@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codename-dkb.local/schemas/dkb-lock.schema.json",
+  "title": "DKB Lock Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registry", "packages", "artifacts"],
+  "properties": {
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "packages": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["krIndex", "krGraph", "krVector"],
+      "properties": {
+        "krIndex": { "$ref": "#/$defs/artifact" },
+        "krGraph": { "$ref": "#/$defs/artifact" },
+        "krVector": { "$ref": "#/$defs/artifact" },
+        "sourceIndex": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "compiled": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "hash", "status"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "hash": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "enum": ["built", "not_built", "missing"]
+        }
+      }
+    }
+  }
+}

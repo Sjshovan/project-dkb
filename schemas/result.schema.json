@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codename-dkb.local/schemas/result.schema.json",
+  "title": "DKB Query Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query", "collectionId", "results", "trace"],
+  "properties": {
+    "query": {
+      "type": "string"
+    },
+    "collectionId": {
+      "type": "string"
+    },
+    "results": {
+      "type": "array"
+    },
+    "trace": {
+      "type": "array"
+    }
+  }
+}

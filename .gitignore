@@ -1,0 +1,31 @@
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# runtime/generated DKB artifacts
+.dkb/
+**/.dkb/
+dkb-lock.json
+dkb-release.json
+*.dkbpkg
+
+# local IDE state
+.idea/
+latest-session.jsonl
+rollout-*.jsonl
+
+# local labs and scratch runs
+storage/
+src/testing/
+Dockerfile
+docker-compose.yml
+.dockerignore
+_local/
+.local/
+runs/*
+!runs/.gitkeep
+runs-debug/
+dkbr/
+studio/
