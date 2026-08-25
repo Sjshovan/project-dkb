@@ -1,28 +1,36 @@
-import { canCompileRegions, canCompileSourceUnits } from '../adapters/adapter.js';
+import { canCompileSourceUnits } from '../adapters/adapter.js';
 import { adapterFor, adapterForStore } from '../adapters/index.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { stableHash } from '../contracts/hash.js';
-import {
-  KR_GRAPH_PATH,
-  KR_INDEX_PATH,
-  KR_VECTOR_LANCE_PATH,
-  KR_VECTOR_PATH,
-  recordForHash,
-  writeGraphArtifacts,
-  writeKrIndex,
-  writeVectorArtifacts,
-  type IndexedKnowledgeRegion,
-} from '../indexes/knowledgeIndex.js';
 import { DkbError } from '../protocol/errors.js';
 import { loadCompose } from '../protocol/manifest.js';
-import { DKB_CACHE_DIR, DKB_LOCKS_DIR, manifestPath, resolveFrom } from '../protocol/paths.js';
+import { DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, manifestPath, resolveFrom } from '../protocol/paths.js';
 import { validateDkbLockManifest } from '../protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedRegistry } from '../protocol/types.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, sourceUnitsFromKnowledgeRegion, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
+import { DKB_ARTIFACT_MANIFEST_PATH, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
+import { compileDkbWithLlamaIndex } from './llamaindex.js';
+import {
+  LLAMAINDEX_COMPILER_AGGREGATE_PATH,
+  LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
+  LLAMAINDEX_COMPILER_RECORDS_DIR,
+  readLlamaIndexCompilerBundleManifest,
+  readLlamaIndexCompilerRecords,
+  sourceUnitFromLlamaIndexRecord,
+  writeLlamaIndexCompilerBundle,
+  type LlamaIndexCompilerBundleManifest,
+} from './llamaindexArtifacts.js';
+import {
+  FAISS_CATALOG_PATH,
+  FAISS_MANIFEST_PATH,
+  FAISS_SEGMENT_PATH,
+  writeFaissPackageArtifacts,
+} from '../indexes/faissStore.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
 export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;
@@ -31,13 +39,10 @@ const COMPILE_LOCK_TIMEOUT_MS = 30_000;
 const COMPILE_LOCK_STALE_MS = 10 * 60_000;
 const COMPILE_LOCK_RETRY_MS = 100;
 const QUICK_ARTIFACT_PATHS = [
-  KR_INDEX_PATH,
-  KR_GRAPH_PATH,
-  KR_VECTOR_PATH,
-  KR_VECTOR_LANCE_PATH,
   SOURCE_INDEX_PATH,
   SOURCE_GRAPH_PATH,
   SOURCE_VECTOR_PATH,
+  DKB_ARTIFACT_MANIFEST_PATH,
 ];
 
 export interface CompiledCollection {
@@ -58,14 +63,30 @@ export interface CompiledComposeProject {
   registryId: string;
   recordCount: number;
   databasePath: string;
-  krIndexPath: string;
+  chunkIndexPath: string;
+  artifactManifestPath: string;
   lockPath: string;
   lock: DkbLockManifest;
   cacheHit: boolean;
+  profile?: CompileComposeProfile;
+}
+
+export interface CompileComposeProfile {
+  timingsMs: {
+    sourceSnapshot: number;
+    cacheLookup: number;
+    collectState: number;
+    aggregateArtifacts: number;
+    compileCacheWrite: number;
+    total: number;
+  };
+  aggregateTimingsMs?: AtomicCompileArtifactTimings;
 }
 
 export interface CompileComposeProjectOptions {
   force?: boolean;
+  compiler?: 'native' | 'llamaindex';
+  artifactProfile?: 'full' | 'faiss-package';
 }
 
 export interface VerifyComposeProjectResult {
@@ -91,6 +112,35 @@ interface CompileCacheManifest {
     os: NodeJS.Platform;
     node: string;
   };
+}
+
+interface AtomicCompileArtifactTimings {
+  stagePrepare: number;
+  sourceAnalysis: number;
+  chunkIndex: number;
+  vector: number;
+  graph: number;
+  compilerArtifacts: number;
+  lock: number;
+  artifactManifest: number;
+  validation: number;
+  promotion: number;
+  cleanup: number;
+  total: number;
+}
+
+interface CompilerArtifactState {
+  dkb: LoadedDkb;
+  dkbRoot: string;
+  result: Awaited<ReturnType<typeof compileDkbWithLlamaIndex>>;
+}
+
+interface RegistryCompileState {
+  sourceUnits: IndexedSourceUnit[];
+  packages: DkbLockManifest['packages'];
+  chunkRepositoryHash: string;
+  sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
+  compilerArtifacts: CompilerArtifactState[];
 }
 
 interface QuickSourceSnapshot {
@@ -159,51 +209,426 @@ export async function compileComposeProject(root: string, options: CompileCompos
   const resolvedRoot = path.resolve(root);
 
   return withCompileLock(resolvedRoot, async () => {
+    const totalStart = performance.now();
     const registry = await loadCompose(resolvedRoot);
-    const krIndexPath = resolveFrom(resolvedRoot, KR_INDEX_PATH);
+    const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
     const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
+    const sourceSnapshotStart = performance.now();
     const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
-    const cached = options.force
-      ? null
-      : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, krIndexPath, lockPath);
-
-    if (cached) {
-      return cached;
-    }
-
-    const state = await collectRegistryState(registry);
+    const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
+    const cacheLookupStart = performance.now();
     const allDkbs = uniqueDkbs([
       ...registry.collections.flatMap((collection) => collection.dkbs),
       ...registry.dkbs,
     ]);
+    const packageProfileNeedsInitialBundle = await needsInitialFaissPackageBundle(resolvedRoot, options, allDkbs);
+    const cached = options.force || packageProfileNeedsInitialBundle
+      ? null
+      : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, chunkIndexPath, lockPath);
+    const cacheLookupMs = elapsedMs(cacheLookupStart);
 
-    await writeSourceAnalysisArtifacts(resolvedRoot, registry.manifest.id, state.sourceAnalysis);
-    await writeKrIndex(resolvedRoot, state.records);
-    const vectorArtifacts = await writeVectorArtifacts(resolvedRoot, registry.manifest.id, state.records);
-    await writeGraphArtifacts(resolvedRoot, allDkbs, state.records, vectorArtifacts.semanticNeighbors);
+    if (cached) {
+      return {
+        ...cached,
+        profile: {
+          timingsMs: {
+            sourceSnapshot: sourceSnapshotMs,
+            cacheLookup: cacheLookupMs,
+            collectState: 0,
+            aggregateArtifacts: 0,
+            compileCacheWrite: 0,
+            total: elapsedMs(totalStart),
+          },
+        },
+      };
+    }
 
-    const lock = await lockForState(resolvedRoot, registry, state, new Date().toISOString());
+    const collectStateStart = performance.now();
+    const state = await collectRegistryState(registry, options.compiler ?? 'native');
+    const collectStateMs = elapsedMs(collectStateStart);
 
-    await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+    const aggregateStart = performance.now();
+    const written = await shouldUseFaissPackageUpdate(resolvedRoot, options, allDkbs)
+      ? await writeAtomicFaissPackageUpdateArtifacts(resolvedRoot, registry, state)
+      : await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs);
+    const aggregateArtifactsMs = elapsedMs(aggregateStart);
+    const cacheWriteStart = performance.now();
+    const lock = written.lock;
     await writeCompileCache(resolvedRoot, registry, sourceSnapshot, lockPath);
+    const compileCacheWriteMs = elapsedMs(cacheWriteStart);
 
     return {
       registryId: registry.manifest.id,
-      recordCount: state.records.length,
-      databasePath: krIndexPath,
-      krIndexPath,
+      recordCount: state.sourceUnits.length,
+      databasePath: chunkIndexPath,
+      chunkIndexPath,
+      artifactManifestPath: resolveFrom(resolvedRoot, DKB_ARTIFACT_MANIFEST_PATH),
       lockPath,
       lock,
       cacheHit: false,
+      profile: {
+        timingsMs: {
+          sourceSnapshot: sourceSnapshotMs,
+          cacheLookup: cacheLookupMs,
+          collectState: collectStateMs,
+          aggregateArtifacts: aggregateArtifactsMs,
+          compileCacheWrite: compileCacheWriteMs,
+          total: elapsedMs(totalStart),
+        },
+        aggregateTimingsMs: written.timings,
+      },
     };
   });
+}
+
+async function writeAtomicCompileArtifacts(
+  root: string,
+  registry: LoadedRegistry,
+  state: Awaited<ReturnType<typeof collectRegistryState>>,
+  allDkbs: LoadedDkb[],
+): Promise<{ lock: DkbLockManifest; timings: AtomicCompileArtifactTimings }> {
+  const totalStart = performance.now();
+  const timings: AtomicCompileArtifactTimings = {
+    stagePrepare: 0,
+    sourceAnalysis: 0,
+    chunkIndex: 0,
+    vector: 0,
+    graph: 0,
+    compilerArtifacts: 0,
+    lock: 0,
+    artifactManifest: 0,
+    validation: 0,
+    promotion: 0,
+    cleanup: 0,
+    total: 0,
+  };
+  const stageParent = resolveFrom(root, `${DKB_CACHE_DIR}/compile-stage-${process.pid}-${Date.now().toString(36)}`);
+  const stageRoot = path.join(stageParent, 'root');
+  const artifactDir = resolveFrom(root, DKB_ARTIFACTS_DIR);
+  const lockPath = manifestPath(root, 'dkb-lock.json');
+  const artifactBackup = `${artifactDir}.replace-${process.pid}-${Date.now().toString(36)}`;
+  const lockBackup = `${lockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
+
+  await fs.rm(stageParent, { recursive: true, force: true });
+  await fs.mkdir(stageRoot, { recursive: true });
+  await fs.copyFile(manifestPath(root, 'dkb.json'), manifestPath(stageRoot, 'dkb.json'));
+  timings.stagePrepare = elapsedMs(totalStart);
+
+  try {
+    const sourceAnalysisStart = performance.now();
+    await writeSourceAnalysisArtifacts(stageRoot, registry.manifest.id, state.sourceAnalysis);
+    timings.sourceAnalysis = elapsedMs(sourceAnalysisStart);
+    timings.chunkIndex = timings.sourceAnalysis;
+    const compilerArtifactStart = performance.now();
+    await writeCompilerBundles(stageRoot, state.compilerArtifacts, { writeAggregate: true });
+    timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
+
+    const lockStart = performance.now();
+    const lock = await lockForState(stageRoot, registry, state, new Date().toISOString());
+    const stageLockPath = manifestPath(stageRoot, 'dkb-lock.json');
+
+    await fs.writeFile(stageLockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+    timings.lock = elapsedMs(lockStart);
+    const artifactManifestStart = performance.now();
+    await writeDkbArtifactManifest(stageRoot, lock, { compiler: artifactCompilerForState(state) });
+    timings.artifactManifest = elapsedMs(artifactManifestStart);
+
+    const validationStart = performance.now();
+    const validation = await validateDkbArtifactManifest(stageRoot);
+    timings.validation = elapsedMs(validationStart);
+
+    if (!validation.ok) {
+      throw new DkbError(`Staged compiled artifact validation failed at ${stageRoot}`);
+    }
+
+    if (process.env.DKB_TEST_ABORT_COMPILE_AFTER_STAGE_VALIDATION === '1') {
+      throw new DkbError(`Aborted compile after staged artifact validation at ${stageRoot}`);
+    }
+
+    const promotionStart = performance.now();
+    await fs.mkdir(path.dirname(artifactDir), { recursive: true });
+    await moveIfExists(artifactDir, artifactBackup);
+    await moveIfExists(lockPath, lockBackup);
+
+    try {
+      await fs.rename(resolveFrom(stageRoot, DKB_ARTIFACTS_DIR), artifactDir);
+      await fs.rename(stageLockPath, lockPath);
+      await fs.rm(artifactBackup, { recursive: true, force: true });
+      await fs.rm(lockBackup, { recursive: true, force: true });
+    } catch (error) {
+      await fs.rm(artifactDir, { recursive: true, force: true });
+      await fs.rm(lockPath, { force: true });
+      await moveIfExists(artifactBackup, artifactDir);
+      await moveIfExists(lockBackup, lockPath);
+      throw error;
+    }
+
+    timings.promotion = elapsedMs(promotionStart);
+    timings.total = elapsedMs(totalStart);
+
+    return { lock, timings };
+  } finally {
+    const cleanupStart = performance.now();
+    await fs.rm(stageParent, { recursive: true, force: true });
+    timings.cleanup = elapsedMs(cleanupStart);
+  }
+}
+
+async function writeAtomicFaissPackageUpdateArtifacts(
+  root: string,
+  registry: LoadedRegistry,
+  state: Awaited<ReturnType<typeof collectRegistryState>>,
+): Promise<{ lock: DkbLockManifest; timings: AtomicCompileArtifactTimings }> {
+  const totalStart = performance.now();
+  const timings: AtomicCompileArtifactTimings = {
+    stagePrepare: 0,
+    sourceAnalysis: 0,
+    chunkIndex: 0,
+    vector: 0,
+    graph: 0,
+    compilerArtifacts: 0,
+    lock: 0,
+    artifactManifest: 0,
+    validation: 0,
+    promotion: 0,
+    cleanup: 0,
+    total: 0,
+  };
+  const compilerArtifact = state.compilerArtifacts[0];
+
+  if (!compilerArtifact) {
+    throw new DkbError('FAISS package profile requires a LlamaIndex compiler artifact');
+  }
+
+  const stageParent = resolveFrom(root, `${DKB_CACHE_DIR}/compile-stage-${process.pid}-${Date.now().toString(36)}`);
+  const stageRoot = path.join(stageParent, 'root');
+  const stageStart = performance.now();
+
+  await fs.rm(stageParent, { recursive: true, force: true });
+  await fs.mkdir(stageRoot, { recursive: true });
+  await copyExistingArtifactPayload(root, stageRoot);
+  timings.stagePrepare = elapsedMs(stageStart);
+
+  try {
+    const compilerArtifactStart = performance.now();
+    const bundle = await writeLlamaIndexCompilerBundle(stageRoot, compilerArtifact.result, {
+      changedSourceKeys: compilerArtifact.result.cache?.changedSourceKeys,
+      writeAggregate: false,
+    });
+    timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
+
+    const lockStart = performance.now();
+    const lock = await lockForState(stageRoot, registry, state, new Date().toISOString());
+    const stageLockPath = manifestPath(stageRoot, 'dkb-lock.json');
+
+    await fs.writeFile(stageLockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+    timings.lock = elapsedMs(lockStart);
+
+    const artifactManifestStart = performance.now();
+    await writeDkbArtifactManifest(stageRoot, lock, { compiler: artifactCompilerForState(state) });
+    timings.artifactManifest = elapsedMs(artifactManifestStart);
+
+    const validationStart = performance.now();
+    const validation = await validateDkbArtifactManifest(stageRoot);
+    timings.validation = elapsedMs(validationStart);
+
+    if (!validation.ok) {
+      throw new DkbError(`Staged compiled artifact validation failed at ${stageRoot}`);
+    }
+
+    if (process.env.DKB_TEST_ABORT_COMPILE_AFTER_STAGE_VALIDATION === '1') {
+      throw new DkbError(`Aborted compile after staged artifact validation at ${stageRoot}`);
+    }
+
+    const promotionStart = performance.now();
+    await promoteFaissPackageUpdate(root, stageRoot, bundle);
+    timings.promotion = elapsedMs(promotionStart);
+    timings.total = elapsedMs(totalStart);
+
+    return { lock, timings };
+  } finally {
+    const cleanupStart = performance.now();
+    await fs.rm(stageParent, { recursive: true, force: true });
+    timings.cleanup = elapsedMs(cleanupStart);
+  }
+}
+
+async function shouldUseFaissPackageUpdate(
+  root: string,
+  options: CompileComposeProjectOptions,
+  allDkbs: LoadedDkb[],
+): Promise<boolean> {
+  if (options.force || options.compiler !== 'llamaindex' || options.artifactProfile !== 'faiss-package' || allDkbs.length !== 1) {
+    return false;
+  }
+
+  try {
+    await readLlamaIndexCompilerBundleManifest(root);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function needsInitialFaissPackageBundle(
+  root: string,
+  options: CompileComposeProjectOptions,
+  allDkbs: LoadedDkb[],
+): Promise<boolean> {
+  if (options.force || options.compiler !== 'llamaindex' || options.artifactProfile !== 'faiss-package' || allDkbs.length !== 1) {
+    return false;
+  }
+
+  try {
+    await readLlamaIndexCompilerBundleManifest(root);
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+async function copyExistingArtifactPayload(sourceRoot: string, stageRoot: string): Promise<void> {
+  await fs.mkdir(stageRoot, { recursive: true });
+  await fs.copyFile(manifestPath(sourceRoot, 'dkb.json'), manifestPath(stageRoot, 'dkb.json'));
+
+  const paths = new Set<string>([
+    'dkb-lock.json',
+    SOURCE_INDEX_PATH,
+    SOURCE_GRAPH_PATH,
+    SOURCE_VECTOR_PATH,
+    FAISS_CATALOG_PATH,
+    FAISS_SEGMENT_PATH,
+    FAISS_MANIFEST_PATH,
+    LLAMAINDEX_COMPILER_AGGREGATE_PATH,
+    LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
+    ...await listRelativeFiles(resolveFrom(sourceRoot, LLAMAINDEX_COMPILER_RECORDS_DIR), LLAMAINDEX_COMPILER_RECORDS_DIR),
+  ]);
+
+  for (const relativePath of paths) {
+    const source = resolveFrom(sourceRoot, relativePath);
+    const target = resolveFrom(stageRoot, relativePath);
+
+    try {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.copyFile(source, target);
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : '';
+
+      if (code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+}
+
+async function promoteFaissPackageUpdate(
+  root: string,
+  stageRoot: string,
+  bundle: Awaited<ReturnType<typeof writeLlamaIndexCompilerBundle>>,
+): Promise<void> {
+  const paths = [
+    'dkb-lock.json',
+    DKB_ARTIFACT_MANIFEST_PATH,
+    FAISS_CATALOG_PATH,
+    FAISS_SEGMENT_PATH,
+    FAISS_MANIFEST_PATH,
+    LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
+    ...bundle.changedRecordPaths,
+  ];
+
+  for (const relativePath of paths) {
+    await replaceFileWithBackup(resolveFrom(stageRoot, relativePath), resolveFrom(root, relativePath));
+  }
+
+  for (const relativePath of bundle.removedRecordPaths) {
+    await fs.rm(resolveFrom(root, relativePath), { force: true });
+  }
+}
+
+async function replaceFileWithBackup(source: string, target: string): Promise<void> {
+  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
+
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await moveIfExists(target, backup);
+
+  try {
+    await fs.copyFile(source, target);
+    await fs.rm(backup, { force: true });
+  } catch (error) {
+    await fs.rm(target, { force: true });
+    await moveIfExists(backup, target);
+    throw error;
+  }
+}
+
+async function listRelativeFiles(root: string, relativeRoot: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    const nested = await Promise.all(entries.flatMap(async (entry) => {
+      const target = path.join(root, entry.name);
+      const relative = `${relativeRoot}/${entry.name}`.replace(/\\/g, '/');
+
+      if (entry.isDirectory()) {
+        return listRelativeFiles(target, relative);
+      }
+
+      return entry.isFile() ? [relative] : [];
+    }));
+
+    return nested.flat().sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
+async function writeCompilerBundles(
+  stageRoot: string,
+  compilerArtifacts: CompilerArtifactState[],
+  options: { writeAggregate: boolean },
+): Promise<void> {
+  await Promise.all(compilerArtifacts.map(async (artifact) => {
+    await writeLlamaIndexCompilerBundle(stageRoot, artifact.result, {
+      changedSourceKeys: artifact.result.cache?.changedSourceKeys,
+      writeAggregate: options.writeAggregate,
+    });
+    await writeFaissPackageArtifacts(stageRoot, artifact.dkb, artifact.result);
+  }));
+}
+
+function artifactCompilerForState(state: RegistryCompileState): DkbArtifactCompiler | undefined {
+  if (state.compilerArtifacts.length === 0) {
+    return undefined;
+  }
+
+  if (state.compilerArtifacts.length === 1) {
+    return state.compilerArtifacts[0].result.compiler;
+  }
+
+  return {
+    id: 'dkb.multi-compiler',
+    compilers: state.compilerArtifacts.map((artifact) => artifact.result.compiler),
+  };
+}
+
+async function moveIfExists(source: string, target: string): Promise<void> {
+  try {
+    await fs.rename(source, target);
+  } catch (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : '';
+
+    if (code !== 'ENOENT') {
+      throw error;
+    }
+  }
 }
 
 export async function verifyComposeProject(root: string): Promise<VerifyComposeProjectResult> {
   const resolvedRoot = path.resolve(root);
   const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
   const registry = await loadCompose(resolvedRoot);
-  const current = await collectRegistryState(registry);
+  const current = await collectRegistryStateForVerification(registry);
   const lock = validateDkbLockManifest(parseLock(await fs.readFile(lockPath, 'utf8'), lockPath), lockPath);
   const expected = await lockForState(resolvedRoot, registry, current, lock.compiled?.compiledAt ?? new Date().toISOString());
   const checks = [
@@ -215,29 +640,22 @@ export async function verifyComposeProject(root: string): Promise<VerifyComposeP
     {
       name: 'packages',
       ok: stableHash(lock.packages) === stableHash(expected.packages),
-      detail: 'package manifest, source, and KR hashes match lockfile',
-    },
-    {
-      name: 'artifacts.krIndex',
-      ok: sameArtifact(lock.artifacts.krIndex, expected.artifacts.krIndex),
-      detail: `${lock.artifacts.krIndex.hash ?? 'null'} expected ${expected.artifacts.krIndex.hash ?? 'null'}`,
-    },
-    {
-      name: 'artifacts.krGraph',
-      ok: sameArtifact(lock.artifacts.krGraph, expected.artifacts.krGraph),
-      detail: `${lock.artifacts.krGraph.hash ?? 'null'} expected ${expected.artifacts.krGraph.hash ?? 'null'}`,
-    },
-    {
-      name: 'artifacts.krVector',
-      ok: sameArtifact(lock.artifacts.krVector, expected.artifacts.krVector),
-      detail: `${lock.artifacts.krVector.hash ?? 'null'} expected ${expected.artifacts.krVector.hash ?? 'null'}`,
+      detail: 'package manifest, source, and chunk hashes match lockfile',
     },
     {
       name: 'artifacts.sourceIndex',
-      ok: lock.artifacts.sourceIndex !== undefined
-        && expected.artifacts.sourceIndex !== undefined
-        && sameArtifact(lock.artifacts.sourceIndex, expected.artifacts.sourceIndex),
-      detail: `${lock.artifacts.sourceIndex?.hash ?? 'null'} expected ${expected.artifacts.sourceIndex?.hash ?? 'null'}`,
+      ok: sameArtifact(lock.artifacts.sourceIndex, expected.artifacts.sourceIndex),
+      detail: `${lock.artifacts.sourceIndex.hash ?? 'null'} expected ${expected.artifacts.sourceIndex.hash ?? 'null'}`,
+    },
+    {
+      name: 'artifacts.sourceGraph',
+      ok: sameArtifact(lock.artifacts.sourceGraph, expected.artifacts.sourceGraph),
+      detail: `${lock.artifacts.sourceGraph.hash ?? 'null'} expected ${expected.artifacts.sourceGraph.hash ?? 'null'}`,
+    },
+    {
+      name: 'artifacts.sourceVector',
+      ok: sameArtifact(lock.artifacts.sourceVector, expected.artifacts.sourceVector),
+      detail: `${lock.artifacts.sourceVector.hash ?? 'null'} expected ${expected.artifacts.sourceVector.hash ?? 'null'}`,
     },
   ];
 
@@ -252,7 +670,7 @@ async function cachedCompileResultFor(
   root: string,
   registry: LoadedRegistry,
   sourceSnapshot: QuickSourceSnapshot,
-  krIndexPath: string,
+  chunkIndexPath: string,
   lockPath: string,
 ): Promise<CompiledComposeProject | null> {
   if (!sourceSnapshot.cacheable) {
@@ -285,8 +703,9 @@ async function cachedCompileResultFor(
   return {
     registryId: lock.registry.id,
     recordCount: lock.compiled?.recordCount ?? Object.values(lock.packages).reduce((total, item) => total + item.recordCount, 0),
-    databasePath: krIndexPath,
-    krIndexPath,
+    databasePath: chunkIndexPath,
+    chunkIndexPath,
+    artifactManifestPath: resolveFrom(root, DKB_ARTIFACT_MANIFEST_PATH),
     lockPath,
     lock,
     cacheHit: true,
@@ -397,6 +816,25 @@ async function quickStoreSnapshotFor(dkb: LoadedDkb, store: DkbStore): Promise<Q
 
   const absolutePath = resolveFrom(dkb.root, store.path);
   const relativePath = path.relative(dkb.root, absolutePath).replace(/\\/g, '/') || '.';
+  const includedPaths = includedSourcePathsForStore(store);
+
+  if (includedPaths) {
+    const entries = await Promise.all(includedPaths.map((item) => quickPathSnapshot(resolveFrom(dkb.root, item), item)));
+    const cacheable = entries.every((entry) => entry.exists);
+
+    return {
+      dkbId: dkb.manifest.id,
+      storeId: store.id,
+      type: store.type,
+      path: relativePath,
+      connectionRef: store.connectionRef,
+      cacheable,
+      reason: cacheable ? undefined : 'included_local_source_missing',
+      hash: stableHash({ store, entries }),
+      entries,
+    };
+  }
+
   const snapshot = await quickPathSnapshot(absolutePath, relativePath);
   const cacheable = snapshot.exists;
 
@@ -429,9 +867,7 @@ function quickNonPathStoreSnapshot(dkb: LoadedDkb, store: DkbStore, reason: stri
 
 async function quickArtifactSnapshotFor(root: string): Promise<QuickArtifactSnapshot> {
   const artifacts = await Promise.all(QUICK_ARTIFACT_PATHS.map(async (artifactPath) => quickPathSnapshot(resolveFrom(root, artifactPath), artifactPath)));
-  const requiredArtifactsReady = artifacts
-    .filter((artifact) => artifact.path !== KR_VECTOR_LANCE_PATH)
-    .every((artifact) => artifact.exists);
+  const requiredArtifactsReady = artifacts.every((artifact) => artifact.exists);
 
   return {
     hash: stableHash({
@@ -533,42 +969,115 @@ function hashString(value: string): string {
   return `sha256:${hash.digest('hex')}`;
 }
 
-async function collectRegistryState(registry: LoadedRegistry): Promise<{
-  records: IndexedKnowledgeRegion[];
+async function collectRegistryState(registry: LoadedRegistry, compiler: 'native' | 'llamaindex' = 'native'): Promise<{
+  sourceUnits: IndexedSourceUnit[];
   packages: DkbLockManifest['packages'];
-  krRepositoryHash: string;
+  chunkRepositoryHash: string;
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
+  compilerArtifacts: CompilerArtifactState[];
 }> {
   const allDkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb)));
-  const records = packageEntries.flatMap((entry) => entry.records);
+  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, compiler)));
+  const sourceUnits = packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits);
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const sourceAnalysis = {
-    sourceUnits: packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits),
+    sourceUnits,
     sourceEdges: packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceEdges),
-    records,
   };
 
   return {
-    records,
+    sourceUnits,
     packages,
-    krRepositoryHash: stableHash(records.map((record) => recordForHash(record))),
+    chunkRepositoryHash: stableHash(sourceUnits.map(chunkForHash)),
     sourceAnalysis,
+    compilerArtifacts: packageEntries.flatMap((entry) => entry.compilerArtifact ? [entry.compilerArtifact] : []),
   };
 }
 
-async function collectDkbState(dkb: LoadedDkb): Promise<{
+async function collectRegistryStateForVerification(registry: LoadedRegistry): Promise<RegistryCompileState> {
+  const allDkbs = uniqueDkbs([
+    ...registry.collections.flatMap((collection) => collection.dkbs),
+    ...registry.dkbs,
+  ]);
+  const packageEntries = await Promise.all(allDkbs.map((dkb) => collectDkbVerificationState(dkb)));
+  const sourceUnits = packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits);
+  const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
+  const sourceAnalysis = {
+    sourceUnits,
+    sourceEdges: packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceEdges),
+  };
+
+  return {
+    sourceUnits,
+    packages,
+    chunkRepositoryHash: stableHash(sourceUnits.map(chunkForHash)),
+    sourceAnalysis,
+    compilerArtifacts: [],
+  };
+}
+
+async function collectDkbVerificationState(dkb: LoadedDkb): Promise<{
   package: DkbLockManifest['packages'][string];
-  records: IndexedKnowledgeRegion[];
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
 }> {
-  const rawSourceUnits = await buildSourceUnitsForDkb(dkb);
+  try {
+    const compilerRecords = await readLlamaIndexCompilerRecords(dkb.root);
+
+    if (compilerRecords.length > 0) {
+      const unique = new Map<string, IndexedSourceUnit>();
+
+      for (const record of compilerRecords) {
+        const unit = sourceUnitFromLlamaIndexRecord(dkb, record);
+        unique.set(unit.id, unit);
+      }
+
+      const sourceAnalysis = analyzeSourceUnits([...unique.values()].sort((a, b) => a.id.localeCompare(b.id)));
+
+      return {
+        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits),
+        sourceAnalysis,
+      };
+    }
+  } catch {
+    // Packages without a compiler bundle verify against direct source adapters.
+  }
+
+  const state = await collectDkbState(dkb);
+
+  return {
+    package: state.package,
+    sourceAnalysis: state.sourceAnalysis,
+  };
+}
+
+async function collectDkbState(dkb: LoadedDkb, compiler: 'native' | 'llamaindex' = 'native'): Promise<{
+  package: DkbLockManifest['packages'][string];
+  sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
+  compilerArtifact?: CompilerArtifactState;
+}> {
+  const built = await buildSourceUnitsForDkb(dkb, compiler);
+  const rawSourceUnits = built.units;
   const sourceAnalysis = analyzeSourceUnits(rawSourceUnits);
-  const records = sourceAnalysis.records;
-  const sourceUnitsByStore = countSourceUnitsByStore(sourceAnalysis.sourceUnits);
+
+  return {
+    package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits),
+    sourceAnalysis,
+    compilerArtifact: built.compilerResult ? {
+      dkb,
+      dkbRoot: dkb.root,
+      result: built.compilerResult,
+    } : undefined,
+  };
+}
+
+async function lockPackageForDkb(
+  dkb: LoadedDkb,
+  sourceUnits: IndexedSourceUnit[],
+): Promise<DkbLockManifest['packages'][string]> {
+  const sourceUnitsByStore = countSourceUnitsByStore(sourceUnits);
   const stores = await Promise.all(storesForDkb(dkb).map(async (store) => {
     const storePath = store.path ? resolveFrom(dkb.root, store.path) : null;
 
@@ -577,32 +1086,47 @@ async function collectDkbState(dkb: LoadedDkb): Promise<{
       type: store.type,
       path: storePath ? path.relative(dkb.root, storePath).replace(/\\/g, '/') || '.' : undefined,
       connectionRef: store.connectionRef,
-      hash: storePath ? await hashStore(storePath) : stableHash({ connectionRef: store.connectionRef, type: store.type }),
+      hash: storePath ? await hashStoreForDkb(dkb, store, storePath) : stableHash({ connectionRef: store.connectionRef, type: store.type }),
       recordCount: sourceUnitsByStore.get(store.id) ?? 0,
     };
   }));
 
   return {
-    package: {
-      id: dkb.manifest.id,
-      name: dkb.manifest.name,
-      version: dkb.manifest.version,
-      path: dkb.packagePath ? path.relative(process.cwd(), dkb.packagePath).replace(/\\/g, '/') : null,
-      manifestHash: dkb.manifestHash ?? stableHash(dkb.manifest),
-      sourceInventoryHash: stableHash(stores),
-      krRepositoryHash: stableHash(records.map((record) => recordForHash(record))),
-      recordCount: records.length,
-      stores,
-    },
-    records,
-    sourceAnalysis,
+    id: dkb.manifest.id,
+    name: dkb.manifest.name,
+    version: dkb.manifest.version,
+    path: dkb.packagePath ? path.relative(process.cwd(), dkb.packagePath).replace(/\\/g, '/') : null,
+    manifestHash: dkb.manifestHash ?? stableHash(dkb.manifest),
+    sourceInventoryHash: stableHash(stores),
+    chunkRepositoryHash: stableHash(sourceUnits.map(chunkForHash)),
+    recordCount: sourceUnits.length,
+    stores,
   };
 }
 
-async function buildSourceUnitsForDkb(dkb: LoadedDkb): Promise<IndexedSourceUnit[]> {
+async function buildSourceUnitsForDkb(dkb: LoadedDkb, compiler: 'native' | 'llamaindex' = 'native'): Promise<{
+  units: IndexedSourceUnit[];
+  compilerResult?: Awaited<ReturnType<typeof compileDkbWithLlamaIndex>>;
+}> {
+  if (compiler === 'llamaindex') {
+    const result = await compileDkbWithLlamaIndex(dkb);
+    const unique = new Map<string, IndexedSourceUnit>();
+
+    for (const record of result.records) {
+      const unit = sourceUnitFromLlamaIndexRecord(dkb, record);
+      unique.set(unit.id, unit);
+    }
+
+    return {
+      units: [...unique.values()].sort((a, b) => a.id.localeCompare(b.id)),
+      compilerResult: result,
+    };
+  }
   const batches = await Promise.all(storesForDkb(dkb).map((store) => buildSourceUnitsForStore(dkb, store)));
 
-  return batches.flat().sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    units: batches.flat().sort((a, b) => a.id.localeCompare(b.id)),
+  };
 }
 
 async function buildSourceUnitsForStore(dkb: LoadedDkb, store: DkbStore): Promise<IndexedSourceUnit[]> {
@@ -616,13 +1140,7 @@ async function buildSourceUnitsForStore(dkb: LoadedDkb, store: DkbStore): Promis
     return adapter.compileSourceUnits({ dkb, store });
   }
 
-  if (!canCompileRegions(adapter)) {
-    throw new DkbError(`Store type ${store.type} does not support source unit compilation`);
-  }
-
-  const regions = await adapter.compileRegions({ dkb, store });
-
-  return regions.flatMap(sourceUnitsFromKnowledgeRegion);
+  throw new DkbError(`Store type ${store.type} does not support direct chunk compilation`);
 }
 
 function countSourceUnitsByStore(units: IndexedSourceUnit[]): Map<string, number> {
@@ -635,11 +1153,30 @@ function countSourceUnitsByStore(units: IndexedSourceUnit[]): Map<string, number
   return counts;
 }
 
+function chunkForHash(unit: IndexedSourceUnit): Record<string, unknown> {
+  return {
+    id: unit.id,
+    assetId: unit.assetId,
+    dkbId: unit.dkbId,
+    storeId: unit.storeId,
+    type: unit.type,
+    locator: unit.locator,
+    assetLocator: unit.assetLocator,
+    title: unit.title,
+    text: unit.text,
+    keywords: unit.keywords,
+    hash: unit.hash,
+    updatedAt: unit.updatedAt,
+    chunkOrdinal: unit.chunkOrdinal,
+    chunkStart: unit.chunkStart,
+    chunkEnd: unit.chunkEnd,
+  };
+}
+
 async function lockForState(root: string, registry: LoadedRegistry, state: Awaited<ReturnType<typeof collectRegistryState>>, compiledAt: string): Promise<DkbLockManifest> {
-  const krIndexHash = await maybeHashFile(resolveFrom(root, KR_INDEX_PATH));
-  const krGraphHash = await maybeHashFile(resolveFrom(root, KR_GRAPH_PATH));
-  const krVectorHash = await maybeHashArtifact(resolveFrom(root, KR_VECTOR_PATH));
   const sourceIndexHash = await maybeHashFile(resolveFrom(root, SOURCE_INDEX_PATH));
+  const sourceGraphHash = await maybeHashFile(resolveFrom(root, SOURCE_GRAPH_PATH));
+  const sourceVectorHash = await maybeHashArtifact(resolveFrom(root, SOURCE_VECTOR_PATH));
 
   return {
     registry: {
@@ -649,17 +1186,16 @@ async function lockForState(root: string, registry: LoadedRegistry, state: Await
     },
     packages: state.packages,
     artifacts: {
-      krIndex: artifact(KR_INDEX_PATH, krIndexHash),
-      krGraph: artifact(KR_GRAPH_PATH, krGraphHash),
-      krVector: artifact(KR_VECTOR_PATH, krVectorHash),
       sourceIndex: artifact(SOURCE_INDEX_PATH, sourceIndexHash),
+      sourceGraph: artifact(SOURCE_GRAPH_PATH, sourceGraphHash),
+      sourceVector: artifact(SOURCE_VECTOR_PATH, sourceVectorHash),
     },
     compiled: {
-      path: KR_INDEX_PATH,
-      artifactHash: krIndexHash,
-      krRepositoryHash: state.krRepositoryHash,
-      indexHash: stableHash({ krIndexHash, krGraphHash, krVectorHash, sourceIndexHash }),
-      recordCount: state.records.length,
+      path: SOURCE_INDEX_PATH,
+      artifactHash: sourceIndexHash,
+      chunkRepositoryHash: state.chunkRepositoryHash,
+      indexHash: stableHash({ sourceIndexHash, sourceGraphHash, sourceVectorHash }),
+      recordCount: state.sourceUnits.length,
       compiledAt,
     },
   };
@@ -765,6 +1301,10 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function elapsedMs(start: number): number {
+  return Math.round((performance.now() - start) * 1000) / 1000;
+}
+
 async function hashStore(storePath: string): Promise<string> {
   const stats = await fs.stat(storePath);
 
@@ -783,6 +1323,36 @@ async function hashStore(storePath: string): Promise<string> {
   })));
 
   return stableHash(hashed);
+}
+
+async function hashStoreForDkb(dkb: LoadedDkb, store: DkbStore, storePath: string): Promise<string> {
+  const includedPaths = includedSourcePathsForStore(store);
+
+  if (!includedPaths) {
+    return hashStore(storePath);
+  }
+
+  const hashed = await Promise.all(includedPaths.map(async (relativePath) => ({
+    path: relativePath,
+    hash: await hashFile(resolveFrom(dkb.root, relativePath)),
+  })));
+
+  return stableHash(hashed.sort((left, right) => left.path.localeCompare(right.path)));
+}
+
+function includedSourcePathsForStore(store: DkbStore): string[] | null {
+  const included = store.meta?.includePaths;
+
+  if (!Array.isArray(included)) {
+    return null;
+  }
+
+  const paths = included
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.replace(/\\/g, '/'))
+    .sort((left, right) => left.localeCompare(right));
+
+  return paths.length > 0 ? paths : null;
 }
 
 async function listFiles(root: string): Promise<string[]> {

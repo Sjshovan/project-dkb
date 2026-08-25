@@ -1,5 +1,5 @@
 import type { DkbWriteIntent, DkbWriteIntentResult } from '../protocol/writeGate.js';
-import type { KnowledgeRegion } from '../protocol/types.js';
+import type { DkbRecord } from '../protocol/types.js';
 
 export type QueuedWriteStatus = 'pending' | 'needs_review' | 'blocked' | 'committed' | 'failed' | 'superseded';
 
@@ -25,7 +25,7 @@ export interface QueuedWrite {
   evidenceRefs: string[];
   gate: DkbWriteIntentResult;
   selection?: unknown;
-  record?: KnowledgeRegion;
+  record?: DkbRecord;
   failureReason?: string;
   history: WriteStatusEvent[];
   createdAt: string;

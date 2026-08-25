@@ -4,6 +4,7 @@ import type { DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
 import { discoverRemoteDkb } from './discovery.js';
 import type {
   DkbRemoteAttachInput,
+  DkbDiscoveryEndpoint,
   DkbRemoteRetrieveResult,
   DkbRemoteSession,
   DkbRetrieveKnowledgeRequest,
@@ -23,6 +24,8 @@ export async function attachRemoteSession(input: DkbRemoteAttachInput): Promise<
 
   const session: DkbRemoteSession = {
     id: `remote_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+    origin: 'remote',
+    trust: 'unverified',
     status: 'attached',
     endpoint,
     discoveryUrl: discovered.discoveryUrl,
@@ -77,11 +80,15 @@ export async function retrieveFromRemoteSession(id: string, request: DkbRetrieve
 }
 
 async function retrieveFromEndpoint(session: DkbRemoteSession, request: DkbRetrieveKnowledgeRequest): Promise<DkbRetrieveKnowledgeResponse> {
-  if (session.endpoint.type === 'dkb-runtime-http') {
-    return retrieveFromRuntimeHttp(session.endpoint.url, request);
+  return retrieveFromRemoteEndpoint(session.endpoint, request);
+}
+
+export async function retrieveFromRemoteEndpoint(endpoint: DkbDiscoveryEndpoint, request: DkbRetrieveKnowledgeRequest): Promise<DkbRetrieveKnowledgeResponse> {
+  if (endpoint.type === 'dkb-runtime-http') {
+    return retrieveFromRuntimeHttp(endpoint.url, request);
   }
 
-  return retrieveFromMcpHttp(session.endpoint.url, request);
+  return retrieveFromMcpHttp(endpoint.url, request);
 }
 
 async function retrieveFromRuntimeHttp(endpointUrl: string, request: DkbRetrieveKnowledgeRequest): Promise<DkbRetrieveKnowledgeResponse> {

@@ -1,7 +1,7 @@
 export type DkbAdapter = 'folder' | 'sqlite' | 'postgres' | 'compose';
-export type DkbStoreType = 'filesystem' | 'sqlite' | 'postgres';
+export type DkbStoreType = 'filesystem' | 'sqlite' | 'postgres' | 'database';
 export type DkbStoreMode = 'read' | 'write' | 'readwrite';
-export type DkbSourceRegionType = 'file' | 'folder' | 'table' | 'table_group' | 'view' | 'record' | 'dataset' | 'endpoint';
+export type DkbTargetOrigin = 'local' | 'remote';
 export type DkbWriteMode = 'read_only' | 'queued' | 'direct';
 export type DkbAvailability = 'ready' | 'unavailable';
 export type DkbIndexFreshness = 'fresh' | 'stale' | 'unknown';
@@ -45,6 +45,12 @@ export interface DkbSpaceFields {
 export interface DkbPermissions {
   read?: boolean;
   write?: boolean;
+}
+
+export interface DkbLocalSourcesPolicy {
+  enabled?: boolean;
+  root?: string;
+  excludes?: string[];
 }
 
 export interface DkbStore {
@@ -107,6 +113,7 @@ export interface DkbSourceManifest extends DkbSpaceFields {
   license?: string;
   collection?: string | DkbCollectionRef;
   dependencies?: Record<string, string>;
+  localSources?: DkbLocalSourcesPolicy;
   permissions?: DkbPermissions;
   domains?: string[];
   roles?: string[];
@@ -150,7 +157,7 @@ export interface DkbLockManifest {
     path: string | null;
     manifestHash: string;
     sourceInventoryHash: string;
-    krRepositoryHash: string;
+    chunkRepositoryHash: string;
     recordCount: number;
     stores: Array<{
       id: string;
@@ -175,15 +182,14 @@ export interface DkbLockManifest {
     installedAt?: string;
   }>;
   artifacts: {
-    krIndex: DkbLockArtifact;
-    krGraph: DkbLockArtifact;
-    krVector: DkbLockArtifact;
-    sourceIndex?: DkbLockArtifact;
+    sourceIndex: DkbLockArtifact;
+    sourceGraph: DkbLockArtifact;
+    sourceVector: DkbLockArtifact;
   };
   compiled?: {
     path: string;
     artifactHash: string | null;
-    krRepositoryHash: string;
+    chunkRepositoryHash: string;
     indexHash: string;
     recordCount: number;
     compiledAt: string;
@@ -283,6 +289,7 @@ export interface DkbLockArtifact {
 
 export interface LoadedDkb {
   root: string;
+  origin?: DkbTargetOrigin;
   manifest: DkbManifest;
   packagePath?: string | null;
   manifestHash?: string;
@@ -302,17 +309,7 @@ export interface LoadedRegistry {
   dkbs: LoadedDkb[];
 }
 
-export interface KnowledgeRegionRelationship {
-  type: 'parent' | 'child' | 'sibling' | 'foreign_key' | 'reference' | 'semantic';
-  regionId: string;
-}
-
-export interface KnowledgeRegionGrouping {
-  strategy: 'filesystem_direct_files' | 'database_foreign_keys' | 'single_source' | 'json_record' | 'semantic_cluster';
-  reason: string;
-}
-
-export interface KnowledgeRegion {
+export interface DkbRecord {
   id: string;
   title: string;
   content: string;
@@ -324,19 +321,12 @@ export interface KnowledgeRegion {
   aliases?: string[];
   sourceRef?: KnowledgeSourceRef;
   queryable?: KnowledgeQueryable;
-  regionType?: DkbSourceRegionType;
-  parentRegionId?: string;
-  childRegionIds?: string[];
-  relatedRegionIds?: string[];
-  ancestry?: string[];
-  relationships?: KnowledgeRegionRelationship[];
-  grouping?: KnowledgeRegionGrouping;
   sourceUnits?: KnowledgeSourceUnit[];
   sourceIds?: string[];
   capabilities?: KnowledgeCapabilityProfile;
 }
 
-export interface QueryHit extends KnowledgeRegion {
+export interface QueryHit extends DkbRecord {
   dkbId: string;
   adapter: DkbAdapter;
   score: number;

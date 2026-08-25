@@ -1,9 +1,9 @@
 import { stableHash } from '../contracts/hash.js';
 import type { DkbWriteIntent } from '../protocol/writeGate.js';
-import type { KnowledgeRegion } from '../protocol/types.js';
+import type { DkbRecord } from '../protocol/types.js';
 import type { QueuedWrite } from './types.js';
 
-export function recordFromQueuedWrite(item: QueuedWrite): KnowledgeRegion {
+export function recordFromQueuedWrite(item: QueuedWrite): DkbRecord {
   const payload = payloadObject(item.intent.payload);
   const claim = stringValue(payload.claim) ?? stringValue(payload.content) ?? JSON.stringify(item.intent.payload ?? {});
   const title = stringValue(payload.title) ?? titleFor(item.intent);

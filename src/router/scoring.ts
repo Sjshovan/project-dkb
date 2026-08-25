@@ -1,15 +1,15 @@
-import type { KnowledgeRegion } from '../protocol/types.js';
+import type { DkbRecord } from '../protocol/types.js';
 
 export const defaultMinimumScore = 2;
 export const defaultResultProbabilityCutoff = 0.035;
 
-export interface ScoredRecord extends KnowledgeRegion {
+export interface ScoredRecord extends DkbRecord {
   score: number;
   matchedTokens: number;
   queryTokenCount: number;
 }
 
-export function scoreRecord(record: KnowledgeRegion, queryTokens: string[]): ScoredRecord {
+export function scoreRecord(record: DkbRecord, queryTokens: string[]): ScoredRecord {
   const titleTokenVariants = tokenVariantSet(tokenize(record.title, { keepStopwords: true }));
   const aliasTokenVariants = tokenVariantSet(tokenize((record.aliases ?? []).join(' '), { keepStopwords: true }));
   const entityTokenVariants = tokenVariantSet(tokenize(record.entities.join(' '), { keepStopwords: true }));

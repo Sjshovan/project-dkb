@@ -1,13 +1,18 @@
 ﻿import fs from 'node:fs/promises';
 import path from 'node:path';
+import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '../signing/index.js';
+import { validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '../artifacts/manifest.js';
 import { compileComposeProject } from '../compiler/compile.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
+import { closeFaissSnapshot, validateFaissPackageQueryability, validateFaissRuntimeReady, type FaissPackageMutationResult } from '../indexes/faissStore.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { renderModelEvidence } from '../read/modelEvidence.js';
-import { recordRetrievalTrace } from './trace.js';
-import { loadDkb, loadRegistry } from '../protocol/manifest.js';
+import { recordRetrievalTrace, retrievalTraceEnabled } from './trace.js';
+import { enqueueQueryAudit } from './queryAudit.js';
+import { loadDkb, loadDkbPackage, loadRegistry } from '../protocol/manifest.js';
 import { DkbError } from '../protocol/errors.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 import type { DkbSourceManifest, LoadedDkb } from '../protocol/types.js';
 
 // Runtime snapshots are invalidated by managed mutations, not revalidated on
@@ -27,6 +32,11 @@ export interface DkbRuntimeStatus {
   registryPath: string;
   packageCount: number;
   dkbIds: string[];
+  packages: Array<{
+    id: string;
+    version: string;
+    packageTreeHash?: string;
+  }>;
 }
 
 export interface ImportDkbOptions {
@@ -44,6 +54,26 @@ export interface ImportDkbResult {
   packagePath: string;
   generatedManifest: boolean;
   compiled?: Awaited<ReturnType<typeof compileComposeProject>>;
+}
+
+export interface ImportCompiledDkbArtifactOptions {
+  sourcePath: string;
+  id?: string;
+  force?: boolean;
+  progress?: DkbProgressReporter;
+}
+
+export interface ImportCompiledDkbArtifactResult {
+  status: 'imported_compiled_artifact';
+  id: string;
+  registryPath: string;
+  packagePath: string;
+  validation: ValidateDkbArtifactManifestResult;
+  catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>>;
+  search: {
+    upsert: FaissPackageMutationResult;
+    removedPrevious?: FaissPackageMutationResult;
+  };
 }
 
 export function runtimePaths(stateRoot = defaultRuntimeStateRoot()): DkbRuntimePaths {
@@ -75,6 +105,31 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
   const paths = await ensureRuntimeState(stateRoot);
   const dkbs = await installedDkbs(paths);
   const dkbIds = dkbs.map((dkb) => dkb.manifest.id).sort();
+  const packageTreeHashes = await runtimePackageTreeHashes(paths.stateRoot);
+  const packages = await Promise.all(dkbs.map(async (dkb) => {
+    try {
+      const receiptPath = path.join(dkb.root, DKB_PACKAGE_RECEIPT_PATH);
+      const receipt = parsePackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
+
+      return {
+        id: dkb.manifest.id,
+        version: dkb.manifest.version,
+        ...(receipt.payload.packageTreeHash
+          ? { packageTreeHash: receipt.payload.packageTreeHash }
+          : packageTreeHashes.get(`${dkb.manifest.id}@${dkb.manifest.version}`)
+            ? { packageTreeHash: packageTreeHashes.get(`${dkb.manifest.id}@${dkb.manifest.version}`) }
+            : {}),
+      };
+    } catch {
+      return {
+        id: dkb.manifest.id,
+        version: dkb.manifest.version,
+        ...(packageTreeHashes.get(`${dkb.manifest.id}@${dkb.manifest.version}`)
+          ? { packageTreeHash: packageTreeHashes.get(`${dkb.manifest.id}@${dkb.manifest.version}`) }
+          : {}),
+      };
+    }
+  }));
 
   return {
     ok: true,
@@ -82,7 +137,35 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     registryPath: paths.stateRoot,
     packageCount: dkbIds.length,
     dkbIds,
+    packages,
   };
+}
+
+async function runtimePackageTreeHashes(root: string): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>();
+
+  try {
+    const lock = JSON.parse(await fs.readFile(path.join(root, 'dkb-lock.json'), 'utf8')) as {
+      packages?: Record<string, { version?: unknown; packageTreeHash?: unknown; resolved?: unknown }>;
+    };
+
+    for (const item of Object.values(lock.packages ?? {})) {
+      if (typeof item.version !== 'string' || typeof item.packageTreeHash !== 'string') {
+        continue;
+      }
+
+      const resolved = typeof item.resolved === 'string' ? item.resolved : '';
+      const packageId = resolved.split(':').pop()?.split('@')[0] ?? '';
+
+      if (packageId) {
+        hashes.set(`${packageId}@${item.version}`, item.packageTreeHash);
+      }
+    }
+  } catch {
+    // A local source runtime may not have a generated lock yet.
+  }
+
+  return hashes;
 }
 
 export async function listRuntimeRegistries(stateRoot?: string) {
@@ -110,6 +193,12 @@ export async function importDkbIntoRuntime(options: ImportDkbOptions, stateRoot?
   const compileResult = options.compile === false
     ? undefined
     : await compileComposeProject(paths.stateRoot, { force: true });
+  // A precompiled package still needs its chunks and vectors activated in the
+  // shared runtime catalog. Skipping compilation must never mean skipping
+  // installation into the search index.
+  if (options.compile === false) {
+    await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot);
+  }
   invalidateRuntimeQuerySnapshot(paths.stateRoot);
 
   return {
@@ -122,7 +211,134 @@ export async function importDkbIntoRuntime(options: ImportDkbOptions, stateRoot?
   };
 }
 
-export async function removeDkbFromRuntime(id: string, stateRoot?: string) {
+export async function importCompiledDkbArtifactIntoRuntime(
+  options: ImportCompiledDkbArtifactOptions,
+  stateRoot?: string,
+): Promise<ImportCompiledDkbArtifactResult> {
+  const paths = await ensureRuntimeState(stateRoot);
+  const sourceRoot = path.resolve(options.sourcePath);
+
+  if (!(await exists(sourceRoot))) {
+    throw new DkbError(`Compiled artifact source does not exist: ${sourceRoot}`);
+  }
+
+  const sourceValidation = await validateDkbArtifactManifest(sourceRoot, { progress: options.progress });
+
+  if (!sourceValidation.ok || !sourceValidation.manifest) {
+    throw new DkbError(`Compiled artifact validation failed at ${sourceRoot}`);
+  }
+
+  const id = await allocateInstallId(paths, safeId(options.id ?? sourceValidation.manifest.registry.id), options.force);
+  const packagePath = path.join(paths.packagesDir, id);
+  const existing = await maybeInstalledPackage(paths, id);
+  const tempPath = await copyCompiledArtifactToInstallTemp(sourceRoot, paths, id);
+
+  try {
+    const tempValidation = await validateDkbArtifactManifest(tempPath, { progress: options.progress });
+
+    if (!tempValidation.ok) {
+      throw new DkbError(`Copied compiled artifact validation failed at ${tempPath}`);
+    }
+
+    const stagedDkb = await loadDkbPackage(tempPath, id);
+    const sameVersionReplacement = existing?.dkb.manifest.version === stagedDkb.manifest.version;
+
+    if (sameVersionReplacement && existing.validation?.manifest?.hashes.artifactTree !== tempValidation.manifest?.hashes.artifactTree) {
+      throw new DkbError(`Cannot atomically replace ${id}@${stagedDkb.manifest.version} with different compiled content. Bump the DKB version before updating.`);
+    }
+
+    const registryId = await runtimeRegistryId(paths);
+    await validateFaissPackageQueryability(stagedDkb);
+    let finalValidation: ValidateDkbArtifactManifestResult | undefined;
+    let catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>> | undefined;
+    let searchUpsert: FaissPackageMutationResult | undefined;
+    let removedPrevious: FaissPackageMutationResult | undefined;
+
+    const activationTotal = 4;
+
+    options.progress?.(progressStart({
+      phase: 'activate',
+      label: 'Activate package',
+      total: activationTotal,
+      unit: 'steps',
+    }));
+
+    await promotePackagePath(tempPath, packagePath, options.force, async () => {
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 1,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+      finalValidation = await validateDkbArtifactManifest(packagePath);
+
+      if (!finalValidation.ok) {
+        throw new DkbError(`Installed compiled artifact validation failed at ${packagePath}`);
+      }
+
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 2,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+      catalog = await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false });
+      invalidateRuntimeQuerySnapshot(paths.stateRoot);
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 3,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+      searchUpsert = await validateFaissRuntimeReady({
+        root: paths.stateRoot,
+        registryId,
+        packageId: stagedDkb.manifest.id,
+        packageVersion: stagedDkb.manifest.version,
+      });
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 4,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+    });
+    options.progress?.(progressFinish({
+      phase: 'activate',
+      label: 'Activate package',
+      total: activationTotal,
+      unit: 'steps',
+    }));
+
+    if (existing && existing.dkb.manifest.version !== stagedDkb.manifest.version) {
+      removedPrevious = searchUpsert;
+    }
+    invalidateRuntimeQuerySnapshot(paths.stateRoot);
+
+    return {
+      status: 'imported_compiled_artifact',
+      id,
+      registryPath: paths.stateRoot,
+      packagePath,
+      validation: finalValidation!,
+      catalog: catalog!,
+      search: {
+        upsert: searchUpsert!,
+        removedPrevious,
+      },
+    };
+  } catch (error) {
+    await fs.rm(tempPath, { recursive: true, force: true });
+    invalidateRuntimeQuerySnapshot(paths.stateRoot);
+    throw error;
+  }
+}
+
+export async function removeDkbFromRuntime(id: string, stateRoot?: string, options: { progress?: DkbProgressReporter } = {}) {
   const paths = await ensureRuntimeState(stateRoot);
   const packageRoots = await installedDkbRoots(paths, id);
 
@@ -130,15 +346,70 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string) {
     throw new DkbError(`Runtime DKB is not installed: ${id}`);
   }
 
-  await Promise.all(packageRoots.map((packagePath) => fs.rm(packagePath, { recursive: true, force: true })));
-  await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot);
+  const registryId = await runtimeRegistryId(paths);
+  const total = packageRoots.length + 3;
+  let completed = 0;
+
+  options.progress?.(progressStart({
+    phase: 'uninstall',
+    label: 'Uninstall package',
+    total,
+    unit: 'steps',
+  }));
+
+  await Promise.all(packageRoots.map(async (packagePath) => {
+    await fs.rm(packagePath, { recursive: true, force: true });
+    completed += 1;
+    options.progress?.(progressUpdate({
+      phase: 'uninstall',
+      label: 'Uninstall package',
+      value: completed,
+      total,
+      unit: 'steps',
+    }));
+  }));
+  await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false });
+  completed += 1;
+  options.progress?.(progressUpdate({
+    phase: 'uninstall',
+    label: 'Uninstall package',
+    value: completed,
+    total,
+    unit: 'steps',
+  }));
   await removeRuntimeDependencyEntries(paths.stateRoot, id, packageRoots);
+  completed += 1;
+  options.progress?.(progressUpdate({
+    phase: 'uninstall',
+    label: 'Uninstall package',
+    value: completed,
+    total,
+    unit: 'steps',
+  }));
   invalidateRuntimeQuerySnapshot(paths.stateRoot);
+  const remaining = await validateFaissRuntimeReady({ root: paths.stateRoot, registryId }).catch(() => null);
+  completed += 1;
+  options.progress?.(progressUpdate({
+    phase: 'uninstall',
+    label: 'Uninstall package',
+    value: completed,
+    total,
+    unit: 'steps',
+  }));
+  options.progress?.(progressFinish({
+    phase: 'uninstall',
+    label: 'Uninstall package',
+    total,
+    unit: 'steps',
+  }));
 
   return {
     status: 'removed',
     id,
     registryPath: paths.stateRoot,
+    search: {
+      removed: remaining ? [remaining] : [],
+    },
   };
 }
 
@@ -162,13 +433,29 @@ export async function retrieveFromRuntime(request: DkbRetrieveKnowledgeRequest, 
   let queryContext = runtimeQueryContexts.get(snapshotKey);
 
   if (!queryContext) {
-    queryContext = await getQueryContext(paths.stateRoot, registry.manifest.id);
-    runtimeQueryContexts.set(snapshotKey, queryContext);
+    try {
+      queryContext = await getQueryContext(paths.stateRoot, registry.manifest.id);
+      runtimeQueryContexts.set(snapshotKey, queryContext);
+    } catch (error) {
+      if (!isMissingCompiledArtifactError(error)) {
+        throw error;
+      }
+    }
   }
 
   const response = await retrieveKnowledge(paths.stateRoot, request, queryContext);
 
-  if (process.env.DKB_TRACE_ENABLED !== 'false') {
+  const audit = enqueueQueryAudit({
+    root: paths.stateRoot,
+    channel: 'runtime-http',
+    request,
+    response,
+  });
+  if (audit.mode === 'synchronous_fallback') {
+    await audit.flushed;
+  }
+
+  if (retrievalTraceEnabled()) {
     await recordRetrievalTrace({
       root: paths.stateRoot,
       request,
@@ -180,9 +467,18 @@ export async function retrieveFromRuntime(request: DkbRetrieveKnowledgeRequest, 
   return response;
 }
 
+function isMissingCompiledArtifactError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return /unable to open database file|no such file or directory|ENOENT/i.test(message);
+}
+
 export function invalidateRuntimeQuerySnapshot(stateRoot?: string): number {
   if (!stateRoot) {
     const count = runtimeQueryContexts.size;
+    for (const context of runtimeQueryContexts.values()) {
+      void closeFaissSnapshot(context.faiss);
+    }
     runtimeQueryContexts.clear();
     invalidateQueryContext();
 
@@ -190,7 +486,9 @@ export function invalidateRuntimeQuerySnapshot(stateRoot?: string): number {
   }
 
   const root = path.resolve(stateRoot);
+  const context = runtimeQueryContexts.get(root);
   const removed = runtimeQueryContexts.delete(root) ? 1 : 0;
+  void closeFaissSnapshot(context?.faiss);
   invalidateQueryContext(root);
 
   return removed;
@@ -289,6 +587,26 @@ async function installedDkbRoots(paths: DkbRuntimePaths, id: string): Promise<st
     .map((dkb) => dkb.root);
 }
 
+async function maybeInstalledPackage(paths: DkbRuntimePaths, id: string): Promise<{
+  dkb: LoadedDkb;
+  validation: ValidateDkbArtifactManifestResult | null;
+} | null> {
+  const packagePath = path.join(paths.packagesDir, id);
+
+  if (!(await exists(packagePath))) {
+    return null;
+  }
+
+  const dkb = await loadDkbPackage(packagePath, id);
+  const validation = await validateDkbArtifactManifest(packagePath).catch(() => null);
+
+  return { dkb, validation };
+}
+
+async function runtimeRegistryId(paths: DkbRuntimePaths): Promise<string> {
+  return (await loadRegistry(paths.stateRoot)).manifest.id;
+}
+
 async function allocateInstallId(paths: DkbRuntimePaths, requested: string, force?: boolean): Promise<string> {
   if (force) {
     return requested;
@@ -319,6 +637,54 @@ async function replacePackagePath(packagePath: string, force?: boolean): Promise
   }
 
   await fs.rm(packagePath, { recursive: true, force: true });
+}
+
+async function copyCompiledArtifactToInstallTemp(sourceRoot: string, paths: DkbRuntimePaths, id: string): Promise<string> {
+  const tempRoot = path.join(paths.stateDir, 'tmp');
+  const tempPath = path.join(tempRoot, `install-${safeId(id)}-${process.pid}-${Date.now().toString(36)}`);
+
+  await fs.mkdir(tempRoot, { recursive: true });
+  await fs.rm(tempPath, { recursive: true, force: true });
+  await fs.cp(sourceRoot, tempPath, {
+    recursive: true,
+    filter: (source) => !isEphemeralDkbStatePath(sourceRoot, source),
+  });
+
+  return tempPath;
+}
+
+async function promotePackagePath<T>(
+  tempPath: string,
+  packagePath: string,
+  force: boolean | undefined,
+  validatePromotion: () => Promise<T>,
+): Promise<T> {
+  const backupPath = `${packagePath}.replace-${process.pid}-${Date.now().toString(36)}`;
+
+  if (await exists(packagePath)) {
+    if (!force) {
+      throw new DkbError(`Runtime DKB already exists: ${path.basename(packagePath)}. Use force to replace it.`);
+    }
+
+    await fs.rename(packagePath, backupPath);
+  }
+
+  try {
+    await fs.rename(tempPath, packagePath);
+    const result = await validatePromotion();
+    await fs.rm(backupPath, { recursive: true, force: true });
+
+    return result;
+  } catch (error) {
+    await fs.rm(packagePath, { recursive: true, force: true });
+
+    if (await exists(backupPath)) {
+      await fs.rename(backupPath, packagePath);
+    }
+
+    throw error;
+  }
+
 }
 
 async function writeGeneratedDkbManifest(root: string, manifest: DkbSourceManifest): Promise<void> {
@@ -402,6 +768,20 @@ function isRuntimeArtifactPath(sourceRoot: string, source: string): boolean {
   const relative = path.relative(sourceRoot, source);
 
   return relative === '.dkb' || relative.startsWith(`.dkb${path.sep}`);
+}
+
+function isEphemeralDkbStatePath(sourceRoot: string, source: string): boolean {
+  const relative = path.relative(sourceRoot, source);
+  const cachePath = path.join('.dkb', 'cache');
+  const locksPath = path.join('.dkb', 'locks');
+  const runsPath = path.join('.dkb', 'runs');
+
+  return relative === cachePath
+    || relative.startsWith(`${cachePath}${path.sep}`)
+    || relative === locksPath
+    || relative.startsWith(`${locksPath}${path.sep}`)
+    || relative === runsPath
+    || relative.startsWith(`${runsPath}${path.sep}`);
 }
 
 async function exists(target: string): Promise<boolean> {

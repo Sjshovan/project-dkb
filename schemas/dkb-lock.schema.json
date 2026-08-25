@@ -29,12 +29,11 @@
     "artifacts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["krIndex", "krGraph", "krVector"],
+      "required": ["sourceIndex", "sourceGraph", "sourceVector"],
       "properties": {
-        "krIndex": { "$ref": "#/$defs/artifact" },
-        "krGraph": { "$ref": "#/$defs/artifact" },
-        "krVector": { "$ref": "#/$defs/artifact" },
-        "sourceIndex": { "$ref": "#/$defs/artifact" }
+        "sourceIndex": { "$ref": "#/$defs/artifact" },
+        "sourceGraph": { "$ref": "#/$defs/artifact" },
+        "sourceVector": { "$ref": "#/$defs/artifact" }
       }
     },
     "compiled": {

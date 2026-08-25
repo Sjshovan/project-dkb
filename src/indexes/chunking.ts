@@ -3,7 +3,6 @@ import type { DkbStoreType, KnowledgeSourceUnit } from '../protocol/types.js';
 
 export interface ChunkSourceInput {
   dkbId: string;
-  regionId: string;
   storeId: string;
   type: DkbStoreType;
   unit: KnowledgeSourceUnit & {
@@ -40,7 +39,6 @@ export function chunkSourceUnit(input: ChunkSourceInput): ChunkedSourceUnit[] {
   const baseKeywords = input.unit.keywords ?? [];
   const assetId = sourceAssetId({
     dkbId: input.dkbId,
-    regionId: input.regionId,
     storeId: input.storeId,
     type: input.type,
     locator: input.unit.locator,
@@ -78,7 +76,6 @@ export function chunkSourceUnit(input: ChunkSourceInput): ChunkedSourceUnit[] {
 
 export function sourceAssetId(input: {
   dkbId: string;
-  regionId?: string;
   storeId: string;
   type: DkbStoreType;
   locator: Record<string, unknown>;
@@ -86,7 +83,6 @@ export function sourceAssetId(input: {
   return stableHash({
     type: 'source-unit',
     dkbId: input.dkbId,
-    regionId: input.regionId ?? null,
     storeId: input.storeId,
     sourceType: input.type,
     locator: input.locator,
@@ -116,7 +112,6 @@ function chunkFor(input: {
   const hash = stableHash({
     type: 'source-chunk',
     dkbId: input.input.dkbId,
-    regionId: input.input.regionId,
     assetId: input.assetId,
     ordinal: input.ordinal,
     text: input.text,

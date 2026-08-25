@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import * as tar from 'tar';
 import { DkbError } from '../protocol/errors.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 
 export const DKB_PACKAGE_EXTENSION = '.dkbpkg';
 export const DKB_PACKAGE_MEDIA_TYPE = 'application/vnd.dkb.package+gzip';
@@ -21,8 +22,19 @@ export async function createDkbPackageArchive(sourceRoot: string, archivePath: s
   }, ['.']);
 }
 
-export async function extractDkbPackageArchive(archivePath: string, targetRoot: string): Promise<void> {
+export async function extractDkbPackageArchive(archivePath: string, targetRoot: string, options: { progress?: DkbProgressReporter } = {}): Promise<void> {
   const target = path.resolve(targetRoot);
+  const entries = options.progress ? await listArchiveEntries(archivePath) : [];
+  let extracted = 0;
+
+  if (options.progress && entries.length > 0) {
+    options.progress(progressStart({
+      phase: 'extract',
+      label: 'Extract package',
+      total: entries.length,
+      unit: 'files',
+    }));
+  }
 
   await fs.mkdir(target, { recursive: true });
   await tar.x({
@@ -31,7 +43,45 @@ export async function extractDkbPackageArchive(archivePath: string, targetRoot: 
     preserveOwner: false,
     unlink: true,
     filter: (entryPath, entry) => isSafeTarEntry(entryPath, entry as unknown),
+    onentry: () => {
+      if (!options.progress || entries.length === 0) {
+        return;
+      }
+      extracted += 1;
+      options.progress(progressUpdate({
+        phase: 'extract',
+        label: 'Extract package',
+        value: extracted,
+        total: entries.length,
+        unit: 'files',
+      }));
+    },
   });
+
+  if (options.progress && entries.length > 0) {
+    options.progress(progressFinish({
+      phase: 'extract',
+      label: 'Extract package',
+      total: entries.length,
+      unit: 'files',
+    }));
+  }
+}
+
+async function listArchiveEntries(archivePath: string): Promise<string[]> {
+  const entries: string[] = [];
+
+  await tar.t({
+    file: path.resolve(archivePath),
+    filter: (entryPath, entry) => {
+      isSafeTarEntry(entryPath, entry as unknown);
+      entries.push(entryPath);
+
+      return true;
+    },
+  });
+
+  return entries;
 }
 
 function isSafeTarEntry(entryPath: string, entry: unknown): boolean {

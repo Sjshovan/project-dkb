@@ -63,6 +63,9 @@
         "minLength": 1
       }
     },
+    "localSources": {
+      "$ref": "#/$defs/localSources"
+    },
     "permissions": {
       "$ref": "#/$defs/permissions"
     },
@@ -150,6 +153,22 @@
         },
         "write": {
           "type": "boolean"
+        }
+      }
+    },
+    "localSources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "excludes": {
+          "$ref": "#/$defs/stringList"
         }
       }
     },

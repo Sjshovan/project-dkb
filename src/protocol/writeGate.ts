@@ -5,6 +5,7 @@ import type { DkbWriteOperation, LoadedDkb } from './types.js';
 export type DkbWriteGateStatus = 'accepted' | 'queued' | 'blocked';
 export type DkbWriteBlockReason =
   | 'read_only_dkb'
+  | 'remote_read_only'
   | 'capability_disabled'
   | 'unavailable_dkb'
   | 'alpha_append_only'
@@ -27,7 +28,7 @@ export interface DkbWriteIntent {
     registryId?: string;
     collectionId?: string | null;
     dkbId?: string;
-    regionId?: string;
+    sourceId?: string;
     reason?: string;
   };
 }
@@ -36,6 +37,7 @@ export interface DkbWriteGateResult {
   target: {
     dkbId: string;
     root: string;
+    origin: 'local' | 'remote';
   };
   operation: DkbWriteOperation;
   status: DkbWriteGateStatus;
@@ -61,16 +63,26 @@ export interface DkbWriteIntentResult extends DkbWriteGateResult {
 }
 
 export function evaluateDkbWrite(dkb: LoadedDkb, operation: DkbWriteOperation): DkbWriteGateResult {
-  const capabilities = resolveDkbCapabilities(dkb.manifest);
+  const origin = dkb.origin ?? 'local';
+  const capabilities = origin === 'remote' ? remoteReadOnlyCapabilities() : resolveDkbCapabilities(dkb.manifest);
   const accessOperation = accessOperationFor(operation);
   const base = {
     target: {
       dkbId: dkb.manifest.id,
       root: dkb.root,
+      origin,
     },
     operation,
     capabilities,
   };
+
+  if (origin === 'remote') {
+    return {
+      ...base,
+      status: 'blocked',
+      reason: 'remote_read_only',
+    };
+  }
 
   if (capabilities.state.availability !== 'ready') {
     return {
@@ -124,6 +136,27 @@ export function evaluateDkbWrite(dkb: LoadedDkb, operation: DkbWriteOperation): 
     ...base,
     status: 'accepted',
     reason: null,
+  };
+}
+
+function remoteReadOnlyCapabilities(): DkbCapabilities {
+  return {
+    access: {
+      read: true,
+      write: false,
+      append: false,
+      delete: false,
+    },
+    writePolicy: {
+      mode: 'read_only',
+      queueRequired: true,
+      confirmationRequired: false,
+    },
+    state: {
+      availability: 'ready',
+      indexFreshness: 'unknown',
+      lastIndexedAt: null,
+    },
   };
 }
 

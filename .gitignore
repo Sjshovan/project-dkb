@@ -13,8 +13,13 @@ dkb-release.json
 
 # local IDE state
 .idea/
+.codex-remote-attachments/
 latest-session.jsonl
 rollout-*.jsonl
+
+# Python compiler caches
+__pycache__/
+*.py[cod]
 
 # local labs and scratch runs
 storage/

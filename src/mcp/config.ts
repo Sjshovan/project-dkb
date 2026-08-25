@@ -1,7 +1,7 @@
 import { DkbError } from '../protocol/errors.js';
 
 export function defaultRegistryPath(): string | null {
-  return process.env.DKB_REGISTRY_PATH || null;
+  return process.env.DKB_REGISTRY_PATH || process.env.DKB_RUNTIME_STATE_ROOT || null;
 }
 
 export function configuredRegistryPath(): string {

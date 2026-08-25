@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
-import type { KnowledgeRegionDescriptor } from '../contracts/types.js';
-import { buildKnowledgeRegionDescriptorsFromCollection, buildKnowledgeRegionDescriptorsFromDkb } from '../knowledge/regionDescriptors.js';
+import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import { sourceIndexForInstalledDkb } from '../runtime/catalog.js';
 import { resolveDkbCapabilities, type DkbCapabilities } from '../protocol/capabilities.js';
 import { loadRegistry } from '../protocol/manifest.js';
 import { deriveKnowledgeSpace, type KnowledgeSpaceIdentity } from '../protocol/space.js';
@@ -11,12 +11,17 @@ export interface DkrOrigin {
   registryId: string;
   collectionId: string | null;
   dkbId: string;
-  recordId: string;
+  sourceId: string;
 }
 
-export interface RegistryRegion extends KnowledgeRegionDescriptor {
+export interface RegistryChunk {
+  id: string;
+  title: string;
+  contentHash: string;
+  updatedAt: string;
   origin: DkrOrigin;
   capabilities: Pick<DkbCapabilities['access'], 'read' | 'write' | 'append'>;
+  metadata: Record<string, unknown>;
 }
 
 export interface RegistryCatalog {
@@ -53,10 +58,10 @@ export interface RegistryCatalog {
   };
 }
 
-export interface RegistryRegionIndex {
+export interface RegistryChunkIndex {
   registryId: string;
   registryHash: string;
-  regions: RegistryRegion[];
+  chunks: RegistryChunk[];
   metadata: RegistryCatalog['metadata'];
 }
 
@@ -64,8 +69,8 @@ export async function describeRegistry(registryPath: string): Promise<RegistryCa
   return catalogFromRegistry(await loadRegistry(registryPath));
 }
 
-export async function buildRegistryRegions(registryPath: string): Promise<RegistryRegionIndex> {
-  return buildRegistryRegionsFromRegistry(await loadRegistry(registryPath));
+export async function buildRegistryChunks(registryPath: string): Promise<RegistryChunkIndex> {
+  return buildRegistryChunksFromRegistry(await loadRegistry(registryPath));
 }
 
 export function catalogFromRegistry(registry: LoadedRegistry): RegistryCatalog {
@@ -128,7 +133,7 @@ export function catalogFromRegistry(registry: LoadedRegistry): RegistryCatalog {
   };
 }
 
-export async function buildRegistryRegionsFromRegistry(registry: LoadedRegistry): Promise<RegistryRegionIndex> {
+export async function buildRegistryChunksFromRegistry(registry: LoadedRegistry): Promise<RegistryChunkIndex> {
   const registryHash = stableHash({
     id: registry.manifest.id,
     version: registry.manifest.version,
@@ -136,7 +141,7 @@ export async function buildRegistryRegionsFromRegistry(registry: LoadedRegistry)
     dkbs: registry.dkbs.map((dkb) => dkb.manifest.id),
   });
   const duplicateTracker = createDuplicateTracker();
-  const regions: RegistryRegion[] = [];
+  const chunks: RegistryChunk[] = [];
 
   for (const collection of registry.collections) {
     const includedRoots = new Set<string>();
@@ -147,16 +152,12 @@ export async function buildRegistryRegionsFromRegistry(registry: LoadedRegistry)
       }
     }
 
-    const collectionBuild = await buildKnowledgeRegionDescriptorsFromCollection(collection);
-
-    for (const region of collectionBuild.regions) {
-      const dkb = dkbForRegion(collection, region);
-
-      if (!dkb || !includedRoots.has(path.resolve(dkb.root))) {
+    for (const dkb of collection.dkbs) {
+      if (!includedRoots.has(path.resolve(dkb.root))) {
         continue;
       }
 
-      regions.push(toRegistryRegion(registry.manifest.id, collection.manifest.id, dkb, region));
+      chunks.push(...await registryChunksForDkb(registry.manifest.id, collection.manifest.id, dkb));
     }
   }
 
@@ -165,43 +166,48 @@ export async function buildRegistryRegionsFromRegistry(registry: LoadedRegistry)
       continue;
     }
 
-    const collectionHash = stableHash({
-      type: 'standalone-dkb',
-      registryId: registry.manifest.id,
-      dkbId: dkb.manifest.id,
-      version: dkb.manifest.version,
-    });
-    const dkbRegions = await buildKnowledgeRegionDescriptorsFromDkb(dkb, collectionHash);
-
-    regions.push(...dkbRegions.map((region) => toRegistryRegion(registry.manifest.id, null, dkb, region)));
+    chunks.push(...await registryChunksForDkb(registry.manifest.id, null, dkb));
   }
 
   return {
     registryId: registry.manifest.id,
     registryHash,
-    regions: regions.sort((a, b) => a.id.localeCompare(b.id)),
+    chunks: chunks.sort((a, b) => a.id.localeCompare(b.id)),
     metadata: {
       duplicateDkbRoots: duplicateTracker.duplicates,
     },
   };
 }
 
-function toRegistryRegion(
+async function registryChunksForDkb(
   registryId: string,
   collectionId: string | null,
   dkb: LoadedDkb,
-  region: KnowledgeRegionDescriptor,
-): RegistryRegion {
+): Promise<RegistryChunk[]> {
+  const sourceIndex = await sourceIndexForInstalledDkb(dkb);
+
+  return sourceIndex.units.map((unit) => toRegistryChunk(registryId, collectionId, dkb, unit));
+}
+
+function toRegistryChunk(
+  registryId: string,
+  collectionId: string | null,
+  dkb: LoadedDkb,
+  unit: IndexedSourceUnit,
+): RegistryChunk {
   const capabilities = resolveDkbCapabilities(dkb.manifest);
   const origin = {
     registryId,
     collectionId,
     dkbId: dkb.manifest.id,
-    recordId: region.fetch.recordId ?? region.fetchPlan?.recordId ?? region.id,
+    sourceId: unit.id,
   };
 
   return {
-    ...region,
+    id: unit.id,
+    title: unit.title,
+    contentHash: unit.hash,
+    updatedAt: unit.updatedAt,
     origin,
     capabilities: {
       read: capabilities.access.read,
@@ -209,17 +215,12 @@ function toRegistryRegion(
       append: capabilities.access.append,
     },
     metadata: {
-      ...(region.metadata ?? {}),
       origin,
       capabilities,
+      assetId: unit.assetId,
+      locator: unit.locator,
     },
   };
-}
-
-function dkbForRegion(collection: LoadedCollection, region: KnowledgeRegionDescriptor): LoadedDkb | null {
-  const dkbId = region.fetch.dkbId ?? region.fetchPlan?.dkbId;
-
-  return collection.dkbs.find((candidate) => candidate.manifest.id === dkbId) ?? null;
 }
 
 function createDuplicateTracker() {

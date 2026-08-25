@@ -3,9 +3,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { stableHash } from '../contracts/hash.js';
 import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
-import type { DkbReadOperation, DkbReadQuery, DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable, KnowledgeRegion, KnowledgeSourceUnit } from '../protocol/types.js';
+import type { DkbReadOperation, DkbReadQuery, DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable } from '../protocol/types.js';
 import { tokenize } from '../router/scoring.js';
-import { chunkSourceUnit } from './chunking.js';
 
 export const SOURCE_INDEX_PATH = `${DKB_ARTIFACTS_DIR}/source.index`;
 export const SOURCE_GRAPH_PATH = `${DKB_ARTIFACTS_DIR}/source.index.graph`;
@@ -26,7 +25,7 @@ export interface IndexedSourceUnit {
   id: string;
   assetId: string;
   dkbId: string;
-  regionId: string;
+  packageVersion?: string;
   storeId: string;
   type: DkbStoreType;
   locator: Record<string, unknown>;
@@ -80,12 +79,13 @@ export interface SourceUnitMatch {
 
 export async function writeSourceIndex(root: string, units: IndexedSourceUnit[], edges: IndexedSourceEdge[]): Promise<string> {
   const indexPath = resolveFrom(root, SOURCE_INDEX_PATH);
+  const tempIndexPath = `${indexPath}.${process.pid}.${Date.now()}.tmp`;
   const assets = sourceAssetsFromChunks(units);
 
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  await removeArtifact(indexPath);
+  await removeArtifact(tempIndexPath);
 
-  const database = new DatabaseSync(indexPath);
+  const database = new DatabaseSync(tempIndexPath);
 
   try {
     database.exec(`
@@ -103,7 +103,6 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
 
       create table source_units (
         dkb_id text not null,
-        region_id text not null,
         source_id text not null,
         asset_id text not null,
         store_id text not null,
@@ -124,8 +123,6 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
         primary key (dkb_id, source_id)
       );
 
-      create index source_units_region_idx
-        on source_units (dkb_id, region_id);
       create index source_units_asset_idx
         on source_units (dkb_id, asset_id);
 
@@ -149,10 +146,10 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
     `);
     const insertUnit = database.prepare(`
       insert into source_units (
-        dkb_id, region_id, source_id, asset_id, store_id, type, locator_json, asset_locator_json,
+        dkb_id, source_id, asset_id, store_id, type, locator_json, asset_locator_json,
         title, search_text, keywords_json, capabilities_json, queryable_json, source_hash, updated_at,
         chunk_ordinal, chunk_start, chunk_end, heading
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertEdge = database.prepare(`
       insert into source_edges (
@@ -178,7 +175,6 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
       for (const unit of units) {
         insertUnit.run(
           unit.dkbId,
-          unit.regionId,
           unit.id,
           unit.assetId,
           unit.storeId,
@@ -220,6 +216,9 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
     database.close();
   }
 
+  await removeArtifact(indexPath);
+  await fs.rename(tempIndexPath, indexPath);
+
   return indexPath;
 }
 
@@ -238,7 +237,7 @@ export async function readSourceIndex(root: string): Promise<SourceIndexReadResu
       `).all() as Array<Record<string, unknown>>
       : [];
     const unitRows = database.prepare(`
-      select dkb_id, region_id, source_id,
+      select dkb_id, source_id,
              ${hasAssetColumns ? 'asset_id' : 'source_id as asset_id'},
              store_id, type, locator_json,
              ${hasAssetColumns ? 'asset_locator_json' : 'locator_json as asset_locator_json'},
@@ -248,7 +247,7 @@ export async function readSourceIndex(root: string): Promise<SourceIndexReadResu
              ${hasAssetColumns ? 'chunk_end' : 'length(search_text) as chunk_end'},
              ${hasAssetColumns ? 'heading' : 'null as heading'}
       from source_units
-      order by dkb_id, region_id, source_id
+      order by dkb_id, source_id
     `).all() as Array<Record<string, unknown>>;
     const edgeRows = database.prepare(`
       select dkb_id, store_id, source_id, target_source_id, type, score, keywords_json, reason
@@ -264,20 +263,6 @@ export async function readSourceIndex(root: string): Promise<SourceIndexReadResu
   } finally {
     database.close();
   }
-}
-
-export function groupSourceUnitsByRegion(units: IndexedSourceUnit[]): Map<string, IndexedSourceUnit[]> {
-  const result = new Map<string, IndexedSourceUnit[]>();
-
-  for (const unit of units) {
-    const key = sourceRegionKey(unit);
-    const list = result.get(key) ?? [];
-
-    list.push(unit);
-    result.set(key, list);
-  }
-
-  return result;
 }
 
 export function queryEvidenceForSourceUnits(query: DkbReadQuery | string): SourceUnitQueryEvidence {
@@ -324,7 +309,7 @@ export function filterSourceUnitsForQueryEvidence(
       index,
       evidence: sourceUnitMatchEvidence(unit, evidence),
     }))
-    .filter((item) => hasSourceUnitMatch(item.evidence))
+    .filter((item) => hasSourceUnitMatch(item.evidence, evidence))
     .sort(compareSourceUnitMatches)
     .slice(0, limit)
     .map((item) => ({
@@ -392,13 +377,8 @@ export function expandSourceChunkMatches(
     .slice(0, limit);
 }
 
-export function sourceRegionKey(value: { dkbId: string; regionId?: string; id?: string }): string {
-  return `${value.dkbId}/${value.regionId ?? value.id ?? ''}`;
-}
-
 export function sourceUnitId(input: {
   dkbId: string;
-  regionId: string;
   storeId: string;
   type: DkbStoreType;
   locator: Record<string, unknown>;
@@ -407,152 +387,11 @@ export function sourceUnitId(input: {
   return stableHash({
     type: 'source-chunk',
     dkbId: input.dkbId,
-    regionId: input.regionId,
     storeId: input.storeId,
     sourceType: input.type,
     locator: input.locator,
     ordinal: input.ordinal ?? 0,
   });
-}
-
-export function sourceUnitsFromKnowledgeRegion(record: KnowledgeRegion & { dkbId: string }): IndexedSourceUnit[] {
-  const sourceRef = record.sourceRef;
-
-  if (!sourceRef) {
-    return [];
-  }
-
-  const explicit = record.sourceUnits ?? [];
-
-  if (explicit.length > 0) {
-    return explicit.flatMap((unit): IndexedSourceUnit[] => {
-      const sourceText = unit.text ?? '';
-      const keywordText = [
-        unit.title ?? record.title,
-        sourceText,
-        (unit.keywords ?? []).join(' '),
-      ].join(' ');
-      const keywords = rankedKeywords([
-        ...(unit.keywords ?? []),
-        ...extractKeywords(keywordText),
-      ], 24);
-
-      const unitStoreId = unit.storeId ?? sourceRef.storeId;
-      const unitType = unit.type ?? sourceRef.type;
-
-      if (isChunkedSourceUnit(unit)) {
-        const unitText = unit.text ?? '';
-        const unitKeywords = rankedKeywords([
-          ...(unit.keywords ?? []),
-          ...extractKeywords(unitText),
-        ], 24);
-
-        return [{
-          id: unit.id ?? sourceUnitId({
-            dkbId: record.dkbId,
-            regionId: record.id,
-            storeId: unitStoreId,
-            type: unitType,
-            locator: unit.locator,
-            ordinal: unit.chunkOrdinal,
-          }),
-          assetId: unit.assetId,
-          dkbId: record.dkbId,
-          regionId: record.id,
-          storeId: unitStoreId,
-          type: unitType,
-          locator: unit.locator,
-          assetLocator: unit.assetLocator ?? sourceRef.locator,
-          title: unit.title ?? record.title,
-          text: unitText,
-          keywords: unitKeywords,
-          capabilities: unit.capabilities ?? capabilitiesForSourceType(unitType),
-          queryable: unit.queryable ?? record.queryable,
-          hash: unit.hash ?? stableHash({ sourceHash: sourceRef.hash ?? null, text: unitText, locator: unit.locator }),
-          updatedAt: unit.updatedAt ?? record.updatedAt,
-          chunkOrdinal: unit.chunkOrdinal,
-          chunkStart: unit.chunkStart,
-          chunkEnd: unit.chunkEnd,
-          heading: unit.heading,
-        }];
-      }
-
-      return chunkSourceUnit({
-        dkbId: record.dkbId,
-        regionId: record.id,
-        storeId: unitStoreId,
-        type: unitType,
-        unit: {
-          ...unit,
-          text: sourceText,
-          keywords,
-          hash: unit.hash ?? stableHash({ sourceHash: sourceRef.hash ?? null, text: sourceText, locator: unit.locator }),
-          updatedAt: unit.updatedAt ?? record.updatedAt,
-        },
-        fallbackTitle: record.title,
-        fallbackUpdatedAt: record.updatedAt,
-      }).map((chunk) => ({
-        ...chunk,
-        dkbId: record.dkbId,
-        regionId: record.id,
-        storeId: unitStoreId,
-        type: unitType,
-        assetLocator: unit.locator,
-        capabilities: unit.capabilities ?? capabilitiesForSourceType(unitType),
-        queryable: unit.queryable ?? record.queryable,
-      }));
-    });
-  }
-
-  return locatorsForRegion(record).flatMap((locator) => {
-    const text = [
-      record.title,
-      record.content,
-      record.topics.join(' '),
-      (record.keywords ?? []).join(' '),
-      record.entities.join(' '),
-      (record.aliases ?? []).join(' '),
-    ].join(' ');
-    const assetHash = stableHash({ sourceHash: sourceRef.hash ?? null, text, locator });
-
-    return chunkSourceUnit({
-      dkbId: record.dkbId,
-      regionId: record.id,
-      storeId: sourceRef.storeId,
-      type: sourceRef.type,
-      unit: {
-        locator,
-        title: record.title,
-        text,
-        keywords: extractKeywords(text),
-        hash: assetHash,
-        updatedAt: record.updatedAt,
-      },
-      fallbackTitle: record.title,
-      fallbackUpdatedAt: record.updatedAt,
-    }).map((chunk) => ({
-      ...chunk,
-      dkbId: record.dkbId,
-      regionId: record.id,
-      storeId: sourceRef.storeId,
-      type: sourceRef.type,
-      assetLocator: locator,
-      capabilities: capabilitiesForSourceType(sourceRef.type),
-      queryable: record.queryable,
-    }));
-  });
-}
-
-function isChunkedSourceUnit(unit: KnowledgeSourceUnit): unit is KnowledgeSourceUnit & {
-  assetId: string;
-  chunkOrdinal: number;
-  chunkStart: number;
-  chunkEnd: number;
-} {
-  return typeof unit.assetId === 'string'
-    && typeof unit.chunkOrdinal === 'number'
-    && typeof unit.chunkStart === 'number'
-    && typeof unit.chunkEnd === 'number';
 }
 
 export function sourceAssetsFromChunks(units: IndexedSourceUnit[]): IndexedSourceAsset[] {
@@ -586,7 +425,7 @@ export function sourceAssetsFromChunks(units: IndexedSourceUnit[]): IndexedSourc
 }
 
 export function capabilitiesForSourceType(type: DkbStoreType): KnowledgeCapabilityProfile {
-  if (type === 'sqlite' || type === 'postgres') {
+  if (type === 'sqlite' || type === 'postgres' || type === 'database') {
     return {
       evidence: 'full',
       records: 'full',
@@ -622,22 +461,37 @@ export function mergeCapabilityProfiles(profiles: KnowledgeCapabilityProfile[]):
 
 function sourceUnitMatchEvidence(unit: IndexedSourceUnit, evidence: SourceUnitQueryEvidence): SourceUnitMatch['evidence'] {
   const normalized = `${unit.title}\n${unit.text}\n${unit.keywords.join(' ')}`.toLowerCase();
+  const phrases = evidence.phrases.filter((phrase) => phrase.length > 0 && normalized.includes(phrase));
+  const identifiers = evidence.identifiers.filter((identifier) => normalized.includes(identifier.toLowerCase()));
+
+  if (evidence.identifiers.length > 0) {
+    return {
+      phrases,
+      identifiers,
+      keywords: [],
+      tokens: [],
+    };
+  }
+
   const unitTokens = new Set(tokenize(normalized));
   const keywordSet = new Set(unit.keywords.map((keyword) => keyword.toLowerCase()));
-
   return {
-    phrases: evidence.phrases.filter((phrase) => phrase.length > 0 && normalized.includes(phrase)),
-    identifiers: evidence.identifiers.filter((identifier) => normalized.includes(identifier.toLowerCase())),
+    phrases,
+    identifiers,
     keywords: evidence.tokens.filter((token) => keywordSet.has(token)),
     tokens: evidence.tokens.filter((token) => unitTokens.has(token)),
   };
 }
 
-function hasSourceUnitMatch(evidence: SourceUnitMatch['evidence']): boolean {
-  return evidence.phrases.length > 0
-    || evidence.identifiers.length > 0
-    || evidence.keywords.length > 0
-    || evidence.tokens.length > 0;
+function hasSourceUnitMatch(match: SourceUnitMatch['evidence'], query: SourceUnitQueryEvidence): boolean {
+  if (query.identifiers.length > 0) {
+    return match.identifiers.length > 0;
+  }
+
+  return match.phrases.length > 0
+    || match.identifiers.length > 0
+    || match.keywords.length > 0
+    || match.tokens.length > 0;
 }
 
 function compareSourceUnitMatches(
@@ -685,37 +539,6 @@ function explicitPhrasesFor(query: DkbReadQuery): string[] {
     .filter((filter) => filter.op === 'contains' && typeof filter.value === 'string')
     .map((filter) => String(filter.value).toLowerCase().replace(/\s+/g, ' ').trim())
     .filter(Boolean);
-}
-
-function locatorsForRegion(record: KnowledgeRegion): Record<string, unknown>[] {
-  const sourceRef = record.sourceRef;
-  const locator = sourceRef?.locator ?? {};
-
-  if (sourceRef?.type === 'filesystem') {
-    const paths = Array.isArray(locator.paths)
-      ? locator.paths.filter((item): item is string => typeof item === 'string')
-      : [];
-    const singlePath = typeof locator.path === 'string' ? locator.path : null;
-
-    return (paths.length > 0 ? paths : singlePath ? [singlePath] : []).map((sourcePath) => ({
-      path: sourcePath,
-    }));
-  }
-
-  if (sourceRef?.type === 'sqlite' || sourceRef?.type === 'postgres') {
-    const tables = Array.isArray(locator.tables)
-      ? locator.tables.filter((item): item is string => typeof item === 'string')
-      : [];
-    const table = typeof locator.table === 'string' ? locator.table : null;
-    const schema = typeof locator.schema === 'string' ? locator.schema : undefined;
-
-    return (tables.length > 0 ? tables : table ? [table] : []).map((tableName) => ({
-      ...(schema ? { schema } : {}),
-      table: tableName,
-    }));
-  }
-
-  return [locator];
 }
 
 function extractKeywords(text: string): string[] {
@@ -791,7 +614,6 @@ function sourceUnitFromRow(row: Record<string, unknown>): IndexedSourceUnit {
     id: String(row.source_id),
     assetId: String(row.asset_id),
     dkbId: String(row.dkb_id),
-    regionId: String(row.region_id),
     storeId: String(row.store_id),
     type: String(row.type) as DkbStoreType,
     locator: parseJsonObject(row.locator_json),
@@ -899,8 +721,6 @@ const genericKeywords = new Set([
   'mentions',
   'record',
   'records',
-  'region',
-  'regions',
   'row',
   'rows',
   'source',

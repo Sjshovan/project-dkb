@@ -1,6 +1,6 @@
 ﻿import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readKrIndex } from '../indexes/knowledgeIndex.js';
+import { readSourceIndex } from '../indexes/sourceIndex.js';
 import { loadDkb, loadManifest, loadRegistry } from '../protocol/manifest.js';
 import { manifestPath } from '../protocol/paths.js';
 import { deriveKnowledgeSpace } from '../protocol/space.js';
@@ -15,7 +15,7 @@ export async function inspectTarget(root: string) {
   const dkbs = registry
     ? uniqueDkbs([...registry.collections.flatMap((collection) => collection.dkbs), ...registry.dkbs])
     : [await loadDkb(resolvedRoot)];
-  const krIndex = await maybeReadKrIndex(resolvedRoot);
+  const sourceIndex = await maybeReadSourceIndex(resolvedRoot);
   const verification = await maybeVerify(resolvedRoot, manifestType);
 
   return {
@@ -59,12 +59,12 @@ export async function inspectTarget(root: string) {
       write: dkb.manifest.write ?? null,
     })),
     indexes: {
-      krCount: krIndex.length,
-      regionDescriptorCount: krIndex.length,
+      chunkCount: sourceIndex.units.length,
+      sourceAssetCount: sourceIndex.assets.length,
       compiled: await exists(manifestPath(resolvedRoot, 'dkb-lock.json')),
     },
     verification,
-    warnings: warningsFor(dkbs, krIndex.length),
+    warnings: warningsFor(dkbs, sourceIndex.units.length),
   };
 }
 
@@ -76,19 +76,19 @@ async function maybeVerify(root: string, manifestType: string) {
   return verifyComposeProject(root);
 }
 
-async function maybeReadKrIndex(root: string) {
+async function maybeReadSourceIndex(root: string) {
   try {
-    return await readKrIndex(root);
+    return await readSourceIndex(root);
   } catch {
-    return [];
+    return { assets: [], units: [], edges: [] };
   }
 }
 
-function warningsFor(dkbs: LoadedDkb[], krCount: number): string[] {
+function warningsFor(dkbs: LoadedDkb[], chunkCount: number): string[] {
   const warnings: string[] = [];
 
-  if (krCount === 0) {
-    warnings.push('No compiled KR index records were found.');
+  if (chunkCount === 0) {
+    warnings.push('No compiled chunk records were found.');
   }
 
   for (const dkb of dkbs) {

@@ -9,6 +9,10 @@ import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '
 export const DKB_TRACE_DB = 'trace.sqlite';
 const DEFAULT_TRACE_MAX_ROWS = 100_000;
 
+export function retrievalTraceEnabled(): boolean {
+  return process.env.DKB_TRACE_ENABLED === 'true';
+}
+
 export interface DkbTraceRun {
   id: string;
   root: string;
@@ -357,8 +361,6 @@ function traceEventsFor(
       stage: 'retrieval',
       at,
       payload: {
-        regionsMatched: response.metadata.regionsMatched,
-        regionsRead: response.metadata.regionsRead,
         chunksMatched: response.metadata.chunksMatched ?? 0,
         chunksRead: response.metadata.chunksRead ?? 0,
         sourceUnitsMatched: response.metadata.sourceUnitsMatched,
@@ -371,9 +373,8 @@ function traceEventsFor(
       stage: 'selection',
       at,
       payload: {
-        regionMatches: response.metadata.regionMatches,
         sourceUnitMatches: response.metadata.sourceUnitMatches,
-        krProfile: response.metadata.krProfile ?? null,
+        retrievalProfile: response.metadata.retrievalProfile ?? null,
       },
     },
     {

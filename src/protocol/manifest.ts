@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from './errors.js';
-import { manifestPath } from './paths.js';
+import { manifestPath, resolveContainedPath } from './paths.js';
 import { validateDkbManifest } from './validation.js';
 import type {
   DkbManifest,
@@ -26,7 +26,32 @@ const DISCOVERY_IGNORES = new Set([
   'archives',
 ]);
 const SYSTEM_ARTIFACT_FILENAMES = new Set(['dkb-lock.json', 'dkb-release.json', '.dkb-package.json']);
+const REGISTRY_LOCAL_SOURCE_IGNORES = new Set([
+  ...DISCOVERY_IGNORES,
+  'vendor',
+  DKB_MANIFEST_FILENAME,
+  ...SYSTEM_ARTIFACT_FILENAMES,
+]);
 const SQLITE_EXTENSIONS = new Set(['.sqlite', '.sqlite3', '.db']);
+const LOCAL_TEXT_SOURCE_EXTENSIONS = new Set([
+  '.adoc',
+  '.csv',
+  '.htm',
+  '.html',
+  '.ini',
+  '.json',
+  '.jsonl',
+  '.log',
+  '.md',
+  '.rst',
+  '.sql',
+  '.toml',
+  '.tsv',
+  '.txt',
+  '.xml',
+  '.yaml',
+  '.yml',
+]);
 
 export async function loadDkb(root: string): Promise<LoadedDkb> {
   const resolvedRoot = path.resolve(root);
@@ -76,14 +101,21 @@ export async function loadCollection(root: string, collectionId?: string): Promi
 export async function loadRegistry(root: string): Promise<LoadedRegistry> {
   const resolvedRoot = path.resolve(root);
   const roots = await discoverDkbRoots(resolvedRoot);
+  const rootManifest = await maybeReadRegistryProjectManifest(resolvedRoot);
 
-  if (roots.length === 0) {
-    throw new DkbError(`No ${DKB_MANIFEST_FILENAME} manifest found at ${resolvedRoot}`);
+  const packageDkbs = await Promise.all(roots.map((dkbRoot) => loadDkb(dkbRoot)));
+  const uniquePackages = uniqueDkbs(packageDkbs);
+  const registryManifest = registryManifestFor(resolvedRoot, uniquePackages, rootManifest);
+  const implicitLocalDkb = await maybeLoadImplicitLocalDkb(resolvedRoot, registryManifest, rootManifest, uniquePackages);
+  const unique = uniqueDkbs([
+    ...uniquePackages,
+    ...(implicitLocalDkb ? [implicitLocalDkb] : []),
+  ]);
+
+  if (unique.length === 0 && !rootManifest) {
+    throw new DkbError(`No ${DKB_MANIFEST_FILENAME} manifest or eligible registry-local sources found at ${resolvedRoot}`);
   }
 
-  const dkbs = await Promise.all(roots.map((dkbRoot) => loadDkb(dkbRoot)));
-  const unique = uniqueDkbs(dkbs);
-  const registryManifest = registryManifestFor(resolvedRoot, unique);
   const collections = collectionsFromDkbs(resolvedRoot, registryManifest, unique);
   const collectionDkbIds = new Set(collections.flatMap((collection) => collection.dkbs.map((dkb) => dkb.manifest.id)));
 
@@ -117,7 +149,7 @@ async function discoverDkbRoots(root: string): Promise<string[]> {
 
   const entries = await safeReadDir(root);
   const nested = await Promise.all(entries
-    .filter((entry) => entry.isDirectory() && !DISCOVERY_IGNORES.has(entry.name))
+    .filter((entry) => entry.isDirectory() && !DISCOVERY_IGNORES.has(entry.name) && !entry.name.includes('.replace-'))
     .map((entry) => discoverDkbRoots(path.join(root, entry.name))));
 
   return nested.flat().sort((left, right) => left.localeCompare(right));
@@ -142,6 +174,18 @@ async function safeReadDir(root: string): Promise<import('node:fs').Dirent[]> {
 
     throw new DkbError(`Unable to read DKB registry root at ${root}: ${reason}`);
   }
+}
+
+async function maybeReadRegistryProjectManifest(root: string): Promise<DkbSourceManifest | null> {
+  const source = manifestPath(root, DKB_MANIFEST_FILENAME);
+
+  if (!(await exists(source))) {
+    return null;
+  }
+
+  const raw = await readJson(source);
+
+  return isRegistryProjectManifest(raw) ? validateDkbManifest(raw, source) : null;
 }
 
 async function normalizeDkb(root: string, manifest: DkbSourceManifest, id: string, source: string): Promise<LoadedDkb> {
@@ -183,20 +227,143 @@ async function normalizeDkb(root: string, manifest: DkbSourceManifest, id: strin
   };
 }
 
-function registryManifestFor(root: string, dkbs: LoadedDkb[]): DkrManifest {
+function registryManifestFor(root: string, dkbs: LoadedDkb[], rootManifest: DkbSourceManifest | null): DkrManifest {
   const owner = dkbs.find((dkb) => dkb.manifest.owner)?.manifest.owner;
   const namespace = commonValue(dkbs.map((dkb) => dkb.manifest.namespace));
   const appId = commonValue(dkbs.map((dkb) => dkb.manifest.appId));
+  const registryName = rootManifest?.name ?? titleFromId(path.basename(root) || 'Local Registry');
 
   return {
-    id: safeId(path.basename(root) || 'local-registry'),
-    name: titleFromId(path.basename(root) || 'Local Registry'),
-    version: LOCAL_VERSION,
-    namespace,
-    appId,
-    owner,
+    id: safeId(rootManifest?.package ?? rootManifest?.name ?? (path.basename(root) || 'local-registry')),
+    name: registryName,
+    version: rootManifest?.version ?? LOCAL_VERSION,
+    namespace: rootManifest?.namespace ?? namespace,
+    appId: rootManifest?.appId ?? appId,
+    owner: rootManifest?.owner ?? rootManifest?.author ?? owner,
     dkbs: dkbs.map((dkb) => ({ path: dkb.root })),
   };
+}
+
+async function maybeLoadImplicitLocalDkb(
+  root: string,
+  registry: DkrManifest,
+  rootManifest: DkbSourceManifest | null,
+  existing: LoadedDkb[],
+): Promise<LoadedDkb | null> {
+  if (!rootManifest || rootManifest.localSources?.enabled === false) {
+    return null;
+  }
+
+  const stores = await discoverRegistryLocalStores(root, rootManifest);
+
+  if (stores.length === 0) {
+    return null;
+  }
+
+  const id = implicitLocalDkbIdFor(registry.id, existing.map((dkb) => dkb.manifest.id), root);
+  const manifest = {
+    id,
+    name: `${registry.name} Local Sources`,
+    version: LOCAL_VERSION,
+    description: 'Implicit registry-local sources compiled from eligible raw files.',
+    namespace: registry.namespace,
+    appId: registry.appId,
+    owner: registry.owner,
+    permissions: {
+      read: true,
+      write: false,
+    },
+    adapter: stores.length === 1 && stores[0]!.type === 'filesystem' ? 'folder' as const : 'compose' as const,
+    entrypoint: '.',
+    stores,
+    domains: [id, registry.id],
+    meta: {
+      registryId: registry.id,
+      sourceOrigin: 'registry-local',
+      implicit: true,
+    },
+  };
+
+  return {
+    root,
+    origin: 'local',
+    manifest,
+    packagePath: null,
+    manifestHash: stableHash({
+      registry: registry.id,
+      localSources: rootManifest.localSources ?? {},
+      stores,
+    }),
+    identityKey: `dkb:${root}:registry-local`,
+  };
+}
+
+async function discoverRegistryLocalStores(root: string, manifest: DkbSourceManifest): Promise<DkbStore[]> {
+  const sourceRoot = resolveContainedPath(root, manifest.localSources?.root ?? '.', 'localSources.root');
+  const policyExcludes = new Set((manifest.localSources?.excludes ?? [])
+    .map((item) => item.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/g, ''))
+    .filter(Boolean));
+  const entries = await safeReadDir(sourceRoot);
+  const files = entries
+    .filter((entry) => isEligibleRegistryLocalSourceEntry(entry, policyExcludes))
+    .map((entry) => path.join(sourceRoot, entry.name))
+    .sort((left, right) => left.localeCompare(right));
+  const textFiles = files
+    .filter((file) => LOCAL_TEXT_SOURCE_EXTENSIONS.has(path.extname(file).toLowerCase()))
+    .map((file) => path.relative(root, file).replace(/\\/g, '/'));
+  const sqliteFiles = files
+    .filter((file) => SQLITE_EXTENSIONS.has(path.extname(file).toLowerCase()))
+    .map((file) => path.relative(root, file).replace(/\\/g, '/'));
+  const stores: DkbStore[] = [];
+
+  if (textFiles.length > 0) {
+    stores.push({
+      id: 'registry-local-files',
+      type: 'filesystem',
+      path: path.relative(root, sourceRoot).replace(/\\/g, '/') || '.',
+      mode: 'read',
+      meta: {
+        includePaths: textFiles,
+        sourceOrigin: 'registry-local',
+      },
+    });
+  }
+
+  stores.push(...sqliteFiles.map((relative) => ({
+    id: `registry-local-sqlite-${stableHash(relative).replace(/^sha256:/, '').slice(0, 12)}`,
+    type: 'sqlite' as const,
+    path: relative,
+    mode: 'read' as const,
+    meta: {
+      sourceOrigin: 'registry-local',
+    },
+  })));
+
+  return stores;
+}
+
+function isEligibleRegistryLocalSourceEntry(entry: import('node:fs').Dirent, excludes: Set<string>): boolean {
+  if (!entry.isFile() || entry.isSymbolicLink()) {
+    return false;
+  }
+
+  if (entry.name.startsWith('.') || REGISTRY_LOCAL_SOURCE_IGNORES.has(entry.name) || excludes.has(entry.name)) {
+    return false;
+  }
+
+  const extension = path.extname(entry.name).toLowerCase();
+
+  return LOCAL_TEXT_SOURCE_EXTENSIONS.has(extension) || SQLITE_EXTENSIONS.has(extension);
+}
+
+function implicitLocalDkbIdFor(registryId: string, existingIds: string[], root: string): string {
+  const base = `${registryId}.local`;
+
+  if (!existingIds.includes(base)) {
+    return base;
+  }
+
+  return `${base}-${stableHash(root).replace(/^sha256:/, '').slice(0, 8)}`;
 }
 
 function collectionsFromDkbs(root: string, registry: DkrManifest, dkbs: LoadedDkb[]): LoadedCollection[] {

@@ -4,9 +4,19 @@ import { z } from 'zod/v4';
 import { DKB_PROTOCOL_VERSION } from '../protocol/version.js';
 import {
   describeCollectionTool,
+  describeRegistryChunksTool,
   describeRegistryTool,
   healthTool,
+  lexicalSearchTool,
+  readDkbTool,
   retrieveKnowledgeTool,
+  installPackageTool,
+  remoteAddTool,
+  remoteDescribeTool,
+  remoteListTool,
+  remoteQueryTool,
+  semanticSearchTool,
+  sourcesTool,
   traceGetTool,
   traceLatestTool,
   traceListTool,
@@ -14,8 +24,8 @@ import {
 } from './tools.js';
 
 /**
- * DKB 1.0 deliberately exposes one normal retrieval path. Advanced reference
- * runtime operations stay out of the interoperable MCP surface until specified.
+ * DKB exposes small navigation primitives over the same compiled runtime
+ * snapshot; answer-oriented retrieval remains available for compatibility.
  */
 export function createDkbMcpServer(): McpServer {
   const server = new McpServer(
@@ -46,6 +56,17 @@ export function createDkbMcpServer(): McpServer {
   );
 
   server.registerTool(
+    'dkb.describe_registry_chunks',
+    {
+      title: 'Describe DKB Registry Chunks',
+      description: 'Return the configured registry direct compiled chunk catalog with package and source provenance.',
+      inputSchema: z.object({}).optional(),
+      outputSchema: z.object({}).loose(),
+    },
+    async () => toolResult(await describeRegistryChunksTool()),
+  );
+
+  server.registerTool(
     'dkb.describe_collection',
     {
       title: 'Describe DKB Collection',
@@ -57,10 +78,91 @@ export function createDkbMcpServer(): McpServer {
   );
 
   server.registerTool(
+    'dkb.semantic_search',
+    {
+      title: 'Semantic DKB Search',
+      description: 'Find conceptually related compiled chunks and return stable references for follow-up reads.',
+      inputSchema: z.object({
+        targetId: z.string().min(1).optional(),
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(100).default(10),
+        scope: z.object({
+          dkbId: z.string().min(1).optional(),
+          packageVersion: z.string().min(1).optional(),
+          assetId: z.string().min(1).optional(),
+          sourceType: z.string().min(1).optional(),
+        }).optional(),
+      }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ targetId, query, limit, scope }) => toolResult(await semanticSearchTool(targetId, query, limit, scope)),
+  );
+
+  server.registerTool(
+    'dkb.find',
+    {
+      title: 'Exact DKB Search',
+      description: 'Find literal terms, identifiers, filenames, and error strings in compiled chunk catalogs.',
+      inputSchema: z.object({
+        targetId: z.string().min(1).optional(),
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(100).default(10),
+        scope: z.object({
+          dkbId: z.string().min(1).optional(),
+          packageVersion: z.string().min(1).optional(),
+          assetId: z.string().min(1).optional(),
+          sourceType: z.string().min(1).optional(),
+        }).optional(),
+      }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ targetId, query, limit, scope }) => toolResult(await lexicalSearchTool(targetId, query, limit, scope)),
+  );
+
+  server.registerTool(
+    'dkb.read',
+    {
+      title: 'Read DKB Chunks',
+      description: 'Read selected compiled chunks by stable reference, including evidence and provenance.',
+      inputSchema: z.object({
+        targetId: z.string().min(1).optional(),
+        request: z.object({
+          queries: z.array(z.object({
+            id: z.string().min(1),
+            target: z.string().min(1),
+            operation: z.enum(['fetch', 'search', 'lookup', 'aggregate']),
+            metric: z.enum(['count']).optional(),
+            filters: z.array(z.object({
+              field: z.string().min(1),
+              op: z.enum(['equals', 'contains', 'gt', 'lt', 'gte', 'lte', 'between']),
+              value: z.unknown(),
+            })).max(25).optional(),
+            return: z.array(z.string().min(1)).max(20).optional(),
+            limit: z.number().int().min(1).max(1000).optional(),
+          })).min(1).max(50),
+        }),
+      }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ targetId, request }) => toolResult(await readDkbTool(targetId, request)),
+  );
+
+  server.registerTool(
+    'dkb.sources',
+    {
+      title: 'List DKB Sources',
+      description: 'List active compiled source assets and their chunk counts without reading their content.',
+      inputSchema: z.object({ targetId: z.string().min(1).optional() }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ targetId }) => toolResult(await sourcesTool(targetId)),
+  );
+
+  server.registerTool(
     'dkb.retrieve_knowledge',
     {
       title: 'Retrieve DKB Knowledge',
-      description: 'Retrieve bounded, provenance-preserving source evidence through compiled DKB indexes and safe adapters.',
+      description: 'Retrieve bounded, provenance-preserving source evidence from compiled DKB chunks.',
       inputSchema: z.object({
         targetId: z.string().min(1).optional(),
         request: z.object({
@@ -73,6 +175,63 @@ export function createDkbMcpServer(): McpServer {
       }),
     },
     async ({ targetId, request }) => textToolResult((await retrieveKnowledgeTool(targetId, request)).modelText),
+  );
+
+  server.registerTool(
+    'dkb.remote_list',
+    {
+      title: 'List Verified Remote DKBs',
+      description: 'List persistent remote DKB runtimes and one-time local installation offers.',
+      inputSchema: z.object({}).optional(),
+      outputSchema: z.object({}).loose(),
+    },
+    async () => toolResult(await remoteListTool()),
+  );
+
+  server.registerTool(
+    'dkb.remote_describe',
+    {
+      title: 'Describe Remote DKB',
+      description: 'Return the verified identity, endpoint, lease, and installation state for one remote DKB.',
+      inputSchema: z.object({ remoteId: z.string().min(1) }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ remoteId }) => toolResult(await remoteDescribeTool(remoteId)),
+  );
+
+  server.registerTool(
+    'dkb.remote_query',
+    {
+      title: 'Query Verified Remote DKB',
+      description: 'Query a registry-verified remote runtime after lease and provenance checks.',
+      inputSchema: z.object({
+        remoteId: z.string().min(1),
+        request: z.object({
+          need: z.string().min(1),
+          intent: z.enum(['evidence', 'records', 'count', 'summary', 'compare']).optional(),
+          phrases: z.array(z.string().min(1)).optional(),
+          limit: z.number().int().min(1).max(100).optional(),
+          profile: z.boolean().optional(),
+        }),
+      }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ remoteId, request }) => toolResult(await remoteQueryTool(remoteId, request)),
+  );
+
+  server.registerTool(
+    'dkb.install_package',
+    {
+      title: 'Install Remote DKB Package',
+      description: 'Explicitly install the signed package associated with a verified remote runtime.',
+      inputSchema: z.object({
+        remoteId: z.string().min(1),
+        confirm: z.literal(true),
+        runtimeRoot: z.string().min(1).optional(),
+      }),
+      outputSchema: z.object({}).loose(),
+    },
+    async ({ remoteId, confirm, runtimeRoot }) => toolResult(await installPackageTool({ remoteId, confirm, runtimeRoot })),
   );
 
   server.registerTool(

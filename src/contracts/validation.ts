@@ -13,7 +13,6 @@ export const knowledgeNeedSchema = z.object({
   filters: z.object({
     targetIds: z.array(z.string().min(1)).optional(),
     sourceTypes: z.array(z.string().min(1)).optional(),
-    regionTypes: z.array(z.string().min(1)).optional(),
   }).optional(),
   retrieval: z.object({
     passes: z.array(z.enum(['lexical', 'vector', 'graph'])).optional(),

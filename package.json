@@ -18,15 +18,18 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "ajv": "^8.17.1",
     "chokidar": "^5.0.0",
+    "cli-progress": "^3.12.0",
     "commander": "^12.1.0",
     "graphology": "^0.26.0",
     "meilisearch": "^0.53.0",
+    "ora": "^9.4.1",
     "pg": "^8.22.0",
     "tar": "^7.5.22",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/cli-progress": "^3.11.6",
     "@types/node": "^22.15.0",
     "@types/pg": "^8.21.0",
     "typescript": "^5.9.2"

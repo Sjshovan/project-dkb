@@ -5,6 +5,7 @@ import {
   compileRuntimeDkb,
   defaultRuntimeStateRoot,
   ensureRuntimeState,
+  importCompiledDkbArtifactIntoRuntime,
   importDkbIntoRuntime,
   listRuntimeRegistries,
   removeDkbFromRuntime,
@@ -15,6 +16,7 @@ import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { attachRemoteSession, detachRemoteSession, listRemoteSessions, retrieveFromRemoteSession } from '../remote/sessions.js';
 import { discoverRemoteDkb } from '../remote/discovery.js';
 import { getTrace, latestTrace, listTraces } from './trace.js';
+import { closeQueryAuditQueue } from './queryAudit.js';
 
 export interface ServeRuntimeOptions {
   host?: string;
@@ -38,6 +40,7 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
   const server = http.createServer(async (request, response) => {
     await routeRequest(request, response, stateRoot);
   });
+  installGracefulAuditDrain(server);
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, resolve);
@@ -71,6 +74,10 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
       return sendJson(response, 200, { ok: true, runtime: await runtimeStatus(stateRoot) });
     }
 
+    if (request.method === 'GET' && pathName === '/.well-known/dkb.json') {
+      return sendJson(response, 200, await runtimeDiscoveryDocument(stateRoot, request.headers.host));
+    }
+
     if (request.method === 'GET' && pathName === '/api/runtime') {
       return sendJson(response, 200, await runtimeStatus(stateRoot));
     }
@@ -95,6 +102,16 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
       }>(request);
 
       return sendJson(response, 201, await importDkbIntoRuntime(body, stateRoot));
+    }
+
+    if (request.method === 'POST' && pathName === '/api/dkbs/import-artifact') {
+      const body = await readJsonBody<{
+        sourcePath: string;
+        id?: string;
+        force?: boolean;
+      }>(request);
+
+      return sendJson(response, 201, await importCompiledDkbArtifactIntoRuntime(body, stateRoot));
     }
 
     const dkbMatch = pathName.match(/^\/api\/dkbs\/([^/]+)(?:\/(compile))?$/);
@@ -190,6 +207,50 @@ function requiredString(value: unknown, label: string): string {
   return value;
 }
 
+async function runtimeDiscoveryDocument(stateRoot: string, requestHost?: string) {
+  const runtime = await runtimeStatus(stateRoot);
+  const registryUrl = process.env.DKB_REGISTRY_URL;
+  const site = process.env.DKB_PUBLIC_URL
+    ?? (requestHost ? 'http://' + requestHost : 'http://127.0.0.1:' + (process.env.DKB_RUNTIME_PORT ?? '7331'));
+  const packages = Array.isArray((runtime as { packages?: unknown }).packages)
+    ? (runtime as { packages: Array<Record<string, unknown>> }).packages
+    : [];
+
+  return {
+    version: '0.2',
+    type: 'dkb-discovery',
+    site,
+    publisher: process.env.DKB_PUBLISHER_NAME ? {
+      name: process.env.DKB_PUBLISHER_NAME,
+      ...(process.env.DKB_PUBLISHER_URL ? { url: process.env.DKB_PUBLISHER_URL } : {}),
+    } : undefined,
+    endpoints: [{
+      type: 'dkb-runtime-http',
+      url: site,
+      access: 'public-read',
+    }],
+    packages: packages.map((item) => ({
+      id: String(item.id ?? item.packageId ?? ''),
+      version: typeof item.version === 'string' ? item.version : undefined,
+      ...(typeof item.packageTreeHash === 'string' ? { packageTreeHash: item.packageTreeHash } : {}),
+      ...(registryUrl && typeof item.id === 'string' && typeof item.version === 'string' && typeof item.packageTreeHash === 'string'
+        ? {
+            install: {
+              registryUrl,
+              packageId: item.id,
+              version: item.version,
+              packageTreeHash: item.packageTreeHash,
+            },
+          }
+        : {}),
+    })),
+    policy: {
+      scrape: 'disallow',
+      ttlSeconds: 300,
+    },
+  };
+}
+
 function parseLimit(value: string | null, fallback: number): number {
   if (!value) {
     return fallback;
@@ -267,4 +328,17 @@ function setCommonHeaders(response: ServerResponse): void {
   response.setHeader('access-control-allow-origin', '*');
   response.setHeader('access-control-allow-methods', 'GET,POST,DELETE,OPTIONS');
   response.setHeader('access-control-allow-headers', 'content-type,authorization');
+}
+
+function installGracefulAuditDrain(server: http.Server): void {
+  const close = server.close.bind(server);
+
+  server.close = ((callback?: (error?: Error) => void) => close(async (error?: Error) => {
+    try {
+      await closeQueryAuditQueue();
+      callback?.(error);
+    } catch (auditError) {
+      callback?.(auditError instanceof Error ? auditError : new Error(String(auditError)));
+    }
+  })) as typeof server.close;
 }

@@ -1,13 +1,16 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { compileComposeProject } from '../compiler/compile.js';
 import { invalidateRuntimeQuerySnapshot, ensureRuntimeState } from '../runtime/state.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.js';
+import { validateFaissPackageQueryability, validateFaissRuntimeReady } from '../indexes/faissStore.js';
 import { canonicalJson, stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
-import { loadDkb, loadRegistry } from '../protocol/manifest.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
+import { loadDkb, loadDkbPackage, loadRegistry } from '../protocol/manifest.js';
 import { manifestPath } from '../protocol/paths.js';
 import { validateDkbLockManifest } from '../protocol/validation.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
@@ -19,12 +22,7 @@ import {
   parsePackageReceipt,
   verifyPackageReceipt,
 } from '../signing/index.js';
-import {
-  KR_GRAPH_PATH,
-  KR_INDEX_PATH,
-  KR_VECTOR_PATH,
-} from '../indexes/knowledgeIndex.js';
-import { SOURCE_INDEX_PATH } from '../indexes/sourceIndex.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '../protocol/types.js';
 
 export const MOCK_REGISTRY_DB = 'registry.sqlite';
@@ -273,7 +271,11 @@ export async function publishDkbToMockRegistry(options: MockRegistryPublishOptio
 
   try {
     await writeRegistryPackageManifest(buildRoot, dkb, account.account.id);
-    const compiled = await compileComposeProject(buildRoot, { force: true });
+    const compiled = await compileComposeProject(buildRoot, {
+      force: true,
+      compiler: 'llamaindex',
+      artifactProfile: 'faiss-package',
+    });
     const database = openRegistryDatabase(paths.databasePath);
 
     try {
@@ -451,6 +453,7 @@ export async function installDkbFromMockRegistry(options: {
   version?: string;
   runtimeRoot?: string;
   force?: boolean;
+  progress?: DkbProgressReporter;
 }): Promise<MockRegistryInstallResult> {
   const downloaded = await downloadDkbFromMockRegistry(options);
 
@@ -459,6 +462,7 @@ export async function installDkbFromMockRegistry(options: {
     runtimeRoot: options.runtimeRoot,
     trustedKeys: [downloaded.publisherKey, downloaded.registryKey],
     force: options.force,
+    progress: options.progress,
   });
 }
 
@@ -484,6 +488,7 @@ export async function installDkbArchiveIntoRuntime(options: {
   runtimeRoot?: string;
   trustedKeys: DkbSigningKeyRecord[];
   force?: boolean;
+  progress?: DkbProgressReporter;
 }): Promise<MockRegistryInstallResult> {
   const runtime = await ensureRuntimeState(options.runtimeRoot);
   const installParent = path.join(runtime.stateDir, 'tmp', `install-${process.pid}-${Date.now().toString(36)}`);
@@ -492,7 +497,7 @@ export async function installDkbArchiveIntoRuntime(options: {
   await fs.rm(installParent, { recursive: true, force: true });
 
   try {
-    await extractDkbPackageArchive(options.archivePath, extractedRoot);
+    await extractDkbPackageArchive(options.archivePath, extractedRoot, { progress: options.progress });
     const verification = await verifyExtractedPackage(extractedRoot, options.trustedKeys, 'package receipt');
 
     if (!verification.ok) {
@@ -502,39 +507,125 @@ export async function installDkbArchiveIntoRuntime(options: {
     const receipt = parsePackageReceipt(JSON.parse(await fs.readFile(path.join(extractedRoot, DKB_PACKAGE_RECEIPT_PATH), 'utf8')), path.join(extractedRoot, DKB_PACKAGE_RECEIPT_PATH));
     const target = runtimeVendorPackagePath(runtime.stateRoot, receipt, verification.packageId, verification.version);
     const installed = await installedPackageRoots(runtime.stateRoot, verification.packageId);
+    const registryId = (await loadRegistry(runtime.stateRoot)).manifest.id;
+    const stagedDkb = await loadDkbPackage(extractedRoot, verification.packageId);
+    await validateFaissPackageQueryability(stagedDkb);
 
     if (installed.length > 0 || await exists(target)) {
       if (!options.force) {
         throw new DkbError(`Runtime DKB already exists: ${verification.packageId}. Use force to replace it.`);
       }
-
-      await Promise.all(installed.map((root) => fs.rm(root, { recursive: true, force: true })));
-      await fs.rm(target, { recursive: true, force: true });
     }
 
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.rm(path.join(extractedRoot, DKB_PACKAGE_RECEIPT_PATH), { force: true });
-    await fs.rm(path.join(extractedRoot, 'dkb-lock.json'), { force: true });
-    await fs.rm(path.join(extractedRoot, 'dkb-release.json'), { force: true });
-    await fs.rename(extractedRoot, target);
-    const catalog = await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot);
-    await updateRuntimeInstallManifests(runtime.stateRoot, receipt, {
-      archiveHash: await hashRequiredPath(options.archivePath),
-      installedPath: path.relative(runtime.stateRoot, target).replace(/\\/g, '/'),
-    });
-    invalidateRuntimeQuerySnapshot(runtime.stateRoot);
+    const backup = await backupInstalledRoots(installed, target);
 
-    return {
-      status: 'installed',
-      packageId: verification.packageId,
-      version: verification.version,
-      runtimeRoot: runtime.stateRoot,
-      packagePath: target,
-      verification,
-      catalog,
-    };
+    const activationTotal = 5;
+
+    options.progress?.(progressStart({
+      phase: 'activate',
+      label: 'Activate package',
+      total: activationTotal,
+      unit: 'steps',
+    }));
+
+    try {
+      await fs.rename(extractedRoot, target);
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 1,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+      const catalog = await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot, { syncSearch: false });
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 2,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+
+      await updateRuntimeInstallManifests(runtime.stateRoot, receipt, {
+        archiveHash: await hashRequiredPath(options.archivePath),
+        installedPath: path.relative(runtime.stateRoot, target).replace(/\\/g, '/'),
+      });
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 3,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+
+      invalidateRuntimeQuerySnapshot(runtime.stateRoot);
+      await validateFaissRuntimeReady({
+        root: runtime.stateRoot,
+        registryId,
+        packageId: stagedDkb.manifest.id,
+        packageVersion: stagedDkb.manifest.version,
+      });
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 4,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+      await removeInstalledRootsBackup(backup);
+      invalidateRuntimeQuerySnapshot(runtime.stateRoot);
+      options.progress?.(progressUpdate({
+        phase: 'activate',
+        label: 'Activate package',
+        value: 5,
+        total: activationTotal,
+        unit: 'steps',
+      }));
+      options.progress?.(progressFinish({
+        phase: 'activate',
+        label: 'Activate package',
+        total: activationTotal,
+        unit: 'steps',
+      }));
+
+      return {
+        status: 'installed',
+        packageId: verification.packageId,
+        version: verification.version,
+        runtimeRoot: runtime.stateRoot,
+        packagePath: target,
+        verification,
+        catalog,
+      };
+    } catch (error) {
+      await restoreInstalledRootsBackup(backup).catch(() => undefined);
+      invalidateRuntimeQuerySnapshot(runtime.stateRoot);
+
+      throw error;
+    }
   } finally {
     await fs.rm(installParent, { recursive: true, force: true });
+  }
+}
+
+export async function verifyDkbArchiveFile(options: {
+  archivePath: string;
+  trustedKeys: DkbSigningKeyRecord[];
+}): Promise<MockRegistryVerifyResult> {
+  const verifyParent = path.join(os.tmpdir(), `dkb-verify-${process.pid}-${Date.now().toString(36)}`);
+  const extractedRoot = path.join(verifyParent, 'package');
+
+  await fs.rm(verifyParent, { recursive: true, force: true });
+
+  try {
+    await extractDkbPackageArchive(options.archivePath, extractedRoot);
+    await sleep(1_000);
+
+    return verifyExtractedPackage(extractedRoot, options.trustedKeys, 'package receipt');
+  } finally {
+    await fs.rm(verifyParent, { recursive: true, force: true });
   }
 }
 
@@ -1043,9 +1134,9 @@ async function updateRuntimeInstallManifests(root: string, receipt: DkbPackageRe
     packages,
     artifacts,
     compiled: {
-      path: KR_INDEX_PATH,
-      artifactHash: artifacts.krIndex.hash,
-      krRepositoryHash: stableHash(packages),
+      path: SOURCE_INDEX_PATH,
+      artifactHash: artifacts.sourceIndex.hash,
+      chunkRepositoryHash: stableHash(packages),
       indexHash: stableHash(artifacts),
       recordCount,
       compiledAt: new Date().toISOString(),
@@ -1085,16 +1176,14 @@ async function readExistingLock(lockPath: string): Promise<DkbLockManifest | nul
 }
 
 async function runtimeLockArtifacts(root: string): Promise<DkbLockManifest['artifacts']> {
-  const krIndexHash = await hashPath(path.join(root, KR_INDEX_PATH));
-  const krGraphHash = await hashPath(path.join(root, KR_GRAPH_PATH));
-  const krVectorHash = await hashPath(path.join(root, KR_VECTOR_PATH));
   const sourceIndexHash = await hashPath(path.join(root, SOURCE_INDEX_PATH));
+  const sourceGraphHash = await hashPath(path.join(root, SOURCE_GRAPH_PATH));
+  const sourceVectorHash = await hashPath(path.join(root, SOURCE_VECTOR_PATH));
 
   return {
-    krIndex: lockArtifact(KR_INDEX_PATH, krIndexHash),
-    krGraph: lockArtifact(KR_GRAPH_PATH, krGraphHash),
-    krVector: lockArtifact(KR_VECTOR_PATH, krVectorHash),
     sourceIndex: lockArtifact(SOURCE_INDEX_PATH, sourceIndexHash),
+    sourceGraph: lockArtifact(SOURCE_GRAPH_PATH, sourceGraphHash),
+    sourceVector: lockArtifact(SOURCE_VECTOR_PATH, sourceVectorHash),
   };
 }
 
@@ -1147,13 +1236,17 @@ async function verifyPackageArtifacts(root: string, lock: DkbLockManifest): Prom
   return checks;
 }
 
-async function listFiles(root: string): Promise<string[]> {
+async function listFiles(root: string, options: { excludeDkbSystemArtifactsRoot?: string } = {}): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   const nested = await Promise.all(entries.map(async (entry) => {
     const target = path.join(root, entry.name);
 
+    if (options.excludeDkbSystemArtifactsRoot && isDkbSystemArtifactPath(options.excludeDkbSystemArtifactsRoot, target)) {
+      return [];
+    }
+
     if (entry.isDirectory()) {
-      return listFiles(target);
+      return listFiles(target, options);
     }
 
     return entry.isFile() ? [target] : [];
@@ -1170,10 +1263,16 @@ async function verifyExtractedPackage(root: string, trustedKeys: DkbSigningKeyRe
   const version = receipt.payload.lock.packages[packageId]?.version ?? receipt.package.version;
   const payloadMatchesLock = stableHash(packageReceiptPayloadForLock(lock, receipt.payload.packageTreeHash)) === receipt.payloadHash
     && canonicalJson(lock) === canonicalJson(receipt.payload.lock);
-  const artifactChecks = await verifyPackageArtifacts(root, lock);
   const packageTreeHash = receipt.payload.packageTreeHash ?? null;
-  const actualPackageTreeHash = packageTreeHash ? await hashPackageTree(root) : null;
-  const packageTreeMatches = !packageTreeHash || actualPackageTreeHash === packageTreeHash;
+  const [actualPackageTree, artifactChecks] = await Promise.all([
+    packageTreeHash ? hashSourcePackageTree(root) : Promise.resolve(null),
+    verifyPackageArtifacts(root, lock),
+  ]);
+  const actualPackageTreeHash = actualPackageTree?.hash ?? null;
+  const legacyPackageTreeHash = packageTreeHash && actualPackageTreeHash !== packageTreeHash
+    ? await maybeHashPackageTree(root, { includeDkbSystemArtifacts: true })
+    : null;
+  const packageTreeMatches = !packageTreeHash || actualPackageTreeHash === packageTreeHash || legacyPackageTreeHash === packageTreeHash;
   const signatureVerification = await verifyPackageReceipt(receipt, ({ role, signature }) => {
     const key = trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
 
@@ -1197,11 +1296,34 @@ async function verifyExtractedPackage(root: string, trustedKeys: DkbSigningKeyRe
       {
         name: 'package_tree_hash',
         ok: packageTreeMatches,
-        detail: packageTreeMatches ? 'package tree hash matches receipt' : `package tree hash mismatch: expected ${packageTreeHash}, got ${actualPackageTreeHash}`,
+        detail: packageTreeMatches ? 'package tree hash matches receipt' : `package tree hash mismatch: expected ${packageTreeHash}, got ${actualPackageTreeHash} from ${actualPackageTree?.files.join(', ') || 'no source files'}`,
       },
       ...artifactChecks,
       ...signatureVerification.checks,
     ],
+  };
+}
+
+async function maybeHashPackageTree(root: string, options: { includeDkbSystemArtifacts?: boolean } = {}): Promise<string | null> {
+  try {
+    return await hashPackageTree(root, options);
+  } catch {
+    return null;
+  }
+}
+
+async function hashSourcePackageTree(root: string): Promise<{ hash: string; files: string[] }> {
+  const files = (await listPackageTreeSourceFiles(root))
+    .map((file) => path.relative(root, file).replace(/\\/g, '/'))
+    .sort((left, right) => left.localeCompare(right));
+  const entries = await Promise.all(files.map(async (relative) => ({
+    path: relative,
+    hash: await hashRequiredPath(path.join(root, relative)),
+  })));
+
+  return {
+    hash: stableHash(entries),
+    files,
   };
 }
 
@@ -1242,28 +1364,87 @@ function runtimeVendorPackagePath(stateRoot: string, receipt: DkbPackageReceipt,
   );
 }
 
+interface InstalledRootsBackup {
+  root: string;
+  entries: Array<{
+    original: string;
+    backup: string;
+  }>;
+}
+
+async function backupInstalledRoots(installed: string[], target: string): Promise<InstalledRootsBackup> {
+  const backupRoot = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
+  const roots = [...new Set([
+    ...installed.map((item) => path.resolve(item)),
+    path.resolve(target),
+  ])];
+  const entries: InstalledRootsBackup['entries'] = [];
+
+  await fs.rm(backupRoot, { recursive: true, force: true });
+  await fs.mkdir(backupRoot, { recursive: true });
+
+  for (const root of roots) {
+    if (!(await exists(root))) {
+      continue;
+    }
+
+    const backupPath = path.join(backupRoot, safeId(path.relative(path.dirname(target), root) || path.basename(root)));
+
+    await fs.mkdir(path.dirname(backupPath), { recursive: true });
+    await fs.rename(root, backupPath);
+    entries.push({ original: root, backup: backupPath });
+  }
+
+  return { root: backupRoot, entries };
+}
+
+async function restoreInstalledRootsBackup(backup: InstalledRootsBackup): Promise<void> {
+  for (const entry of [...backup.entries].reverse()) {
+    await fs.rm(entry.original, { recursive: true, force: true });
+    await fs.mkdir(path.dirname(entry.original), { recursive: true });
+
+    if (await exists(entry.backup)) {
+      await fs.rename(entry.backup, entry.original);
+    }
+  }
+
+  await fs.rm(backup.root, { recursive: true, force: true });
+}
+
+async function removeInstalledRootsBackup(backup: InstalledRootsBackup): Promise<void> {
+  await fs.rm(backup.root, { recursive: true, force: true });
+}
+
 function packageArchiveFileName(packageId: string, version: string): string {
   return `${safeId(packageId)}-${safeId(version)}${DKB_PACKAGE_EXTENSION}`;
 }
 
-async function hashPath(target: string): Promise<string | null> {
-  try {
-    const stat = await fs.stat(target);
+async function hashPath(target: string, attempts = 20): Promise<string | null> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const stat = await fs.stat(target);
 
-    if (stat.isDirectory()) {
-      const files = await listFiles(target);
-      const hashed = await Promise.all(files.map(async (file) => ({
-        path: path.relative(target, file).replace(/\\/g, '/'),
-        hash: await hashPath(file),
-      })));
+      if (stat.isDirectory()) {
+        const files = await listFiles(target);
+        const hashed = await Promise.all(files.map(async (file) => ({
+          path: path.relative(target, file).replace(/\\/g, '/'),
+          hash: await hashPath(file),
+        })));
 
-      return stableHash(hashed);
+        return stableHash(hashed);
+      }
+
+      return `sha256:${createHashForBuffer(await fs.readFile(target))}`;
+    } catch {
+      if (attempt === attempts) {
+        return null;
+      }
+
+      await sleep(250);
     }
-
-    return `sha256:${createHashForBuffer(await fs.readFile(target))}`;
-  } catch {
-    return null;
   }
+
+  return null;
 }
 
 async function hashRequiredPath(target: string): Promise<string> {
@@ -1276,10 +1457,12 @@ async function hashRequiredPath(target: string): Promise<string> {
   return hash;
 }
 
-async function hashPackageTree(root: string): Promise<string> {
-  const files = (await listFiles(root))
+async function hashPackageTree(root: string, options: { includeDkbSystemArtifacts?: boolean } = {}): Promise<string> {
+  const files = (options.includeDkbSystemArtifacts
+    ? await listFiles(root)
+    : await listPackageTreeSourceFiles(root))
     .map((file) => path.relative(root, file).replace(/\\/g, '/'))
-    .filter((relative) => relative !== DKB_PACKAGE_RECEIPT_PATH)
+    .filter((relative) => options.includeDkbSystemArtifacts || !isDkbSystemArtifactPath(root, path.join(root, relative)))
     .sort((left, right) => left.localeCompare(right));
   const entries = await Promise.all(files.map(async (relative) => ({
     path: relative,
@@ -1287,6 +1470,25 @@ async function hashPackageTree(root: string): Promise<string> {
   })));
 
   return stableHash(entries);
+}
+
+async function listPackageTreeSourceFiles(root: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    if (entry.name === '.dkb' || entry.name === 'dkb-lock.json' || entry.name === 'dkb-release.json' || entry.name === DKB_PACKAGE_RECEIPT_PATH) {
+      return [];
+    }
+
+    const target = path.join(root, entry.name);
+
+    if (entry.isDirectory()) {
+      return listPackageTreeSourceFiles(target);
+    }
+
+    return entry.isFile() ? [target] : [];
+  }));
+
+  return nested.flat().sort((left, right) => left.localeCompare(right));
 }
 
 async function readJsonObject(source: string): Promise<Record<string, unknown>> {
@@ -1311,6 +1513,12 @@ async function maybeReadJsonObject(source: string): Promise<Record<string, unkno
 
 function createHashForBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function safePackageFilePath(root: string, relativeFile: string): string {

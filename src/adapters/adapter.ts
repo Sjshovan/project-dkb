@@ -1,18 +1,12 @@
-import type { IndexedKnowledgeRegion } from '../indexes/knowledgeIndex.js';
 import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
-import type { DkbReadQuery, DkbReadResult, DkbStore, KnowledgeRegion, LoadedDkb } from '../protocol/types.js';
+import type { DkbReadQuery, DkbReadResult, DkbStore, DkbRecord, LoadedDkb } from '../protocol/types.js';
 
 export interface DkbReader {
-  readRecords(dkb: LoadedDkb): Promise<KnowledgeRegion[]>;
+  readRecords(dkb: LoadedDkb): Promise<DkbRecord[]>;
 }
 
 export interface DkbWriter {
-  appendRecord(dkb: LoadedDkb, record: KnowledgeRegion): Promise<KnowledgeRegion>;
-}
-
-export interface DkbCompileRegionsInput {
-  dkb: LoadedDkb;
-  store: DkbStore;
+  appendRecord(dkb: LoadedDkb, record: DkbRecord): Promise<DkbRecord>;
 }
 
 export interface DkbCompileSourceUnitsInput {
@@ -23,7 +17,7 @@ export interface DkbCompileSourceUnitsInput {
 export interface DkbExecuteReadPlanInput {
   dkb: LoadedDkb;
   store: DkbStore;
-  record: IndexedKnowledgeRegion;
+  record: any;
   query: DkbReadQuery;
   sourceUnits?: IndexedSourceUnit[];
 }
@@ -32,21 +26,13 @@ export type DkbReadPlanResult = DkbReadResult['queries'][number];
 
 export interface DkbSourceAdapter {
   compileSourceUnits(input: DkbCompileSourceUnitsInput): Promise<IndexedSourceUnit[]>;
-  compileRegions?(input: DkbCompileRegionsInput): Promise<IndexedKnowledgeRegion[]>;
   executeReadPlan(input: DkbExecuteReadPlanInput): Promise<DkbReadPlanResult>;
 }
 
 export type DkbAdapterHandle = DkbReader & Partial<DkbWriter> & Partial<DkbSourceAdapter>;
-export type DkbRegionCompiler = DkbAdapterHandle & {
-  compileRegions(input: DkbCompileRegionsInput): Promise<IndexedKnowledgeRegion[]>;
-};
 
 export function canWrite(adapter: DkbAdapterHandle): adapter is DkbReader & DkbWriter {
   return typeof adapter.appendRecord === 'function';
-}
-
-export function canCompileRegions(adapter: DkbAdapterHandle): adapter is DkbRegionCompiler {
-  return typeof adapter.compileRegions === 'function';
 }
 
 export function canCompileSourceUnits(adapter: DkbAdapterHandle): adapter is DkbAdapterHandle & DkbSourceAdapter {

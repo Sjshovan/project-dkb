@@ -9,9 +9,10 @@ import type { DkbWriteGateResult } from '../protocol/writeGate.js';
 import type { DkbWriteIntent } from '../protocol/writeGate.js';
 import type { DkbReadRequest, DkbReadResult, DkbWriteOperation } from '../protocol/types.js';
 import type { DkbQueryTargetResponse, DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
+import type { DkbLexicalSearchResponse, DkbSemanticSearchResponse, DkbSourceDescription, DkbNavigationScope } from '../read/navigation.js';
 import type { DkbTraceRun, DkbTraceSummary } from '../runtime/trace.js';
 import type { DkbRemoteAttachInput, DkbRemoteDiscoveryResult, DkbRemoteRetrieveResult, DkbRemoteSession } from '../remote/types.js';
-import type { RegistryCatalog, RegistryRegionIndex } from '../registry/index.js';
+import type { RegistryCatalog, RegistryChunkIndex } from '../registry/index.js';
 import type { QueuedWrite, QueuedWriteStatus } from '../writes/types.js';
 import type { CollectionCatalog } from './catalog.js';
 import type { DkbHealthReport, RestoreIndexesResult } from '../lifecycle/health.js';
@@ -21,8 +22,11 @@ export interface DkbMcpClientHandle {
   health(input?: { targetId?: string }): Promise<DkbHealthReport>;
   restoreIndexes(input?: { targetId?: string }): Promise<RestoreIndexesResult>;
   describeRegistry(): Promise<RegistryCatalog>;
-  describeRegistryRegions(): Promise<RegistryRegionIndex>;
+  describeRegistryChunks(): Promise<RegistryChunkIndex>;
   describeCollection(collectionId?: string): Promise<CollectionCatalog>;
+  semanticSearch(input: { targetId?: string; query: string; limit?: number; scope?: DkbNavigationScope }): Promise<DkbSemanticSearchResponse>;
+  find(input: { targetId?: string; query: string; limit?: number; scope?: DkbNavigationScope }): Promise<DkbLexicalSearchResponse>;
+  sources(targetId?: string): Promise<{ status: 'ready'; sources: DkbSourceDescription[] }>;
   auditAlignment(targetId?: string): Promise<KnowledgeAlignmentAudit>;
   search(targetId: string | undefined, query: string, limit: number): Promise<QueryResponse>;
   traceQuery(targetId: string | undefined, query: string, limit: number): Promise<Record<string, unknown>>;
@@ -87,11 +91,20 @@ export async function connectDkbMcpClient(options: { registryPath?: string } = {
     async describeRegistry(): Promise<RegistryCatalog> {
       return callStructuredTool<RegistryCatalog>(client, 'dkb.describe_registry', {});
     },
-    async describeRegistryRegions(): Promise<RegistryRegionIndex> {
-      return callStructuredTool<RegistryRegionIndex>(client, 'dkb.describe_registry_regions', {});
+    async describeRegistryChunks(): Promise<RegistryChunkIndex> {
+      return callStructuredTool<RegistryChunkIndex>(client, 'dkb.describe_registry_chunks', {});
     },
     async describeCollection(collectionId?: string): Promise<CollectionCatalog> {
       return callStructuredTool<CollectionCatalog>(client, 'dkb.describe_collection', { collectionId });
+    },
+    async semanticSearch(input): Promise<DkbSemanticSearchResponse> {
+      return callStructuredTool<DkbSemanticSearchResponse>(client, 'dkb.semantic_search', input);
+    },
+    async find(input): Promise<DkbLexicalSearchResponse> {
+      return callStructuredTool<DkbLexicalSearchResponse>(client, 'dkb.find', input);
+    },
+    async sources(targetId?: string): Promise<{ status: 'ready'; sources: DkbSourceDescription[] }> {
+      return callStructuredTool<{ status: 'ready'; sources: DkbSourceDescription[] }>(client, 'dkb.sources', { targetId });
     },
     async auditAlignment(targetId?: string): Promise<KnowledgeAlignmentAudit> {
       return callStructuredTool<KnowledgeAlignmentAudit>(client, 'dkb.audit_alignment', { targetId });

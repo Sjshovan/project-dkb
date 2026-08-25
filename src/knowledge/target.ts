@@ -53,68 +53,21 @@ export async function resolveKnowledgeTarget(targetPath: string): Promise<Knowle
   const resolvedPath = path.resolve(targetPath);
 
   if (!(await exists(manifestPath(resolvedPath, 'dkb.json')))) {
-    const registry = await loadRegistry(resolvedPath);
-    const duplicateTracker = createDuplicateTracker();
-    const units: KnowledgeTargetResolution['units'] = [];
-    const includedDkbs: KnowledgeTargetDkbRef[] = [];
-
-    for (const collection of registry.collections) {
-      const dkbs = collection.dkbs.filter((dkb) => duplicateTracker.track(dkb, `collection:${collection.manifest.id}`));
-
-      if (dkbs.length === 0) {
-        continue;
-      }
-
-      units.push({
-        collection: {
-          ...collection,
-          dkbs,
-        },
-        collectionId: collection.manifest.id,
-        standalone: false,
-      });
-      includedDkbs.push(...dkbs.map((dkb) => dkbRef(dkb, collection.manifest.id, false)));
-    }
-
-    const standalone = registry.dkbs.filter((dkb) => duplicateTracker.track(dkb, 'dkb'));
-
-    if (standalone.length > 0) {
-      units.push({
-        collection: {
-          root: registry.root,
-          manifest: {
-            id: `${registry.manifest.id}-standalone`,
-            name: `${registry.manifest.name} Standalone DKBs`,
-            version: registry.manifest.version,
-            dkbs: [],
-          },
-          dkbs: standalone,
-        },
-        collectionId: null,
-        standalone: true,
-      });
-      includedDkbs.push(...standalone.map((dkb) => dkbRef(dkb, null, true)));
-    }
-
-    return {
-      path: resolvedPath,
-      type: 'dkr',
-      id: registry.manifest.id,
-      name: registry.manifest.name,
-      version: registry.manifest.version,
-      targetHash: stableHash({
-        type: 'dkr-target',
-        id: registry.manifest.id,
-        version: registry.manifest.version,
-        includedDkbs,
-      }),
-      units,
-      includedDkbs,
-      duplicateDkbRoots: duplicateTracker.duplicates,
-    };
+    return resolveRegistryTarget(await loadRegistry(resolvedPath), resolvedPath);
   }
 
-  const dkb = await loadDkb(resolvedPath);
+  let dkb: LoadedDkb;
+
+  try {
+    dkb = await loadDkb(resolvedPath);
+  } catch (error) {
+    if (!isRegistryManifestLoadError(error)) {
+      throw error;
+    }
+
+    return resolveRegistryTarget(await loadRegistry(resolvedPath), resolvedPath);
+  }
+
   const includedDkbs = [dkbRef(dkb, null, true)];
 
   return {
@@ -148,6 +101,73 @@ export async function resolveKnowledgeTarget(targetPath: string): Promise<Knowle
     includedDkbs,
     duplicateDkbRoots: [],
   };
+}
+
+function resolveRegistryTarget(registry: Awaited<ReturnType<typeof loadRegistry>>, resolvedPath: string): KnowledgeTargetResolution {
+  const duplicateTracker = createDuplicateTracker();
+  const units: KnowledgeTargetResolution['units'] = [];
+  const includedDkbs: KnowledgeTargetDkbRef[] = [];
+
+  for (const collection of registry.collections) {
+    const dkbs = collection.dkbs.filter((dkb) => duplicateTracker.track(dkb, `collection:${collection.manifest.id}`));
+
+    if (dkbs.length === 0) {
+      continue;
+    }
+
+    units.push({
+      collection: {
+        ...collection,
+        dkbs,
+      },
+      collectionId: collection.manifest.id,
+      standalone: false,
+    });
+    includedDkbs.push(...dkbs.map((dkb) => dkbRef(dkb, collection.manifest.id, false)));
+  }
+
+  const standalone = registry.dkbs.filter((dkb) => duplicateTracker.track(dkb, 'dkb'));
+
+  if (standalone.length > 0) {
+    units.push({
+      collection: {
+        root: registry.root,
+        manifest: {
+          id: `${registry.manifest.id}-standalone`,
+          name: `${registry.manifest.name} Standalone DKBs`,
+          version: registry.manifest.version,
+          dkbs: [],
+        },
+        dkbs: standalone,
+      },
+      collectionId: null,
+      standalone: true,
+    });
+    includedDkbs.push(...standalone.map((dkb) => dkbRef(dkb, null, true)));
+  }
+
+  return {
+    path: resolvedPath,
+    type: 'dkr',
+    id: registry.manifest.id,
+    name: registry.manifest.name,
+    version: registry.manifest.version,
+    targetHash: stableHash({
+      type: 'dkr-target',
+      id: registry.manifest.id,
+      version: registry.manifest.version,
+      includedDkbs,
+    }),
+    units,
+    includedDkbs,
+    duplicateDkbRoots: duplicateTracker.duplicates,
+  };
+}
+
+function isRegistryManifestLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return message.includes('Registry project manifests cannot be loaded as DKB packages');
 }
 
 async function exists(target: string): Promise<boolean> {

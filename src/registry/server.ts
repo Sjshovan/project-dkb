@@ -216,9 +216,12 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 }
 
 async function sendBinaryFile(response: ServerResponse, target: string, contentType: string, fileName: string): Promise<void> {
+  const stat = await fs.stat(target);
+
   response.writeHead(200, {
     'content-type': contentType,
     'content-disposition': `attachment; filename="${fileName}"`,
+    'content-length': String(stat.size),
   });
   response.end(await fs.readFile(target));
 }

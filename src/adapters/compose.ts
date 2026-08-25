@@ -1,11 +1,11 @@
 import { DkbError } from '../protocol/errors.js';
-import type { DkbStore, KnowledgeRegion, LoadedDkb } from '../protocol/types.js';
+import type { DkbStore, DkbRecord, LoadedDkb } from '../protocol/types.js';
 import type { DkbReader, DkbWriter } from './adapter.js';
 import { FolderAdapter } from './folder.js';
 import { SqliteAdapter } from './sqlite.js';
 
 export class ComposeStoreAdapter implements DkbReader, DkbWriter {
-  async readRecords(dkb: LoadedDkb): Promise<KnowledgeRegion[]> {
+  async readRecords(dkb: LoadedDkb): Promise<DkbRecord[]> {
     const stores = dkb.manifest.stores ?? [];
     const batches = await Promise.all(stores.map((store) => readerFor(store.type).readRecords({
       ...dkb,
@@ -19,7 +19,7 @@ export class ComposeStoreAdapter implements DkbReader, DkbWriter {
     return batches.flat();
   }
 
-  async appendRecord(dkb: LoadedDkb, record: KnowledgeRegion): Promise<KnowledgeRegion> {
+  async appendRecord(dkb: LoadedDkb, record: DkbRecord): Promise<DkbRecord> {
     const stores = dkb.manifest.stores ?? [];
     const targetStore = stores.find((store) => store.mode === 'write' || store.mode === 'readwrite');
 

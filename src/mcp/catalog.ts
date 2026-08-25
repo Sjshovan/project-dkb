@@ -1,6 +1,5 @@
-import { adapterFor } from '../adapters/index.js';
 import { loadCollection } from '../protocol/manifest.js';
-import type { KnowledgeRegion } from '../protocol/types.js';
+import { sourceIndexForInstalledDkb } from '../runtime/catalog.js';
 
 export interface CollectionCatalog {
   collectionId: string;
@@ -20,16 +19,15 @@ export async function describeCollection(collectionPath: string, collectionId?: 
   const collection = await loadCollection(collectionPath, collectionId);
   const dkbs = await Promise.all(
     collection.dkbs.map(async (dkb) => {
-      const adapter = await adapterFor(dkb.manifest.adapter);
-      const records = await adapter.readRecords(dkb);
+      const compiled = await sourceIndexForInstalledDkb(dkb);
 
       return {
         id: dkb.manifest.id,
         name: dkb.manifest.name,
         version: dkb.manifest.version,
         adapter: dkb.manifest.adapter,
-        recordCount: records.length,
-        topics: topicsFor(records),
+        recordCount: compiled.units.length,
+        topics: topicsFor(compiled.units.map((unit) => unit.title)),
       };
     }),
   );
@@ -42,6 +40,6 @@ export async function describeCollection(collectionPath: string, collectionId?: 
   };
 }
 
-function topicsFor(records: KnowledgeRegion[]): string[] {
-  return [...new Set(records.map((record) => record.title).filter(Boolean))].slice(0, 12);
+function topicsFor(titles: string[]): string[] {
+  return [...new Set(titles.filter(Boolean))].slice(0, 12);
 }

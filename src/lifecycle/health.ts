@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { COMPILE_CACHE_PATH, compileComposeProject, verifyComposeProject } from '../compiler/compile.js';
-import { KR_GRAPH_PATH, KR_INDEX_PATH, KR_VECTOR_LANCE_PATH, KR_VECTOR_PATH } from '../indexes/knowledgeIndex.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import { invalidateQueryContext } from '../indexes/queryContext.js';
 import { loadManifest, loadRegistry } from '../protocol/manifest.js';
 import { manifestPath, resolveFrom } from '../protocol/paths.js';
@@ -47,10 +47,9 @@ export interface RestoreIndexesResult {
 }
 
 const ARTIFACTS = [
-  KR_INDEX_PATH,
-  KR_GRAPH_PATH,
-  KR_VECTOR_PATH,
-  KR_VECTOR_LANCE_PATH,
+  SOURCE_INDEX_PATH,
+  SOURCE_GRAPH_PATH,
+  SOURCE_VECTOR_PATH,
   'dkb-lock.json',
   COMPILE_CACHE_PATH,
 ];

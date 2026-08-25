@@ -1,72 +1,29 @@
-import { canExecuteReadPlan } from '../adapters/adapter.js';
-import { adapterForStore } from '../adapters/index.js';
+import { performance } from 'node:perf_hooks';
 import { stableHash } from '../contracts/hash.js';
-import { queryKrIndex, readKrIndex, type IndexedKnowledgeRegion } from '../indexes/knowledgeIndex.js';
 import type { QueryContext } from '../indexes/queryContext.js';
 import {
-  filterSourceUnitsForQueryEvidence,
-  groupSourceUnitsByRegion,
-  querySourceChunks,
   queryEvidenceForSourceUnits,
+  querySourceChunks,
   readSourceIndex,
-  sourceRegionKey,
+  type IndexedSourceAsset,
   type IndexedSourceUnit,
   type SourceUnitMatch,
+  type SourceUnitQueryEvidence,
 } from '../indexes/sourceIndex.js';
-import { loadCompose } from '../protocol/manifest.js';
+import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
+import { searchFaissSnapshot } from '../indexes/faissStore.js';
 import { validateDkbReadRequest } from '../protocol/validation.js';
 import type {
-  DkbReadBlockReason,
   DkbEvidence,
   DkbEvidenceSufficiency,
   DkbReadQuery,
   DkbReadRequest,
   DkbReadResult,
   DkbReadStatus,
-  LoadedDkb,
-  QueryHit,
 } from '../protocol/types.js';
-import { blocked, validateDkbReadQuery } from '../adapters/sqlShared.js';
 import { tokenize } from '../router/scoring.js';
-import { SOURCE_DATA_POLICY_LINE } from '../security/sourceContent.js';
-
-const DEFAULT_EVIDENCE_COMPLETION = {
-  maxEvidencePasses: 2,
-  minEvidenceConfidence: 0.75,
-  maxAdditionalRegions: 3,
-} as const;
-const SUFFICIENCY_STOPWORDS = new Set([
-  'what',
-  'which',
-  'where',
-  'when',
-  'who',
-  'how',
-  'does',
-  'find',
-  'show',
-  'tell',
-  'about',
-  'record',
-  'records',
-  'mention',
-  'mentions',
-  'that',
-  'this',
-  'with',
-  'from',
-  'the',
-]);
-
-interface RetrieveSourceGroup {
-  record: IndexedKnowledgeRegion | QueryHit;
-  dkbId: string;
-  storeId: string;
-  sourceType: IndexedSourceUnit['type'];
-  units: IndexedSourceUnit[];
-  matches: SourceUnitMatch[];
-  query: DkbReadQuery;
-}
+import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '../security/sourceContent.js';
+import { readNavigationChunks, semanticSearch } from './navigation.js';
 
 export interface DkbRetrieveKnowledgeRequest {
   need: string;
@@ -74,7 +31,6 @@ export interface DkbRetrieveKnowledgeRequest {
   phrases?: string[];
   limit?: number;
   profile?: boolean;
-  fallbackMode?: 'none' | 'source-rescue';
 }
 
 export interface DkbRetrieveKnowledgeResponse {
@@ -86,8 +42,6 @@ export interface DkbRetrieveKnowledgeResponse {
     requestId: string;
     query: string;
     intent: NonNullable<DkbRetrieveKnowledgeRequest['intent']>;
-    regionsMatched: number;
-    regionsRead: number;
     chunksMatched?: number;
     chunksRead?: number;
     sourceUnitsMatched: number;
@@ -96,24 +50,22 @@ export interface DkbRetrieveKnowledgeResponse {
       dkbId: string;
       storeId: string;
       sourceType: string;
-      regions: number;
+      chunks: number;
       sourceUnits: number;
     }>;
-    regionMatches: Array<{
-      dkbId: string;
-      regionId: string;
-      title: string;
-      retrievalPasses: string[];
-      matchedTokens: string[];
-      matchedPhrases: string[];
-      matchedIdentifiers: string[];
-    }>;
     sourceUnitMatches: Array<{
+      registryId?: string;
+      sourceOrigin?: string;
       dkbId: string;
-      regionId: string;
+      packageVersion?: string;
       sourceId: string;
       assetId?: string;
+      assetLocator?: Record<string, unknown>;
+      sourceAssetHash?: string;
+      chunkHash?: string;
       chunkOrdinal?: number;
+      chunkStart?: number;
+      chunkEnd?: number;
       storeId: string;
       type: string;
       matchedTokens: string[];
@@ -121,20 +73,18 @@ export interface DkbRetrieveKnowledgeResponse {
       matchedIdentifiers: string[];
       matchedKeywords: string[];
     }>;
-    krProfile?: unknown;
-    fallbackMode?: 'source-rescue';
+    retrievalProfile?: unknown;
   };
 }
 
 export interface DkbQueryTargetDescription {
   target: string;
   dkbId: string;
-  regionId: string;
+  sourceId: string;
   recordId: string;
   title: string;
   summary: string;
   source: string;
-  regionType: string | null;
   sourceType: string | null;
   operations: string[];
   fields: Record<string, unknown>;
@@ -151,31 +101,33 @@ export interface DkbQueryTargetResponse {
 }
 
 export async function describeQueryTargets(root: string, query: string, limit = 10, queryContext?: QueryContext): Promise<DkbQueryTargetResponse> {
-  const response = await queryKrIndex(root, 'compose-index', query, limit, undefined, { queryContext });
-  const targets = response.results
-    .filter((record) => record.sourceRef && record.queryable)
-    .map((record) => ({
-      target: targetFor(record),
-      dkbId: record.dkbId,
-      regionId: record.id,
-      recordId: record.id,
-      title: record.title,
-      summary: record.content,
-      source: record.source,
-      regionType: record.regionType ?? null,
-      sourceType: record.sourceRef?.type ?? null,
-      operations: record.queryable?.operations ?? [],
-      fields: record.queryable?.fields ?? {},
-      defaultLimit: record.queryable?.defaultLimit ?? 10,
-      maxLimit: record.queryable?.maxLimit ?? 100,
-      score: record.score,
+  const sourceIndex = queryContext ? { units: queryContext.sourceUnits } : await maybeReadSourceIndexData(root);
+  const result = await semanticSearch(root, query, limit, undefined, queryContext);
+  const unitsById = new Map(sourceIndex.units.map((unit) => [unit.id, unit]));
+  const targets = result.results
+    .map((hit) => unitsById.get(hit.id))
+    .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
+    .map((unit, index) => ({
+      target: `${unit.dkbId}/${unit.id}`,
+      dkbId: unit.dkbId,
+      sourceId: unit.id,
+      recordId: unit.id,
+      title: unit.title,
+      summary: unit.text,
+      source: unit.id,
+      sourceType: unit.type,
+      operations: unit.queryable?.operations ?? [],
+      fields: unit.queryable?.fields ?? {},
+      defaultLimit: unit.queryable?.defaultLimit ?? 10,
+      maxLimit: unit.queryable?.maxLimit ?? 100,
+      score: result.results[index]?.score ?? 0,
     }));
 
   return {
     status: targets.length > 0 ? 'ready' : 'empty',
     query,
     targets,
-    trace: response.trace,
+    trace: [result.trace],
   };
 }
 
@@ -186,110 +138,249 @@ export async function retrieveKnowledge(
 ): Promise<DkbRetrieveKnowledgeResponse> {
   const query = retrievalQueryText(request);
   const limit = Math.max(1, Math.min(request.limit ?? 8, 100));
-  const records = queryContext?.records ?? await maybeReadKrRecords(root);
-  const sourceUnits = queryContext?.sourceUnits ?? await maybeReadSourceUnits(root);
-  const sourceUnitsByRegion = groupSourceUnitsByRegion(sourceUnits);
+  const sourceIndex = queryContext
+    ? { assets: queryContext.sourceAssets, units: queryContext.sourceUnits }
+    : await maybeReadSourceIndexData(root);
+  const sourceUnits = sourceIndex.units;
   const sourceIndexQuery = sourceIndexRetrievalQuery(query, request);
   const queryEvidence = queryEvidenceForSourceUnits(sourceIndexQuery);
-  const chunkMatches = querySourceChunks(sourceUnits, sourceIndexQuery, Math.max(limit * 4, 20));
-  const chunkMatchesForRead = chunkMatches.slice(0, limit);
-  const chunkMatchedRecords = recordsForMatchedSourceUnits(records, chunkMatches);
 
-  if (records.length === 0 && sourceUnits.length === 0) {
+  if (sourceUnits.length === 0) {
     return blockedRetrievalResponse(request, query);
   }
 
-  const krResponse = await queryKrIndex(root, 'compose-index', query, Math.max(records.length, 1), undefined, {
-    queryContext,
-    profile: request.profile,
-    records,
-  });
-  const matchedRecords = chunkMatchedRecords.length > 0
-    ? chunkMatchedRecords
-    : krResponse.results.length > 0 || request.fallbackMode !== 'source-rescue'
-      ? krResponse.results
-    : recordsForMatchedSourceUnits(
-        records,
-        filterSourceUnitsForQueryEvidence(
-          sourceUnits,
-          queryEvidence,
-          Math.max(limit * 5, 20),
-        ),
-      );
+  const vectorStart = performance.now();
+  const vectorResult = queryContext?.faiss
+    ? await searchFaissSnapshot(queryContext.faiss, query, Math.max(limit * 3, 20))
+    : await querySearchDocuments(
+      queryContext?.searchRegistryId ?? 'compose-index',
+      queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(sourceUnits),
+      query,
+      Math.max(limit * 3, 20),
+      queryContext?.vectorArtifactRoot,
+      request.phrases ?? [],
+    );
+  const vectorQueryMs = performance.now() - vectorStart;
+  const sourceUnitsById = queryContext?.sourceUnitsById ?? new Map(sourceUnits.map((unit) => [unit.id, unit]));
+  const candidateChunkMatches = vectorResult.hits
+    .map((hit) => sourceUnitsById.get(hit.id))
+    .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
+    .map((unit) => querySourceChunks([unit], sourceIndexQuery, 1)[0] ?? emptyMatch(unit));
+  const exactMatchRequired = requiresExactCompiledMatch(request, queryEvidence);
+  const chunkMatchesForRead = (exactMatchRequired
+    ? candidateChunkMatches.filter((match) => hasCompiledMatchEvidence(match.evidence))
+    : candidateChunkMatches).slice(0, limit);
 
-  if (matchedRecords.length === 0) {
-    return blockedRetrievalResponse(request, query, krResponse.profile);
+  const directChunkMatches = chunkMatchesForRead.filter((match) => hasCompiledMatchEvidence(match.evidence));
+  const profile = request.profile ? {
+    timingsMs: {
+      total: roundMs(vectorQueryMs),
+      artifactContext: 0,
+      dkbFilter: 0,
+      tokenize: 0,
+      lexicalScore: 0,
+      vectorQuery: roundMs(vectorQueryMs),
+      graphExpansion: 0,
+      fusion: 0,
+      traceAssembly: 0,
+    },
+    counts: {
+      totalRecords: sourceUnits.length,
+      filteredRecords: sourceUnits.length,
+      lexicalHits: 0,
+      vectorHits: vectorResult.hits.length,
+      graphHits: 0,
+      fusedHits: vectorResult.hits.length,
+      returnedHits: chunkMatchesForRead.length,
+    },
+    passes: ['vector'],
+  } : undefined;
+
+  if (chunkMatchesForRead.length === 0) {
+    return blockedRetrievalResponse(request, query, profile);
   }
 
-  const registry = await loadCompose(root);
-  const dkbs = uniqueDkbs([
-    ...registry.collections.flatMap((collection) => collection.dkbs),
-    ...registry.dkbs,
-  ]);
-  const chunkMatchesByRegion = groupSourceMatchesByRegion(chunkMatchesForRead);
-  const sourceGroups = matchedRecords.flatMap((record, index) => sourceGroupsForRetrievedRegion(
-    record,
-    request,
-    query,
-    index,
-    sourceUnitsByRegion,
-    chunkMatches.length > 0
-      ? chunkMatchesByRegion.get(sourceRegionKey(record)) ?? []
-      : undefined,
-  ));
-  const fallbackQueries = sourceGroups.length === 0
-    ? matchedRecords.flatMap((record, index) => fallbackReadQueryForRetrievedRegion(record, request, query, index))
-    : [];
-  const fallbackResult = fallbackQueries.length > 0
-    ? await readDkb(root, { queries: fallbackQueries }, queryContext)
-    : null;
-  const queryResults = await Promise.all(sourceGroups.map((group) => executeRetrieveSourceGroup(group, dkbs)));
   const readResult: DkbReadResult = {
-    status: fallbackResult?.status ?? summarizeStatus(queryResults.map((item) => item.status)),
+    status: 'complete',
     sourcePolicy: SOURCE_DATA_POLICY_LINE,
-    queries: fallbackResult?.queries ?? queryResults,
+    queries: compiledChunkResultsForMatches(chunkMatchesForRead, query, request),
   };
   const evidence = readResult.queries.flatMap((item) => item.evidence).map(redactEvidenceSource);
-  const sufficiency = evaluateEvidenceSufficiency(readResult, query, false, 1);
 
   return {
     status: readResult.status,
     sourcePolicy: readResult.sourcePolicy,
     evidence,
-    sufficiency,
+    sufficiency: evaluateEvidenceSufficiency(readResult, query),
     metadata: {
       requestId: retrievalRequestId(request),
       query,
       intent: request.intent ?? 'evidence',
-      regionsMatched: matchedRecords.length,
-      regionsRead: new Set(sourceGroups.map((group) => `${group.dkbId}/${group.record.id}`)).size,
-      chunksMatched: sourceGroups.reduce((total, group) => total + group.matches.length, 0),
-      chunksRead: sourceGroups.reduce((total, group) => total + group.units.length, 0),
-      sourceUnitsMatched: sourceGroups.reduce((total, group) => total + group.matches.length, 0),
-      sourceUnitsRead: sourceGroups.reduce((total, group) => total + group.units.length, 0),
-      adapterGroups: adapterGroupsForSourceGroups(sourceGroups),
-      regionMatches: regionMatchesFor(matchedRecords, queryEvidence),
-      sourceUnitMatches: sourceUnitMatchesFor(sourceGroups),
-      krProfile: krResponse.profile,
-      ...(request.fallbackMode === 'source-rescue' && krResponse.results.length === 0 && matchedRecords.length > 0
-        ? { fallbackMode: 'source-rescue' }
-        : {}),
+      chunksMatched: directChunkMatches.length,
+      chunksRead: chunkMatchesForRead.length,
+      sourceUnitsMatched: directChunkMatches.length,
+      sourceUnitsRead: chunkMatchesForRead.length,
+      adapterGroups: adapterGroupsForSourceMatches(chunkMatchesForRead),
+      sourceUnitMatches: sourceUnitMatchesForMatches(chunkMatchesForRead, sourceIndex.assets, queryContext?.sourceAssetsByKey),
+      retrievalProfile: profile,
     },
   };
 }
 
-async function maybeReadKrRecords(root: string): Promise<IndexedKnowledgeRegion[]> {
-  try {
-    return await readKrIndex(root);
-  } catch {
-    return [];
-  }
+export async function readDkb(root: string, request: DkbReadRequest, queryContext?: QueryContext): Promise<DkbReadResult> {
+  const validatedRequest = validateDkbReadRequest(request, 'DKB read request');
+  const fetchQueries = validatedRequest.queries.filter((query) => query.operation === 'fetch');
+  const direct = await readNavigationChunks(root, fetchQueries.map((query) => query.target), queryContext);
+
+  const queries = validatedRequest.queries.map((query) => {
+    if (query.operation !== 'fetch') {
+      return {
+        id: query.id,
+        target: query.target,
+        status: 'blocked' as const,
+        reason: 'unsupported_operation' as const,
+        message: 'Use dkb.semantic_search or dkb.find to discover chunk references, then fetch them with operation fetch.',
+        evidence: [],
+        trace: { navigation: true },
+      };
+    }
+
+    if (query.filters && query.filters.length > 0) {
+      return {
+        id: query.id,
+        target: query.target,
+        status: 'blocked' as const,
+        reason: 'unsupported_field' as const,
+        message: 'Direct chunk fetch does not apply filters; search first and fetch the returned reference.',
+        evidence: [],
+        trace: { navigation: true },
+      };
+    }
+
+    const chunk = direct.chunks.find((candidate) => candidate.reference.id === query.target
+      || `${candidate.reference.dkbId}/${candidate.reference.id}` === query.target);
+
+    if (!chunk) {
+      return {
+        id: query.id,
+        target: query.target,
+        status: 'partial' as const,
+        reason: 'no_results' as const,
+        message: 'Compiled chunk reference was not found in the active runtime.',
+        evidence: [],
+        trace: { navigation: true, retrievalMode: 'compiled_chunk_direct' },
+      };
+    }
+
+    return {
+      id: query.id,
+      target: query.target,
+      status: 'complete' as const,
+      reason: null,
+      message: 'Compiled source chunk read directly from the active runtime catalog.',
+        evidence: [{
+        type: 'text' as const,
+        label: `[${chunk.reference.dkbId}] ${chunk.reference.title}`,
+        text: chunk.text,
+        source: {
+          storeId: chunk.reference.storeId,
+          type: chunk.reference.sourceType as DkbEvidence['source']['type'],
+          locator: chunk.reference.locator,
+          hash: chunk.reference.sourceHash,
+        },
+      }],
+      trace: {
+        navigation: true,
+        retrievalMode: 'compiled_chunk_direct',
+        dkbId: chunk.reference.dkbId,
+        packageVersion: chunk.reference.packageVersion,
+        sourceId: chunk.reference.sourceId,
+        assetId: chunk.reference.assetId,
+        storeId: chunk.reference.storeId,
+        sourceType: chunk.reference.sourceType,
+        locator: chunk.reference.locator,
+        assetLocator: chunk.reference.assetLocator,
+        sourceHash: chunk.reference.sourceHash,
+        chunkOrdinal: chunk.reference.chunkOrdinal,
+        chunkStart: chunk.reference.chunkStart,
+        chunkEnd: chunk.reference.chunkEnd,
+      },
+    };
+  });
+
+  return sanitizeReadResult({
+    status: queries.every((query) => query.status === 'complete')
+      ? 'complete'
+      : queries.some((query) => query.status === 'complete')
+        ? 'partial'
+        : 'blocked',
+    sourcePolicy: SOURCE_DATA_POLICY_LINE,
+    queries,
+  });
+}
+
+function compiledChunkResultsForMatches(
+  matches: SourceUnitMatch[],
+  query: string,
+  request: DkbRetrieveKnowledgeRequest,
+): DkbReadResult['queries'] {
+  return matches.map((match, index) => ({
+    id: `retrieve-${index + 1}`,
+    target: `${match.unit.dkbId}/${match.unit.id}`,
+    status: 'complete',
+    reason: null,
+    message: 'Compiled source chunk retrieved.',
+    evidence: [compiledChunkEvidence(match)],
+    trace: {
+      retrievalMode: 'compiled_chunk_index',
+      dkbId: match.unit.dkbId,
+      storeId: match.unit.storeId,
+      sourceType: match.unit.type,
+      sourceId: match.unit.id,
+      assetId: match.unit.assetId,
+      chunkOrdinal: match.unit.chunkOrdinal,
+      chunkStart: match.unit.chunkStart,
+      chunkEnd: match.unit.chunkEnd,
+      matchedTokens: match.evidence.tokens,
+      matchedPhrases: match.evidence.phrases,
+      matchedIdentifiers: match.evidence.identifiers,
+      matchedKeywords: match.evidence.keywords,
+      requestedLimit: request.limit,
+      query,
+    },
+  }));
+}
+
+function compiledChunkEvidence(match: SourceUnitMatch): DkbEvidence {
+  return {
+    type: 'text',
+    label: compiledChunkLabel(match.unit),
+    text: renderUntrustedSourceBlock(match.unit.text),
+    source: {
+      storeId: match.unit.storeId,
+      type: match.unit.type,
+      locator: match.unit.locator,
+      hash: match.unit.hash,
+    },
+  };
+}
+
+function compiledChunkLabel(unit: IndexedSourceUnit): string {
+  const pathLabel = typeof unit.assetLocator.path === 'string'
+    ? compactPathLabel(unit.assetLocator.path)
+    : typeof unit.locator.path === 'string'
+      ? compactPathLabel(unit.locator.path)
+      : unit.title;
+
+  return unit.chunkOrdinal > 0
+    ? `${pathLabel} chunk ${unit.chunkOrdinal + 1}`
+    : pathLabel;
 }
 
 function blockedRetrievalResponse(
   request: DkbRetrieveKnowledgeRequest,
   query: string,
-  krProfile?: unknown,
+  profile?: unknown,
 ): DkbRetrieveKnowledgeResponse {
   return {
     status: 'blocked',
@@ -307,85 +398,92 @@ function blockedRetrievalResponse(
       requestId: retrievalRequestId(request),
       query,
       intent: request.intent ?? 'evidence',
-      regionsMatched: 0,
-      regionsRead: 0,
       chunksMatched: 0,
       chunksRead: 0,
       sourceUnitsMatched: 0,
       sourceUnitsRead: 0,
       adapterGroups: [],
-      regionMatches: [],
       sourceUnitMatches: [],
-      krProfile,
+      retrievalProfile: profile,
     },
   };
 }
 
-function recordsForMatchedSourceUnits(
-  records: IndexedKnowledgeRegion[],
-  matches: SourceUnitMatch[],
-): IndexedKnowledgeRegion[] {
-  const recordsByRegion = new Map(records.map((record) => [sourceRegionKey(record), record]));
-  const seen = new Set<string>();
-
-  return matches.flatMap((match) => {
-    const record = recordsByRegion.get(sourceRegionKey(match.unit));
-
-    if (!record) {
-      return [];
-    }
-
-    const key = `${record.dkbId}/${record.id}`;
-
-    if (seen.has(key)) {
-      return [];
-    }
-
-    seen.add(key);
-
-    return [record];
-  });
+function hasCompiledMatchEvidence(evidence: SourceUnitMatch['evidence']): boolean {
+  return evidence.phrases.length > 0
+    || evidence.identifiers.length > 0
+    || evidence.keywords.length > 0
+    || evidence.tokens.length > 0;
 }
 
-function groupSourceMatchesByRegion(matches: SourceUnitMatch[]): Map<string, SourceUnitMatch[]> {
-  const groups = new Map<string, SourceUnitMatch[]>();
+function requiresExactCompiledMatch(
+  request: DkbRetrieveKnowledgeRequest,
+  evidence: SourceUnitQueryEvidence,
+): boolean {
+  return Boolean(request.phrases?.some((phrase) => phrase.trim().length > 0))
+    || evidence.identifiers.length > 0;
+}
+
+function emptyMatch(unit: IndexedSourceUnit): SourceUnitMatch {
+  return {
+    unit,
+    evidence: { phrases: [], identifiers: [], keywords: [], tokens: [] },
+  };
+}
+
+function adapterGroupsForSourceMatches(matches: SourceUnitMatch[]): DkbRetrieveKnowledgeResponse['metadata']['adapterGroups'] {
+  const groups = new Map<string, DkbRetrieveKnowledgeResponse['metadata']['adapterGroups'][number]>();
 
   for (const match of matches) {
-    const key = sourceRegionKey(match.unit);
-    const list = groups.get(key) ?? [];
+    const key = `${match.unit.dkbId}/${match.unit.storeId}/${match.unit.type}`;
+    const group = groups.get(key) ?? {
+      dkbId: match.unit.dkbId,
+      storeId: match.unit.storeId,
+      sourceType: match.unit.type,
+      chunks: 0,
+      sourceUnits: 0,
+    };
 
-    list.push(match);
-    groups.set(key, list);
+    group.chunks += 1;
+    group.sourceUnits += 1;
+    groups.set(key, group);
   }
 
-  return groups;
+  return [...groups.values()].sort((left, right) => left.dkbId.localeCompare(right.dkbId)
+    || left.storeId.localeCompare(right.storeId)
+    || left.sourceType.localeCompare(right.sourceType));
 }
 
-export async function readDkb(root: string, request: DkbReadRequest, queryContext?: QueryContext): Promise<DkbReadResult> {
-  const validatedRequest = validateDkbReadRequest(request, 'DKB read request');
-  const registry = await loadCompose(root);
-  const dkbs = uniqueDkbs([
-    ...registry.collections.flatMap((collection) => collection.dkbs),
-    ...registry.dkbs,
-  ]);
-  const records = queryContext?.records ?? await readKrIndex(root);
-  const sourceUnits = queryContext?.sourceUnits ?? await maybeReadSourceUnits(root);
-  const recordsByTarget = new Map<string, IndexedKnowledgeRegion>();
-  const sourceUnitsByRegion = groupSourceUnitsByRegion(sourceUnits);
+function sourceUnitMatchesForMatches(
+  matches: SourceUnitMatch[],
+  assets: IndexedSourceAsset[],
+  existingAssetsByKey?: Map<string, IndexedSourceAsset>,
+): DkbRetrieveKnowledgeResponse['metadata']['sourceUnitMatches'] {
+  const assetsByKey = existingAssetsByKey ?? new Map(assets.map((asset) => [`${asset.dkbId}/${asset.id}`, asset]));
 
-  for (const record of records) {
-    recordsByTarget.set(targetFor(record), record);
-    recordsByTarget.set(record.id, record);
-    recordsByTarget.set(`${record.dkbId}.${record.id}`, record);
-  }
+  return matches.map((match) => {
+    const asset = assetsByKey.get(`${match.unit.dkbId}/${match.unit.assetId}`);
 
-  const queries = await Promise.all(validatedRequest.queries.map((query) => executeOne(query, dkbs, recordsByTarget, sourceUnitsByRegion)));
-  const status = summarizeStatus(queries.map((query) => query.status));
-
-  return sanitizeReadResult({
-    status,
-    sourcePolicy: SOURCE_DATA_POLICY_LINE,
-    queries,
+    return {
+      registryId: registryIdForSourceUnit(match.unit),
+      sourceOrigin: sourceOriginForSourceUnit(match.unit),
+      dkbId: match.unit.dkbId,
+      packageVersion: match.unit.packageVersion,
+      sourceId: match.unit.id,
+      assetId: match.unit.assetId,
+      assetLocator: match.unit.assetLocator,
+      sourceAssetHash: asset?.hash,
+      chunkHash: match.unit.hash,
+      chunkOrdinal: match.unit.chunkOrdinal,
+      chunkStart: match.unit.chunkStart,
+      chunkEnd: match.unit.chunkEnd,
+      storeId: match.unit.storeId,
+      type: match.unit.type,
+      matchedTokens: match.evidence.tokens,
+      matchedPhrases: match.evidence.phrases,
+      matchedIdentifiers: match.evidence.identifiers,
+      matchedKeywords: match.evidence.keywords,
+    };
   });
 }
 
@@ -418,272 +516,15 @@ function redactEvidenceSource(evidence: DkbEvidence): DkbEvidence {
   };
 }
 
-async function executeOne(
-  query: DkbReadQuery,
-  dkbs: LoadedDkb[],
-  recordsByTarget: Map<string, IndexedKnowledgeRegion>,
-  sourceUnitsByRegion: Map<string, IndexedSourceUnit[]>,
-): Promise<DkbReadResult['queries'][number]> {
-  const record = recordsByTarget.get(query.target);
-
-  if (!record) {
-    return blocked(query, 'unknown_target', `Unknown DKB read target: ${query.target}`, {});
-  }
-
-  const dkb = dkbs.find((candidate) => candidate.manifest.id === record.dkbId);
-
-  if (!dkb) {
-    return blocked(query, 'unknown_target', `Target DKB is unavailable: ${record.dkbId}`, { dkbId: record.dkbId });
-  }
-
-  const store = dkb.manifest.stores?.find((candidate) => candidate.id === record.sourceRef?.storeId);
-
-  if (!store || !record.sourceRef) {
-    return blocked(query, 'source_unavailable', `Target source is unavailable: ${record.dkbId}/${record.id}`, { dkbId: record.dkbId });
-  }
-
-  if (dkb.manifest.permissions?.read === false || store.permissions?.read === false) {
-    return blocked(query, 'permission_denied', `Read denied for ${record.dkbId}/${store.id}`, { dkbId: record.dkbId, storeId: store.id });
-  }
-
+async function maybeReadSourceIndexData(root: string): Promise<{ assets: IndexedSourceAsset[]; units: IndexedSourceUnit[] }> {
   try {
-    const adapter = await adapterForStore(record.sourceRef.type);
-
-    if (!canExecuteReadPlan(adapter)) {
-      return blocked(query, 'source_unavailable', `Store type ${record.sourceRef.type} does not support DKB Read API execution`, { sourceType: record.sourceRef.type });
-    }
-
-    const sourceUnits = selectedSourceUnitsFor(record, query, sourceUnitsByRegion);
-    const adapterQuery = sourceUnits.status === 'ready' ? queryForSelectedSources(query) : query;
-    const queryable = record.queryable;
-    const validation = validateQuery(adapterQuery, queryable);
-
-    if (validation) {
-      return blocked(query, validation.reason, validation.message, { target: targetFor(record) });
-    }
-
-    if (sourceUnits.status === 'empty') {
-      return blocked(query, 'no_results', 'No source units matched the DKB read query inside the selected Knowledge Region.', {
-        adapter: record.sourceRef.type,
-        dkbId: dkb.manifest.id,
-        storeId: store.id,
-        regionId: record.id,
-        sourceUnitsScanned: sourceUnits.scanned,
-      });
-    }
-
-    return adapter.executeReadPlan({ dkb, store, record, query: adapterQuery, sourceUnits: sourceUnits.units });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-
-    return blocked(query, 'source_unavailable', message, { target: targetFor(record) });
-  }
-}
-
-function queryForSelectedSources(query: DkbReadQuery): DkbReadQuery {
-  return {
-    ...query,
-    filters: undefined,
-  };
-}
-
-function sourceGroupsForRetrievedRegion(
-  record: IndexedKnowledgeRegion | QueryHit,
-  request: DkbRetrieveKnowledgeRequest,
-  queryText: string,
-  index: number,
-  sourceUnitsByRegion: Map<string, IndexedSourceUnit[]>,
-  selectedMatches?: SourceUnitMatch[],
-): RetrieveSourceGroup[] {
-  const operation = operationForRetrieve(record, request.intent ?? 'evidence');
-
-  if (!operation) {
-    return [];
-  }
-
-  const candidates = sourceUnitsByRegion.get(sourceRegionKey(record)) ?? [];
-  const matches = selectedMatches
-    ? selectedMatches.slice(0, Math.max(1, Math.min(request.limit ?? record.queryable?.defaultLimit ?? 20, record.queryable?.maxLimit ?? 100)))
-    : operation === 'aggregate'
-    ? []
-    : filterSourceUnitsForQueryEvidence(
-        candidates,
-        queryEvidenceForSourceUnits(retrievalFilterQuery(record, queryText, request)),
-        Math.max(1, Math.min(request.limit ?? record.queryable?.defaultLimit ?? 20, record.queryable?.maxLimit ?? 100)),
-      );
-  const selected = matches.map((match) => match.unit);
-
-  if (operation !== 'aggregate' && candidates.length > 0 && selected.length === 0) {
-    return [];
-  }
-
-  if (operation === 'aggregate') {
-    return [{
-      record,
-      dkbId: record.dkbId,
-      storeId: record.sourceRef?.storeId ?? '',
-      sourceType: record.sourceRef?.type ?? 'filesystem',
+    return await readSourceIndex(root);
+  } catch {
+    return {
+      assets: [],
       units: [],
-      matches: [],
-      query: {
-        id: `retrieve-${index + 1}`,
-        target: targetFor(record),
-        operation,
-        metric: 'count',
-        limit: request.limit,
-      },
-    }];
+    };
   }
-
-  return [...groupSourceUnitsForAdapter(selected.length > 0 ? selected : candidates).values()].map((units, groupIndex) => ({
-    matches: matches.filter((match) => units.some((unit) => unit.id === match.unit.id)),
-    record,
-    dkbId: record.dkbId,
-    storeId: units[0]!.storeId,
-    sourceType: units[0]!.type,
-    units,
-    query: {
-      id: `retrieve-${index + 1}-${groupIndex + 1}`,
-      target: targetFor(record),
-      operation: operationForSourceUnits(units, request.intent ?? 'evidence') ?? operation,
-      filters: undefined,
-      limit: request.limit,
-    },
-  }));
-}
-
-async function executeRetrieveSourceGroup(
-  group: RetrieveSourceGroup,
-  dkbs: LoadedDkb[],
-): Promise<DkbReadResult['queries'][number]> {
-  const dkb = dkbs.find((candidate) => candidate.manifest.id === group.dkbId);
-
-  if (!dkb) {
-    return blocked(group.query, 'unknown_target', `Target DKB is unavailable: ${group.dkbId}`, { dkbId: group.dkbId });
-  }
-
-  const store = dkb.manifest.stores?.find((candidate) => candidate.id === group.storeId);
-
-  if (!store) {
-    return blocked(group.query, 'source_unavailable', `Target store is unavailable: ${group.dkbId}/${group.storeId}`, {
-      dkbId: group.dkbId,
-      storeId: group.storeId,
-    });
-  }
-
-  if (dkb.manifest.permissions?.read === false || store.permissions?.read === false) {
-    return blocked(group.query, 'permission_denied', `Read denied for ${group.dkbId}/${group.storeId}`, {
-      dkbId: group.dkbId,
-      storeId: group.storeId,
-    });
-  }
-
-  const adapter = await adapterForStore(group.sourceType);
-
-  if (!canExecuteReadPlan(adapter)) {
-    return blocked(group.query, 'source_unavailable', `Store type ${group.sourceType} does not support DKB retrieval execution`, {
-      sourceType: group.sourceType,
-    });
-  }
-
-  const record: IndexedKnowledgeRegion = {
-    ...group.record,
-    sourceRef: {
-      storeId: group.storeId,
-      type: group.sourceType,
-      locator: group.units.length === 1
-        ? group.units[0]!.locator
-        : {
-            ...(group.record.sourceRef?.locator ?? {}),
-            sourceIds: group.units.map((unit) => unit.id),
-          },
-      hash: group.record.sourceRef?.hash,
-    },
-    queryable: group.units[0]?.queryable ?? group.record.queryable,
-    storeIds: 'storeIds' in group.record ? group.record.storeIds : [group.storeId],
-  };
-
-  try {
-    return adapter.executeReadPlan({ dkb, store, record, query: group.query, sourceUnits: group.units });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-
-    return blocked(group.query, 'source_unavailable', message, { target: targetFor(group.record) });
-  }
-}
-
-function groupSourceUnitsForAdapter(units: IndexedSourceUnit[]): Map<string, IndexedSourceUnit[]> {
-  const groups = new Map<string, IndexedSourceUnit[]>();
-
-  for (const unit of units) {
-    const key = `${unit.dkbId}/${unit.storeId}/${unit.type}`;
-    const group = groups.get(key) ?? [];
-
-    group.push(unit);
-    groups.set(key, group);
-  }
-
-  return groups;
-}
-
-function operationForSourceUnits(units: IndexedSourceUnit[], intent: NonNullable<DkbRetrieveKnowledgeRequest['intent']>): DkbReadQuery['operation'] | null {
-  const operations = new Set(units.flatMap((unit) => unit.capabilities.operations));
-
-  if (intent === 'count') {
-    return operations.has('aggregate') ? 'aggregate' : operations.has('search') ? 'search' : null;
-  }
-
-  if (intent === 'records') {
-    return operations.has('lookup') ? 'lookup' : operations.has('search') ? 'search' : null;
-  }
-
-  return operations.has('search') ? 'search' : operations.has('fetch') ? 'fetch' : operations.has('lookup') ? 'lookup' : null;
-}
-
-function fallbackReadQueryForRetrievedRegion(
-  record: IndexedKnowledgeRegion | QueryHit,
-  request: DkbRetrieveKnowledgeRequest,
-  queryText: string,
-  index: number,
-): DkbReadQuery[] {
-  const operation = operationForRetrieve(record, request.intent ?? 'evidence');
-
-  if (!operation) {
-    return [];
-  }
-
-  return [{
-    id: `retrieve-${index + 1}`,
-    target: targetFor(record),
-    operation,
-    metric: operation === 'aggregate' ? 'count' : undefined,
-    filters: operation === 'aggregate' ? undefined : readFiltersForRetrieve(request, queryText),
-    limit: request.limit,
-  }];
-}
-
-function operationForRetrieve(record: IndexedKnowledgeRegion | QueryHit, intent: NonNullable<DkbRetrieveKnowledgeRequest['intent']>): DkbReadQuery['operation'] | null {
-  const operations = record.queryable?.operations ?? [];
-
-  if (intent === 'count') {
-    return operations.includes('aggregate') ? 'aggregate' : operations.includes('search') ? 'search' : operations[0] ?? null;
-  }
-
-  if (intent === 'records') {
-    return operations.includes('lookup') ? 'lookup' : operations.includes('search') ? 'search' : operations[0] ?? null;
-  }
-
-  return operations.includes('search') ? 'search' : operations.includes('fetch') ? 'fetch' : operations.includes('lookup') ? 'lookup' : operations[0] ?? null;
-}
-
-function retrievalFilterQuery(record: IndexedKnowledgeRegion | QueryHit, queryText: string, request: DkbRetrieveKnowledgeRequest): DkbReadQuery {
-  return {
-    id: 'source-select',
-    target: targetFor(record),
-    operation: operationForRetrieve(record, request.intent ?? 'evidence') ?? 'search',
-    filters: readFiltersForRetrieve(request, queryText),
-    limit: request.limit,
-  };
 }
 
 function sourceIndexRetrievalQuery(queryText: string, request: DkbRetrieveKnowledgeRequest): DkbReadQuery {
@@ -725,163 +566,17 @@ function retrievalRequestId(request: DkbRetrieveKnowledgeRequest): string {
   return `retrieve:${normalizeIdentifierText(retrievalQueryText(request)).slice(0, 24) || 'knowledge'}`;
 }
 
-function adapterGroupsForSourceGroups(sourceGroups: RetrieveSourceGroup[]): DkbRetrieveKnowledgeResponse['metadata']['adapterGroups'] {
-  const groups = new Map<string, DkbRetrieveKnowledgeResponse['metadata']['adapterGroups'][number]>();
-
-  for (const sourceGroup of sourceGroups) {
-    const key = `${sourceGroup.dkbId}/${sourceGroup.storeId}/${sourceGroup.sourceType}`;
-    const group = groups.get(key) ?? {
-      dkbId: sourceGroup.dkbId,
-      storeId: sourceGroup.storeId,
-      sourceType: sourceGroup.sourceType,
-      regions: 0,
-      sourceUnits: 0,
-    };
-
-    group.regions += 1;
-    group.sourceUnits += sourceGroup.units.length;
-    groups.set(key, group);
-  }
-
-  return [...groups.values()].sort((left, right) => left.dkbId.localeCompare(right.dkbId)
-    || left.storeId.localeCompare(right.storeId)
-    || left.sourceType.localeCompare(right.sourceType));
-}
-
-function regionMatchesFor(
-  records: Array<IndexedKnowledgeRegion | QueryHit>,
-  evidence: ReturnType<typeof queryEvidenceForSourceUnits>,
-): DkbRetrieveKnowledgeResponse['metadata']['regionMatches'] {
-  return records.map((record) => {
-    const normalized = [
-      record.title,
-      record.content,
-      record.topics.join(' '),
-      (record.keywords ?? []).join(' '),
-      record.entities.join(' '),
-      (record.aliases ?? []).join(' '),
-    ].join(' ').toLowerCase();
-    const tokens = new Set(tokenize(normalized));
-    const keywords = new Set((record.keywords ?? []).map((keyword) => keyword.toLowerCase()));
-
-    return {
-      dkbId: record.dkbId,
-      regionId: record.id,
-      title: record.title,
-      retrievalPasses: 'retrievalPasses' in record ? record.retrievalPasses ?? [] : [],
-      matchedTokens: evidence.tokens.filter((token) => tokens.has(token) || keywords.has(token)),
-      matchedPhrases: evidence.phrases.filter((phrase) => normalized.includes(phrase)),
-      matchedIdentifiers: evidence.identifiers.filter((identifier) => normalized.includes(identifier.toLowerCase())),
-    };
-  });
-}
-
-function sourceUnitMatchesFor(sourceGroups: RetrieveSourceGroup[]): DkbRetrieveKnowledgeResponse['metadata']['sourceUnitMatches'] {
-  return sourceGroups.flatMap((group) => group.matches.map((match) => ({
-    dkbId: match.unit.dkbId,
-    regionId: match.unit.regionId,
-    sourceId: match.unit.id,
-    assetId: match.unit.assetId,
-    chunkOrdinal: match.unit.chunkOrdinal,
-    storeId: match.unit.storeId,
-    type: match.unit.type,
-    matchedTokens: match.evidence.tokens,
-    matchedPhrases: match.evidence.phrases,
-    matchedIdentifiers: match.evidence.identifiers,
-    matchedKeywords: match.evidence.keywords,
-  })));
-}
-
-function selectedSourceUnitsFor(
-  record: IndexedKnowledgeRegion,
-  query: DkbReadQuery,
-  sourceUnitsByRegion: Map<string, IndexedSourceUnit[]>,
-): { status: 'none' | 'ready'; units?: IndexedSourceUnit[] } | { status: 'empty'; scanned: number } {
-  if (query.operation === 'aggregate') {
-    return { status: 'none' };
-  }
-
-  const candidates = sourceUnitsByRegion.get(sourceRegionKey(record)) ?? [];
-
-  if (candidates.length === 0) {
-    return { status: 'none' };
-  }
-
-  const limit = Math.max(1, Math.min(query.limit ?? record.queryable?.defaultLimit ?? 20, record.queryable?.maxLimit ?? 100));
-  const selected = filterSourceUnitsForQueryEvidence(candidates, queryEvidenceForSourceUnits(query), limit).map((match) => match.unit);
-
-  if (selected.length === 0) {
-    return {
-      status: 'empty',
-      scanned: candidates.length,
-    };
-  }
-
-  return {
-    status: 'ready',
-    units: selected,
-  };
-}
-
-async function maybeReadSourceUnits(root: string): Promise<IndexedSourceUnit[]> {
-  try {
-    return (await readSourceIndex(root)).units;
-  } catch {
-    return [];
-  }
-}
-
-function validateQuery(query: DkbReadQuery, queryable: IndexedKnowledgeRegion['queryable']): { reason: DkbReadBlockReason; message: string } | null {
-  return validateDkbReadQuery(query, queryable) as { reason: DkbReadBlockReason; message: string } | null;
-}
-
-function summarizeStatus(statuses: DkbReadStatus[]): DkbReadStatus {
-  if (statuses.length === 0) {
-    return 'blocked';
-  }
-
-  if (statuses.every((status) => status === 'complete')) {
-    return 'complete';
-  }
-
-  if (statuses.some((status) => status === 'complete')) {
-    return 'partial';
-  }
-
-  return 'blocked';
-}
-
-function targetFor(record: { dkbId: string; id: string }): string {
-  return `${record.dkbId}/${record.id}`;
-}
-
-function evaluateEvidenceSufficiency(
-  result: DkbReadResult,
-  needText: string,
-  expanded: boolean,
-  passes: number,
-): DkbEvidenceSufficiency {
+function evaluateEvidenceSufficiency(result: DkbReadResult, needText: string): DkbEvidenceSufficiency {
   const evidence = result.queries.flatMap((query) => query.evidence);
 
-  if (result.status === 'blocked') {
+  if (evidence.length === 0) {
     return {
       status: 'blocked',
       confidence: 0,
       matchedNeed: false,
-      expanded,
-      reason: 'blocked',
-      passes,
-    };
-  }
-
-  if (evidence.length === 0) {
-    return {
-      status: result.status === 'complete' ? 'partial' : result.status,
-      confidence: 0,
-      matchedNeed: false,
-      expanded,
+      expanded: false,
       reason: 'no_evidence',
-      passes,
+      passes: 1,
     };
   }
 
@@ -890,40 +585,25 @@ function evaluateEvidenceSufficiency(
   if (tokens.length === 0) {
     return {
       status: result.status,
-      confidence: result.status === 'complete' ? 1 : 0.5,
+      confidence: 1,
       matchedNeed: true,
-      expanded,
+      expanded: false,
       reason: 'no_need',
-      passes,
+      passes: 1,
     };
   }
 
-  const evidenceText = evidence.map(evidenceToText).join(' ');
-  const exactIdentifierConfidence = exactIdentifierConfidenceFor(needText, evidenceText);
-
-  if (exactIdentifierConfidence !== null) {
-    return {
-      status: result.status === 'complete' ? 'complete' : 'partial',
-      confidence: exactIdentifierConfidence,
-      matchedNeed: exactIdentifierConfidence >= DEFAULT_EVIDENCE_COMPLETION.minEvidenceConfidence,
-      expanded,
-      reason: 'matched_specific_identifier',
-      passes,
-    };
-  }
-
-  const evidenceTokens = new Set(tokenize(evidenceText));
+  const evidenceTokens = new Set(tokenize(evidence.map(evidenceToText).join(' ')));
   const matchedCount = tokens.filter((token) => evidenceTokens.has(token)).length;
   const confidence = roundConfidence(matchedCount / tokens.length);
-  const matchedNeed = confidence >= DEFAULT_EVIDENCE_COMPLETION.minEvidenceConfidence;
 
   return {
-    status: matchedNeed && result.status === 'complete' ? 'complete' : 'partial',
+    status: confidence >= 0.75 && result.status === 'complete' ? 'complete' : 'partial',
     confidence,
-    matchedNeed,
-    expanded,
-    reason: matchedNeed ? 'matched_need' : 'weak_match',
-    passes,
+    matchedNeed: confidence >= 0.75,
+    expanded: false,
+    reason: confidence >= 0.75 ? 'matched_need' : 'weak_match',
+    passes: 1,
   };
 }
 
@@ -943,47 +623,51 @@ function evidenceToText(evidence: DkbEvidence): string {
   return evidence.label;
 }
 
-function roundConfidence(value: number): number {
-  return Math.round(Math.max(0, Math.min(1, value)) * 10000) / 10000;
+function registryIdForSourceUnit(unit: IndexedSourceUnit): string | undefined {
+  return unit.dkbId.endsWith('.local') || /\.local-[a-f0-9]{8}$/.test(unit.dkbId)
+    ? unit.dkbId.replace(/\.local(?:-[a-f0-9]{8})?$/, '')
+    : undefined;
 }
 
-function exactIdentifierConfidenceFor(needText: string, evidenceText: string): number | null {
-  const identifiers = specificIdentifiers(needText);
-
-  if (identifiers.length === 0) {
-    return null;
-  }
-
-  const normalizedEvidence = normalizeIdentifierText(evidenceText);
-  const matched = identifiers.filter((identifier) => normalizedEvidence.includes(identifier));
-
-  if (matched.length === 0) {
-    return null;
-  }
-
-  return roundConfidence(matched.length / identifiers.length);
+function sourceOriginForSourceUnit(unit: IndexedSourceUnit): string | undefined {
+  return registryIdForSourceUnit(unit) ? 'registry-local' : undefined;
 }
 
-function specificIdentifiers(value: string): string[] {
-  return [...new Set((value.match(/\b[a-zA-Z][a-zA-Z0-9_-]*\d+[a-zA-Z0-9_-]*\b/g) ?? [])
-    .map(normalizeIdentifierText)
-    .filter((identifier) => identifier.length >= 4))];
+function compactPathLabel(value: string): string {
+  return value.split(/[\\/]+/g).filter(Boolean).at(-1) ?? value;
 }
 
 function normalizeIdentifierText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
-function uniqueDkbs(dkbs: LoadedDkb[]): LoadedDkb[] {
-  const seen = new Set<string>();
-
-  return dkbs.filter((dkb) => {
-    if (seen.has(dkb.manifest.id)) {
-      return false;
-    }
-
-    seen.add(dkb.manifest.id);
-
-    return true;
-  });
+function roundConfidence(value: number): number {
+  return Math.round(Math.max(0, Math.min(1, value)) * 10000) / 10000;
 }
+
+function roundMs(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+const SUFFICIENCY_STOPWORDS = new Set([
+  'what',
+  'which',
+  'where',
+  'when',
+  'who',
+  'how',
+  'does',
+  'find',
+  'show',
+  'tell',
+  'about',
+  'record',
+  'records',
+  'mention',
+  'mentions',
+  'that',
+  'this',
+  'with',
+  'from',
+  'the',
+]);

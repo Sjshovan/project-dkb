@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { stableHash } from '../contracts/hash.js';
 import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
-import type { QueryHit } from '../protocol/types.js';
-import { defaultMinimumScore, hasSufficientQueryCoverage, scoreRecord, tokenize } from '../router/scoring.js';
-import type { IndexedKnowledgeRegion } from './knowledgeIndex.js';
+import { tokenize } from '../router/scoring.js';
+import type { IndexedSourceUnit } from './sourceIndex.js';
 import {
   DEFAULT_EMBEDDING_MODEL,
   DEFAULT_VECTOR_DIMENSIONS,
@@ -24,8 +24,9 @@ const DEFAULT_RANKING_SCORE_THRESHOLD = 0.15;
 
 export interface VectorDocument {
   id: string;
+  packageId?: string;
+  packageVersion?: string;
   dkbId: string;
-  regionId: string;
   recordId: string;
   title: string;
   summary: string;
@@ -35,10 +36,11 @@ export interface VectorDocument {
   keywords: string[];
   entities: string[];
   aliases: string[];
-  regionType: string;
   sourceType: string;
   updatedAt: string;
   sourceHash: string | null;
+  /** Compiler-produced vector. The runtime must never create a replacement. */
+  embedding?: number[];
 }
 
 export interface SemanticNeighbor {
@@ -48,9 +50,21 @@ export interface SemanticNeighbor {
 }
 
 export interface VectorArtifactBuild {
-  krVectorPath: string;
+  vectorPath: string;
   semanticNeighbors: SemanticNeighbor[];
   backend: SearchBackendDescription;
+}
+
+export interface PackageSearchMutationResult {
+  backend: SearchBackendDescription;
+  documentCount: number;
+  taskUid?: number;
+  timingsMs: {
+    total: number;
+    ensureIndex: number;
+    taskWait: number;
+    verify: number;
+  };
 }
 
 export interface SearchBackendDescription {
@@ -59,7 +73,7 @@ export interface SearchBackendDescription {
   reason?: string;
   url?: string;
   path?: string;
-  krIndexUid?: string;
+  indexUid?: string;
   embedder?: string;
   semanticRatio?: number;
   rankingScoreThreshold?: number;
@@ -95,6 +109,7 @@ export interface SearchIndexBackend {
     documents: VectorDocument[];
     query: string;
     limit: number;
+    lexicalQueries?: string[];
   }): Promise<SearchQueryResult>;
   semanticNeighbors(input: {
     registryId: string;
@@ -107,57 +122,120 @@ export interface SearchIndexBackend {
   }): Promise<SearchBackendDescription>;
 }
 
-export function vectorDocumentsFor(records: IndexedKnowledgeRegion[]): VectorDocument[] {
-  return records.map((record) => ({
-    id: `${record.dkbId}/${record.id}`,
-    dkbId: record.dkbId,
-    regionId: record.id,
-    recordId: record.id,
-    title: record.title,
-    summary: record.content,
-    text: [
-      record.title,
-      record.content,
-      (record.keywords ?? []).join(' '),
-      record.topics.join(' '),
-      record.entities.join(' '),
-      (record.aliases ?? []).join(' '),
-      (record.ancestry ?? []).join(' '),
-      record.grouping?.reason ?? '',
-    ].join(' '),
+/**
+ * The runtime's canonical search document. A source chunk is the unit that
+ * was compiled, embedded, installed and cited.
+ */
+export function vectorDocumentsForSourceUnits(units: IndexedSourceUnit[]): VectorDocument[] {
+  return units.map((unit) => ({
+    id: unit.id,
+    dkbId: unit.dkbId,
+    recordId: unit.id,
+    title: unit.title,
+    summary: unit.text,
+    text: [unit.title, unit.text, unit.keywords.join(' ')].join(' '),
     domains: [],
-    topics: [...record.topics],
-    keywords: [...(record.keywords ?? [])],
-    entities: [...record.entities],
-    aliases: [...(record.aliases ?? [])],
-    regionType: record.regionType ?? 'unknown',
-    sourceType: record.sourceRef?.type ?? 'unknown',
-    updatedAt: record.updatedAt,
-    sourceHash: record.sourceRef?.hash ?? null,
+    topics: [],
+    keywords: [...unit.keywords],
+    entities: [],
+    aliases: [],
+    sourceType: unit.type,
+    updatedAt: unit.updatedAt,
+    sourceHash: unit.hash,
   }));
+}
+
+export async function querySearchDocuments(
+  registryId: string,
+  documents: VectorDocument[],
+  query: string,
+  limit: number,
+  artifactRoot = path.resolve(DKB_ARTIFACTS_DIR),
+  lexicalQueries: string[] = [],
+): Promise<SearchQueryResult> {
+  return searchBackendForEnvironment().query({
+    registryId,
+    artifactRoot,
+    documents,
+    query,
+    limit: Math.max(limit, 1),
+    lexicalQueries,
+  });
+}
+
+export async function upsertSearchPackage(input: {
+  registryId: string;
+  artifactRoot?: string;
+  dkbId: string;
+  packageVersion: string;
+  documents: VectorDocument[];
+}): Promise<PackageSearchMutationResult> {
+  const backend = searchBackendForEnvironment();
+
+  if (backend instanceof MeilisearchBackend) {
+    return backend.upsertPackage(input);
+  }
+
+  return {
+    backend: backend.describe(),
+    documentCount: input.documents.length,
+    timingsMs: { total: 0, ensureIndex: 0, taskWait: 0, verify: 0 },
+  };
+}
+
+export async function deleteSearchPackage(input: {
+  registryId: string;
+  artifactRoot?: string;
+  dkbId: string;
+  packageVersion: string;
+  documents?: VectorDocument[];
+}): Promise<PackageSearchMutationResult> {
+  const backend = searchBackendForEnvironment();
+
+  if (backend instanceof MeilisearchBackend) {
+    return backend.deletePackage(input);
+  }
+
+  return {
+    backend: backend.describe(),
+    documentCount: 0,
+    timingsMs: { total: 0, ensureIndex: 0, taskWait: 0, verify: 0 },
+  };
+}
+
+export async function countSearchPackageDocuments(input: {
+  registryId: string;
+  dkbId: string;
+  packageVersion: string;
+  documents?: VectorDocument[];
+}): Promise<number> {
+  const backend = searchBackendForEnvironment();
+
+  return backend instanceof MeilisearchBackend
+    ? backend.countPackageDocuments(input)
+    : 0;
 }
 
 export async function writeSearchArtifacts(
   registryId: string,
-  krVectorPath: string,
-  records: IndexedKnowledgeRegion[],
+  vectorPath: string,
+  documents: VectorDocument[],
 ): Promise<VectorArtifactBuild> {
-  const documents = vectorDocumentsFor(records);
   const backend = searchBackendForEnvironment();
-  const artifactRoot = path.dirname(krVectorPath);
+  const artifactRoot = path.dirname(vectorPath);
   await removeLegacyLanceRoot(artifactRoot);
-  const krSync = await backend.syncDocuments({ registryId, artifactRoot, documents });
-  const backendDescription = krSync.engine === MEILI_ENGINE || krSync.engine === LANCEDB_ENGINE
-    ? krSync
+  const sync = await backend.syncDocuments({ registryId, artifactRoot, documents });
+  const backendDescription = sync.engine === MEILI_ENGINE || sync.engine === LANCEDB_ENGINE
+    ? sync
     : backend.describe();
   const semanticNeighbors = canBuildSemanticGraphEdges(backendDescription)
     ? await backend.semanticNeighbors({ registryId, artifactRoot, documents })
     : [];
 
-  await writeVectorManifest(krVectorPath, registryId, documents, krSync);
+  await writeVectorManifest(vectorPath, registryId, documents, sync);
 
   return {
-    krVectorPath,
+    vectorPath,
     semanticNeighbors,
     backend: backendDescription,
   };
@@ -167,93 +245,32 @@ function canBuildSemanticGraphEdges(backend: SearchBackendDescription): boolean 
   return backend.status === 'ready' && backend.embedder !== DEFAULT_EMBEDDING_MODEL;
 }
 
-export async function querySearchArtifact(
-  registryId: string,
-  records: IndexedKnowledgeRegion[],
-  query: string,
-  limit = records.length,
-  artifactRoot = path.resolve(DKB_ARTIFACTS_DIR),
-): Promise<QueryHit[]> {
-  const documents = vectorDocumentsFor(records);
-
-  return querySearchDocumentsArtifact(registryId, records, documents, query, limit, artifactRoot);
-}
-
-export async function querySearchDocumentsArtifact(
-  registryId: string,
-  records: IndexedKnowledgeRegion[],
-  documents: VectorDocument[],
-  query: string,
-  limit = records.length,
-  artifactRoot = path.resolve(DKB_ARTIFACTS_DIR),
-): Promise<QueryHit[]> {
-  const backend = searchBackendForEnvironment();
-  const result = await backend.query({
-    registryId,
-    artifactRoot,
-    documents,
-    query,
-    limit: Math.max(limit, records.length, 1),
-  });
-  const byTarget = new Map(records.map((record) => [`${record.dkbId}/${record.id}`, record]));
-  const queryTokens = tokenize(query);
-  const lexicalBoundedVector = result.trace.embedder === DEFAULT_EMBEDDING_MODEL;
-
-  return result.hits
-    .map((hit): QueryHit | null => {
-      const record = byTarget.get(hit.id);
-
-      if (!record) {
-        return null;
-      }
-
-      const vectorScore = Math.round(hit.score * 12);
-      const lexicalHit = scoreRecord(record, queryTokens);
-      const lexicalScore = lexicalHit.score;
-      const trustedVectorScore = lexicalBoundedVector ? Math.min(vectorScore, lexicalScore + 1) : vectorScore;
-      const fusedScore = Math.max(trustedVectorScore, lexicalScore);
-
-      if (fusedScore < defaultMinimumScore || (lexicalBoundedVector && !hasSufficientQueryCoverage(lexicalHit, queryTokens))) {
-        return null;
-      }
-
-      return {
-        ...record,
-        dkbId: record.dkbId,
-        adapter: 'compose',
-        score: fusedScore,
-        retrievalPasses: ['vector'],
-      };
-    })
-    .filter((hit): hit is QueryHit => hit !== null);
-}
-
 export async function describeSearchBackend(artifactRoot?: string): Promise<SearchBackendHealth> {
   return searchBackendForEnvironment().health(artifactRoot);
 }
 
-export async function resetSearchBackend(registryId: string, artifactRoot?: string): Promise<{ kr: SearchBackendDescription }> {
+export async function resetSearchBackend(registryId: string, artifactRoot?: string): Promise<{ chunks: SearchBackendDescription }> {
   const backend = searchBackendForEnvironment();
-  const kr = await backend.deleteIndex({ registryId, artifactRoot });
+  const chunks = await backend.deleteIndex({ registryId, artifactRoot });
 
-  return { kr };
+  return { chunks };
 }
 
 export async function searchBackendQuery(input: {
   registryId: string;
   artifactRoot?: string;
-  records: IndexedKnowledgeRegion[];
+  documents: VectorDocument[];
   query: string;
   limit?: number;
+  lexicalQueries?: string[];
 }): Promise<SearchQueryResult> {
-  const documents = vectorDocumentsFor(input.records);
-
   return searchBackendForEnvironment().query({
     registryId: input.registryId,
     artifactRoot: input.artifactRoot ?? path.resolve(DKB_ARTIFACTS_DIR),
-    documents,
+    documents: input.documents,
     query: input.query,
     limit: input.limit ?? 10,
+    lexicalQueries: input.lexicalQueries ?? [],
   });
 }
 
@@ -290,7 +307,7 @@ function meiliApiKey(): string | undefined {
 }
 
 function indexUidFor(registryId: string): string {
-  return `dkb_kr_${safeIndexPart(registryId)}`;
+  return `dkb_chunks_${safeIndexPart(registryId)}`;
 }
 
 function safeIndexPart(value: string): string {
@@ -407,7 +424,6 @@ class LanceDbBackend implements SearchIndexBackend {
           id: '__empty__',
           vector: new Array<number>(DEFAULT_VECTOR_DIMENSIONS).fill(0),
           dkbId: '',
-          regionId: '',
           recordId: '',
           title: '',
           summary: '',
@@ -417,7 +433,6 @@ class LanceDbBackend implements SearchIndexBackend {
           keywords: '',
           entities: '',
           aliases: '',
-          regionType: '',
           sourceType: '',
           updatedAt: '',
           sourceHash: '',
@@ -429,7 +444,7 @@ class LanceDbBackend implements SearchIndexBackend {
       return {
         ...this.describe(),
         path: root,
-        krIndexUid: tableName,
+        indexUid: tableName,
       };
     } catch (error) {
       return {
@@ -476,7 +491,7 @@ class LanceDbBackend implements SearchIndexBackend {
         trace: {
           ...this.describe(),
           path: root,
-          krIndexUid: tableName,
+          indexUid: tableName,
         },
       };
     } catch (error) {
@@ -505,7 +520,7 @@ class LanceDbBackend implements SearchIndexBackend {
       return {
         ...this.describe(),
         path: root,
-        krIndexUid: lanceTableNameFor(input.registryId),
+        indexUid: lanceTableNameFor(input.registryId),
       };
     } catch (error) {
       return {
@@ -575,7 +590,7 @@ class MeilisearchBackend implements SearchIndexBackend {
 
       return {
         ...this.describe(),
-        krIndexUid: uid,
+        indexUid: uid,
       };
     } catch (error) {
       return {
@@ -587,13 +602,141 @@ class MeilisearchBackend implements SearchIndexBackend {
     }
   }
 
-  async query(input: { registryId: string; documents: VectorDocument[]; query: string; limit: number }): Promise<SearchQueryResult> {
+  async upsertPackage(input: {
+    registryId: string;
+    dkbId: string;
+    packageVersion: string;
+    documents: VectorDocument[];
+  }): Promise<PackageSearchMutationResult> {
+    const started = performance.now();
+    const uid = indexUidFor(input.registryId);
+    const client = await createMeiliClient();
+    const ensureStart = performance.now();
+
+    await this.ensureIndex(client, uid);
+    const ensureDone = performance.now();
+    const index = client.index<SearchDocument>(uid);
+    let taskUid: number | undefined;
+    let taskWaitMs = 0;
+
+    if (input.documents.length > 0) {
+      const task = await index.addDocuments(input.documents.map((document) => packageSearchDocumentFor(document, input.dkbId, input.packageVersion)), { primaryKey: 'id' });
+      const waitStarted = performance.now();
+
+      taskUid = task.taskUid;
+      await client.tasks.waitForTask(task, { timeout: 60000, interval: 100 });
+      taskWaitMs = performance.now() - waitStarted;
+    }
+
+    const verifyStart = performance.now();
+    const documentCount = await this.countPackageDocuments({
+      registryId: input.registryId,
+      dkbId: input.dkbId,
+      packageVersion: input.packageVersion,
+      documents: input.documents,
+    });
+    const verifyMs = performance.now() - verifyStart;
+
+    if (documentCount !== input.documents.length) {
+      throw new Error(`Meilisearch package upsert verification failed for ${input.dkbId}@${input.packageVersion}: expected ${input.documents.length}, got ${documentCount}`);
+    }
+
+    return {
+      backend: {
+        ...this.describe(),
+        indexUid: uid,
+      },
+      documentCount,
+      taskUid,
+      timingsMs: {
+        total: roundMs(performance.now() - started),
+        ensureIndex: roundMs(ensureDone - ensureStart),
+        taskWait: roundMs(taskWaitMs),
+        verify: roundMs(verifyMs),
+      },
+    };
+  }
+
+  async deletePackage(input: {
+    registryId: string;
+    dkbId: string;
+    packageVersion: string;
+    documents?: VectorDocument[];
+  }): Promise<PackageSearchMutationResult> {
+    const started = performance.now();
+    const uid = indexUidFor(input.registryId);
+    const client = await createMeiliClient();
+    const ensureStart = performance.now();
+
+    await this.ensureIndex(client, uid);
+    const ensureDone = performance.now();
+    const index = client.index<SearchDocument>(uid);
+    const documentIds = input.documents?.map((document) => packageSearchDocumentFor(document, input.dkbId, input.packageVersion).id);
+    const task = documentIds
+      ? await index.deleteDocuments(documentIds)
+      : await index.deleteDocuments({
+          filter: packageFilter(input.dkbId, input.packageVersion),
+        } as never);
+    const waitStarted = performance.now();
+
+    await client.tasks.waitForTask(task, { timeout: 60000, interval: 100 });
+    const taskWaitMs = performance.now() - waitStarted;
+    const verifyStart = performance.now();
+    const documentCount = await this.countPackageDocuments(input);
+    const verifyMs = performance.now() - verifyStart;
+
+    if (documentCount !== 0) {
+      throw new Error(`Meilisearch package delete verification failed for ${input.dkbId}@${input.packageVersion}: ${documentCount} documents remain`);
+    }
+
+    return {
+      backend: {
+        ...this.describe(),
+        indexUid: uid,
+      },
+      documentCount,
+      taskUid: task.taskUid,
+      timingsMs: {
+        total: roundMs(performance.now() - started),
+        ensureIndex: roundMs(ensureDone - ensureStart),
+        taskWait: roundMs(taskWaitMs),
+        verify: roundMs(verifyMs),
+      },
+    };
+  }
+
+  async countPackageDocuments(input: {
+    registryId: string;
+    dkbId: string;
+    packageVersion: string;
+    documents?: VectorDocument[];
+  }): Promise<number> {
+    const client = await createMeiliClient();
+    const index = client.index<SearchDocument>(indexUidFor(input.registryId));
+
+    if (input.documents) {
+      const ids = input.documents.map((document) => packageSearchDocumentFor(document, input.dkbId, input.packageVersion).id);
+      const results = await Promise.all(ids.map((id) => index.getDocument(id).then(() => true, () => false)));
+
+      return results.filter(Boolean).length;
+    }
+
+    const response = await index.search('', {
+      limit: 0,
+      filter: packageFilter(input.dkbId, input.packageVersion),
+    } as never) as { estimatedTotalHits?: number };
+
+    return Number(response.estimatedTotalHits ?? 0);
+  }
+
+  async query(input: { registryId: string; documents: VectorDocument[]; query: string; limit: number; lexicalQueries?: string[] }): Promise<SearchQueryResult> {
     const uid = indexUidFor(input.registryId);
 
     try {
       const client = await createMeiliClient();
       const index = client.index<SearchDocument>(uid);
-      const response = await index.search<SearchDocument>(input.query, {
+      const queryVector = isUserProvidedEmbedder() ? await embedQuery(input.query) : undefined;
+      const vectorResponse = await index.search<SearchDocument>(input.query, {
         limit: input.limit,
         showRankingScore: true,
         rankingScoreThreshold: rankingScoreThreshold(),
@@ -601,21 +744,41 @@ class MeilisearchBackend implements SearchIndexBackend {
           embedder: embedderName(),
           semanticRatio: semanticRatio(),
         } : undefined,
+        vector: queryVector,
       } as never);
+      const lexicalQueries = hasMeiliEmbedder() ? uniqueLexicalQueries([input.query, ...(input.lexicalQueries ?? [])]) : [];
+      const lexicalResponses = await Promise.all(lexicalQueries.map((lexicalQuery) => index.search<SearchDocument>(lexicalQuery, {
+            limit: input.limit,
+            showRankingScore: true,
+            rankingScoreThreshold: rankingScoreThreshold(),
+          } as never)));
+      const hits = mergeMeiliHits([
+        ...vectorResponse.hits,
+        ...lexicalResponses.flatMap((response) => response.hits),
+      ], input.limit);
 
       return {
-        hits: response.hits.map((hit) => ({
-          id: hit.id,
+        hits: hits.map((hit) => ({
+          id: typeof hit.canonicalId === 'string' ? hit.canonicalId : canonicalMeiliDocumentId(hit.id),
           score: typeof hit._rankingScore === 'number' ? hit._rankingScore : 0,
           source: MEILI_ENGINE,
         })),
         trace: {
           ...this.describe(),
-          krIndexUid: uid,
+          indexUid: uid,
         },
       };
     } catch (error) {
-      return new LocalHashSearchBackend(`Meilisearch query failed: ${errorMessage(error)}`).query(input);
+      return {
+        hits: [],
+        trace: {
+          engine: MEILI_ENGINE,
+          status: 'unavailable',
+          url: meiliUrl(),
+          indexUid: uid,
+          reason: `Meilisearch query failed: ${errorMessage(error)}`,
+        },
+      };
     }
   }
 
@@ -643,7 +806,9 @@ class MeilisearchBackend implements SearchIndexBackend {
         } as never);
 
         for (const hit of response.hits) {
-          if (hit.id === document.id) {
+          const hitId = canonicalMeiliDocumentId(hit.id);
+
+          if (hitId === document.id) {
             continue;
           }
 
@@ -653,7 +818,7 @@ class MeilisearchBackend implements SearchIndexBackend {
             continue;
           }
 
-          const [left, right] = [document.id, hit.id].sort((a, b) => a.localeCompare(b));
+          const [left, right] = [document.id, hitId].sort((a, b) => a.localeCompare(b));
           const key = `${left}->${right}`;
           const existing = edges.get(key);
 
@@ -683,7 +848,7 @@ class MeilisearchBackend implements SearchIndexBackend {
 
       return {
         ...this.describe(),
-        krIndexUid: uid,
+        indexUid: uid,
       };
     } catch (error) {
       return {
@@ -702,8 +867,38 @@ class MeilisearchBackend implements SearchIndexBackend {
       const task = await client.createIndex(uid, { primaryKey: 'id' });
 
       await client.tasks.waitForTask(task, { timeout: 30000, interval: 100 });
+      const index = client.index<SearchDocument>(uid);
+      const settingsTask = await index.updateSettings(meiliSettings());
+
+      await client.tasks.waitForTask(settingsTask, { timeout: 30000, interval: 100 });
     }
   }
+}
+
+function mergeMeiliHits(hits: SearchDocument[], limit: number): SearchDocument[] {
+  const byId = new Map<string, SearchDocument>();
+
+  for (const hit of hits) {
+    const id = typeof hit.canonicalId === 'string' ? hit.canonicalId : canonicalMeiliDocumentId(hit.id);
+    const existing = byId.get(id);
+
+    if (!existing || Number(hit._rankingScore ?? 0) > Number(existing._rankingScore ?? 0)) {
+      byId.set(id, hit);
+    }
+  }
+
+  return [...byId.values()]
+    .sort((left, right) => Number(right._rankingScore ?? 0) - Number(left._rankingScore ?? 0)
+      || (typeof left.canonicalId === 'string' ? left.canonicalId : left.id)
+        .localeCompare(typeof right.canonicalId === 'string' ? right.canonicalId : right.id))
+    .slice(0, limit);
+}
+
+function uniqueLexicalQueries(values: string[]): string[] {
+  return [...new Set(values
+    .map((value) => value.trim())
+    .filter(Boolean))]
+    .slice(0, 6);
 }
 
 type MeiliClient = InstanceType<(typeof import('meilisearch'))['MeiliSearch']>;
@@ -724,8 +919,10 @@ interface LanceSearchRow {
 
 interface SearchDocument {
   id: string;
+  canonicalId?: string;
+  packageId?: string;
+  packageVersion?: string;
   dkbId: string;
-  regionId: string;
   recordId: string;
   title: string;
   summary: string;
@@ -735,17 +932,17 @@ interface SearchDocument {
   keywords: string[];
   entities: string[];
   aliases: string[];
-  regionType: string;
   sourceType: string;
   updatedAt: string;
   sourceHash: string | null;
+  _vectors?: Record<string, number[]>;
   _rankingScore?: number;
 }
 
 function lanceRootFor(artifactRoot: string): string {
   return process.env.DKB_VECTOR_PATH
     ? path.resolve(process.env.DKB_VECTOR_PATH)
-    : path.join(artifactRoot, 'kr.index.vector.lance');
+    : path.join(artifactRoot, 'chunk.index.vector.lance');
 }
 
 async function removeLegacyLanceRoot(artifactRoot: string): Promise<void> {
@@ -757,14 +954,20 @@ async function removeLegacyLanceRoot(artifactRoot: string): Promise<void> {
 }
 
 function lanceTableNameFor(registryId: string): string {
-  return `kr_${safeIndexPart(registryId)}`;
+  return `chunks_${safeIndexPart(registryId)}`;
 }
 
 function searchDocumentFor(document: VectorDocument): SearchDocument {
   return {
-    id: document.id,
+    // Meilisearch primary keys may only contain alphanumerics, hyphens, and
+    // underscores. DKB canonical IDs intentionally contain separators such as
+    // "/" and ":", so keep the canonical form in memory and store a lossless
+    // backend-safe representation in Meilisearch.
+    id: meiliDocumentId(versionedMeiliDocumentId(document)),
+    canonicalId: document.id,
+    packageId: document.packageId ?? document.dkbId,
+    packageVersion: document.packageVersion ?? '0.0.0',
     dkbId: document.dkbId,
-    regionId: document.regionId,
     recordId: document.recordId,
     title: document.title,
     summary: document.summary,
@@ -774,11 +977,45 @@ function searchDocumentFor(document: VectorDocument): SearchDocument {
     keywords: document.keywords,
     entities: document.entities,
     aliases: document.aliases,
-    regionType: document.regionType,
     sourceType: document.sourceType,
     updatedAt: document.updatedAt,
     sourceHash: document.sourceHash,
+    ...(document.embedding ? { _vectors: { [embedderName()]: document.embedding } } : {}),
   };
+}
+
+function packageSearchDocumentFor(document: VectorDocument, dkbId: string, packageVersion: string): SearchDocument {
+  return searchDocumentFor({
+    ...document,
+    packageId: dkbId,
+    packageVersion,
+  });
+}
+
+function meiliDocumentId(canonicalId: string): string {
+  return Buffer.from(canonicalId, 'utf8').toString('base64url');
+}
+
+function canonicalMeiliDocumentId(id: string): string {
+  try {
+    const decoded = Buffer.from(id, 'base64url').toString('utf8');
+    const parts = decoded.split('|');
+
+    return parts.length >= 4 ? parts.slice(3).join('|') : decoded;
+  } catch {
+    // Preserve compatibility with an existing index created by an older
+    // runtime. It will be rebuilt on the next lifecycle operation.
+    return id;
+  }
+}
+
+function versionedMeiliDocumentId(document: VectorDocument): string {
+  return [
+    document.packageId ?? document.dkbId,
+    document.packageVersion ?? '0.0.0',
+    document.sourceHash ?? '',
+    document.id,
+  ].join('|');
 }
 
 function lanceDocumentFor(document: VectorDocument): Omit<SearchDocument, 'domains' | 'topics' | 'keywords' | 'entities' | 'aliases' | 'sourceHash'> & {
@@ -792,7 +1029,6 @@ function lanceDocumentFor(document: VectorDocument): Omit<SearchDocument, 'domai
   return {
     id: document.id,
     dkbId: document.dkbId,
-    regionId: document.regionId,
     recordId: document.recordId,
     title: document.title,
     summary: document.summary,
@@ -802,7 +1038,6 @@ function lanceDocumentFor(document: VectorDocument): Omit<SearchDocument, 'domai
     keywords: document.keywords.join(' '),
     entities: document.entities.join(' '),
     aliases: document.aliases.join(' '),
-    regionType: document.regionType,
     sourceType: document.sourceType,
     updatedAt: document.updatedAt,
     sourceHash: document.sourceHash ?? '',
@@ -812,19 +1047,20 @@ function lanceDocumentFor(document: VectorDocument): Omit<SearchDocument, 'domai
 function meiliSettings(): Record<string, unknown> {
   const settings: Record<string, unknown> = {
     searchableAttributes: ['title', 'summary', 'keywords', 'topics', 'entities', 'aliases', 'text'],
-    filterableAttributes: ['dkbId', 'regionId', 'recordId', 'sourceType', 'regionType', 'updatedAt'],
+    filterableAttributes: ['packageId', 'packageVersion', 'dkbId', 'recordId', 'sourceType', 'updatedAt'],
     sortableAttributes: ['updatedAt'],
     displayedAttributes: [
       'id',
+      'canonicalId',
+      'packageId',
+      'packageVersion',
       'dkbId',
-      'regionId',
       'recordId',
       'title',
       'summary',
       'topics',
       'entities',
       'aliases',
-      'regionType',
       'sourceType',
       'updatedAt',
       'sourceHash',
@@ -841,7 +1077,25 @@ function meiliSettings(): Record<string, unknown> {
   return settings;
 }
 
+function packageFilter(dkbId: string, packageVersion: string): string {
+  return `packageId = "${escapeMeiliFilterString(dkbId)}" AND packageVersion = "${escapeMeiliFilterString(packageVersion)}"`;
+}
+
+function escapeMeiliFilterString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 function embedderConfig(source: string): Record<string, unknown> {
+  if (source === 'userProvided') {
+    return {
+      source: 'userProvided',
+      dimensions: Number(process.env.DKB_MEILI_EMBEDDER_DIMENSIONS ?? 384),
+    };
+  }
   if (source === 'ollama') {
     return {
       source: 'ollama',
@@ -893,6 +1147,34 @@ function hasMeiliEmbedder(): boolean {
   return Boolean(process.env.DKB_MEILI_EMBEDDER_SOURCE);
 }
 
+function isUserProvidedEmbedder(): boolean {
+  return process.env.DKB_MEILI_EMBEDDER_SOURCE === 'userProvided';
+}
+
+async function embedQuery(query: string): Promise<number[]> {
+  const url = process.env.DKB_QUERY_EMBEDDER_URL;
+
+  if (!url) {
+    throw new Error('DKB_QUERY_EMBEDDER_URL is required when using a userProvided Meilisearch embedder');
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ texts: [query] }),
+  });
+  const body = await response.json() as { vectors?: unknown };
+  const vector = Array.isArray(body.vectors) && Array.isArray(body.vectors[0])
+    ? body.vectors[0]
+    : null;
+
+  if (!response.ok || !vector || !vector.every((value) => typeof value === 'number')) {
+    throw new Error(`DKB query embedder failed (${response.status})`);
+  }
+
+  return vector;
+}
+
 function semanticRatio(): number {
   return boundedNumber(process.env.DKB_MEILI_SEMANTIC_RATIO, DEFAULT_SEMANTIC_RATIO, 0, 1);
 }
@@ -918,9 +1200,9 @@ async function writeVectorManifest(
     engine: backend.engine,
     status: backend.status,
     reason: backend.reason,
-    artifactType: 'kr',
+    artifactType: 'chunks',
     registryId,
-    indexUid: backend.krIndexUid ?? indexUidFor(registryId),
+    indexUid: backend.indexUid ?? indexUidFor(registryId),
     artifactPath: backend.path,
     embedder: backend.embedder,
     semanticRatio: backend.semanticRatio,
@@ -935,9 +1217,8 @@ async function writeVectorManifest(
     documents: documents.map((document) => ({
       id: document.id,
       dkbId: document.dkbId,
-      regionId: document.regionId,
+      recordId: document.recordId,
       title: document.title,
-      regionType: document.regionType,
       sourceType: document.sourceType,
       textHash: stableTextHash(document.text),
     })),
@@ -945,17 +1226,16 @@ async function writeVectorManifest(
 }
 
 function scoreVectorDocument(document: VectorDocument, queryTokens: string[]): number {
-  return scoreRecord({
-    id: document.regionId,
-    title: document.title,
-    content: document.summary,
-    source: document.id,
-    topics: document.topics,
-    keywords: document.keywords,
-    entities: document.entities,
-    aliases: document.aliases,
-    updatedAt: document.updatedAt,
-  }, queryTokens).score;
+  const text = [
+    document.title,
+    document.summary,
+    document.text,
+    document.keywords.join(' '),
+    document.topics.join(' '),
+  ].join(' ').toLowerCase();
+  const tokens = new Set(tokenize(text));
+
+  return queryTokens.filter((token) => tokens.has(token)).length;
 }
 
 async function localSemanticNeighbors(documents: VectorDocument[]): Promise<SemanticNeighbor[]> {

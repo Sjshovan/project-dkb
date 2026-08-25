@@ -5,6 +5,7 @@ export const DKB_PROTOCOL_COMPATIBILITY = 'dkb.read.v1';
 export const DKB_STABLE_MCP_TOOLS = [
   'dkb.health',
   'dkb.describe_registry',
+  'dkb.describe_registry_chunks',
   'dkb.describe_collection',
   'dkb.retrieve_knowledge',
   'dkb.trace_query',

@@ -3,7 +3,6 @@ import { stableHash } from '../contracts/hash.js';
 export interface KnowledgeNeedFilters {
   targetIds?: string[];
   sourceTypes?: string[];
-  regionTypes?: string[];
 }
 
 export interface KnowledgeNeedRetrieval {
@@ -117,7 +116,6 @@ function normalizeFilters(filters: KnowledgeNeedFilters | undefined): KnowledgeN
   return {
     targetIds: uniqueStrings(filters?.targetIds ?? []),
     sourceTypes: uniqueStrings(filters?.sourceTypes ?? []),
-    regionTypes: uniqueStrings(filters?.regionTypes ?? []),
   };
 }
 

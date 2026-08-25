@@ -1,9 +1,10 @@
-﻿import fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describeQueryTargets, readDkb, retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { renderModelEvidence } from '../read/modelEvidence.js';
 import { getQueryContext } from '../indexes/queryContext.js';
-import { getTrace, latestTrace, listTraces, recordRetrievalTrace } from '../runtime/trace.js';
+import { getTrace, latestTrace, listTraces, recordRetrievalTrace, retrievalTraceEnabled } from '../runtime/trace.js';
+import { enqueueQueryAudit } from '../runtime/queryAudit.js';
 import { auditKnowledgeAlignment } from '../knowledge/alignment.js';
 import { queryKnowledgeTarget } from '../knowledge/target.js';
 import { DkbError } from '../protocol/errors.js';
@@ -12,13 +13,14 @@ import { resolveDkbCapabilities } from '../protocol/capabilities.js';
 import { evaluateDkbWrite, evaluateDkbWriteIntent, type DkbWriteIntent } from '../protocol/writeGate.js';
 import type { DkbWriteOperation, DkbReadRequest } from '../protocol/types.js';
 import { manifestPath } from '../protocol/paths.js';
-import { buildRegistryRegions, describeRegistry } from '../registry/index.js';
+import { buildRegistryChunks, describeRegistry } from '../registry/index.js';
 import { enqueueWrite, listQueuedWrites, loadQueuedWrite } from '../writes/queue.js';
 import { processWriteQueue } from '../writes/processor.js';
 import type { ProcessWriteQueueInput, QueuedWriteStatus, WriteTarget } from '../writes/types.js';
 import { describeCollection } from './catalog.js';
 import { configuredRegistryPath, debugMcp } from './config.js';
 import { modelSafeToolResult } from '../security/sourceContent.js';
+import { describeSources, lexicalSearch, semanticSearch, type DkbNavigationScope } from '../read/navigation.js';
 import { discoverRemoteDkb } from '../remote/discovery.js';
 import {
   attachRemoteSession,
@@ -27,6 +29,14 @@ import {
   retrieveFromRemoteSession,
 } from '../remote/sessions.js';
 import type { DkbRemoteAttachInput } from '../remote/types.js';
+import {
+  addDirectRemote,
+  addRegisteredRemote,
+  installRegisteredRemote,
+  listRegisteredRemotes,
+  queryRegisteredRemote,
+  removeRegisteredRemote,
+} from '../remote/manager.js';
 
 export async function describeCollectionTool(collectionId?: string) {
   const collection = await resolveCollectionTarget(collectionId);
@@ -38,8 +48,8 @@ export async function describeRegistryTool() {
   return describeRegistry(configuredRegistryPath());
 }
 
-export async function describeRegistryRegionsTool() {
-  return buildRegistryRegions(configuredRegistryPath());
+export async function describeRegistryChunksTool() {
+  return buildRegistryChunks(configuredRegistryPath());
 }
 
 export async function auditAlignmentTool(targetId?: string) {
@@ -63,10 +73,41 @@ export async function describeQueryTargetsTool(targetId: string | undefined, que
   return modelSafeToolResult(await describeQueryTargets(composePath, query, limit, await maybeQueryContext(composePath)));
 }
 
+export async function semanticSearchTool(
+  targetId: string | undefined,
+  query: string,
+  limit: number,
+  scope?: DkbNavigationScope,
+) {
+  const targetPath = await resolveTargetPath(targetId);
+
+  return semanticSearch(targetPath, query, limit, scope, await maybeQueryContext(targetPath, targetId ?? 'configured-root'));
+}
+
+export async function lexicalSearchTool(
+  targetId: string | undefined,
+  query: string,
+  limit: number,
+  scope?: DkbNavigationScope,
+) {
+  const targetPath = await resolveTargetPath(targetId);
+
+  return lexicalSearch(targetPath, query, limit, scope, await maybeQueryContext(targetPath, targetId ?? 'configured-root'));
+}
+
+export async function sourcesTool(targetId?: string) {
+  const targetPath = await resolveTargetPath(targetId);
+
+  return {
+    status: 'ready' as const,
+    sources: await describeSources(targetPath, await maybeQueryContext(targetPath, targetId ?? 'configured-root')),
+  };
+}
+
 export async function readDkbTool(targetId: string | undefined, request: DkbReadRequest) {
   const composePath = await resolveTargetPath(targetId);
 
-  return modelSafeToolResult(await readDkb(composePath, request, await maybeQueryContext(composePath)));
+  return readDkb(composePath, request, await maybeQueryContext(composePath, targetId ?? 'configured-root'));
 }
 
 export async function retrieveKnowledgeTool(targetId: string | undefined, request: DkbRetrieveKnowledgeRequest): Promise<{ modelText: string }> {
@@ -77,7 +118,17 @@ export async function retrieveKnowledgeTool(targetId: string | undefined, reques
   }, await maybeQueryContext(composePath));
   const modelText = renderModelEvidence(response);
 
-  if (process.env.DKB_TRACE_ENABLED !== 'false') {
+  const audit = enqueueQueryAudit({
+    root: composePath,
+    channel: 'mcp',
+    request,
+    response,
+  });
+  if (audit.mode === 'synchronous_fallback') {
+    await audit.flushed;
+  }
+
+  if (retrievalTraceEnabled()) {
     await recordRetrievalTrace({
       root: composePath,
       request,
@@ -109,6 +160,55 @@ export async function remoteDetachSessionTool(sessionId: string) {
 
 export async function remoteRetrieveTool(sessionId: string, request: DkbRetrieveKnowledgeRequest) {
   return modelSafeToolResult(await retrieveFromRemoteSession(sessionId, request));
+}
+
+export async function remoteListTool() {
+  return modelSafeToolResult(await listRegisteredRemotes({ presentOffers: true }));
+}
+
+export async function remoteDescribeTool(id: string) {
+  const result = await listRegisteredRemotes();
+  const remote = result.remotes.find((candidate) => candidate.id === id);
+
+  if (!remote) {
+    throw new DkbError('Unknown remote DKB: ' + id);
+  }
+
+  return modelSafeToolResult({ remote });
+}
+
+export async function remoteAddTool(input: {
+  target: string;
+  version?: string;
+  endpointUrl?: string;
+  registryUrl?: string;
+}) {
+  const result = /^https?:\/\//i.test(input.target)
+    ? await addDirectRemote({ url: input.target })
+    : await addRegisteredRemote({
+        packageId: input.target,
+        version: input.version,
+        endpointUrl: input.endpointUrl,
+        registryUrl: input.registryUrl,
+      });
+
+  return modelSafeToolResult(result);
+}
+
+export async function remoteQueryTool(id: string, request: DkbRetrieveKnowledgeRequest) {
+  return modelSafeToolResult(await queryRegisteredRemote({ id, request }));
+}
+
+export async function installPackageTool(input: {
+  remoteId: string;
+  confirm: true;
+  runtimeRoot?: string;
+}) {
+  return modelSafeToolResult(await installRegisteredRemote({
+    id: input.remoteId,
+    confirm: true,
+    runtimeRoot: input.runtimeRoot,
+  }));
 }
 
 export async function traceQueryTool(targetId: string | undefined, query: string, limit: number) {
@@ -157,9 +257,11 @@ export async function restoreIndexesTool(targetId?: string) {
   return restoreIndexes(await resolveTargetPath(targetId));
 }
 
-async function maybeQueryContext(root: string, collectionId = 'compose-index') {
+async function maybeQueryContext(root: string, collectionId?: string) {
   try {
-    return await getQueryContext(root, collectionId);
+    const contextId = collectionId ?? (await loadRegistry(root)).manifest.id;
+
+    return await getQueryContext(root, contextId);
   } catch {
     return undefined;
   }
@@ -348,20 +450,7 @@ async function configuredTargets(root: string): Promise<{
     try {
       const registry = await loadRegistry(root);
 
-      return {
-        rootId: registry.manifest.id,
-        rootType: 'registry',
-        targets: [
-          { id: registry.manifest.id, root: registry.root, type: 'registry' },
-          ...(await Promise.all(registry.collections.map(async (collection) => ({
-            id: collection.manifest.id,
-            root: collection.root,
-            type: 'collection' as const,
-          })))),
-          ...registry.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const })),
-          ...registry.collections.flatMap((collection) => collection.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const }))),
-        ],
-      };
+      return targetsForRegistry(registry);
     } catch {
       return {
         rootId: safeTargetId(path.basename(root) || 'runtime'),
@@ -373,15 +462,50 @@ async function configuredTargets(root: string): Promise<{
     }
   }
 
-  const dkb = await loadDkb(root);
+  try {
+    const dkb = await loadDkb(root);
 
+    return {
+      rootId: dkb.manifest.id,
+      rootType: 'dkb',
+      targets: [
+        { id: dkb.manifest.id, root: dkb.root, type: 'dkb' },
+      ],
+    };
+  } catch (error) {
+    if (!isRegistryManifestLoadError(error)) {
+      throw error;
+    }
+
+    return targetsForRegistry(await loadRegistry(root));
+  }
+}
+
+function targetsForRegistry(registry: Awaited<ReturnType<typeof loadRegistry>>): {
+  rootId: string;
+  rootType: 'registry';
+  targets: Array<{ id: string; root: string; type: 'registry' | 'collection' | 'dkb' }>;
+} {
   return {
-    rootId: dkb.manifest.id,
-    rootType: 'dkb',
+    rootId: registry.manifest.id,
+    rootType: 'registry',
     targets: [
-      { id: dkb.manifest.id, root: dkb.root, type: 'dkb' },
+      { id: registry.manifest.id, root: registry.root, type: 'registry' },
+      ...registry.collections.map((collection) => ({
+        id: collection.manifest.id,
+        root: collection.root,
+        type: 'collection' as const,
+      })),
+      ...registry.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const })),
+      ...registry.collections.flatMap((collection) => collection.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const }))),
     ],
   };
+}
+
+function isRegistryManifestLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return message.includes('Registry project manifests cannot be loaded as DKB packages');
 }
 
 function safeTargetId(value: string): string {
