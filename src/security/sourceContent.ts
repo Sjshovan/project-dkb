@@ -77,9 +77,13 @@ export function renderUntrustedSourceBlock(value: string): string {
 }
 
 export function sanitizeUntrustedSourceForModel(value: string): string {
-  const withoutFakeDelimiters = value.replace(/\[UNTRUSTED_SOURCE_(?:BEGIN|END)\]/gi, '');
-  const segments = withoutFakeDelimiters
+  const withoutFakeDelimiters = value
     .replace(/\r/g, '\n')
+    .replace(/\[UNTRUSTED_SOURCE_(?:BEGIN|END)\]/gi, '')
+    // Join prose line-wraps before classifying sentences so a hostile command
+    // cannot evade removal by putting its object on the next line.
+    .replace(/(?<!\n)\n(?!\n)/g, ' ');
+  const segments = withoutFakeDelimiters
     .split(/(?<=[.!?])\s+|\n/g)
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0 && !looksLikeModelOutputFence(segment));

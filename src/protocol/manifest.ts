@@ -25,7 +25,12 @@ const DISCOVERY_IGNORES = new Set([
   'dist',
   'archives',
 ]);
-const SYSTEM_ARTIFACT_FILENAMES = new Set(['dkb-lock.json', 'dkb-release.json', '.dkb-package.json']);
+const SYSTEM_ARTIFACT_FILENAMES = new Set([
+  'dkb-lock.json',
+  'dkb-profile.lock.json',
+  'dkb-release.json',
+  '.dkb-package.json',
+]);
 const REGISTRY_LOCAL_SOURCE_IGNORES = new Set([
   ...DISCOVERY_IGNORES,
   'vendor',
@@ -241,6 +246,7 @@ function registryManifestFor(root: string, dkbs: LoadedDkb[], rootManifest: DkbS
     appId: rootManifest?.appId ?? appId,
     owner: rootManifest?.owner ?? rootManifest?.author ?? owner,
     dkbs: dkbs.map((dkb) => ({ path: dkb.root })),
+    retrievalProfile: rootManifest?.retrievalProfile,
   };
 }
 

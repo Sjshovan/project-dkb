@@ -14,6 +14,7 @@ export interface DkbNavigationScope extends LexicalSearchScope {}
 
 export interface DkbNavigationReference {
   id: string;
+  evidenceId?: string;
   dkbId: string;
   packageVersion?: string;
   sourceId: string;
@@ -232,6 +233,7 @@ function navigationReference(unit: IndexedSourceUnit, score: number, matchedToke
 
   return {
     id: unit.id,
+    evidenceId: unit.evidenceId,
     dkbId: unit.dkbId,
     packageVersion: unit.packageVersion,
     sourceId: unit.id,

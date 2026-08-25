@@ -53,6 +53,15 @@ export interface DkbLocalSourcesPolicy {
   excludes?: string[];
 }
 
+export interface DkbRetrievalProfileConfig {
+  compiler?: 'llamaindex';
+  embedding?: {
+    adapter?: 'fastembed';
+    model?: string;
+    dimensions?: number;
+  };
+}
+
 export interface DkbStore {
   id: string;
   type: DkbStoreType;
@@ -114,6 +123,7 @@ export interface DkbSourceManifest extends DkbSpaceFields {
   collection?: string | DkbCollectionRef;
   dependencies?: Record<string, string>;
   localSources?: DkbLocalSourcesPolicy;
+  retrievalProfile?: DkbRetrievalProfileConfig;
   permissions?: DkbPermissions;
   domains?: string[];
   roles?: string[];
@@ -140,6 +150,7 @@ export interface DkrManifest extends DkbSpaceFields {
   owner?: DkbOwner;
   collections?: Array<{ path: string }>;
   dkbs?: Array<{ path: string }>;
+  retrievalProfile?: DkbRetrievalProfileConfig;
   meta?: Record<string, unknown>;
   extensions?: Record<string, unknown>;
 }
@@ -185,6 +196,10 @@ export interface DkbLockManifest {
     sourceIndex: DkbLockArtifact;
     sourceGraph: DkbLockArtifact;
     sourceVector: DkbLockArtifact;
+  };
+  retrievalProfile?: {
+    path: string;
+    profileDigest: string;
   };
   compiled?: {
     path: string;
@@ -340,6 +355,10 @@ export interface KnowledgeSourceRef {
   type: DkbStoreType;
   locator: Record<string, unknown>;
   hash?: string;
+  evidenceId?: string;
+  chunkId?: string;
+  dkbId?: string;
+  packageVersion?: string;
 }
 
 export interface KnowledgeSourceUnit {

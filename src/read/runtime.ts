@@ -287,6 +287,10 @@ export async function readDkb(root: string, request: DkbReadRequest, queryContex
           type: chunk.reference.sourceType as DkbEvidence['source']['type'],
           locator: chunk.reference.locator,
           hash: chunk.reference.sourceHash,
+          evidenceId: chunk.reference.evidenceId,
+          chunkId: chunk.reference.id,
+          dkbId: chunk.reference.dkbId,
+          packageVersion: chunk.reference.packageVersion,
         },
       }],
       trace: {
@@ -295,6 +299,7 @@ export async function readDkb(root: string, request: DkbReadRequest, queryContex
         dkbId: chunk.reference.dkbId,
         packageVersion: chunk.reference.packageVersion,
         sourceId: chunk.reference.sourceId,
+        evidenceId: chunk.reference.evidenceId,
         assetId: chunk.reference.assetId,
         storeId: chunk.reference.storeId,
         sourceType: chunk.reference.sourceType,
@@ -337,6 +342,7 @@ function compiledChunkResultsForMatches(
       storeId: match.unit.storeId,
       sourceType: match.unit.type,
       sourceId: match.unit.id,
+      evidenceId: match.unit.evidenceId,
       assetId: match.unit.assetId,
       chunkOrdinal: match.unit.chunkOrdinal,
       chunkStart: match.unit.chunkStart,
@@ -361,6 +367,10 @@ function compiledChunkEvidence(match: SourceUnitMatch): DkbEvidence {
       type: match.unit.type,
       locator: match.unit.locator,
       hash: match.unit.hash,
+      evidenceId: match.unit.evidenceId,
+      chunkId: match.unit.id,
+      dkbId: match.unit.dkbId,
+      packageVersion: match.unit.packageVersion,
     },
   };
 }
@@ -470,6 +480,7 @@ function sourceUnitMatchesForMatches(
       dkbId: match.unit.dkbId,
       packageVersion: match.unit.packageVersion,
       sourceId: match.unit.id,
+      evidenceId: match.unit.evidenceId,
       assetId: match.unit.assetId,
       assetLocator: match.unit.assetLocator,
       sourceAssetHash: asset?.hash,
@@ -512,6 +523,10 @@ function redactEvidenceSource(evidence: DkbEvidence): DkbEvidence {
         }).slice(7, 23),
       },
       hash: evidence.source.hash,
+      evidenceId: evidence.source.evidenceId,
+      chunkId: evidence.source.chunkId,
+      dkbId: evidence.source.dkbId,
+      packageVersion: evidence.source.packageVersion,
     },
   };
 }

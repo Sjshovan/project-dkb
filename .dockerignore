@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.dkb
+.idea
+storage
+archives
+runs
+*.zip
+npm-debug.log*

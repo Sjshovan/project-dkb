@@ -14,6 +14,12 @@ import { loadDkb, loadDkbPackage, loadRegistry } from '../protocol/manifest.js';
 import { DkbError } from '../protocol/errors.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 import type { DkbSourceManifest, LoadedDkb } from '../protocol/types.js';
+import {
+  assertMatchingRetrievalProfiles,
+  maybeReadRetrievalProfileLock,
+  writeRetrievalProfileLock,
+  type DkbRetrievalProfileLock,
+} from '../profiles/retrievalProfile.js';
 
 // Runtime snapshots are invalidated by managed mutations, not revalidated on
 // every request. This keeps the hot MCP path independent of artifact I/O.
@@ -37,6 +43,7 @@ export interface DkbRuntimeStatus {
     version: string;
     packageTreeHash?: string;
   }>;
+  retrievalProfile: DkbRetrievalProfileLock | null;
 }
 
 export interface ImportDkbOptions {
@@ -130,6 +137,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
       };
     }
   }));
+  const retrievalProfile = await maybeReadRetrievalProfileLock(paths.stateRoot);
 
   return {
     ok: true,
@@ -138,6 +146,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     packageCount: dkbIds.length,
     dkbIds,
     packages,
+    retrievalProfile,
   };
 }
 
@@ -192,7 +201,11 @@ export async function importDkbIntoRuntime(options: ImportDkbOptions, stateRoot?
   const imported = await importSource(sourceRoot, paths, options);
   const compileResult = options.compile === false
     ? undefined
-    : await compileComposeProject(paths.stateRoot, { force: true });
+    : await compileComposeProject(paths.stateRoot, {
+      force: true,
+      compiler: 'llamaindex',
+      model: (await maybeReadRetrievalProfileLock(paths.stateRoot))?.profile.embedding.model,
+    });
   // A precompiled package still needs its chunks and vectors activated in the
   // shared runtime catalog. Skipping compilation must never mean skipping
   // installation into the search index.
@@ -241,6 +254,12 @@ export async function importCompiledDkbArtifactIntoRuntime(
     }
 
     const stagedDkb = await loadDkbPackage(tempPath, id);
+    const candidateProfile = await maybeReadRetrievalProfileLock(tempPath);
+    const activeProfile = await maybeReadRetrievalProfileLock(paths.stateRoot);
+
+    if (activeProfile && candidateProfile) {
+      assertMatchingRetrievalProfiles(activeProfile, candidateProfile, `${stagedDkb.manifest.id}@${stagedDkb.manifest.version}`);
+    }
     const sameVersionReplacement = existing?.dkb.manifest.version === stagedDkb.manifest.version;
 
     if (sameVersionReplacement && existing.validation?.manifest?.hashes.artifactTree !== tempValidation.manifest?.hashes.artifactTree) {
@@ -299,6 +318,9 @@ export async function importCompiledDkbArtifactIntoRuntime(
         packageId: stagedDkb.manifest.id,
         packageVersion: stagedDkb.manifest.version,
       });
+      if (!activeProfile && candidateProfile) {
+        await writeRetrievalProfileLock(paths.stateRoot, candidateProfile);
+      }
       options.progress?.(progressUpdate({
         phase: 'activate',
         label: 'Activate package',
@@ -420,7 +442,12 @@ export async function compileRuntimeDkb(id?: string, stateRoot?: string) {
     throw new DkbError(`Runtime DKB is not installed: ${id}`);
   }
 
-  const compiled = await compileComposeProject(paths.stateRoot, { force: true });
+  const profile = await maybeReadRetrievalProfileLock(paths.stateRoot);
+  const compiled = await compileComposeProject(paths.stateRoot, {
+    force: true,
+    compiler: 'llamaindex',
+    model: profile?.profile.embedding.model,
+  });
   invalidateRuntimeQuerySnapshot(paths.stateRoot);
 
   return compiled;
@@ -695,6 +722,17 @@ async function ensureRuntimeProjectManifest(root: string): Promise<void> {
   const manifestPath = path.join(root, 'dkb.json');
 
   if (await exists(manifestPath)) {
+    const existing = await maybeReadJsonObject(manifestPath);
+
+    // Runtime roots activate only explicitly installed packages. Older
+    // generated manifests omitted this flag, which made the root's own locks
+    // appear as an implicit DKB and duplicated installed catalog rows.
+    if (existing?.description === 'Local DKB runtime registry.' && !existing.localSources) {
+      await fs.writeFile(manifestPath, `${JSON.stringify({
+        ...existing,
+        localSources: { enabled: false },
+      }, null, 2)}\n`, 'utf8');
+    }
     return;
   }
 
@@ -704,6 +742,9 @@ async function ensureRuntimeProjectManifest(root: string): Promise<void> {
     name: titleFromId(path.basename(root) || 'Runtime Registry'),
     version: '0.0.0-local',
     description: 'Local DKB runtime registry.',
+    localSources: {
+      enabled: false,
+    },
     dependencies: {},
   }, null, 2)}\n`, 'utf8');
 }

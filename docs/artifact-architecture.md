@@ -18,6 +18,27 @@ retrieval reads compiled chunks, not raw files.
 - Agent navigation is reference-first: semantic and exact search discover
   stable compiled chunk IDs, and an explicit read returns stored evidence with
   provenance. DKB does not choose an agent's investigation workflow.
+- One registry activates one retrieval profile. Packages compiled with a
+  different model, dimension count, metric, parser, or chunker profile are
+  rejected before they can enter the live query snapshot.
+
+## Portable And Runtime-Specific Layers
+
+DKB deliberately separates knowledge identity from retrieval acceleration:
+
+- Original source assets and `evidence.ir.json` are portable. Evidence IR is
+  embedding-free and preserves stable evidence IDs, source IDs, hashes,
+  locators, text, and chunk boundaries.
+- `dkb-profile.lock.json` records the exact compiler, extraction, embedding,
+  and index profile used to produce a compiled release.
+- FAISS segments, vectors, and profile-specific runtime catalogs are derived
+  artifacts. They are reusable only by compatible runtimes and may be deleted
+  and regenerated from canonical knowledge.
+
+This lets another retrieval system import DKB evidence and provenance without
+pretending DKB's vectors are universally portable. DKB's own runtime provides
+the out-of-the-box path for users who want install/uninstall without building a
+second ingestion stack.
 
 ## Thin Architecture Direction
 
@@ -125,6 +146,10 @@ extraction, the runtime validates `.dkb/artifacts/dkb-artifact.json`, promotes
 the package through a temporary install directory, preserves `.dkb/artifacts/`,
 and refreshes its aggregate catalog from the installed compiled indexes. It must
 not recompile raw source as part of that install path.
+
+Uninstall removes the promoted package and refreshes the active aggregate
+catalog. Reinstalling the same verified `.dkbpkg` restores its compiled
+artifacts without parsing, chunking, or embedding its source again.
 
 ORAS and Cosign remain adapters against the artifact manifest. They should not
 change source discovery, compiled retrieval, provenance, or model-facing

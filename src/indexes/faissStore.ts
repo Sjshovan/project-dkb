@@ -12,7 +12,12 @@ import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
 import { loadRegistry } from '../protocol/manifest.js';
 import { capabilitiesForSourceType, sourceAssetsFromChunks, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LoadedDkb } from '../protocol/types.js';
-import { LLAMAINDEX_COMPILER_ID, type LlamaIndexCompilerRecord, type LlamaIndexCompilerResult } from '../compiler/llamaindex.js';
+import {
+  LLAMAINDEX_COMPILER_ID,
+  LLAMAINDEX_COMPILER_IMAGE,
+  type LlamaIndexCompilerRecord,
+  type LlamaIndexCompilerResult,
+} from '../compiler/llamaindex.js';
 import { sourceUnitFromLlamaIndexRecord } from '../compiler/llamaindexArtifacts.js';
 import { tokenize } from '../router/scoring.js';
 
@@ -414,6 +419,7 @@ function writeFaissCatalog(
         package_id text not null,
         package_version text not null,
         chunk_id text not null,
+        evidence_id text,
         asset_id text not null,
         store_id text not null,
         type text not null,
@@ -440,10 +446,10 @@ function writeFaissCatalog(
     `);
     const insert = database.prepare(`
       insert into chunks (
-        numeric_id, package_id, package_version, chunk_id, asset_id, store_id, type,
+        numeric_id, package_id, package_version, chunk_id, evidence_id, asset_id, store_id, type,
         locator_json, asset_locator_json, title, text, keywords_json, source_hash,
         updated_at, chunk_ordinal, chunk_start, chunk_end, metadata_json
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertLexicalToken = database.prepare(`
       insert into lexical_tokens (token, numeric_id, weight)
@@ -459,6 +465,7 @@ function writeFaissCatalog(
           dkb.manifest.id,
           dkb.manifest.version,
           unit.id,
+          unit.evidenceId ?? null,
           unit.assetId,
           unit.storeId,
           unit.type,
@@ -493,8 +500,11 @@ function readFaissCatalog(catalogPath: string): { units: IndexedSourceUnit[]; nu
   const database = new DatabaseSync(catalogPath, { readOnly: true });
 
   try {
+    const hasEvidenceId = hasColumn(database, 'chunks', 'evidence_id');
     const rows = database.prepare(`
-      select numeric_id, package_id, package_version, chunk_id, asset_id, store_id, type,
+      select numeric_id, package_id, package_version, chunk_id,
+             ${hasEvidenceId ? 'evidence_id' : 'null as evidence_id'},
+             asset_id, store_id, type,
              locator_json, asset_locator_json, title, text, keywords_json, source_hash,
              updated_at, chunk_ordinal, chunk_start, chunk_end
       from chunks
@@ -517,6 +527,7 @@ function readFaissCatalog(catalogPath: string): { units: IndexedSourceUnit[]; nu
 function rowToSourceUnit(row: Record<string, unknown>): IndexedSourceUnit {
   return {
     id: String(row.chunk_id),
+    evidenceId: typeof row.evidence_id === 'string' ? row.evidence_id : undefined,
     assetId: String(row.asset_id),
     dkbId: String(row.package_id),
     packageVersion: String(row.package_version),
@@ -534,6 +545,12 @@ function rowToSourceUnit(row: Record<string, unknown>): IndexedSourceUnit {
     chunkStart: Number(row.chunk_start),
     chunkEnd: Number(row.chunk_end),
   };
+}
+
+function hasColumn(database: DatabaseSync, table: string, column: string): boolean {
+  const rows = database.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>;
+
+  return rows.some((row) => row.name === column);
 }
 
 function lexicalTokenWeights(unit: IndexedSourceUnit): Map<string, number> {
@@ -598,6 +615,7 @@ class FaissHelperClient {
   private pending: Array<{ resolve: (value: FaissHelperResponse) => void; reject: (error: Error) => void }> = [];
   private stdoutBuffer = '';
   private stderrBuffer = '';
+  private dockerImage: string | null = null;
   private dockerSegmentMounts: Array<{ hostDir: string; containerDir: string }> = [];
 
   async load(input: { dimensions: number; segments: Array<{ path: string }> }): Promise<void> {
@@ -655,7 +673,8 @@ class FaissHelperClient {
       return;
     }
     const helperPath = faissHelperPath();
-    const dockerImage = process.env.DKB_FAISS_DOCKER_IMAGE;
+    const dockerImage = configuredFaissDockerImage();
+    this.dockerImage = dockerImage;
     const child = dockerImage
       ? spawn('docker', [
         'run',
@@ -707,7 +726,7 @@ class FaissHelperClient {
   }
 
   private containerSegments(segments: Array<{ path: string }>): Array<{ path: string }> {
-    if (!process.env.DKB_FAISS_DOCKER_IMAGE || this.dockerSegmentMounts.length === 0) {
+    if (!this.dockerImage || this.dockerSegmentMounts.length === 0) {
       return segments;
     }
 
@@ -799,8 +818,10 @@ function isFaissSearchHit(value: unknown): value is FaissSearchHit {
 }
 
 async function runFaissHelper(args: string[]): Promise<void> {
-  if (process.env.DKB_FAISS_DOCKER_IMAGE && args[0] === 'build') {
-    await runFaissHelperInDocker(process.env.DKB_FAISS_DOCKER_IMAGE, args);
+  const dockerImage = configuredFaissDockerImage();
+
+  if (dockerImage && args[0] === 'build') {
+    await runFaissHelperInDocker(dockerImage, args);
 
     return;
   }
@@ -857,6 +878,20 @@ async function runFaissHelperInDocker(image: string, args: string[]): Promise<vo
 
 function faissPython(): string {
   return process.env.DKB_FAISS_PYTHON ?? process.env.PYTHON ?? 'python';
+}
+
+function configuredFaissDockerImage(): string | null {
+  if (process.env.DKB_FAISS_DOCKER_IMAGE === 'none') {
+    return null;
+  }
+  if (process.env.DKB_FAISS_DOCKER_IMAGE) {
+    return process.env.DKB_FAISS_DOCKER_IMAGE;
+  }
+  if (process.env.DKB_FAISS_PYTHON) {
+    return null;
+  }
+
+  return LLAMAINDEX_COMPILER_IMAGE;
 }
 
 function optionValue(args: string[], option: string): string | null {

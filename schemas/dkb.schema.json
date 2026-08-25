@@ -66,6 +66,9 @@
     "localSources": {
       "$ref": "#/$defs/localSources"
     },
+    "retrievalProfile": {
+      "$ref": "#/$defs/retrievalProfile"
+    },
     "permissions": {
       "$ref": "#/$defs/permissions"
     },
@@ -179,6 +182,32 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "retrievalProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "compiler": {
+          "enum": ["llamaindex"]
+        },
+        "embedding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "adapter": {
+              "enum": ["fastembed"]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dimensions": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
     },
     "write": {
       "type": "object",

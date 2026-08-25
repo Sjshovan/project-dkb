@@ -27,6 +27,9 @@ src/testing/
 Dockerfile
 docker-compose.yml
 .dockerignore
+!Dockerfile
+!.dockerignore
+!compiler/llamaindex/Dockerfile
 _local/
 .local/
 runs/*

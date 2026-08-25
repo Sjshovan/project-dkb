@@ -31,6 +31,15 @@ import {
   FAISS_SEGMENT_PATH,
   writeFaissPackageArtifacts,
 } from '../indexes/faissStore.js';
+import {
+  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+  resolveRegistryRetrievalProfile,
+  retrievalProfileLockForCompilerResults,
+  writeRetrievalProfileLock,
+  type DkbResolvedRetrievalProfile,
+  type DkbRetrievalProfileLock,
+} from '../profiles/retrievalProfile.js';
+import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '../evidence/ir.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
 export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;
@@ -87,6 +96,7 @@ export interface CompileComposeProjectOptions {
   force?: boolean;
   compiler?: 'native' | 'llamaindex';
   artifactProfile?: 'full' | 'faiss-package';
+  model?: string;
 }
 
 export interface VerifyComposeProjectResult {
@@ -141,6 +151,7 @@ interface RegistryCompileState {
   chunkRepositoryHash: string;
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
   compilerArtifacts: CompilerArtifactState[];
+  retrievalProfileLock?: DkbRetrievalProfileLock;
 }
 
 interface QuickSourceSnapshot {
@@ -211,6 +222,9 @@ export async function compileComposeProject(root: string, options: CompileCompos
   return withCompileLock(resolvedRoot, async () => {
     const totalStart = performance.now();
     const registry = await loadCompose(resolvedRoot);
+    const desiredProfile = options.compiler === 'llamaindex'
+      ? resolveRegistryRetrievalProfile(registry, options.model)
+      : undefined;
     const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
     const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
     const sourceSnapshotStart = performance.now();
@@ -222,7 +236,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
       ...registry.dkbs,
     ]);
     const packageProfileNeedsInitialBundle = await needsInitialFaissPackageBundle(resolvedRoot, options, allDkbs);
-    const cached = options.force || packageProfileNeedsInitialBundle
+    const cached = options.force || options.model || packageProfileNeedsInitialBundle
       ? null
       : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, chunkIndexPath, lockPath);
     const cacheLookupMs = elapsedMs(cacheLookupStart);
@@ -244,7 +258,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
     }
 
     const collectStateStart = performance.now();
-    const state = await collectRegistryState(registry, options.compiler ?? 'native');
+    const state = await collectRegistryState(registry, options.compiler ?? 'native', desiredProfile);
     const collectStateMs = elapsedMs(collectStateStart);
 
     const aggregateStart = performance.now();
@@ -308,6 +322,8 @@ async function writeAtomicCompileArtifacts(
   const lockPath = manifestPath(root, 'dkb-lock.json');
   const artifactBackup = `${artifactDir}.replace-${process.pid}-${Date.now().toString(36)}`;
   const lockBackup = `${lockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
+  const profilePath = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
+  const profileBackup = `${profilePath}.replace-${process.pid}-${Date.now().toString(36)}`;
 
   await fs.rm(stageParent, { recursive: true, force: true });
   await fs.mkdir(stageRoot, { recursive: true });
@@ -321,6 +337,7 @@ async function writeAtomicCompileArtifacts(
     timings.chunkIndex = timings.sourceAnalysis;
     const compilerArtifactStart = performance.now();
     await writeCompilerBundles(stageRoot, state.compilerArtifacts, { writeAggregate: true });
+    await writeProfileArtifacts(stageRoot, state);
     timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
 
     const lockStart = performance.now();
@@ -349,17 +366,30 @@ async function writeAtomicCompileArtifacts(
     await fs.mkdir(path.dirname(artifactDir), { recursive: true });
     await moveIfExists(artifactDir, artifactBackup);
     await moveIfExists(lockPath, lockBackup);
+    if (state.retrievalProfileLock) {
+      await moveIfExists(profilePath, profileBackup);
+    }
 
     try {
       await fs.rename(resolveFrom(stageRoot, DKB_ARTIFACTS_DIR), artifactDir);
       await fs.rename(stageLockPath, lockPath);
+      if (state.retrievalProfileLock) {
+        await fs.rename(resolveFrom(stageRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), profilePath);
+      }
       await fs.rm(artifactBackup, { recursive: true, force: true });
       await fs.rm(lockBackup, { recursive: true, force: true });
+      await fs.rm(profileBackup, { force: true });
     } catch (error) {
       await fs.rm(artifactDir, { recursive: true, force: true });
       await fs.rm(lockPath, { force: true });
+      if (state.retrievalProfileLock) {
+        await fs.rm(profilePath, { force: true });
+      }
       await moveIfExists(artifactBackup, artifactDir);
       await moveIfExists(lockBackup, lockPath);
+      if (state.retrievalProfileLock) {
+        await moveIfExists(profileBackup, profilePath);
+      }
       throw error;
     }
 
@@ -415,6 +445,7 @@ async function writeAtomicFaissPackageUpdateArtifacts(
       changedSourceKeys: compilerArtifact.result.cache?.changedSourceKeys,
       writeAggregate: false,
     });
+    await writeProfileArtifacts(stageRoot, state);
     timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
 
     const lockStart = performance.now();
@@ -503,6 +534,8 @@ async function copyExistingArtifactPayload(sourceRoot: string, stageRoot: string
     FAISS_MANIFEST_PATH,
     LLAMAINDEX_COMPILER_AGGREGATE_PATH,
     LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
+    DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+    DKB_EVIDENCE_IR_PATH,
     ...await listRelativeFiles(resolveFrom(sourceRoot, LLAMAINDEX_COMPILER_RECORDS_DIR), LLAMAINDEX_COMPILER_RECORDS_DIR),
   ]);
 
@@ -535,6 +568,8 @@ async function promoteFaissPackageUpdate(
     FAISS_SEGMENT_PATH,
     FAISS_MANIFEST_PATH,
     LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
+    DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+    DKB_EVIDENCE_IR_PATH,
     ...bundle.changedRecordPaths,
   ];
 
@@ -588,13 +623,45 @@ async function writeCompilerBundles(
   compilerArtifacts: CompilerArtifactState[],
   options: { writeAggregate: boolean },
 ): Promise<void> {
-  await Promise.all(compilerArtifacts.map(async (artifact) => {
-    await writeLlamaIndexCompilerBundle(stageRoot, artifact.result, {
-      changedSourceKeys: artifact.result.cache?.changedSourceKeys,
-      writeAggregate: options.writeAggregate,
-    });
-    await writeFaissPackageArtifacts(stageRoot, artifact.dkb, artifact.result);
-  }));
+  if (compilerArtifacts.length === 0) {
+    return;
+  }
+
+  const primary = compilerArtifacts[0]!;
+  const combinedResult = compilerArtifacts.length === 1
+    ? primary.result
+    : {
+        compiler: primary.result.compiler,
+        execution: {
+          mode: 'registry-aggregate',
+          workers: compilerArtifacts.reduce((total, artifact) => total + (artifact.result.execution?.workers ?? 0), 0),
+        },
+        records: compilerArtifacts.flatMap((artifact) => artifact.result.records),
+      };
+
+  await writeLlamaIndexCompilerBundle(stageRoot, combinedResult, {
+    changedSourceKeys: compilerArtifacts.length === 1 ? primary.result.cache?.changedSourceKeys : undefined,
+    writeAggregate: options.writeAggregate,
+  });
+
+  // A package release owns one FAISS snapshot. A multi-package registry keeps
+  // its aggregate source/vector indexes here and each installed package keeps
+  // its independently replaceable FAISS artifact.
+  if (compilerArtifacts.length === 1) {
+    await writeFaissPackageArtifacts(stageRoot, primary.dkb, primary.result);
+  }
+}
+
+async function writeProfileArtifacts(stageRoot: string, state: RegistryCompileState): Promise<void> {
+  if (!state.retrievalProfileLock || state.compilerArtifacts.length === 0) {
+    return;
+  }
+
+  await writeRetrievalProfileLock(stageRoot, state.retrievalProfileLock);
+  await writeEvidenceIr(
+    stageRoot,
+    buildEvidenceIr(state.compilerArtifacts.map((artifact) => artifact.result), state.retrievalProfileLock),
+  );
 }
 
 function artifactCompilerForState(state: RegistryCompileState): DkbArtifactCompiler | undefined {
@@ -969,18 +1036,16 @@ function hashString(value: string): string {
   return `sha256:${hash.digest('hex')}`;
 }
 
-async function collectRegistryState(registry: LoadedRegistry, compiler: 'native' | 'llamaindex' = 'native'): Promise<{
-  sourceUnits: IndexedSourceUnit[];
-  packages: DkbLockManifest['packages'];
-  chunkRepositoryHash: string;
-  sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
-  compilerArtifacts: CompilerArtifactState[];
-}> {
+async function collectRegistryState(
+  registry: LoadedRegistry,
+  compiler: 'native' | 'llamaindex' = 'native',
+  desiredProfile?: DkbResolvedRetrievalProfile,
+): Promise<RegistryCompileState> {
   const allDkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, compiler)));
+  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, compiler, desiredProfile)));
   const sourceUnits = packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits);
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const sourceAnalysis = {
@@ -988,12 +1053,18 @@ async function collectRegistryState(registry: LoadedRegistry, compiler: 'native'
     sourceEdges: packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceEdges),
   };
 
+  const compilerArtifacts = packageEntries.flatMap((entry) => entry.compilerArtifact ? [entry.compilerArtifact] : []);
+  const retrievalProfileLock = desiredProfile && compilerArtifacts.length > 0
+    ? retrievalProfileLockForCompilerResults(desiredProfile, compilerArtifacts.map((artifact) => artifact.result))
+    : undefined;
+
   return {
     sourceUnits,
     packages,
     chunkRepositoryHash: stableHash(sourceUnits.map(chunkForHash)),
     sourceAnalysis,
-    compilerArtifacts: packageEntries.flatMap((entry) => entry.compilerArtifact ? [entry.compilerArtifact] : []),
+    compilerArtifacts,
+    retrievalProfileLock,
   };
 }
 
@@ -1053,12 +1124,16 @@ async function collectDkbVerificationState(dkb: LoadedDkb): Promise<{
   };
 }
 
-async function collectDkbState(dkb: LoadedDkb, compiler: 'native' | 'llamaindex' = 'native'): Promise<{
+async function collectDkbState(
+  dkb: LoadedDkb,
+  compiler: 'native' | 'llamaindex' = 'native',
+  desiredProfile?: DkbResolvedRetrievalProfile,
+): Promise<{
   package: DkbLockManifest['packages'][string];
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
   compilerArtifact?: CompilerArtifactState;
 }> {
-  const built = await buildSourceUnitsForDkb(dkb, compiler);
+  const built = await buildSourceUnitsForDkb(dkb, compiler, desiredProfile);
   const rawSourceUnits = built.units;
   const sourceAnalysis = analyzeSourceUnits(rawSourceUnits);
 
@@ -1104,12 +1179,16 @@ async function lockPackageForDkb(
   };
 }
 
-async function buildSourceUnitsForDkb(dkb: LoadedDkb, compiler: 'native' | 'llamaindex' = 'native'): Promise<{
+async function buildSourceUnitsForDkb(
+  dkb: LoadedDkb,
+  compiler: 'native' | 'llamaindex' = 'native',
+  desiredProfile?: DkbResolvedRetrievalProfile,
+): Promise<{
   units: IndexedSourceUnit[];
   compilerResult?: Awaited<ReturnType<typeof compileDkbWithLlamaIndex>>;
 }> {
   if (compiler === 'llamaindex') {
-    const result = await compileDkbWithLlamaIndex(dkb);
+    const result = await compileDkbWithLlamaIndex(dkb, { model: desiredProfile?.embedding.model });
     const unique = new Map<string, IndexedSourceUnit>();
 
     for (const record of result.records) {
@@ -1190,6 +1269,12 @@ async function lockForState(root: string, registry: LoadedRegistry, state: Await
       sourceGraph: artifact(SOURCE_GRAPH_PATH, sourceGraphHash),
       sourceVector: artifact(SOURCE_VECTOR_PATH, sourceVectorHash),
     },
+    ...(state.retrievalProfileLock ? {
+      retrievalProfile: {
+        path: DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+        profileDigest: state.retrievalProfileLock.profileDigest,
+      },
+    } : {}),
     compiled: {
       path: SOURCE_INDEX_PATH,
       artifactHash: sourceIndexHash,

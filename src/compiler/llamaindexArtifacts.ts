@@ -6,6 +6,7 @@ import { capabilitiesForSourceType, type IndexedSourceUnit } from '../indexes/so
 import { tokenize } from '../router/scoring.js';
 import type { LoadedDkb } from '../protocol/types.js';
 import type { LlamaIndexCompilerRecord, LlamaIndexCompilerResult } from './llamaindex.js';
+import { evidenceIdentityForRecord } from '../evidence/ir.js';
 
 export const LLAMAINDEX_COMPILER_AGGREGATE_PATH = `${DKB_ARTIFACTS_DIR}/llamaindex.compiler.json`;
 export const LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH = `${DKB_ARTIFACTS_DIR}/llamaindex.compiler.manifest.json`;
@@ -156,9 +157,11 @@ export async function readLlamaIndexCompilerBundleManifest(root: string): Promis
 
 export function sourceUnitFromLlamaIndexRecord(dkb: LoadedDkb, record: LlamaIndexCompilerRecord): IndexedSourceUnit {
   const keywords = [...new Set(tokenize(`${record.title} ${record.text}`))].slice(0, 24);
+  const identity = evidenceIdentityForRecord(record);
 
   return {
     id: record.id,
+    evidenceId: identity.evidenceId,
     assetId: record.assetId,
     dkbId: dkb.manifest.id,
     storeId: record.storeId,

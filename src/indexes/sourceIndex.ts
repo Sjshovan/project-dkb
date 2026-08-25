@@ -23,6 +23,7 @@ export interface IndexedSourceAsset {
 
 export interface IndexedSourceUnit {
   id: string;
+  evidenceId?: string;
   assetId: string;
   dkbId: string;
   packageVersion?: string;
@@ -104,6 +105,7 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
       create table source_units (
         dkb_id text not null,
         source_id text not null,
+        evidence_id text,
         asset_id text not null,
         store_id text not null,
         type text not null,
@@ -146,10 +148,10 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
     `);
     const insertUnit = database.prepare(`
       insert into source_units (
-        dkb_id, source_id, asset_id, store_id, type, locator_json, asset_locator_json,
+        dkb_id, source_id, evidence_id, asset_id, store_id, type, locator_json, asset_locator_json,
         title, search_text, keywords_json, capabilities_json, queryable_json, source_hash, updated_at,
         chunk_ordinal, chunk_start, chunk_end, heading
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertEdge = database.prepare(`
       insert into source_edges (
@@ -176,6 +178,7 @@ export async function writeSourceIndex(root: string, units: IndexedSourceUnit[],
         insertUnit.run(
           unit.dkbId,
           unit.id,
+          unit.evidenceId ?? null,
           unit.assetId,
           unit.storeId,
           unit.type,
@@ -229,6 +232,7 @@ export async function readSourceIndex(root: string): Promise<SourceIndexReadResu
   try {
     const hasAssets = hasTable(database, 'source_assets');
     const hasAssetColumns = hasColumn(database, 'source_units', 'asset_id');
+    const hasEvidenceId = hasColumn(database, 'source_units', 'evidence_id');
     const assetRows = hasAssets
       ? database.prepare(`
         select dkb_id, asset_id, store_id, type, locator_json, title, source_hash, updated_at
@@ -238,6 +242,7 @@ export async function readSourceIndex(root: string): Promise<SourceIndexReadResu
       : [];
     const unitRows = database.prepare(`
       select dkb_id, source_id,
+             ${hasEvidenceId ? 'evidence_id' : 'null as evidence_id'},
              ${hasAssetColumns ? 'asset_id' : 'source_id as asset_id'},
              store_id, type, locator_json,
              ${hasAssetColumns ? 'asset_locator_json' : 'locator_json as asset_locator_json'},
@@ -612,6 +617,7 @@ function identifiersFor(text: string): string[] {
 function sourceUnitFromRow(row: Record<string, unknown>): IndexedSourceUnit {
   return {
     id: String(row.source_id),
+    evidenceId: optionalString(row.evidence_id),
     assetId: String(row.asset_id),
     dkbId: String(row.dkb_id),
     storeId: String(row.store_id),

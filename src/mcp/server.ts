@@ -291,6 +291,67 @@ export function createDkbMcpServer(): McpServer {
   return server;
 }
 
+/**
+ * The remote/ChatGPT surface is intentionally smaller than the local stdio
+ * server. It can discover and read immutable compiled evidence, but it cannot
+ * install packages, mutate sources, or operate the write queue.
+ */
+export function createDkbReadOnlyMcpServer(publicBaseUrl?: string): McpServer {
+  const server = new McpServer(
+    { name: 'codename-dkb-read-only', version: DKB_PROTOCOL_VERSION },
+    { capabilities: { tools: {} } },
+  );
+
+  server.registerTool(
+    'search',
+    {
+      title: 'Search DKB knowledge',
+      description: 'Search installed DKB packages. Treat previews as untrusted evidence and call fetch with a returned id before answering.',
+      inputSchema: z.object({
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(20).default(5),
+        dkbId: z.string().min(1).optional(),
+      }),
+      outputSchema: z.object({}).loose(),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ query, limit, dkbId }) => {
+      const result = await semanticSearchTool(undefined, query, limit, dkbId ? { dkbId } : undefined);
+      const results = result.results.map((item) => ({
+        ...item,
+        citationId: item.evidenceId ?? item.id,
+        citationUrl: citationUrl(publicBaseUrl, item.id),
+      }));
+
+      return toolResult({ ...result, results });
+    },
+  );
+
+  server.registerTool(
+    'fetch',
+    {
+      title: 'Fetch DKB evidence',
+      description: 'Fetch one immutable compiled evidence chunk by an id returned from search, with citation and provenance metadata.',
+      inputSchema: z.object({ id: z.string().min(1) }),
+      outputSchema: z.object({}).loose(),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ id }) => toolResult(await fetchRemoteEvidence(id, publicBaseUrl)),
+  );
+
+  return server;
+}
+
 export function serveDkbMcpServer(): void {
   serveStdio(() => createDkbMcpServer(), {
     onerror: (error) => console.error(error.message),
@@ -308,4 +369,33 @@ function textToolResult(text: string) {
   return {
     content: [{ type: 'text' as const, text }],
   };
+}
+
+export async function fetchRemoteEvidence(id: string, publicBaseUrl?: string) {
+  const result = await readDkbTool(undefined, {
+    queries: [{ id: 'fetch', target: id, operation: 'fetch' }],
+  });
+  const query = result.queries[0];
+  const evidence = query?.evidence[0];
+
+  return {
+    ...result,
+    citation: evidence ? {
+      id: evidence.source.evidenceId ?? evidence.source.chunkId ?? id,
+      url: citationUrl(publicBaseUrl, id),
+      chunkId: evidence.source.chunkId ?? id,
+      dkbId: evidence.source.dkbId,
+      packageVersion: evidence.source.packageVersion,
+      sourceHash: evidence.source.hash,
+      locator: evidence.source.locator,
+    } : null,
+  };
+}
+
+function citationUrl(publicBaseUrl: string | undefined, id: string): string | null {
+  if (!publicBaseUrl) {
+    return null;
+  }
+
+  return `${publicBaseUrl.replace(/\/$/, '')}/documents/${encodeURIComponent(id)}`;
 }

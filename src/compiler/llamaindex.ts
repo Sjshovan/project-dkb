@@ -955,6 +955,7 @@ function isExcludedSourceEntry(name: string): boolean {
   return name.startsWith('.')
     || name === 'dkb.json'
     || name === 'dkb-lock.json'
+    || name === 'dkb-profile.lock.json'
     || name === 'dkb-release.json'
     || name === '.dkb-package.json';
 }

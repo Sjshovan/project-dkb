@@ -11,6 +11,7 @@ import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '../protocol/paths.
 import { DKB_ARTIFACT_MANIFEST_PATH } from '../artifacts/manifest.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '../signing/index.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
+import { readRetrievalProfileLock } from '../profiles/retrievalProfile.js';
 
 export interface ServeDkbRegistryCompilerOptions {
   host?: string;
@@ -126,6 +127,7 @@ async function compileRegistryPackage(input: CompileRequest) {
   const buildRoot = path.join(scratch, safeId(requestedPackageId ?? 'build'));
   const archivePath = path.join(scratch, 'compiled.dkbpkg');
   const compilerImage = input.request.compiler?.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? 'dkb-compiler-llamaindex:0.3.0';
+  const compilerModel = input.request.compiler?.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5';
   const previousFaissDockerImage = process.env.DKB_FAISS_DOCKER_IMAGE;
 
   try {
@@ -146,7 +148,9 @@ async function compileRegistryPackage(input: CompileRequest) {
       force: true,
       compiler: 'llamaindex',
       artifactProfile: 'faiss-package',
+      model: compilerModel,
     });
+    const retrievalProfile = await readRetrievalProfileLock(buildRoot);
 
     await fs.rm(manifestPath(buildRoot, 'dkb-lock.json'), { force: true });
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
@@ -163,8 +167,9 @@ async function compileRegistryPackage(input: CompileRequest) {
       compiler: {
         id: 'dkb.registry.package',
         image: compilerImage,
-        model: input.request.compiler?.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5',
+        model: retrievalProfile.profile.embedding.model,
         profile: input.request.compiler?.profile ?? 'faiss-package',
+        profileDigest: retrievalProfile.profileDigest,
       },
       lock: compiled.lock,
       packageTreeHash,

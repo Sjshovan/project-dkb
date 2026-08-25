@@ -92,6 +92,22 @@ node dist/src/cli/index.js compiler stop
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to force the older one-shot compiler
 container path for a single process.
 
+Each registry has one retrieval profile. The profile locks the compiler,
+parser, chunker, embedding model, dimensions, distance metric, and relevant
+versions used by every installed package. Profile changes are whole-registry,
+staged migrations: DKB compiles and validates the complete replacement before
+atomically promoting it.
+
+```bash
+node dist/src/cli/index.js profile show .
+node dist/src/cli/index.js profile plan . --model BAAI/bge-base-en-v1.5
+node dist/src/cli/index.js profile migrate . --model BAAI/bge-base-en-v1.5 --yes
+```
+
+The built-in FastEmbed profiles currently resolve `BAAI/bge-small-en-v1.5` to
+384 dimensions and `BAAI/bge-base-en-v1.5` to 768 dimensions. A package whose
+profile differs from the active runtime is rejected before activation.
+
 Move a compiled package through a local OCI registry:
 
 ```bash
@@ -144,6 +160,23 @@ Run the MCP server:
 node dist/src/cli/index.js mcp serve
 ```
 
+The local stdio server keeps the full DKB tool surface. Remote agents receive a
+separate read-only HTTP surface with only `search` and `fetch`:
+
+```bash
+DKB_REGISTRY_PATH=/knowledge/runtime \
+DKB_QUERY_EMBEDDER_URL=http://127.0.0.1:8090/embed \
+DKB_MCP_BEARER_TOKEN=replace-with-a-secret \
+node dist/src/cli/index.js mcp serve-http --host 127.0.0.1 --port 7332
+```
+
+HTTP MCP requires a bearer token and validates Host and Origin headers. Set
+`DKB_MCP_PUBLIC_BASE_URL` when fetched evidence should include public citation
+URLs, and opt into `DKB_MCP_PUBLIC_DOCUMENTS=true` only when those immutable
+evidence documents are safe to expose. See
+[`docs/chatgpt-mcp.md`](docs/chatgpt-mcp.md) for the ChatGPT boundary and the
+temporary proof workflow.
+
 Discover and query registry-verified hosted runtimes:
 
     node dist/src/cli/index.js remote search docs
@@ -188,6 +221,12 @@ directly into a runtime without recompiling source; the runtime preserves the
 package `.dkb/artifacts/` state and refreshes its aggregate catalog from those
 compiled indexes. Runtime retrieval reads compiled artifacts and returns compact
 evidence text to the model; metadata remains available through trace APIs.
+
+`evidence.ir.json` is the portable, embedding-free interchange layer. It keeps
+stable evidence/source identities, source hashes, locators, text, and chunk
+boundaries without carrying vectors. FAISS segments, embedding vectors, and
+profile-specific chunk artifacts remain compiled runtime outputs and can be
+regenerated from canonical sources plus Evidence IR.
 
 The LlamaIndex compiler image includes a Docling rich-file lane for supported
 filesystem documents. By default `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`,

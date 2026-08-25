@@ -1076,7 +1076,8 @@ program
   .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
   .option('--compiler <name>', 'Compiler profile: native or llamaindex', 'native')
   .option('--artifact-profile <name>', 'Artifact profile: full or faiss-package', 'full')
-  .action(async (target: string, options: { force?: boolean; compiler: string; artifactProfile: string }) => {
+  .option('--model <name>', 'FastEmbed model for the registry retrieval profile')
+  .action(async (target: string, options: { force?: boolean; compiler: string; artifactProfile: string; model?: string }) => {
     const { compileComposeProject } = await import('../compiler/compile.js');
     if (options.compiler !== 'native' && options.compiler !== 'llamaindex') {
       throw new DkbError(`Unknown compiler profile ${options.compiler}. Expected native or llamaindex.`);
@@ -1091,7 +1092,57 @@ program
       force: Boolean(options.force),
       compiler,
       artifactProfile,
+      model: options.model,
     }), summarizeCompileResult);
+  });
+
+const profile = program
+  .command('profile')
+  .description('Inspect or atomically migrate the registry retrieval profile');
+
+profile
+  .command('show')
+  .description('Show configured and compiled retrieval profile details')
+  .argument('[path]', 'Registry or package root', '.')
+  .action(async (target: string) => {
+    const root = path.resolve(target);
+    const [{ loadRegistry }, profileModule] = await Promise.all([
+      import('../protocol/manifest.js'),
+      import('../profiles/retrievalProfile.js'),
+    ]);
+    const registry = await loadRegistry(root);
+    const configured = profileModule.resolveRegistryRetrievalProfile(registry);
+    const lock = await profileModule.maybeReadRetrievalProfileLock(root);
+
+    printJson({
+      root,
+      configured,
+      compiled: lock,
+      supportedModels: profileModule.supportedRetrievalModels(),
+    });
+  });
+
+profile
+  .command('plan')
+  .description('Plan a whole-registry profile recompile without changing files')
+  .argument('[path]', 'Registry or package root', '.')
+  .requiredOption('--model <name>', 'Target FastEmbed model')
+  .action(async (target: string, options: { model: string }) => {
+    const { planRetrievalProfileMigration } = await import('../profiles/migration.js');
+
+    printJson(await planRetrievalProfileMigration(target, options.model));
+  });
+
+profile
+  .command('migrate')
+  .description('Compile every package in staging and atomically activate the target profile')
+  .argument('[path]', 'Registry or package root', '.')
+  .requiredOption('--model <name>', 'Target FastEmbed model')
+  .option('--yes', 'Confirm the whole-registry recompile')
+  .action(async (target: string, options: { model: string; yes?: boolean }) => {
+    const { migrateRetrievalProfile } = await import('../profiles/migration.js');
+
+    printJson(await migrateRetrievalProfile(target, options.model, { confirmed: Boolean(options.yes) }));
   });
 
 program
@@ -1377,6 +1428,18 @@ mcp
     const { serveDkbMcpServer } = await import('../mcp/server.js');
 
     serveDkbMcpServer();
+  });
+
+mcp
+  .command('serve-http')
+  .description('Start the authenticated, read-only DKB MCP server over Streamable HTTP')
+  .option('--host <host>', 'Host to bind', process.env.DKB_MCP_HTTP_HOST || '127.0.0.1')
+  .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_MCP_HTTP_PORT || '7332', 10))
+  .option('--path <path>', 'MCP endpoint path', process.env.DKB_MCP_HTTP_PATH || '/mcp')
+  .action(async (options: { host: string; port: number; path: string }) => {
+    const { serveDkbMcpHttp } = await import('../mcp/http.js');
+
+    await serveDkbMcpHttp(options);
   });
 
 program.exitOverride();

@@ -39,6 +39,20 @@
     "compiled": {
       "type": "object",
       "additionalProperties": true
+    },
+    "retrievalProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "profileDigest"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "profileDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
     }
   },
   "$defs": {

@@ -11,6 +11,12 @@ import { describeCompilerAdapter } from '../compiler/adapters.js';
 import { LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH, LLAMAINDEX_COMPILER_RECORDS_DIR } from '../compiler/llamaindexArtifacts.js';
 import { FAISS_CATALOG_PATH, FAISS_MANIFEST_PATH, FAISS_SEGMENT_PATH } from '../indexes/faissStore.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
+import { DKB_EVIDENCE_IR_PATH, readEvidenceIr, type DkbEvidenceIr } from '../evidence/ir.js';
+import {
+  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+  readRetrievalProfileLock,
+  type DkbRetrievalProfileLock,
+} from '../profiles/retrievalProfile.js';
 import type { DkbLockManifest } from '../protocol/types.js';
 
 export const DKB_ARTIFACT_MANIFEST_VERSION = 1;
@@ -45,6 +51,15 @@ export interface DkbArtifactManifest {
     records: number;
     sourceUnits: number | null;
     sourceAssets: number | null;
+  };
+  retrievalProfile?: {
+    path: typeof DKB_RETRIEVAL_PROFILE_LOCK_PATH;
+    profileDigest: string;
+  };
+  evidence?: {
+    path: typeof DKB_EVIDENCE_IR_PATH;
+    records: number;
+    chunks: number;
   };
   files: DkbArtifactFile[];
   hashes: {
@@ -98,6 +113,8 @@ const OPTIONAL_ARTIFACT_PATHS = [
   FAISS_CATALOG_PATH,
   FAISS_SEGMENT_PATH,
   FAISS_MANIFEST_PATH,
+  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+  DKB_EVIDENCE_IR_PATH,
 ];
 
 export async function writeDkbArtifactManifest(root: string, lock: DkbLockManifest, options: { compiler?: DkbArtifactCompiler } = {}): Promise<DkbArtifactManifest> {
@@ -196,6 +213,45 @@ export async function validateDkbArtifactManifest(root: string, options: { progr
     detail: artifactTreeHash === manifest.hashes.artifactTree ? 'artifact tree hash matches manifest files' : `expected ${manifest.hashes.artifactTree}, got ${artifactTreeHash}`,
   });
 
+  if (manifest.retrievalProfile) {
+    try {
+      const lock = await readRetrievalProfileLock(resolvedRoot);
+      checks.push({
+        name: 'retrievalProfile.digest',
+        ok: lock.profileDigest === manifest.retrievalProfile.profileDigest,
+        detail: lock.profileDigest === manifest.retrievalProfile.profileDigest
+          ? 'retrieval profile digest matches'
+          : `expected ${manifest.retrievalProfile.profileDigest}, got ${lock.profileDigest}`,
+      });
+    } catch (error) {
+      checks.push({
+        name: 'retrievalProfile.digest',
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (manifest.evidence) {
+    try {
+      const evidence = await readEvidenceIr(resolvedRoot);
+      const ok = evidence.evidence.length === manifest.evidence.records && evidence.chunks.length === manifest.evidence.chunks;
+      checks.push({
+        name: 'evidence.counts',
+        ok,
+        detail: ok
+          ? 'Evidence IR counts match'
+          : `expected ${manifest.evidence.records}/${manifest.evidence.chunks}, got ${evidence.evidence.length}/${evidence.chunks.length}`,
+      });
+    } catch (error) {
+      checks.push({
+        name: 'evidence.counts',
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   return {
     ok: checks.every((check) => check.ok),
     manifestPath: manifestFile,
@@ -261,6 +317,10 @@ async function buildDkbArtifactManifest(root: string, lock: DkbLockManifest, opt
     .sort((left, right) => left.path.localeCompare(right.path));
   const lockHash = await hashFile(manifestPath(root, 'dkb-lock.json'));
   const sourceCounts = await sourceIndexCounts(root);
+  const [retrievalProfile, evidence] = await Promise.all([
+    readRetrievalProfileLock(root).catch(() => null),
+    readEvidenceIr(root).catch(() => null),
+  ]);
 
   return {
     type: 'dkb.artifact',
@@ -280,6 +340,19 @@ async function buildDkbArtifactManifest(root: string, lock: DkbLockManifest, opt
       sourceUnits: sourceCounts.units,
       sourceAssets: sourceCounts.assets,
     },
+    ...(retrievalProfile ? {
+      retrievalProfile: {
+        path: DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+        profileDigest: retrievalProfile.profileDigest,
+      },
+    } : {}),
+    ...(evidence ? {
+      evidence: {
+        path: DKB_EVIDENCE_IR_PATH,
+        records: evidence.evidence.length,
+        chunks: evidence.chunks.length,
+      },
+    } : {}),
     files: dedupedFiles,
     hashes: {
       lock: lockHash,
