@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { writeSearchArtifacts, vectorDocumentsForSourceUnits, type VectorDocument } from '../indexes/vectorStore.js';
 import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '../indexes/sourceIndex.js';
-import { loadRegistry } from '../protocol/manifest.js';
+import { loadLibrary, uniqueLoadedDkbs } from '../protocol/manifest.js';
 import { SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import type { LoadedDkb } from '../protocol/types.js';
 import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '../compiler/llamaindexArtifacts.js';
+import { refreshLibraryArtifactMetadata } from '../compiler/compile.js';
 
 export interface RuntimeCatalogRefreshResult {
   recordCount: number;
@@ -34,6 +35,7 @@ export async function refreshRuntimeCatalogFromInstalledArtifacts(
   if (options.syncSearch !== false) {
     await writeSearchArtifacts(loaded.registryId, path.join(resolvedRoot, SOURCE_VECTOR_PATH), await compilerVectorDocuments(loaded.dkbs, sourceUnits));
   }
+  await refreshLibraryArtifactMetadata(resolvedRoot);
 
   return {
     recordCount: sourceUnits.length,
@@ -146,14 +148,14 @@ function compilerVectorsRequired(): boolean {
 
 async function installedDkbsForRuntimeRoot(root: string): Promise<{ registryId: string; dkbs: LoadedDkb[] }> {
   try {
-    const registry = await loadRegistry(root);
+    const library = await loadLibrary(root);
 
     return {
-      registryId: registry.manifest.id,
-      dkbs: [
-        ...registry.collections.flatMap((collection) => collection.dkbs),
-        ...registry.dkbs,
-      ],
+      registryId: library.manifest.id,
+      dkbs: uniqueLoadedDkbs([
+        ...library.collections.flatMap((collection) => collection.dkbs),
+        ...library.dkbs,
+      ]),
     };
   } catch {
     return {

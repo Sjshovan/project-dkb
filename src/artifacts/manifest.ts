@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import * as tar from 'tar';
 import { DatabaseSync } from 'node:sqlite';
 import { stableHash } from '../contracts/hash.js';
-import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '../protocol/paths.js';
+import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, artifactLockPath, resolveFrom } from '../protocol/paths.js';
 import { DkbError } from '../protocol/errors.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import { describeCompilerAdapter } from '../compiler/adapters.js';
@@ -43,7 +43,7 @@ export interface DkbArtifactManifest {
   layout: {
     root: '.';
     manifest: 'dkb.json';
-    lock: 'dkb-lock.json';
+    lock: typeof DKB_ARTIFACT_LOCK_PATH;
     artifacts: typeof DKB_ARTIFACTS_DIR;
   };
   counts: {
@@ -305,7 +305,7 @@ async function buildDkbArtifactManifest(root: string, lock: DkbLockManifest, opt
 
   // The artifact manifest describes its payload. Including the manifest itself
   // would hash the previous revision and make every forced rebuild invalid.
-  for (const item of ['dkb-lock.json', ...REQUIRED_ARTIFACT_PATHS, ...OPTIONAL_ARTIFACT_PATHS, ...await compilerRecordArtifactPaths(root)]) {
+  for (const item of [DKB_ARTIFACT_LOCK_PATH, ...REQUIRED_ARTIFACT_PATHS, ...OPTIONAL_ARTIFACT_PATHS, ...await compilerRecordArtifactPaths(root)]) {
     const file = await artifactFileFor(root, item);
 
     if (file) {
@@ -315,7 +315,7 @@ async function buildDkbArtifactManifest(root: string, lock: DkbLockManifest, opt
 
   const dedupedFiles = [...new Map(files.map((file) => [file.path, file])).values()]
     .sort((left, right) => left.path.localeCompare(right.path));
-  const lockHash = await hashFile(manifestPath(root, 'dkb-lock.json'));
+  const lockHash = await hashFile(artifactLockPath(root));
   const sourceCounts = await sourceIndexCounts(root);
   const [retrievalProfile, evidence] = await Promise.all([
     readRetrievalProfileLock(root).catch(() => null),
@@ -331,7 +331,7 @@ async function buildDkbArtifactManifest(root: string, lock: DkbLockManifest, opt
     layout: {
       root: '.',
       manifest: 'dkb.json',
-      lock: 'dkb-lock.json',
+      lock: DKB_ARTIFACT_LOCK_PATH,
       artifacts: DKB_ARTIFACTS_DIR,
     },
     counts: {

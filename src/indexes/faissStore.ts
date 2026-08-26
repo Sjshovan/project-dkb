@@ -11,7 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
 import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
-import { loadRegistry } from '../protocol/manifest.js';
+import { loadLibrary, uniqueLoadedDkbs } from '../protocol/manifest.js';
 import { capabilitiesForSourceType, sourceAssetsFromChunks, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LoadedDkb } from '../protocol/types.js';
 import {
@@ -241,11 +241,11 @@ export async function loadFaissPackageArtifact(dkb: LoadedDkb): Promise<FaissPac
 }
 
 export async function buildFaissRuntimeSnapshot(root: string, registryId: string): Promise<FaissRuntimeSnapshot | null> {
-  const registry = await loadRegistry(root);
-  const dkbs = [
-    ...registry.collections.flatMap((collection) => collection.dkbs),
-    ...registry.dkbs,
-  ];
+  const library = await loadLibrary(root);
+  const dkbs = uniqueLoadedDkbs([
+    ...library.collections.flatMap((collection) => collection.dkbs),
+    ...library.dkbs,
+  ]);
   const packages = await Promise.all(dkbs.map((dkb) => loadFaissPackageArtifact(dkb).catch(() => null)));
   const ready = packages.filter((item): item is FaissPackageRuntimeArtifact => Boolean(item));
 

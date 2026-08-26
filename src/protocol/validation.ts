@@ -3,12 +3,14 @@ import type { ErrorObject } from 'ajv';
 import dkbSchema from '../../schemas/dkb.schema.json' with { type: 'json' };
 import dkbReadRequestSchema from '../../schemas/dkb-read-request.schema.json' with { type: 'json' };
 import lockSchema from '../../schemas/dkb-lock.schema.json' with { type: 'json' };
+import libraryLockSchema from '../../schemas/dkb-library-lock.schema.json' with { type: 'json' };
 import { DkbError } from './errors.js';
-import type { DkbLockManifest, DkbReadRequest, DkbSourceManifest } from './types.js';
+import type { DkbLibraryLockManifest, DkbLockManifest, DkbReadRequest, DkbSourceManifest } from './types.js';
 
 const ajv = new Ajv2020({ allErrors: true });
 const validateDkbManifestSchema = ajv.compile<DkbSourceManifest>(dkbSchema);
 const validateDkbLockManifestSchema = ajv.compile<DkbLockManifest>(lockSchema);
+const validateDkbLibraryLockManifestSchema = ajv.compile<DkbLibraryLockManifest>(libraryLockSchema);
 const validateDkbReadRequestSchema = ajv.compile<DkbReadRequest>(dkbReadRequestSchema);
 
 export function validateDkbManifest(value: unknown, source: string): DkbSourceManifest {
@@ -25,6 +27,14 @@ export function validateDkbLockManifest(value: unknown, source: string): DkbLock
   }
 
   throw new DkbError(formatValidationError(source, validateDkbLockManifestSchema.errors));
+}
+
+export function validateDkbLibraryLockManifest(value: unknown, source: string): DkbLibraryLockManifest {
+  if (validateDkbLibraryLockManifestSchema(value)) {
+    return value as DkbLibraryLockManifest;
+  }
+
+  throw new DkbError(formatValidationError(source, validateDkbLibraryLockManifestSchema.errors));
 }
 
 export function validateDkbReadRequest(value: unknown, source: string): DkbReadRequest {

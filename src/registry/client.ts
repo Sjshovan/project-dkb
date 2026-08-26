@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '../protocol/errors.js';
+import { parseDkbIdentity } from '../protocol/identity.js';
 import { loadDkb } from '../protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE } from './archive.js';
@@ -19,6 +20,20 @@ export interface DkbRegistryRelease {
   archiveHash?: string;
   packageTreeHash?: string;
   recordCount?: number;
+}
+
+export interface DkbRegistryCollectionRevision {
+  collectionId: string;
+  revision: number;
+  digest: string;
+  manifest: {
+    type: 'collection';
+    id: string;
+    name: string;
+    revision: number;
+    digest: string;
+    members: Array<{ id: string; version: string; digest: string }>;
+  };
 }
 
 export class DkbRegistryClient {
@@ -53,7 +68,7 @@ export class DkbRegistryClient {
   }
 
   remoteEndpoints(packageId: string, version: string) {
-    return this.get(`/api/registry/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(version)}/remote-endpoints`);
+    return this.get(`/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/remote-endpoints`);
   }
 
   async verifiedRemoteEndpoint(packageId: string, version: string, endpointUrl?: string) {
@@ -71,7 +86,7 @@ export class DkbRegistryClient {
   }
 
   claimRemoteEndpoint(packageId: string, version: string, url: string) {
-    return this.post(`/api/registry/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(version)}/remote-endpoints`, { url });
+    return this.post(`/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/remote-endpoints`, { url });
   }
 
   async publish(input: {
@@ -103,7 +118,7 @@ export class DkbRegistryClient {
       form.set('version', dkb.manifest.version);
       form.set('source', source, path.basename(archivePath));
 
-      const version = await this.request('POST', `/api/registry/packages/${encodeURIComponent(dkb.manifest.id)}/versions`, form);
+      const version = await this.request('POST', `/api/registry/packages/${identityRoute(dkb.manifest.id)}/versions`, form);
 
       const published = await this.waitForPublishedVersion(dkb.manifest.id, dkb.manifest.version, version);
 
@@ -130,10 +145,10 @@ export class DkbRegistryClient {
 
   download(packageId: string, version?: string) {
     if (!version) {
-      return this.get(`/api/registry/packages/${encodeURIComponent(packageId)}`);
+      return this.get(`/api/registry/packages/${identityRoute(packageId)}`);
     }
 
-    return this.get(`/api/registry/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(version)}`);
+    return this.get(`/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}`);
   }
 
   verify(packageId: string, version?: string) {
@@ -172,7 +187,7 @@ export class DkbRegistryClient {
   async packageArchive(packageId: string, version?: string, options: { progress?: DkbProgressReporter } = {}): Promise<Buffer> {
     const resolvedVersion = version ?? await this.latestVersion(packageId);
 
-    return this.binary(`/api/registry/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`, DKB_PACKAGE_MEDIA_TYPE, {
+    return this.binary(`/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`, DKB_PACKAGE_MEDIA_TYPE, {
       progress: options.progress,
       progressPhase: 'download',
       progressLabel: 'Download package',
@@ -197,7 +212,7 @@ export class DkbRegistryClient {
 
     const resolvedVersion = version ?? await this.latestVersion(packageId);
     const response = await this.binaryResponse(
-      `/api/registry/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`,
+      `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`,
       DKB_PACKAGE_MEDIA_TYPE,
     );
     const contentLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
@@ -295,6 +310,68 @@ export class DkbRegistryClient {
 
   revokeKey(keyId: string) {
     return this.post(`/api/keys/${encodeURIComponent(keyId)}/revoke`, {});
+  }
+
+  collections() {
+    return this.get('/api/registry/collections');
+  }
+
+  collection(collectionId: string) {
+    return this.get(`/api/registry/collections/${identityRoute(collectionId)}`);
+  }
+
+  async entryKind(identity: string): Promise<'dkb' | 'collection'> {
+    let packageError: unknown;
+    try {
+      const data = resourceData(await this.download(identity));
+      if (data?.id === identity) return 'dkb';
+    } catch (error) {
+      packageError = error;
+    }
+
+    try {
+      const data = resourceData(await this.collection(identity));
+      if (data?.id === identity) return 'collection';
+    } catch (collectionError) {
+      const packageMessage = packageError instanceof Error ? packageError.message : String(packageError ?? 'not found');
+      const collectionMessage = collectionError instanceof Error ? collectionError.message : String(collectionError);
+      throw new DkbError(`Registry entry ${identity} was not found as a DKB or Collection. DKB: ${packageMessage} Collection: ${collectionMessage}`);
+    }
+
+    throw new DkbError(`Registry entry ${identity} returned invalid metadata.`);
+  }
+
+  async collectionRevision(collectionId: string, revision?: number): Promise<DkbRegistryCollectionRevision> {
+    const selector = revision === undefined ? 'latest' : String(revision);
+    const data = resourceData(await this.get(`/api/registry/collections/${identityRoute(collectionId)}/revisions/${selector}`));
+
+    if (!data || data.collectionId !== collectionId || typeof data.revision !== 'number'
+      || typeof data.digest !== 'string' || !isCollectionManifest(data.manifest)) {
+      throw new DkbError(`Registry returned invalid Collection revision for ${collectionId}@${selector}.`);
+    }
+
+    return data as unknown as DkbRegistryCollectionRevision;
+  }
+
+  async publishCollection(input: {
+    id: string;
+    name: string;
+    description?: string;
+    visibility?: 'public' | 'private' | 'unlisted';
+    members: Array<{ id: string; version: string }>;
+  }): Promise<DkbRegistryCollectionRevision> {
+    await this.ensureCollection(input);
+    const data = resourceData(await this.post(
+      `/api/registry/collections/${identityRoute(input.id)}/revisions`,
+      { members: input.members },
+    ));
+
+    if (!data || data.collectionId !== input.id || typeof data.revision !== 'number'
+      || typeof data.digest !== 'string' || !isCollectionManifest(data.manifest)) {
+      throw new DkbError(`Registry returned invalid published Collection revision for ${input.id}.`);
+    }
+
+    return data as unknown as DkbRegistryCollectionRevision;
   }
 
   private get(path: string) {
@@ -435,8 +512,8 @@ export class DkbRegistryClient {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
+        id: input.id,
         name: input.name,
-        slug: input.id,
         description: input.description,
         visibility: input.visibility,
       }),
@@ -467,6 +544,36 @@ export class DkbRegistryClient {
     } catch {
       return false;
     }
+  }
+
+  private async ensureCollection(input: { id: string; name: string; description?: string; visibility?: 'public' | 'private' | 'unlisted' }): Promise<void> {
+    const response = await this.fetchRegistry('/api/registry/collections', {
+      method: 'POST',
+      headers: {
+        ...this.authorizationHeader(),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    });
+
+    if (response.ok) return;
+
+    const text = await response.text();
+    const parsed = parseJson(text);
+    const message = parsed && typeof parsed === 'object' && 'message' in parsed
+      ? String((parsed as { message: unknown }).message)
+      : `POST /api/registry/collections failed with HTTP ${response.status}`;
+
+    if (response.status === 422) {
+      try {
+        const existing = resourceData(await this.collection(input.id));
+        if (existing?.id === input.id) return;
+      } catch {
+        // Surface the original reservation error below.
+      }
+    }
+
+    throw new DkbError(message);
   }
 
   private async waitForPublishedVersion(packageId: string, version: string, initial: unknown) {
@@ -507,6 +614,26 @@ export class DkbRegistryClient {
   private authorizationHeader(): Record<string, string> {
     return this.token ? { authorization: `Bearer ${this.token}` } : {};
   }
+}
+
+function identityRoute(identity: string): string {
+  const parsed = parseDkbIdentity(identity, 'Registry identity');
+
+  return `${encodeURIComponent(parsed.namespace)}/${encodeURIComponent(parsed.name)}`;
+}
+
+function isCollectionManifest(value: unknown): value is DkbRegistryCollectionRevision['manifest'] {
+  return isRecord(value)
+    && value.type === 'collection'
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.revision === 'number'
+    && typeof value.digest === 'string'
+    && Array.isArray(value.members)
+    && value.members.every((member) => isRecord(member)
+      && typeof member.id === 'string'
+      && typeof member.version === 'string'
+      && typeof member.digest === 'string');
 }
 
 export async function writeArchiveFileFromPath(sourcePath: string, targetPath: string, options: { force?: boolean } = {}): Promise<{

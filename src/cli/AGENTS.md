@@ -15,17 +15,17 @@ These rules extend the repository-level `AGENTS.md` for `src/cli/`.
 - Keep the root help focused on ordinary package and knowledge workflows.
   Specialized compiler, runtime, registry, MCP, OCI, and diagnostic operations
   belong in named command groups.
-- Resolve current registry root, runtime state root, upstream URL, credentials,
+- Resolve the current Library, upstream Registry URL, credentials,
   and explicit overrides through shared context helpers. Do not duplicate
   precedence logic inside action callbacks.
 - Top-level package commands should form one coherent lifecycle from the current
-  registry folder. Explicit HTTP runtime administration should remain visibly
+  Library. Explicit HTTP Runtime administration should remain visibly
   distinct under `dkb runtime` or an equally clear boundary.
 - Keep command actions thin: parse and validate input, call a domain service,
   and present its result. Filesystem, registry, compiler, and retrieval logic
   belong in their owning modules.
 - Reuse option builders and resolvers for repeated `--url`, `--root`,
-  `--runtime-root`, credential, confirmation, and output options.
+  `--library`, credential, confirmation, and output options.
 
 ## Output Contract
 
@@ -49,8 +49,8 @@ These rules extend the repository-level `AGENTS.md` for `src/cli/`.
 - Perform lightweight preflight before downloads or destructive replacement.
 - Failed staging cleanup after a successful operation is a warning with an
   actionable path, not a false operation failure.
-- Test root discovery and explicit overrides independently; a test that passes
-  only with `--runtime-root` does not prove the default workflow.
+- Test Library discovery and explicit overrides independently; a test that
+  passes only with `--library` does not prove the nearest-Library workflow.
 - Any common-command change needs coverage for human output, `--json`, exit
   status, and the complete `init -> install -> list -> retrieve -> uninstall`
   lifecycle where applicable.

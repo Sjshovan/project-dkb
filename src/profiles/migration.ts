@@ -2,13 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { compileComposeProject } from '../compiler/compile.js';
 import { DkbError } from '../protocol/errors.js';
-import { loadRegistry } from '../protocol/manifest.js';
+import { loadLibrary } from '../protocol/manifest.js';
 import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   maybeReadRetrievalProfileLock,
   readRetrievalProfileLock,
-  resolveRegistryRetrievalProfile,
+  resolveLibraryRetrievalProfile,
   supportedRetrievalModels,
 } from './retrievalProfile.js';
 
@@ -30,11 +30,11 @@ export interface DkbProfileMigrationPlan {
 
 export async function planRetrievalProfileMigration(root: string, model: string): Promise<DkbProfileMigrationPlan> {
   const resolvedRoot = path.resolve(root);
-  const registry = await loadRegistry(resolvedRoot);
-  const desired = resolveRegistryRetrievalProfile(registry, model);
+  const library = await loadLibrary(resolvedRoot);
+  const desired = resolveLibraryRetrievalProfile(library, model);
   const current = await maybeReadRetrievalProfileLock(resolvedRoot);
-  const packages = uniquePackages(registry.dkbs
-    .concat(registry.collections.flatMap((collection) => collection.dkbs)))
+  const packages = uniquePackages(library.dkbs
+    .concat(library.collections.flatMap((collection) => collection.dkbs)))
     .map((dkb) => ({ id: dkb.manifest.id, version: dkb.manifest.version, root: dkb.root }));
 
   return {
@@ -169,7 +169,6 @@ async function promoteProfileMigration(root: string, stageRoot: string): Promise
   const stamp = `${process.pid}-${Date.now().toString(36)}`;
   const entries = [
     { relative: 'dkb.json', directory: false },
-    { relative: 'dkb-lock.json', directory: false },
     { relative: DKB_RETRIEVAL_PROFILE_LOCK_PATH, directory: false },
     { relative: DKB_ARTIFACTS_DIR, directory: true },
   ];

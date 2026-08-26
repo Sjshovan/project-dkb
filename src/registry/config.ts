@@ -47,7 +47,7 @@ export function cliConfigPath(): string {
     : path.join(os.homedir(), '.dkb', 'config.json');
 }
 
-export function registryFolderConfigPath(root: string): string {
+export function libraryRegistryConfigPath(root: string): string {
   return path.join(path.resolve(root), ...DKB_FOLDER_CONFIG_PATH.split('/'));
 }
 
@@ -87,8 +87,8 @@ export function normalizeRegistryUrl(value: string): string {
 export async function configuredRegistry(options: RegistryConfigurationOptions = {}): Promise<ConfiguredRegistry> {
   const projectRoot = options.root
     ? path.resolve(options.root)
-    : await nearestRegistryRoot(options.cwd ?? process.cwd());
-  const projectConfigPath = projectRoot ? registryFolderConfigPath(projectRoot) : null;
+    : await nearestLibraryRoot(options.cwd ?? process.cwd());
+  const projectConfigPath = projectRoot ? libraryRegistryConfigPath(projectRoot) : null;
   const userConfigPath = cliConfigPath();
   const preferredConfigPath = projectConfigPath ?? userConfigPath;
 
@@ -101,6 +101,10 @@ export async function configuredRegistry(options: RegistryConfigurationOptions =
   }
 
   if (projectConfigPath) {
+    const manifestUrl = await libraryManifestRegistryUrl(projectRoot!);
+    if (manifestUrl) {
+      return configuredResult(normalizeRegistryUrl(manifestUrl), 'project', projectConfigPath, projectRoot);
+    }
     const projectConfig = await readCliConfig(projectConfigPath);
     const projectUrl = projectConfig.registry?.url;
 
@@ -131,9 +135,9 @@ export async function writeConfiguredRegistryUrl(url: string, options: {
   const projectRoot = options.global
     ? null
     : options.root
-      ? await requireRegistryRoot(options.root)
-      : await nearestRegistryRoot(options.cwd ?? process.cwd());
-  const configPath = projectRoot ? registryFolderConfigPath(projectRoot) : cliConfigPath();
+      ? await requireLibraryRoot(options.root)
+      : await nearestLibraryRoot(options.cwd ?? process.cwd());
+  const configPath = projectRoot ? libraryRegistryConfigPath(projectRoot) : cliConfigPath();
   const normalized = normalizeRegistryUrl(url);
   const config = await readCliConfig(configPath);
   const updated: DkbCliConfig = {
@@ -146,6 +150,9 @@ export async function writeConfiguredRegistryUrl(url: string, options: {
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+  if (projectRoot) {
+    await writeLibraryManifestRegistryUrl(projectRoot, normalized);
+  }
 
   return configuredResult(normalized, projectRoot ? 'project' : 'user', configPath, projectRoot);
 }
@@ -196,11 +203,41 @@ async function readCliConfig(configPath: string): Promise<DkbCliConfig> {
   }
 }
 
-async function nearestRegistryRoot(start: string): Promise<string | null> {
+async function libraryManifestRegistryUrl(root: string): Promise<string | null> {
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(root, 'dkb.json'), 'utf8')) as unknown;
+    if (!isObject(manifest) || manifest.type !== 'library' || !isObject(manifest.registry)) return null;
+    return typeof manifest.registry.url === 'string' ? manifest.registry.url : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLibraryManifestRegistryUrl(root: string, url: string): Promise<void> {
+  const target = path.join(root, 'dkb.json');
+  const manifest = JSON.parse(await fs.readFile(target, 'utf8')) as unknown;
+  if (!isObject(manifest) || manifest.type !== 'library') {
+    throw new DkbError(`Not a DKB Library: ${root}`);
+  }
+  const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
+  await fs.writeFile(temp, `${JSON.stringify({ ...manifest, registry: { url } }, null, 2)}\n`, 'utf8');
+  await fs.rename(target, backup);
+  try {
+    await fs.rename(temp, target);
+    await fs.rm(backup, { force: true });
+  } catch (error) {
+    await fs.rm(target, { force: true });
+    await fs.rename(backup, target);
+    throw error;
+  }
+}
+
+async function nearestLibraryRoot(start: string): Promise<string | null> {
   let current = path.resolve(start);
 
   while (true) {
-    if (await isRegistryRoot(current)) {
+    if (await isLibraryRoot(current)) {
       return current;
     }
 
@@ -214,21 +251,21 @@ async function nearestRegistryRoot(start: string): Promise<string | null> {
   }
 }
 
-async function requireRegistryRoot(root: string): Promise<string> {
+async function requireLibraryRoot(root: string): Promise<string> {
   const resolved = path.resolve(root);
 
-  if (!(await isRegistryRoot(resolved))) {
-    throw new DkbError(`Not a DKB registry folder: ${resolved}. Expected a registry dkb.json.`);
+  if (!(await isLibraryRoot(resolved))) {
+    throw new DkbError(`Not a DKB Library: ${resolved}. Expected a Library dkb.json.`);
   }
 
   return resolved;
 }
 
-async function isRegistryRoot(root: string): Promise<boolean> {
+async function isLibraryRoot(root: string): Promise<boolean> {
   try {
     const manifest = JSON.parse(await fs.readFile(path.join(root, 'dkb.json'), 'utf8')) as unknown;
 
-    return isObject(manifest) && manifest.type === 'registry';
+    return isObject(manifest) && manifest.type === 'library';
   } catch {
     return false;
   }

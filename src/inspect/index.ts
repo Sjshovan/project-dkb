@@ -1,25 +1,39 @@
 ﻿import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readSourceIndex } from '../indexes/sourceIndex.js';
-import { loadDkb, loadManifest, loadRegistry } from '../protocol/manifest.js';
-import { manifestPath } from '../protocol/paths.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '../protocol/manifest.js';
+import { artifactLockPath } from '../protocol/paths.js';
 import { deriveKnowledgeSpace } from '../protocol/space.js';
-import type { DkbSourceManifest, DkrManifest, LoadedDkb } from '../protocol/types.js';
+import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '../protocol/types.js';
 import { verifyComposeProject } from '../compiler/compile.js';
 
 export async function inspectTarget(root: string) {
   const resolvedRoot = path.resolve(root);
-  const manifestType = await exists(manifestPath(resolvedRoot, 'dkb.json')) ? 'dkb' : 'dkr';
-  const registry = manifestType === 'dkr' ? await loadRegistry(resolvedRoot) : null;
-  const manifest = registry?.manifest ?? await loadManifest(resolvedRoot);
-  const dkbs = registry
-    ? uniqueDkbs([...registry.collections.flatMap((collection) => collection.dkbs), ...registry.dkbs])
-    : [await loadDkb(resolvedRoot)];
+  const sourceManifest = await loadManifest(resolvedRoot);
+  let manifest: InspectManifest;
+  let dkbs: LoadedDkb[];
+
+  if (sourceManifest.type === 'library') {
+    const library = await loadLibrary(resolvedRoot);
+    manifest = library.manifest;
+    dkbs = uniqueLoadedDkbs([
+      ...library.collections.flatMap((collection) => collection.dkbs),
+      ...library.dkbs,
+    ]);
+  } else if (sourceManifest.type === 'collection') {
+    const collection = await loadCollection(resolvedRoot);
+    manifest = collection.manifest;
+    dkbs = collection.dkbs;
+  } else {
+    const dkb = await loadDkb(resolvedRoot);
+    manifest = dkb.manifest;
+    dkbs = [dkb];
+  }
   const sourceIndex = await maybeReadSourceIndex(resolvedRoot);
-  const verification = await maybeVerify(resolvedRoot, manifestType);
+  const verification = await maybeVerify(resolvedRoot, sourceManifest.type);
 
   return {
-    type: manifestType,
+    type: sourceManifest.type,
     root: resolvedRoot,
     id: idFor(manifest),
     name: nameFor(manifest),
@@ -61,7 +75,7 @@ export async function inspectTarget(root: string) {
     indexes: {
       chunkCount: sourceIndex.units.length,
       sourceAssetCount: sourceIndex.assets.length,
-      compiled: await exists(manifestPath(resolvedRoot, 'dkb-lock.json')),
+      compiled: await exists(artifactLockPath(resolvedRoot)),
     },
     verification,
     warnings: warningsFor(dkbs, sourceIndex.units.length),
@@ -69,7 +83,7 @@ export async function inspectTarget(root: string) {
 }
 
 async function maybeVerify(root: string, manifestType: string) {
-  if (manifestType !== 'dkr' || !(await exists(manifestPath(root, 'dkb-lock.json')))) {
+  if (manifestType !== 'library' || !(await exists(artifactLockPath(root)))) {
     return null;
   }
 
@@ -104,7 +118,7 @@ function warningsFor(dkbs: LoadedDkb[], chunkCount: number): string[] {
   return warnings;
 }
 
-type InspectManifest = DkbSourceManifest | DkrManifest;
+type InspectManifest = DkbManifest | DkbSourceManifest | DkcManifest | DkrManifest;
 
 function idFor(manifest: InspectManifest): string {
   return 'id' in manifest ? manifest.id : safeId(manifest.name);
@@ -122,20 +136,6 @@ function safeId(value: string): string {
   const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 
   return id || 'dkb';
-}
-
-function uniqueDkbs(dkbs: LoadedDkb[]): LoadedDkb[] {
-  const seen = new Set<string>();
-
-  return dkbs.filter((dkb) => {
-    if (seen.has(dkb.manifest.id)) {
-      return false;
-    }
-
-    seen.add(dkb.manifest.id);
-
-    return true;
-  });
 }
 
 async function exists(target: string): Promise<boolean> {

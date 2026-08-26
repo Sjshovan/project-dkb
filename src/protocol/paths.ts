@@ -2,6 +2,7 @@
 
 export const DKB_STATE_DIR = '.dkb';
 export const DKB_ARTIFACTS_DIR = '.dkb/artifacts';
+export const DKB_ARTIFACT_LOCK_PATH = `${DKB_ARTIFACTS_DIR}/dkb-artifact.lock.json`;
 export const DKB_CACHE_DIR = '.dkb/cache';
 export const DKB_LOCKS_DIR = '.dkb/locks';
 export const DKB_RUNS_DIR = '.dkb/runs';
@@ -29,6 +30,10 @@ export function resolveContainedPath(base: string, target: string, label = 'path
 
 export function defaultStatePath(root: string, relativePath: string): string {
   return path.resolve(root, relativePath);
+}
+
+export function artifactLockPath(root: string): string {
+  return resolveFrom(root, DKB_ARTIFACT_LOCK_PATH);
 }
 
 export type ManifestFilename = 'dkb.json' | 'dkb-lock.json' | 'dkb-release.json' | '.dkb-package.json';

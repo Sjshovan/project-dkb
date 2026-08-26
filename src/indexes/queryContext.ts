@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
-import { manifestPath, resolveFrom } from '../protocol/paths.js';
+import { artifactLockPath, resolveFrom } from '../protocol/paths.js';
 import { vectorDocumentsForSourceUnits, type VectorDocument } from './vectorStore.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import { buildFaissRuntimeSnapshot, closeFaissSnapshot, type FaissRuntimeSnapshot } from './faissStore.js';
@@ -154,7 +154,7 @@ export async function closeQueryContext(root?: string): Promise<number> {
 }
 
 export async function queryArtifactHash(root: string): Promise<string> {
-  const lockPath = manifestPath(root, 'dkb-lock.json');
+  const lockPath = artifactLockPath(root);
   const lock = await maybeReadFile(lockPath);
 
   if (lock) {

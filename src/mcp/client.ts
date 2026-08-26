@@ -52,10 +52,10 @@ export interface DkbMcpClientHandle {
   close(): Promise<void>;
 }
 
-export async function connectDkbMcpClient(options: { registryPath?: string } = {}): Promise<DkbMcpClientHandle> {
+export async function connectDkbMcpClient(options: { libraryPath?: string } = {}): Promise<DkbMcpClientHandle> {
   const env = {
     ...process.env,
-    ...(options.registryPath ? { DKB_REGISTRY_PATH: path.resolve(options.registryPath) } : {}),
+    ...(options.libraryPath ? { DKB_LIBRARY_PATH: path.resolve(options.libraryPath) } : {}),
   } as Record<string, string>;
   const client = new Client(
     {

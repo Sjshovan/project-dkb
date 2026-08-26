@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { compileComposeProject } from '../compiler/compile.js';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
+import { parseDkbIdentity } from '../protocol/identity.js';
 import { loadDkb } from '../protocol/manifest.js';
 import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '../protocol/paths.js';
 import { DKB_ARTIFACT_MANIFEST_PATH } from '../artifacts/manifest.js';
@@ -172,7 +173,7 @@ async function compileRegistryPackage(
     const dkb = await loadDkb(buildRoot);
     const packageId = input.request.package?.id ?? dkb.manifest.id;
     const version = input.request.package?.version ?? dkb.manifest.version;
-    const publisherId = input.request.package?.publisherId ?? 'laravel-registry';
+    const publisherId = input.request.package?.publisherId ?? parseDkbIdentity(dkb.manifest.id).namespace;
 
     await writeRegistryPackageManifest(buildRoot, dkb, packageId, version, publisherId);
 
@@ -184,7 +185,6 @@ async function compileRegistryPackage(
     });
     const retrievalProfile = await readRetrievalProfileLock(buildRoot);
 
-    await fs.rm(manifestPath(buildRoot, 'dkb-lock.json'), { force: true });
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
 
     const packageTreeHash = await hashPackageTree(buildRoot);
@@ -301,17 +301,27 @@ async function copyDkbSourceOnly(sourceRoot: string, targetRoot: string): Promis
 async function writeRegistryPackageManifest(root: string, dkb: Awaited<ReturnType<typeof loadDkb>>, packageId: string, version: string, publisherId: string): Promise<void> {
   const source = manifestPath(root, 'dkb.json');
   const manifest = await readJsonObject(source);
+  const identity = parseDkbIdentity(dkb.manifest.id);
+
+  if (packageId !== dkb.manifest.id) {
+    throw new DkbError(`Registry compile identity mismatch: requested ${packageId}, source declares ${dkb.manifest.id}`);
+  }
+  if (publisherId !== identity.namespace) {
+    throw new DkbError(`Publisher ${publisherId} does not own ${dkb.manifest.id}`);
+  }
 
   delete manifest.dependencies;
+  delete manifest.publisher;
+  delete manifest.package;
+  delete manifest.collection;
 
   await fs.writeFile(source, `${JSON.stringify({
     manifestVersion: typeof manifest.manifestVersion === 'number' ? manifest.manifestVersion : 1,
-    type: 'package',
+    type: 'dkb',
     ...manifest,
-    name: dkb.manifest.name,
+    name: dkb.manifest.id,
+    displayName: dkb.manifest.name,
     version,
-    publisher: publisherId,
-    package: dependencyNameFor(publisherId, packageId),
   }, null, 2)}\n`, 'utf8');
 }
 

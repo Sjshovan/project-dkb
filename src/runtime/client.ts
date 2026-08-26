@@ -17,8 +17,8 @@ export class DkbRuntimeClient {
     return this.get('/api/runtime');
   }
 
-  registries() {
-    return this.get('/api/registries');
+  library() {
+    return this.get('/api/library');
   }
 
   importDkb(input: { sourcePath: string; id?: string; name?: string; force?: boolean; compile?: boolean }) {

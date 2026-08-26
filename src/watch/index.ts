@@ -13,18 +13,18 @@ export interface WatchComposeOptions {
 
 export async function watchComposeProject(root: string, options: WatchComposeOptions = {}) {
   const resolvedRoot = path.resolve(root);
-  const registry = await loadCompose(resolvedRoot);
+  const library = await loadCompose(resolvedRoot);
   const allDkbs = [
-    ...registry.collections.flatMap((collection) => collection.dkbs),
-    ...registry.dkbs,
+    ...library.collections.flatMap((collection) => collection.dkbs),
+    ...library.dkbs,
   ];
-  const explicitPackageRoots = allDkbs
-    .filter((dkb) => dkb.manifest.meta?.sourceOrigin !== 'registry-local')
+  const editableDkbRoots = allDkbs
+    .filter((dkb) => !isInside(path.join(resolvedRoot, 'vendor'), path.resolve(dkb.root)))
     .map((dkb) => path.resolve(dkb.root));
-  const hasRegistryManifest = await hasRegistryProjectManifest(resolvedRoot);
+  const hasLibraryManifest = await hasLibraryProjectManifest(resolvedRoot);
   const watchPaths = [
-    ...(hasRegistryManifest ? [resolvedRoot] : []),
-    ...allDkbs.flatMap((dkb) => {
+    ...(hasLibraryManifest ? [resolvedRoot] : []),
+    ...allDkbs.filter((dkb) => editableDkbRoots.includes(path.resolve(dkb.root))).flatMap((dkb) => {
       const storePaths = (dkb.manifest.stores ?? []).flatMap((store) => {
         const included = store.meta?.includePaths;
 
@@ -45,7 +45,7 @@ export async function watchComposeProject(root: string, options: WatchComposeOpt
   ];
   const watcher = watch(watchPaths, {
     ignoreInitial: true,
-    ignored: (target) => isIgnoredRegistryWatchPath(resolvedRoot, target, explicitPackageRoots),
+    ignored: (target) => isIgnoredLibraryWatchPath(resolvedRoot, target, editableDkbRoots),
     awaitWriteFinish: {
       stabilityThreshold: 250,
       pollInterval: 100,
@@ -95,10 +95,10 @@ export async function watchComposeProject(root: string, options: WatchComposeOpt
   return watcher;
 }
 
-function isIgnoredRegistryWatchPath(root: string, target: string, explicitPackageRoots: string[]): boolean {
+function isIgnoredLibraryWatchPath(root: string, target: string, editableDkbRoots: string[]): boolean {
   const resolved = path.resolve(target);
 
-  if (explicitPackageRoots.some((packageRoot) => isInside(packageRoot, resolved))) {
+  if (editableDkbRoots.some((packageRoot) => isInside(packageRoot, resolved))) {
     return false;
   }
 
@@ -127,12 +127,11 @@ function isInside(root: string, target: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-async function hasRegistryProjectManifest(root: string): Promise<boolean> {
+async function hasLibraryProjectManifest(root: string): Promise<boolean> {
   try {
-    const manifest = JSON.parse(await fs.readFile(path.join(root, 'dkb.json'), 'utf8')) as { type?: unknown; dependencies?: unknown };
+    const manifest = JSON.parse(await fs.readFile(path.join(root, 'dkb.json'), 'utf8')) as { type?: unknown };
 
-    return manifest.type === 'registry'
-      || (manifest.dependencies !== undefined && typeof manifest.dependencies === 'object' && !Array.isArray(manifest.dependencies));
+    return manifest.type === 'library';
   } catch {
     return false;
   }

@@ -10,7 +10,7 @@ import {
 } from 'node:crypto';
 import { canonicalJson, stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
-import { manifestPath } from '../protocol/paths.js';
+import { artifactLockPath, manifestPath } from '../protocol/paths.js';
 import { validateDkbLockManifest } from '../protocol/validation.js';
 import type {
   DkbLockManifest,
@@ -303,7 +303,7 @@ export async function verifyPackageReceipt(
 
 export async function signComposeProject(root: string, options: SignComposeProjectOptions = {}) {
   const resolvedRoot = path.resolve(root);
-  const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
+  const lockPath = artifactLockPath(resolvedRoot);
   const releasePath = manifestPath(resolvedRoot, DKB_RELEASE_PATH);
   const publisherKeyEnv = options.publisherKeyEnv ?? options.keyEnv ?? 'DKB_SIGNING_PRIVATE_KEY';
   const registryKeyEnv = options.registryKeyEnv ?? options.keyEnv ?? publisherKeyEnv;
@@ -364,7 +364,7 @@ export async function verifyComposeRelease(root: string, options: VerifyComposeR
   }
 
   const release = parseReleaseEnvelope(JSON.parse(await fs.readFile(releasePath, 'utf8')), releasePath);
-  const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
+  const lockPath = artifactLockPath(resolvedRoot);
   const lock = validateDkbLockManifest(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
   const payloadMatchesLock = stableHash(releasePayloadForLock(lock)) === release.payloadHash
     && canonicalJson(lock) === canonicalJson(release.payload.lock);
@@ -386,7 +386,7 @@ export async function verifyComposeRelease(root: string, options: VerifyComposeR
       {
         name: 'payload_matches_lock',
         ok: payloadMatchesLock,
-        detail: payloadMatchesLock ? 'release payload matches current dkb-lock.json' : 'release payload differs from current dkb-lock.json',
+        detail: payloadMatchesLock ? 'release payload matches current artifact lock' : 'release payload differs from current artifact lock',
       },
       ...(options.signer ? [{
         name: 'publisher_matches_signer',

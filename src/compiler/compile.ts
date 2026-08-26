@@ -8,12 +8,12 @@ import { performance } from 'node:perf_hooks';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
 import { loadCompose } from '../protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, manifestPath, resolveFrom } from '../protocol/paths.js';
+import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, artifactLockPath, manifestPath, resolveFrom } from '../protocol/paths.js';
 import { validateDkbLockManifest } from '../protocol/validation.js';
-import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedRegistry } from '../protocol/types.js';
+import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '../protocol/types.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
-import { DKB_ARTIFACT_MANIFEST_PATH, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
+import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
 import { compileDkbWithLlamaIndex } from './llamaindex.js';
 import {
   LLAMAINDEX_COMPILER_AGGREGATE_PATH,
@@ -33,7 +33,7 @@ import {
 } from '../indexes/faissStore.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
-  resolveRegistryRetrievalProfile,
+  resolveLibraryRetrievalProfile,
   retrievalProfileLockForCompilerResults,
   writeRetrievalProfileLock,
   type DkbResolvedRetrievalProfile,
@@ -223,10 +223,10 @@ export async function compileComposeProject(root: string, options: CompileCompos
     const totalStart = performance.now();
     const registry = await loadCompose(resolvedRoot);
     const desiredProfile = options.compiler === 'llamaindex'
-      ? resolveRegistryRetrievalProfile(registry, options.model)
+      ? resolveLibraryRetrievalProfile(registry, options.model)
       : undefined;
     const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
-    const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
+    const lockPath = artifactLockPath(resolvedRoot);
     const sourceSnapshotStart = performance.now();
     const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
     const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
@@ -297,7 +297,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
 
 async function writeAtomicCompileArtifacts(
   root: string,
-  registry: LoadedRegistry,
+  registry: LoadedLibrary,
   state: Awaited<ReturnType<typeof collectRegistryState>>,
   allDkbs: LoadedDkb[],
   artifactProfile: 'full' | 'faiss-package',
@@ -320,9 +320,7 @@ async function writeAtomicCompileArtifacts(
   const stageParent = resolveFrom(root, `${DKB_CACHE_DIR}/compile-stage-${process.pid}-${Date.now().toString(36)}`);
   const stageRoot = path.join(stageParent, 'root');
   const artifactDir = resolveFrom(root, DKB_ARTIFACTS_DIR);
-  const lockPath = manifestPath(root, 'dkb-lock.json');
   const artifactBackup = `${artifactDir}.replace-${process.pid}-${Date.now().toString(36)}`;
-  const lockBackup = `${lockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
   const profilePath = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
   const profileBackup = `${profilePath}.replace-${process.pid}-${Date.now().toString(36)}`;
 
@@ -346,8 +344,9 @@ async function writeAtomicCompileArtifacts(
 
     const lockStart = performance.now();
     const lock = await lockForState(stageRoot, registry, state, new Date().toISOString());
-    const stageLockPath = manifestPath(stageRoot, 'dkb-lock.json');
+    const stageLockPath = artifactLockPath(stageRoot);
 
+    await fs.mkdir(path.dirname(stageLockPath), { recursive: true });
     await fs.writeFile(stageLockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
     timings.lock = elapsedMs(lockStart);
     const artifactManifestStart = performance.now();
@@ -369,28 +368,23 @@ async function writeAtomicCompileArtifacts(
     const promotionStart = performance.now();
     await fs.mkdir(path.dirname(artifactDir), { recursive: true });
     await moveIfExists(artifactDir, artifactBackup);
-    await moveIfExists(lockPath, lockBackup);
     if (state.retrievalProfileLock) {
       await moveIfExists(profilePath, profileBackup);
     }
 
     try {
       await fs.rename(resolveFrom(stageRoot, DKB_ARTIFACTS_DIR), artifactDir);
-      await fs.rename(stageLockPath, lockPath);
       if (state.retrievalProfileLock) {
         await fs.rename(resolveFrom(stageRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), profilePath);
       }
       await fs.rm(artifactBackup, { recursive: true, force: true });
-      await fs.rm(lockBackup, { recursive: true, force: true });
       await fs.rm(profileBackup, { force: true });
     } catch (error) {
       await fs.rm(artifactDir, { recursive: true, force: true });
-      await fs.rm(lockPath, { force: true });
       if (state.retrievalProfileLock) {
         await fs.rm(profilePath, { force: true });
       }
       await moveIfExists(artifactBackup, artifactDir);
-      await moveIfExists(lockBackup, lockPath);
       if (state.retrievalProfileLock) {
         await moveIfExists(profileBackup, profilePath);
       }
@@ -410,7 +404,7 @@ async function writeAtomicCompileArtifacts(
 
 async function writeAtomicFaissPackageUpdateArtifacts(
   root: string,
-  registry: LoadedRegistry,
+  registry: LoadedLibrary,
   state: Awaited<ReturnType<typeof collectRegistryState>>,
 ): Promise<{ lock: DkbLockManifest; timings: AtomicCompileArtifactTimings }> {
   const totalStart = performance.now();
@@ -454,8 +448,9 @@ async function writeAtomicFaissPackageUpdateArtifacts(
 
     const lockStart = performance.now();
     const lock = await lockForState(stageRoot, registry, state, new Date().toISOString());
-    const stageLockPath = manifestPath(stageRoot, 'dkb-lock.json');
+    const stageLockPath = artifactLockPath(stageRoot);
 
+    await fs.mkdir(path.dirname(stageLockPath), { recursive: true });
     await fs.writeFile(stageLockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
     timings.lock = elapsedMs(lockStart);
 
@@ -529,7 +524,7 @@ async function copyExistingArtifactPayload(sourceRoot: string, stageRoot: string
   await fs.copyFile(manifestPath(sourceRoot, 'dkb.json'), manifestPath(stageRoot, 'dkb.json'));
 
   const paths = new Set<string>([
-    'dkb-lock.json',
+    DKB_ARTIFACT_LOCK_PATH,
     SOURCE_INDEX_PATH,
     SOURCE_GRAPH_PATH,
     SOURCE_VECTOR_PATH,
@@ -566,7 +561,7 @@ async function promoteFaissPackageUpdate(
   bundle: Awaited<ReturnType<typeof writeLlamaIndexCompilerBundle>>,
 ): Promise<void> {
   const paths = [
-    'dkb-lock.json',
+    DKB_ARTIFACT_LOCK_PATH,
     DKB_ARTIFACT_MANIFEST_PATH,
     FAISS_CATALOG_PATH,
     FAISS_SEGMENT_PATH,
@@ -699,7 +694,7 @@ async function moveIfExists(source: string, target: string): Promise<void> {
 
 export async function verifyComposeProject(root: string): Promise<VerifyComposeProjectResult> {
   const resolvedRoot = path.resolve(root);
-  const lockPath = manifestPath(resolvedRoot, 'dkb-lock.json');
+  const lockPath = artifactLockPath(resolvedRoot);
   const registry = await loadCompose(resolvedRoot);
   const current = await collectRegistryStateForVerification(registry);
   const lock = validateDkbLockManifest(parseLock(await fs.readFile(lockPath, 'utf8'), lockPath), lockPath);
@@ -739,6 +734,46 @@ export async function verifyComposeProject(root: string): Promise<VerifyComposeP
   };
 }
 
+/**
+ * Refresh aggregate Library integrity metadata after activating or removing
+ * already-compiled packages. This hashes installed package artifacts and never
+ * re-parses, re-chunks, or re-embeds their source documents.
+ */
+export async function refreshLibraryArtifactMetadata(root: string): Promise<DkbLockManifest> {
+  const resolvedRoot = path.resolve(root);
+
+  return withCompileLock(resolvedRoot, async () => {
+    const library = await loadCompose(resolvedRoot);
+    const state = await collectRegistryStateForVerification(library);
+    const previousManifest = await inspectDkbArtifactManifest(resolvedRoot).catch(() => null);
+    const lock = await lockForState(resolvedRoot, library, state, new Date().toISOString());
+    const lockPath = artifactLockPath(resolvedRoot);
+    const tempPath = `${lockPath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    const backupPath = `${lockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
+    const hadLock = Boolean(await maybeReadFile(lockPath));
+
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await fs.writeFile(tempPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+    if (hadLock) await fs.rename(lockPath, backupPath);
+
+    try {
+      await fs.rename(tempPath, lockPath);
+      await writeDkbArtifactManifest(resolvedRoot, lock, {
+        compiler: previousManifest?.compiler,
+      });
+      await fs.rm(backupPath, { force: true });
+      await fs.rm(resolveFrom(resolvedRoot, COMPILE_CACHE_PATH), { force: true });
+
+      return lock;
+    } catch (error) {
+      await fs.rm(tempPath, { force: true });
+      await fs.rm(lockPath, { force: true });
+      if (hadLock) await fs.rename(backupPath, lockPath);
+      throw error;
+    }
+  });
+}
+
 function packageVerificationDetail(
   locked: DkbLockManifest['packages'],
   current: DkbLockManifest['packages'],
@@ -769,7 +804,7 @@ function packageVerificationDetail(
 
 async function cachedCompileResultFor(
   root: string,
-  registry: LoadedRegistry,
+  registry: LoadedLibrary,
   sourceSnapshot: QuickSourceSnapshot,
   chunkIndexPath: string,
   lockPath: string,
@@ -843,7 +878,7 @@ function isCompileCacheManifest(value: unknown): value is CompileCacheManifest {
 
 async function writeCompileCache(
   root: string,
-  registry: LoadedRegistry,
+  registry: LoadedLibrary,
   sourceSnapshot: QuickSourceSnapshot,
   lockPath: string,
 ): Promise<void> {
@@ -876,7 +911,7 @@ async function writeCompileCache(
   await fs.writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
 }
 
-async function quickSourceSnapshotForRegistry(registry: LoadedRegistry): Promise<QuickSourceSnapshot> {
+async function quickSourceSnapshotForRegistry(registry: LoadedLibrary): Promise<QuickSourceSnapshot> {
   const dkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
@@ -1071,7 +1106,7 @@ function hashString(value: string): string {
 }
 
 async function collectRegistryState(
-  registry: LoadedRegistry,
+  registry: LoadedLibrary,
   compiler: 'native' | 'llamaindex' = 'native',
   desiredProfile?: DkbResolvedRetrievalProfile,
 ): Promise<RegistryCompileState> {
@@ -1079,7 +1114,7 @@ async function collectRegistryState(
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, compiler, desiredProfile)));
+  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, compiler, desiredProfile, registry.root)));
   const sourceUnits = packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits);
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const sourceAnalysis = {
@@ -1102,12 +1137,12 @@ async function collectRegistryState(
   };
 }
 
-async function collectRegistryStateForVerification(registry: LoadedRegistry): Promise<RegistryCompileState> {
+async function collectRegistryStateForVerification(registry: LoadedLibrary): Promise<RegistryCompileState> {
   const allDkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const packageEntries = await Promise.all(allDkbs.map((dkb) => collectDkbVerificationState(dkb)));
+  const packageEntries = await Promise.all(allDkbs.map((dkb) => collectDkbVerificationState(dkb, registry.root)));
   const sourceUnits = packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits);
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const sourceAnalysis = {
@@ -1124,7 +1159,7 @@ async function collectRegistryStateForVerification(registry: LoadedRegistry): Pr
   };
 }
 
-async function collectDkbVerificationState(dkb: LoadedDkb): Promise<{
+async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string): Promise<{
   package: DkbLockManifest['packages'][string];
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
 }> {
@@ -1142,7 +1177,7 @@ async function collectDkbVerificationState(dkb: LoadedDkb): Promise<{
       const sourceAnalysis = analyzeSourceUnits([...unique.values()].sort((a, b) => a.id.localeCompare(b.id)));
 
       return {
-        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits),
+        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
         sourceAnalysis,
       };
     }
@@ -1150,7 +1185,7 @@ async function collectDkbVerificationState(dkb: LoadedDkb): Promise<{
     // Packages without a compiler bundle verify against direct source adapters.
   }
 
-  const state = await collectDkbState(dkb);
+  const state = await collectDkbState(dkb, 'native', undefined, artifactRoot);
 
   return {
     package: state.package,
@@ -1162,6 +1197,7 @@ async function collectDkbState(
   dkb: LoadedDkb,
   compiler: 'native' | 'llamaindex' = 'native',
   desiredProfile?: DkbResolvedRetrievalProfile,
+  artifactRoot = dkb.root,
 ): Promise<{
   package: DkbLockManifest['packages'][string];
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
@@ -1172,7 +1208,7 @@ async function collectDkbState(
   const sourceAnalysis = analyzeSourceUnits(rawSourceUnits);
 
   return {
-    package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits),
+    package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
     sourceAnalysis,
     compilerArtifact: built.compilerResult ? {
       dkb,
@@ -1185,6 +1221,7 @@ async function collectDkbState(
 async function lockPackageForDkb(
   dkb: LoadedDkb,
   sourceUnits: IndexedSourceUnit[],
+  artifactRoot: string,
 ): Promise<DkbLockManifest['packages'][string]> {
   const sourceUnitsByStore = countSourceUnitsByStore(sourceUnits);
   const stores = await Promise.all(storesForDkb(dkb).map(async (store) => {
@@ -1204,7 +1241,7 @@ async function lockPackageForDkb(
     id: dkb.manifest.id,
     name: dkb.manifest.name,
     version: dkb.manifest.version,
-    path: dkb.packagePath ? path.relative(process.cwd(), dkb.packagePath).replace(/\\/g, '/') : null,
+    path: dkb.packagePath ? path.relative(artifactRoot, dkb.packagePath).replace(/\\/g, '/') : null,
     manifestHash: dkb.manifestHash ?? stableHash(dkb.manifest),
     sourceInventoryHash: stableHash(stores),
     chunkRepositoryHash: stableHash(sourceUnits.map(chunkForHash)),
@@ -1286,7 +1323,7 @@ function chunkForHash(unit: IndexedSourceUnit): Record<string, unknown> {
   };
 }
 
-async function lockForState(root: string, registry: LoadedRegistry, state: Awaited<ReturnType<typeof collectRegistryState>>, compiledAt: string): Promise<DkbLockManifest> {
+async function lockForState(root: string, registry: LoadedLibrary, state: Awaited<ReturnType<typeof collectRegistryState>>, compiledAt: string): Promise<DkbLockManifest> {
   const sourceIndexHash = await maybeHashFile(resolveFrom(root, SOURCE_INDEX_PATH));
   const sourceGraphHash = await maybeHashFile(resolveFrom(root, SOURCE_GRAPH_PATH));
   const sourceVectorHash = await maybeHashArtifact(resolveFrom(root, SOURCE_VECTOR_PATH));

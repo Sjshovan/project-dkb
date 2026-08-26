@@ -3,7 +3,7 @@ import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
 import { resolveFrom } from '../protocol/paths.js';
-import type { DkbRetrievalProfileConfig, LoadedRegistry } from '../protocol/types.js';
+import type { DkbRetrievalProfileConfig, LoadedLibrary } from '../protocol/types.js';
 import {
   LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
@@ -59,8 +59,8 @@ export interface DkbRetrievalProfileLock {
   generatedAt: string;
 }
 
-export function resolveRegistryRetrievalProfile(registry: LoadedRegistry, overrideModel?: string): DkbResolvedRetrievalProfile {
-  return resolveRetrievalProfile(registry.manifest.retrievalProfile, overrideModel);
+export function resolveLibraryRetrievalProfile(library: LoadedLibrary, overrideModel?: string): DkbResolvedRetrievalProfile {
+  return resolveRetrievalProfile(library.manifest.retrievalProfile, overrideModel);
 }
 
 export function resolveRetrievalProfile(config?: DkbRetrievalProfileConfig, overrideModel?: string): DkbResolvedRetrievalProfile {

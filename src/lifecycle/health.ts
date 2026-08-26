@@ -4,10 +4,10 @@ import { performance } from 'node:perf_hooks';
 import { COMPILE_CACHE_PATH, compileComposeProject, verifyComposeProject } from '../compiler/compile.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import { invalidateQueryContext } from '../indexes/queryContext.js';
-import { loadManifest, loadRegistry } from '../protocol/manifest.js';
-import { manifestPath, resolveFrom } from '../protocol/paths.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '../protocol/manifest.js';
+import { DKB_ARTIFACT_LOCK_PATH, resolveFrom } from '../protocol/paths.js';
 import { deriveKnowledgeSpace } from '../protocol/space.js';
-import type { DkbSourceManifest, DkbStore, DkrManifest, LoadedDkb } from '../protocol/types.js';
+import type { DkbManifest, DkbSourceManifest, DkbStore, DkcManifest, DkrManifest, LoadedDkb } from '../protocol/types.js';
 import { defaultWriteQueueRoot, listQueuedWrites } from '../writes/queue.js';
 
 export interface DkbHealthReport {
@@ -50,17 +50,36 @@ const ARTIFACTS = [
   SOURCE_INDEX_PATH,
   SOURCE_GRAPH_PATH,
   SOURCE_VECTOR_PATH,
-  'dkb-lock.json',
+  DKB_ARTIFACT_LOCK_PATH,
   COMPILE_CACHE_PATH,
 ];
 
 export async function healthReport(root: string, queueRoot?: string): Promise<DkbHealthReport> {
   const resolvedRoot = path.resolve(root);
   const checks: DkbHealthReport['checks'] = [];
-  const type = await exists(manifestPath(resolvedRoot, 'dkb.json')) ? 'dkb' : 'dkr';
-  const registry = await loadRegistry(resolvedRoot);
-  const manifest = registry?.manifest ?? await loadManifest(resolvedRoot);
-  const effectiveId = registry?.manifest.id ?? idFor(manifest);
+  const sourceManifest = await loadManifest(resolvedRoot);
+  let manifest: HealthManifest;
+  let dkbs: LoadedDkb[];
+
+  if (sourceManifest.type === 'library') {
+    const library = await loadLibrary(resolvedRoot);
+    manifest = library.manifest;
+    dkbs = uniqueLoadedDkbs([
+      ...library.collections.flatMap((collection) => collection.dkbs),
+      ...library.dkbs,
+    ]);
+  } else if (sourceManifest.type === 'collection') {
+    const collection = await loadCollection(resolvedRoot);
+    manifest = collection.manifest;
+    dkbs = collection.dkbs;
+  } else {
+    const dkb = await loadDkb(resolvedRoot);
+    manifest = dkb.manifest;
+    dkbs = [dkb];
+  }
+
+  const type = sourceManifest.type;
+  const effectiveId = idFor(manifest);
   const space = deriveKnowledgeSpace({
     owner: 'owner' in manifest ? manifest.owner : undefined,
     namespace: manifest.namespace,
@@ -76,32 +95,26 @@ export async function healthReport(root: string, queueRoot?: string): Promise<Dk
   });
 
   const artifacts = await Promise.all(ARTIFACTS.map((artifact) => artifactStatus(resolvedRoot, artifact)));
-  const lockExists = artifacts.find((artifact) => artifact.path === 'dkb-lock.json')?.exists ?? false;
+  const lockExists = artifacts.find((artifact) => artifact.path === DKB_ARTIFACT_LOCK_PATH)?.exists ?? false;
 
-  if (registry) {
-    const composeDkbs = registry
-      ? [...registry.collections.flatMap((collection) => collection.dkbs), ...registry.dkbs]
-      : [];
+  checks.push(...await sourceChecks(dkbs));
 
-    checks.push(...await sourceChecks(composeDkbs));
+  if (lockExists) {
+    const verification = await verifyComposeProject(resolvedRoot);
 
-    if (lockExists) {
-      const verification = await verifyComposeProject(resolvedRoot);
-
-      checks.push({
-        name: 'verify',
-        ok: verification.ok,
-        status: verification.ok ? 'ready' : 'degraded',
-        detail: verification.ok ? 'lockfile and artifacts verify' : 'lockfile or generated artifacts are stale',
-      });
-    } else {
-      checks.push({
-        name: 'verify',
-        ok: false,
-        status: 'degraded',
-        detail: 'dkb-lock.json is missing; run dkb restore or dkb compile',
-      });
-    }
+    checks.push({
+      name: 'verify',
+      ok: verification.ok,
+      status: verification.ok ? 'ready' : 'degraded',
+      detail: verification.ok ? 'lockfile and artifacts verify' : 'lockfile or generated artifacts are stale',
+    });
+  } else {
+    checks.push({
+      name: 'verify',
+      ok: false,
+      status: 'degraded',
+      detail: 'compiled artifact lock is missing; run dkb restore or dkb compile',
+    });
   }
 
   const queue = await queueSummary(resolvedRoot, queueRoot);
@@ -135,8 +148,7 @@ export async function restoreIndexes(root: string): Promise<RestoreIndexesResult
 }
 
 async function sourceChecks(dkbs: LoadedDkb[]): Promise<DkbHealthReport['checks']> {
-  const unique = uniqueDkbs(dkbs);
-  const checks = await Promise.all(unique.flatMap((dkb) => storesFor(dkb).map(async (store) => {
+  const checks = await Promise.all(uniqueLoadedDkbs(dkbs).flatMap((dkb) => storesFor(dkb).map(async (store) => {
     const status = await storeStatus(dkb.root, store);
 
     return {
@@ -187,7 +199,7 @@ function storesFor(dkb: LoadedDkb): DkbStore[] {
 }
 
 async function artifactStatus(root: string, artifact: string): Promise<DkbHealthReport['artifacts'][number]> {
-  const target = artifact === 'dkb-lock.json' ? manifestPath(root, artifact) : resolveFrom(root, artifact);
+  const target = resolveFrom(root, artifact);
 
   try {
     const stat = await fs.stat(target);
@@ -233,7 +245,7 @@ function summarizeStatus(checks: DkbHealthReport['checks']): DkbHealthReport['st
   return 'ready';
 }
 
-type HealthManifest = DkbSourceManifest | DkrManifest;
+type HealthManifest = DkbManifest | DkbSourceManifest | DkcManifest | DkrManifest;
 
 function idFor(manifest: HealthManifest): string {
   return 'id' in manifest ? manifest.id : safeId(manifest.name);
@@ -243,28 +255,4 @@ function safeId(value: string): string {
   const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 
   return id || 'dkb';
-}
-
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function uniqueDkbs(dkbs: LoadedDkb[]): LoadedDkb[] {
-  const seen = new Set<string>();
-
-  return dkbs.filter((dkb) => {
-    if (seen.has(dkb.manifest.id)) {
-      return false;
-    }
-
-    seen.add(dkb.manifest.id);
-
-    return true;
-  });
 }

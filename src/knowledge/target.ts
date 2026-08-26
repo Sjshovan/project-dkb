@@ -1,12 +1,10 @@
 ﻿import path from 'node:path';
-import fs from 'node:fs/promises';
 import { stableHash } from '../contracts/hash.js';
-import { loadDkb, loadRegistry } from '../protocol/manifest.js';
-import { manifestPath } from '../protocol/paths.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest } from '../protocol/manifest.js';
 import type { LoadedCollection, LoadedDkb, QueryResponse, QueryTrace } from '../protocol/types.js';
 import { queryCollection, type QueryOptions } from '../router/search.js';
 
-export type KnowledgeTargetType = 'dkb' | 'dkc' | 'dkr';
+export type KnowledgeTargetType = 'dkb' | 'collection' | 'library';
 
 export interface KnowledgeTargetDkbRef {
   dkbId: string;
@@ -51,23 +49,17 @@ export interface KnowledgeTargetSummary {
 
 export async function resolveKnowledgeTarget(targetPath: string): Promise<KnowledgeTargetResolution> {
   const resolvedPath = path.resolve(targetPath);
+  const manifest = await loadManifest(resolvedPath);
 
-  if (!(await exists(manifestPath(resolvedPath, 'dkb.json')))) {
-    return resolveRegistryTarget(await loadRegistry(resolvedPath), resolvedPath);
+  if (manifest.type === 'library') {
+    return resolveLibraryTarget(await loadLibrary(resolvedPath), resolvedPath);
   }
 
-  let dkb: LoadedDkb;
-
-  try {
-    dkb = await loadDkb(resolvedPath);
-  } catch (error) {
-    if (!isRegistryManifestLoadError(error)) {
-      throw error;
-    }
-
-    return resolveRegistryTarget(await loadRegistry(resolvedPath), resolvedPath);
+  if (manifest.type === 'collection') {
+    return resolveCollectionTarget(await loadCollection(resolvedPath), resolvedPath);
   }
 
+  const dkb = await loadDkb(resolvedPath);
   const includedDkbs = [dkbRef(dkb, null, true)];
 
   return {
@@ -90,6 +82,7 @@ export async function resolveKnowledgeTarget(targetPath: string): Promise<Knowle
             id: dkb.manifest.id,
             name: dkb.manifest.name,
             version: dkb.manifest.version,
+            members: {},
             dkbs: [],
           },
           dkbs: [dkb],
@@ -103,12 +96,33 @@ export async function resolveKnowledgeTarget(targetPath: string): Promise<Knowle
   };
 }
 
-function resolveRegistryTarget(registry: Awaited<ReturnType<typeof loadRegistry>>, resolvedPath: string): KnowledgeTargetResolution {
+function resolveCollectionTarget(collection: LoadedCollection, resolvedPath: string): KnowledgeTargetResolution {
+  const includedDkbs = collection.dkbs.map((dkb) => dkbRef(dkb, collection.manifest.id, false));
+
+  return {
+    path: resolvedPath,
+    type: 'collection',
+    id: collection.manifest.id,
+    name: collection.manifest.name,
+    version: collection.manifest.version,
+    targetHash: stableHash({
+      type: 'collection-target',
+      id: collection.manifest.id,
+      version: collection.manifest.version,
+      includedDkbs,
+    }),
+    units: [{ collection, collectionId: collection.manifest.id, standalone: false }],
+    includedDkbs,
+    duplicateDkbRoots: [],
+  };
+}
+
+function resolveLibraryTarget(library: Awaited<ReturnType<typeof loadLibrary>>, resolvedPath: string): KnowledgeTargetResolution {
   const duplicateTracker = createDuplicateTracker();
   const units: KnowledgeTargetResolution['units'] = [];
   const includedDkbs: KnowledgeTargetDkbRef[] = [];
 
-  for (const collection of registry.collections) {
+  for (const collection of library.collections) {
     const dkbs = collection.dkbs.filter((dkb) => duplicateTracker.track(dkb, `collection:${collection.manifest.id}`));
 
     if (dkbs.length === 0) {
@@ -126,16 +140,17 @@ function resolveRegistryTarget(registry: Awaited<ReturnType<typeof loadRegistry>
     includedDkbs.push(...dkbs.map((dkb) => dkbRef(dkb, collection.manifest.id, false)));
   }
 
-  const standalone = registry.dkbs.filter((dkb) => duplicateTracker.track(dkb, 'dkb'));
+  const standalone = library.dkbs.filter((dkb) => duplicateTracker.track(dkb, 'dkb'));
 
   if (standalone.length > 0) {
     units.push({
       collection: {
-        root: registry.root,
+        root: library.root,
         manifest: {
-          id: `${registry.manifest.id}-standalone`,
-          name: `${registry.manifest.name} Standalone DKBs`,
-          version: registry.manifest.version,
+          id: `${library.manifest.id}-standalone`,
+          name: `${library.manifest.name} Standalone DKBs`,
+          version: library.manifest.version,
+          members: {},
           dkbs: [],
         },
         dkbs: standalone,
@@ -148,36 +163,20 @@ function resolveRegistryTarget(registry: Awaited<ReturnType<typeof loadRegistry>
 
   return {
     path: resolvedPath,
-    type: 'dkr',
-    id: registry.manifest.id,
-    name: registry.manifest.name,
-    version: registry.manifest.version,
+    type: 'library',
+    id: library.manifest.id,
+    name: library.manifest.name,
+    version: library.manifest.version,
     targetHash: stableHash({
-      type: 'dkr-target',
-      id: registry.manifest.id,
-      version: registry.manifest.version,
+      type: 'library-target',
+      id: library.manifest.id,
+      version: library.manifest.version,
       includedDkbs,
     }),
     units,
     includedDkbs,
     duplicateDkbRoots: duplicateTracker.duplicates,
   };
-}
-
-function isRegistryManifestLoadError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-
-  return message.includes('Registry project manifests cannot be loaded as DKB packages');
-}
-
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function queryKnowledgeTarget(

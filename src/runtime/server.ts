@@ -7,7 +7,7 @@ import {
   ensureRuntimeState,
   importCompiledDkbArtifactIntoRuntime,
   importDkbIntoRuntime,
-  listRuntimeRegistries,
+  runtimeLibrary,
   removeDkbFromRuntime,
   retrieveFromRuntime,
   runtimeStatus,
@@ -83,14 +83,8 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
       return sendJson(response, 200, await runtimeStatus(stateRoot));
     }
 
-    if (request.method === 'GET' && pathName === '/api/registries') {
-      return sendJson(response, 200, await listRuntimeRegistries(stateRoot));
-    }
-
-    if (request.method === 'POST' && pathName === '/api/registries') {
-      await ensureRuntimeState(stateRoot);
-
-      return sendJson(response, 201, await listRuntimeRegistries(stateRoot));
+    if (request.method === 'GET' && pathName === '/api/library') {
+      return sendJson(response, 200, await runtimeLibrary(stateRoot));
     }
 
     if (request.method === 'POST' && pathName === '/api/dkbs/import') {

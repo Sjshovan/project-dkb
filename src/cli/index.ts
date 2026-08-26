@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Command, CommanderError, Help } from 'commander';
 import { DkbError } from '../protocol/errors.js';
+import { identityDisplayName, parseDkbIdentity } from '../protocol/identity.js';
 import { loadCollection, loadDkb, loadManifest } from '../protocol/manifest.js';
 import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
 import { DKB_PROTOCOL_VERSION } from '../protocol/version.js';
@@ -48,8 +49,8 @@ program
   .addHelpText('after', `
 Examples:
   dkb init
-  dkb init "My Knowledgebase"
-  dkb install <package-id> --version <version>
+  dkb init @my-team/my-knowledge
+  dkb install @my-team/my-knowledge --version 1.0.0
   dkb retrieve "What does this knowledgebase say?"
   dkb --json registry packages
 
@@ -57,29 +58,28 @@ Run 'dkb <command> --help' for command-specific usage.`);
 
 program
   .command('init')
-  .description('Initialize this directory as a registry, or create a named DKB package')
-  .argument('[name]', 'Package id or display name; omit to initialize a registry')
-  .option('--dir <path>', 'Target registry directory, or parent directory for a named package')
-  .option('--here', 'Deprecated alias for registry initialization')
-  .option('--registry-url <url>', 'Upstream package registry URL for this registry')
+  .description('Initialize this directory as a Library, or create a namespaced DKB')
+  .argument('[identity]', 'Scoped @namespace/name DKB identity; omit to initialize a Library')
+  .option('--dir <path>', 'Target Library directory, or parent directory for a DKB')
+  .option('--display-name <name>', 'Human-readable DKB or Library name')
+  .option('--registry-url <url>', 'Upstream Registry URL for this Library')
   .option('--no-verify', 'Save the registry URL without validating it first')
   .option('--yes', 'Use defaults without prompting when possible')
   .option('--owner <id>', 'Owner id to write into dkb.json')
   .option('--email <email>', 'Owner email to write into dkb.json')
-  .option('--collection <id>', 'Optional collection id metadata')
-  .action(async (name: string | undefined, options: { dir?: string; here?: boolean; registryUrl?: string; verify?: boolean; yes?: boolean; owner?: string; email?: string; collection?: string }) => {
-    const initializeRegistry = Boolean(options.here || !name?.trim());
+  .action(async (identity: string | undefined, options: { dir?: string; displayName?: string; registryUrl?: string; verify?: boolean; yes?: boolean; owner?: string; email?: string }) => {
+    const initializeLibrary = !identity?.trim();
 
-    if (initializeRegistry) {
-      const { nearestRegistryRoot, registryManifestForFolder, resolveRegistryInitializationConfiguration } = await import('./serve.js');
+    if (initializeLibrary) {
+      const { nearestLibraryRoot, libraryManifestForFolder, resolveRegistryInitializationConfiguration } = await import('./serve.js');
       const { writeConfiguredRegistryUrl } = await import('../registry/config.js');
       const root = path.resolve(options.dir ?? '.');
       const manifestPath = path.join(root, 'dkb.json');
       const manifestPresent = await exists(manifestPath);
-      const alreadyInitialized = await nearestRegistryRoot(root) === root;
+      const alreadyInitialized = await nearestLibraryRoot(root) === root;
 
       if (manifestPresent && !alreadyInitialized) {
-        throw new DkbError(`Cannot initialize a registry because ${manifestPath} already belongs to a package or is invalid.`);
+        throw new DkbError(`Cannot initialize a Library because ${manifestPath} already belongs to another entry or is invalid.`);
       }
 
       const selectedRegistry = await resolveRegistryInitializationConfiguration({
@@ -88,10 +88,10 @@ program
         yes: Boolean(options.yes),
         verify: options.verify !== false,
       });
-      const displayName = options.here ? name?.trim() : undefined;
       const manifest = {
-        ...registryManifestForFolder(root),
-        ...(displayName ? { name: displayName } : {}),
+        ...libraryManifestForFolder(root),
+        registry: { url: selectedRegistry.url },
+        ...(options.displayName ? { name: options.displayName } : {}),
         ...(options.owner || options.email
           ? {
               owner: {
@@ -101,7 +101,7 @@ program
             }
           : {}),
       };
-      await presenter().run('Initializing registry', async () => {
+      await presenter().run('Initializing Library', async () => {
         let createdManifest = false;
 
         try {
@@ -119,7 +119,7 @@ program
 
           return {
             status: alreadyInitialized ? 'already initialized' : 'initialized',
-            type: 'registry',
+            type: 'library',
             root,
             manifest: manifestPath,
             registry: configured,
@@ -144,23 +144,25 @@ program
     }
 
     if (options.registryUrl || options.verify === false) {
-      throw new DkbError('--registry-url and --no-verify are only valid when initializing a registry with bare `dkb init`.');
+      throw new DkbError('--registry-url and --no-verify are only valid when initializing a Library with bare `dkb init`.');
     }
 
-    const displayName = await resolveInitName(name);
-    const id = safeCliId(displayName);
-    const root = path.resolve(options.dir ?? '.', id);
+    const parsedIdentity = parseDkbIdentity(identity!, 'DKB identity');
+    const displayName = options.displayName ?? identityDisplayName(parsedIdentity.identity);
+    const root = path.resolve(options.dir ?? '.', parsedIdentity.name);
 
     const manifestPath = path.join(root, 'dkb.json');
 
-    await presenter().run('Initializing package', async () => {
+    await presenter().run('Initializing DKB', async () => {
       if (await exists(manifestPath)) {
         throw new DkbError(`dkb.json already exists at ${manifestPath}`);
       }
 
       await fs.mkdir(root, { recursive: true });
       await fs.writeFile(manifestPath, `${JSON.stringify({
-        name: displayName,
+        type: 'dkb',
+        name: parsedIdentity.identity,
+        displayName,
         version: '0.1.0',
         description: '',
         author: options.owner || options.email
@@ -169,33 +171,243 @@ program
               email: options.email,
             }
           : undefined,
-        collection: options.collection
-          ? options.collection
-          : undefined,
       }, null, 2)}\n`, 'utf8');
 
       return {
         status: 'initialized',
-        type: 'package',
+        type: 'dkb',
         root,
         manifest: manifestPath,
       };
     }, summarizeInitResult);
   });
 
+const library = program
+  .command('library')
+  .description('Inspect and manage the current local DKB Library');
+
+library
+  .command('status')
+  .description('Show active, inactive, broken, and untracked Library entries')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { inspectLibraryOverview } = await import('../library/overview.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    presenter().print(await inspectLibraryOverview(root), summarizeLibraryOverview);
+  });
+
+library
+  .command('sync')
+  .description('Resolve the Library manifest into its exact lock and applied-state ledger')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { syncLibrary } = await import('../library/resolver.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    await presenter().run('Synchronizing Library', async () => syncLibrary(root), summarizeLibrarySync);
+  });
+
+library
+  .command('add')
+  .description('Activate a local or already-downloaded DKB or Collection')
+  .argument('<identity>', 'Scoped @namespace/name identity')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (identity: string, options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { addLibraryRoot } = await import('../library/resolver.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    await presenter().run(`Activating ${identity}`, async () => addLibraryRoot(root, identity), summarizeLibrarySync);
+  });
+
+library
+  .command('remove')
+  .description('Deactivate a Library root without deleting its local source')
+  .argument('<identity>', 'Scoped @namespace/name identity')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (identity: string, options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { removeLibraryRoot } = await import('../library/resolver.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(root, identity), summarizeLibrarySync);
+  });
+
+const collection = program
+  .command('collection')
+  .description('Create and edit first-class DKB Collections');
+
+collection
+  .command('create')
+  .description('Create and activate an editable local Collection')
+  .argument('<identity>', 'Scoped @namespace/name Collection identity')
+  .option('--display-name <name>', 'Human-readable Collection name')
+  .option('--dir-name <name>', 'Local folder label; defaults to the identity name')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (identity: string, options: { displayName?: string; dirName?: string; library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { createLocalCollection } = await import('../library/collections.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    await presenter().run(`Creating Collection ${identity}`, async () => createLocalCollection({
+      libraryRoot: root,
+      identity,
+      displayName: options.displayName,
+      directoryName: options.dirName,
+    }), summarizeCollectionMutation);
+  });
+
+collection
+  .command('add')
+  .description('Add or update a DKB member in an editable Collection')
+  .argument('<collection>', 'Scoped Collection identity')
+  .argument('<dkb>', 'Scoped DKB identity')
+  .option('--version <version>', 'latest or an exact DKB version', 'latest')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (collectionIdentity: string, dkbIdentity: string, options: { version: string; library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { setCollectionMember } = await import('../library/collections.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    await presenter().run(`Adding ${dkbIdentity}`, async () => setCollectionMember({
+      libraryRoot: root,
+      collectionIdentity,
+      dkbIdentity,
+      selector: options.version,
+    }), summarizeCollectionMutation);
+  });
+
+collection
+  .command('remove')
+  .description('Remove a DKB member from an editable Collection')
+  .argument('<collection>', 'Scoped Collection identity')
+  .argument('<dkb>', 'Scoped DKB identity')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (collectionIdentity: string, dkbIdentity: string, options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { removeCollectionMember } = await import('../library/collections.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    await presenter().run(`Removing ${dkbIdentity}`, async () => removeCollectionMember({
+      libraryRoot: root,
+      collectionIdentity,
+      dkbIdentity,
+    }), summarizeCollectionMutation);
+  });
+
+collection
+  .command('show')
+  .description('Show a Collection and its version selectors')
+  .argument('<identity>', 'Scoped Collection identity')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (identity: string, options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { collectionOverview } = await import('../library/collections.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    presenter().print(await collectionOverview(root, identity), summarizeCollectionOverview);
+  });
+
+collection
+  .command('publish')
+  .description('Publish an immutable Collection revision and any missing owned DKBs')
+  .argument('[path]', 'Editable Collection folder', '.')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .option('--url <url>', 'Registry API URL')
+  .option('--public', 'Publish the Collection and owned missing DKBs publicly')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (target: string, options: { library?: string; url?: string; public?: boolean; token?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { configuredRegistry } = await import('../registry/config.js');
+    const { DkbRegistryClient } = await import('../registry/client.js');
+    const { publishCollectionFromLibrary } = await import('../registry/collectionRegistry.js');
+    const collectionPath = path.resolve(target);
+    const root = await requireLibraryRoot(options.library ?? collectionPath);
+    const registryConfig = await configuredRegistry({ url: options.url, root });
+
+    await presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
+      collectionPath,
+      libraryRoot: root,
+      client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
+      visibility: options.public ? 'public' : 'private',
+    }), summarizeCollectionRevision);
+  });
+
+collection
+  .command('install')
+  .description('Install an exact Registry Collection revision into the Library')
+  .argument('<identity>', 'Scoped Collection identity')
+  .option('--revision <revision>', 'Immutable Collection revision', parsePositiveInteger)
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .option('--url <url>', 'Registry API URL')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { configuredRegistry } = await import('../registry/config.js');
+    const { DkbRegistryClient } = await import('../registry/client.js');
+    const { installRegistryCollection } = await import('../registry/collectionRegistry.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    const registryConfig = await configuredRegistry({ url: options.url, root });
+
+    await presenter().run(`Installing Collection ${identity}`, async (progress) => installRegistryCollection({
+      client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
+      collectionId: identity,
+      revision: options.revision,
+      libraryRoot: root,
+      progress,
+    }), summarizeCollectionInstall);
+  });
+
+collection
+  .command('update')
+  .description('Atomically update an installed Registry Collection to another revision')
+  .argument('<identity>', 'Scoped Collection identity')
+  .option('--revision <revision>', 'Target immutable revision; defaults to latest', parsePositiveInteger)
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .option('--url <url>', 'Registry API URL')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { configuredRegistry } = await import('../registry/config.js');
+    const { DkbRegistryClient } = await import('../registry/client.js');
+    const { installRegistryCollection } = await import('../registry/collectionRegistry.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+    const registryConfig = await configuredRegistry({ url: options.url, root });
+
+    await presenter().run(`Updating Collection ${identity}`, async (progress) => installRegistryCollection({
+      client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
+      collectionId: identity,
+      revision: options.revision,
+      libraryRoot: root,
+      update: true,
+      progress,
+    }), summarizeCollectionInstall);
+  });
+
+collection
+  .command('uninstall')
+  .description('Uninstall a Registry Collection and prune only its unused vendor DKBs')
+  .argument('<identity>', 'Scoped Collection identity')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (identity: string, options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { uninstallRegistryCollection } = await import('../registry/collectionRegistry.js');
+    const root = await requireLibraryRoot(options.library ?? process.cwd());
+
+    await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
+      collectionId: identity,
+      libraryRoot: root,
+    }), summarizeCollectionUninstall);
+  });
+
 program
   .command('serve')
-  .description('Serve the nearest DKB registry from the current folder')
-  .option('--root <path>', 'Registry root to serve instead of discovering from the current folder')
-  .option('--registry-url <url>', 'Upstream package registry URL when initializing a new registry')
+  .description('Serve the nearest DKB Library from the current folder')
+  .option('--root <path>', 'Library root to serve instead of discovering from the current folder')
+  .option('--registry-url <url>', 'Upstream Registry URL when initializing a new Library')
   .option('--no-verify', 'Save the registry URL without validating it first')
-  .option('--yes', 'Initialize a missing registry without prompting')
+  .option('--yes', 'Initialize a missing Library without prompting')
   .option('--host <host>', 'Host to bind', process.env.DKB_RUNTIME_HOST || '127.0.0.1')
   .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_RUNTIME_PORT || '7331', 10))
   .action(async (options: { root?: string; registryUrl?: string; verify?: boolean; yes?: boolean; host: string; port: number }) => {
-    const { prepareServeRegistry } = await import('./serve.js');
+    const { prepareServeLibrary } = await import('./serve.js');
     const { serveDkbRuntime } = await import('../runtime/server.js');
-    const prepared = await prepareServeRegistry({
+    const prepared = await prepareServeLibrary({
       root: options.root,
       registryUrl: options.registryUrl,
       verifyRegistry: options.verify !== false,
@@ -275,13 +487,13 @@ runtime
   });
 
 runtime
-  .command('registries')
-  .description('List registries managed by the DKB Runtime')
+  .command('library')
+  .description('Show the single Library served by the DKB Runtime')
   .option('--url <url>', 'Runtime API URL', process.env.DKB_RUNTIME_URL || 'http://127.0.0.1:7331')
   .action(async (options: { url: string }) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).registries());
+    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).library());
   });
 
 const registry = program
@@ -308,7 +520,7 @@ registry
   .command('status')
   .description('Show and verify the configured DKB registry')
   .option('--url <url>', 'Registry API URL to verify instead of the configured registry')
-  .option('--root <path>', 'DKB registry folder whose upstream registry should be inspected')
+  .option('--root <path>', 'DKB Library whose upstream Registry should be inspected')
   .action(async (options: { url?: string; root?: string }) => {
     const { configuredRegistry, verifyRegistryEndpoint } = await import('../registry/config.js');
     const configured = await configuredRegistry({ url: options.url, root: options.root });
@@ -326,9 +538,9 @@ registry
 
 registry
   .command('use')
-  .description('Set the upstream registry URL for the current DKB registry folder')
+  .description('Set the upstream Registry URL for the current DKB Library')
   .argument('<url>', 'Registry API URL')
-  .option('--root <path>', 'DKB registry folder to configure')
+  .option('--root <path>', 'DKB Library to configure')
   .option('--global', 'Set the user-wide fallback instead of a folder-specific URL')
   .option('--no-verify', 'Save the URL without validating it first')
   .action(async (url: string, options: { root?: string; global?: boolean; verify?: boolean }) => {
@@ -674,8 +886,8 @@ registry
 
 program
   .command('publish')
-  .description('Publish a DKB folder to the configured registry')
-  .argument('[path]', 'DKB folder to publish', '.')
+  .description('Publish a DKB or immutable Collection revision to the configured Registry')
+  .argument('[path]', 'DKB or Collection folder to publish', '.')
   .option('--registry <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--account <id>', 'Publisher account id')
@@ -691,9 +903,28 @@ program
     if (!options.registry) {
       const { DkbRegistryClient } = await import('../registry/client.js');
       const { configuredRegistry } = await import('../registry/config.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
+      const sourceManifest = await loadManifest(sourcePath);
+      const libraryRoot = sourceManifest.type === 'collection'
+        ? await import('../library/root.js').then((module) => module.requireLibraryRoot(sourcePath))
+        : undefined;
+      const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
+      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
 
-      await presenter().run('Publishing package', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).publish({
+      if (sourceManifest.type === 'collection') {
+        const { publishCollectionFromLibrary } = await import('../registry/collectionRegistry.js');
+        await presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
+          collectionPath: sourcePath,
+          libraryRoot: libraryRoot!,
+          client,
+          visibility: options.public ? 'public' : 'private',
+        }), summarizeCollectionRevision);
+        return;
+      }
+      if (sourceManifest.type !== 'dkb') {
+        throw new DkbError('Libraries are runtime configuration and cannot be published. Publish a DKB or Collection folder.');
+      }
+
+      await presenter().run('Publishing DKB', async () => client.publish({
         sourcePath,
         accountId: options.account,
         accountName: options.name,
@@ -712,6 +943,9 @@ program
     if (!registryRoot) {
       throw new DkbError('Local registry mode requires --registry.');
     }
+    if ((await loadManifest(sourcePath)).type !== 'dkb') {
+      throw new DkbError('The embedded development Registry supports DKB publishing only; use the HTTP Registry for Collections.');
+    }
 
     await presenter().run('Publishing package', async () => publishDkbToMockRegistry({
       registryRoot,
@@ -725,27 +959,45 @@ program
 
 program
   .command('install')
-  .description('Install a verified DKB package from the configured registry')
-  .argument('<package-id>', 'Registry package id')
+  .description('Install a verified DKB or Collection from the configured Registry')
+  .argument('<package-id>', 'Scoped Registry identity')
   .option('--version <version>', 'Package version')
+  .option('--revision <revision>', 'Collection revision', parsePositiveInteger)
   .option('--registry <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
-  .option('--runtime-root <path>', 'Managed runtime state root', process.env.DKB_RUNTIME_STATE_ROOT || '.dkb/runtime')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
   .option('--force', 'Repair an incomplete install or replace an installed DKB')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; registry?: string; url?: string; runtimeRoot: string; force?: boolean; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; revision?: number; registry?: string; url?: string; library?: string; force?: boolean; token?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const libraryRoot = await requireLibraryRoot(options.library ?? process.cwd());
     if (!options.registry) {
       const { DkbRegistryClient } = await import('../registry/client.js');
       const { DKB_PACKAGE_EXTENSION } = await import('../registry/archive.js');
       const { installDkbArchiveIntoRuntime, preflightDkbInstall } = await import('../registry/packageRegistry.js');
       const { configuredRegistry } = await import('../registry/config.js');
-      const registryConfig = await configuredRegistry({ url: options.url, root: options.runtimeRoot });
+      const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
       const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+      const kind = await client.entryKind(packageId);
 
-      await presenter().run('Installing package', async (progress) => {
+      if (kind === 'collection') {
+        if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
+        const { installRegistryCollection } = await import('../registry/collectionRegistry.js');
+        await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
+          client,
+          collectionId: packageId,
+          revision: options.revision,
+          libraryRoot,
+          progress,
+        }), summarizeCollectionInstall);
+        return;
+      }
+      if (options.revision) throw new DkbError('--revision applies to Collections; use --version for a DKB.');
+
+      await presenter().run('Installing DKB', async (progress) => {
         const release = await client.packageRelease(packageId, options.version);
         const existing = await preflightDkbInstall({
-          runtimeRoot: options.runtimeRoot,
+          runtimeRoot: libraryRoot,
           candidate: release,
           force: Boolean(options.force),
         });
@@ -764,7 +1016,7 @@ program
           return await installDkbArchiveIntoRuntime({
             archivePath,
             trustedKeys: publicKeys.keys,
-            runtimeRoot: options.runtimeRoot,
+            runtimeRoot: libraryRoot,
             expectedArchiveHash: release.archiveHash,
             force: Boolean(options.force),
             progress,
@@ -786,7 +1038,7 @@ program
 
     await presenter().run('Installing package', async (progress) => installDkbFromMockRegistry({
       registryRoot,
-      runtimeRoot: options.runtimeRoot,
+      runtimeRoot: libraryRoot,
       packageId,
       version: options.version,
       force: Boolean(options.force),
@@ -797,15 +1049,16 @@ program
 
 program
   .command('list')
-  .description('List packages installed in a local managed runtime')
-  .option('--runtime-root <path>', 'Managed runtime state root', process.env.DKB_RUNTIME_STATE_ROOT || '.dkb/runtime')
-  .action(async (options: { runtimeRoot: string }) => {
+  .description('List DKBs and Collections in the current Library')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (options: { library?: string }) => {
     const { listRuntimePackages } = await import('../runtime/state.js');
     const { configuredRegistry } = await import('../registry/config.js');
-    const runtimeRoot = path.resolve(options.runtimeRoot);
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const libraryRoot = await requireLibraryRoot(options.library ?? process.cwd());
     const [listing, upstream] = await Promise.all([
-      listRuntimePackages(runtimeRoot),
-      configuredRegistry({ root: runtimeRoot }),
+      listRuntimePackages(libraryRoot),
+      configuredRegistry({ root: libraryRoot }),
     ]);
 
     presenter().print({
@@ -982,13 +1235,13 @@ remote
 
 runtime
   .command('compile')
-  .description('Compile the runtime registry or one installed DKB')
+  .description('Compile the runtime Library or one installed DKB')
   .argument('[id]', 'Installed DKB id')
   .option('--url <url>', 'Runtime API URL', process.env.DKB_RUNTIME_URL || 'http://127.0.0.1:7331')
   .action(async (id: string | undefined, options: { url: string }) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    await presenter().run(id ? `Compiling installed package ${id}` : 'Compiling runtime registry', async () => new DkbRuntimeClient({ baseUrl: options.url }).compile(id), summarizeCompileResult);
+    await presenter().run(id ? `Compiling installed DKB ${id}` : 'Compiling runtime Library', async () => new DkbRuntimeClient({ baseUrl: options.url }).compile(id), summarizeCompileResult);
   });
 
 runtime
@@ -1017,8 +1270,8 @@ runtime
 
 program
   .command('add')
-  .description('Import a DKB folder/package into the managed runtime registry')
-  .argument('<path>', 'Local DKB package, registry folder, or raw folder')
+  .description('Import a DKB folder/package into the runtime Library')
+  .argument('<path>', 'Local DKB package, Library folder, or raw folder')
   .option('--id <id>', 'Installed DKB id override')
   .option('--name <name>', 'Generated manifest display name for raw folders')
   .option('--force', 'Replace an existing installed DKB with the same id')
@@ -1091,19 +1344,42 @@ program
   });
 
 program
-  .command('remove')
-  .description('Remove an installed DKB from the managed runtime registry')
-  .argument('<id>', 'Installed DKB id')
-  .option('--url <url>', 'Runtime API URL', process.env.DKB_RUNTIME_URL || 'http://127.0.0.1:7331')
-  .action(async (id: string, options: { url: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+  .command('uninstall')
+  .alias('remove')
+  .description('Uninstall a DKB or Collection from the current Library')
+  .argument('<identity>', 'Scoped @namespace/name identity')
+  .option('--library <path>', 'Library path; defaults to the nearest Library')
+  .action(async (identity: string, options: { library?: string }) => {
+    const { requireLibraryRoot } = await import('../library/root.js');
+    const { readLibraryState } = await import('../library/state.js');
+    const libraryRoot = await requireLibraryRoot(options.library ?? process.cwd());
+    const entry = (await readLibraryState(libraryRoot)).entries[identity];
 
-    await presenter().run(`Removing package ${id}`, async () => new DkbRuntimeClient({ baseUrl: options.url }).removeDkb(id), summarizeRemoveResult);
+    if (entry?.kind === 'collection' && entry.source === 'registry') {
+      const { uninstallRegistryCollection } = await import('../registry/collectionRegistry.js');
+
+      await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
+        libraryRoot,
+        collectionId: identity,
+      }), summarizeCollectionUninstall);
+      return;
+    }
+
+    if (entry?.kind === 'collection') {
+      const { removeLibraryRoot } = await import('../library/resolver.js');
+
+      await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(libraryRoot, identity), summarizeLibrarySync);
+      return;
+    }
+
+    const { removeDkbFromRuntime } = await import('../runtime/state.js');
+
+    await presenter().run(`Uninstalling ${identity}`, async (progress) => removeDkbFromRuntime(identity, libraryRoot, { progress }), summarizeRemoveResult);
   });
 
 program
   .command('retrieve')
-  .description('Retrieve grounded evidence from the managed runtime registry')
+  .description('Retrieve grounded evidence from the runtime Library')
   .argument('<need>', 'Knowledge need')
   .option('--intent <intent>', 'Retrieval intent: evidence, records, count, summary, compare', 'evidence')
   .option('-l, --limit <number>', 'Maximum retrieved evidence count', parseLimit, 8)
@@ -1157,27 +1433,31 @@ program
   .addCommand(new Command('install')
     .description('Install a validated extracted compiled artifact into a runtime without recompiling source')
     .argument('<path>', 'Extracted directory containing a compiled DKB artifact manifest')
-    .option('--runtime-root <path>', 'Runtime registry root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_REGISTRY_PATH || '.dkb/runtime')
+    .option('--library <path>', 'Library path; defaults to the nearest Library')
     .option('--id <id>', 'Installed DKB id override')
     .option('--force', 'Replace an existing installed DKB with the same id')
-    .action(async (target: string, options: { runtimeRoot: string; id?: string; force?: boolean }) => {
+    .action(async (target: string, options: { library?: string; id?: string; force?: boolean }) => {
       const { importCompiledDkbArtifactIntoRuntime } = await import('../runtime/state.js');
+      const { requireLibraryRoot } = await import('../library/root.js');
+      const libraryRoot = await requireLibraryRoot(options.library ?? process.cwd());
 
       await presenter().run('Installing compiled artifact', async (progress) => importCompiledDkbArtifactIntoRuntime({
         sourcePath: path.resolve(target),
         id: options.id,
         force: Boolean(options.force),
         progress,
-      }, path.resolve(options.runtimeRoot)), summarizeInstallResult);
+      }, libraryRoot), summarizeInstallResult);
     }))
   .addCommand(new Command('uninstall')
     .description('Remove an installed compiled artifact from a local runtime')
     .argument('<id>', 'Installed DKB id')
-    .option('--runtime-root <path>', 'Runtime registry root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_REGISTRY_PATH || '.dkb/runtime')
-    .action(async (id: string, options: { runtimeRoot: string }) => {
+    .option('--library <path>', 'Library path; defaults to the nearest Library')
+    .action(async (id: string, options: { library?: string }) => {
       const { removeDkbFromRuntime } = await import('../runtime/state.js');
+      const { requireLibraryRoot } = await import('../library/root.js');
+      const libraryRoot = await requireLibraryRoot(options.library ?? process.cwd());
 
-      await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, path.resolve(options.runtimeRoot), { progress }), summarizeRemoveResult);
+      await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, libraryRoot, { progress }), summarizeRemoveResult);
     }))
   .addCommand(new Command('tools')
     .description('Inspect OCI transport and signing tool availability')
@@ -1238,30 +1518,34 @@ program
 
 program
   .command('validate')
-  .description('Validate a DKB package or implicit registry')
-  .argument('<path>', 'Directory containing dkb.json or nested DKB packages')
+  .description('Validate a DKB, Collection, or Library')
+  .argument('<path>', 'Directory containing a DKB manifest')
   .action(async (target: string) => {
     const resolved = path.resolve(target);
     const manifestFile = path.join(resolved, 'dkb.json');
     const manifest = await exists(manifestFile)
-      ? JSON.parse(await fs.readFile(manifestFile, 'utf8')) as { type?: unknown; dependencies?: unknown }
+      ? JSON.parse(await fs.readFile(manifestFile, 'utf8')) as { type?: unknown; name?: unknown }
       : null;
-    const isProjectManifest = manifest?.type === 'registry'
-      || (manifest?.dependencies !== undefined && typeof manifest.dependencies === 'object' && !Array.isArray(manifest.dependencies));
-    const isDkb = Boolean(manifest) && !isProjectManifest;
-    const output = isDkb
+    const output = manifest?.type === 'dkb'
       ? await loadDkb(resolved).then((dkb) => ({
           id: dkb.manifest.id,
           name: dkb.manifest.name,
           version: dkb.manifest.version,
           type: 'dkb',
         }))
-      : await import('../protocol/manifest.js').then((module) => module.loadRegistry(resolved)).then((registry) => ({
-          id: registry.manifest.id,
-          name: registry.manifest.name,
-          version: registry.manifest.version,
-          type: 'registry',
-        }));
+      : manifest?.type === 'collection'
+        ? await loadCollection(resolved).then((collection) => ({
+            id: collection.manifest.id,
+            name: collection.manifest.name,
+            version: collection.manifest.version,
+            type: 'collection',
+          }))
+        : await import('../protocol/manifest.js').then((module) => module.loadLibrary(resolved)).then((library) => ({
+            id: library.manifest.id,
+            name: library.manifest.name,
+            version: library.manifest.version,
+            type: 'library',
+          }));
 
     printJson({
       ok: true,
@@ -1271,12 +1555,12 @@ program
 
 program
   .command('compile')
-  .description('Compile a DKB package or implicit registry')
-  .argument('<path>', 'Directory containing dkb.json or nested DKB packages')
+  .description('Compile a DKB or Library')
+  .argument('<path>', 'Directory containing dkb.json')
   .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
   .option('--compiler <name>', 'Compiler profile: native or llamaindex', 'native')
   .option('--artifact-profile <name>', 'Artifact profile: full or faiss-package', 'full')
-  .option('--model <name>', 'FastEmbed model for the registry retrieval profile')
+  .option('--model <name>', 'FastEmbed model for the Library retrieval profile')
   .action(async (target: string, options: { force?: boolean; compiler: string; artifactProfile: string; model?: string }) => {
     const { compileComposeProject } = await import('../compiler/compile.js');
     if (options.compiler !== 'native' && options.compiler !== 'llamaindex') {
@@ -1298,20 +1582,20 @@ program
 
 const profile = program
   .command('profile')
-  .description('Inspect or atomically migrate the registry retrieval profile');
+  .description('Inspect or atomically migrate the Library retrieval profile');
 
 profile
   .command('show')
   .description('Show configured and compiled retrieval profile details')
-  .argument('[path]', 'Registry or package root', '.')
+  .argument('[path]', 'Library, Collection, or DKB root', '.')
   .action(async (target: string) => {
     const root = path.resolve(target);
-    const [{ loadRegistry }, profileModule] = await Promise.all([
+    const [{ loadCompose }, profileModule] = await Promise.all([
       import('../protocol/manifest.js'),
       import('../profiles/retrievalProfile.js'),
     ]);
-    const registry = await loadRegistry(root);
-    const configured = profileModule.resolveRegistryRetrievalProfile(registry);
+    const registry = await loadCompose(root);
+    const configured = profileModule.resolveLibraryRetrievalProfile(registry);
     const lock = await profileModule.maybeReadRetrievalProfileLock(root);
 
     printJson({
@@ -1324,8 +1608,8 @@ profile
 
 profile
   .command('plan')
-  .description('Plan a whole-registry profile recompile without changing files')
-  .argument('[path]', 'Registry or package root', '.')
+  .description('Plan a whole-Library profile recompile without changing files')
+  .argument('[path]', 'Library root', '.')
   .requiredOption('--model <name>', 'Target FastEmbed model')
   .action(async (target: string, options: { model: string }) => {
     const { planRetrievalProfileMigration } = await import('../profiles/migration.js');
@@ -1336,9 +1620,9 @@ profile
 profile
   .command('migrate')
   .description('Compile every package in staging and atomically activate the target profile')
-  .argument('[path]', 'Registry or package root', '.')
+  .argument('[path]', 'Library root', '.')
   .requiredOption('--model <name>', 'Target FastEmbed model')
-  .option('--yes', 'Confirm the whole-registry recompile')
+  .option('--yes', 'Confirm the whole-Library recompile')
   .action(async (target: string, options: { model: string; yes?: boolean }) => {
     const { migrateRetrievalProfile } = await import('../profiles/migration.js');
 
@@ -1409,12 +1693,12 @@ program
 
 program
   .command('verify')
-  .description('Verify a compiled DKB registry against dkb-lock.json')
+  .description('Verify a compiled Library, Collection, or DKB against its artifact lock')
   .argument('<path>', 'Directory containing DKB packages and dkb-lock.json')
   .option('--strict', 'Require all generated artifacts to be built')
   .action(async (target: string, options: { strict?: boolean }) => {
     const { verifyComposeProject } = await import('../compiler/compile.js');
-    const output = await presenter().check('Compiled registry verification', async () => {
+    const output = await presenter().check('Compiled knowledge verification', async () => {
       const result = await verifyComposeProject(target);
       const strictFailures = options.strict
         ? Object.entries(result.checks)
@@ -1436,7 +1720,7 @@ program
 
 program
   .command('inspect')
-  .description('Inspect a DKB package or implicit registry before use')
+  .description('Inspect a DKB package or Library before use')
   .argument('<path>', 'Directory containing a DKB manifest')
   .action(async (target: string) => {
     const { inspectTarget } = await import('../inspect/index.js');
@@ -1447,7 +1731,7 @@ program
 program
   .command('health')
   .description('Check manifest, source, artifact, verification, queue, and space identity health')
-  .argument('[path]', 'Directory containing dkb.json or nested DKB packages', process.env.DKB_REGISTRY_PATH || '.')
+  .argument('[path]', 'Directory containing a Library or DKB manifest', process.env.DKB_LIBRARY_PATH || '.')
   .option('--queue-root <path>', 'Write queue root to inspect', process.env.DKB_QUEUE_ROOT || process.env.DKB_WRITE_QUEUE_ROOT)
   .action(async (target: string, options: { queueRoot?: string }) => {
     const { healthReport } = await import('../lifecycle/health.js');
@@ -1462,8 +1746,8 @@ program
 
 program
   .command('restore')
-  .description('Rebuild generated registry artifacts from source knowledge without mutating it')
-  .argument('[path]', 'Directory containing dkb.json or nested DKB packages', process.env.DKB_REGISTRY_PATH || '.')
+  .description('Rebuild generated retrieval artifacts from source knowledge without mutating it')
+  .argument('[path]', 'Directory containing a Library or DKB manifest', process.env.DKB_LIBRARY_PATH || '.')
   .action(async (target: string) => {
     const { restoreIndexes } = await import('../lifecycle/health.js');
 
@@ -1472,8 +1756,8 @@ program
 
 program
   .command('query')
-  .description('Run deterministic search against a DKB package or implicit registry')
-  .argument('<registry-path>', 'Directory containing dkb.json or nested DKB packages')
+  .description('Run deterministic search against a DKB package or Library')
+  .argument('<library-path>', 'Directory containing a Library, Collection, or DKB manifest')
   .argument('<query>', 'Search query')
   .option('-l, --limit <number>', 'Maximum result count', parseLimit)
   .action(async (target: string, query: string, options: { limit?: number }) => {
@@ -1484,8 +1768,8 @@ program
 
 program
   .command('read-targets')
-  .description('Describe queryable DKB Read API targets from a compiled DKB registry')
-  .argument('<registry-path>', 'Directory containing DKB packages and compiled chunk artifacts')
+  .description('Describe queryable DKB Read API targets from compiled Library artifacts')
+  .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
   .argument('<query>', 'Natural-language lookup intent for ranking chunk targets')
   .option('-l, --limit <number>', 'Maximum target count', parseLimit, 10)
   .action(async (target: string, query: string, options: { limit: number }) => {
@@ -1496,8 +1780,8 @@ program
 
 program
   .command('read')
-  .description('Execute a DKB Read API request JSON file against a compiled DKB registry')
-  .argument('<registry-path>', 'Directory containing DKB packages and compiled chunk artifacts')
+  .description('Execute a DKB Read API request JSON file against compiled Library artifacts')
+  .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
   .argument('<request-path>', 'Path to a DKB Read API request JSON file')
   .action(async (target: string, requestPath: string) => {
     const fs = await import('node:fs/promises');
@@ -1509,7 +1793,7 @@ program
 program
   .command('search-health')
   .description('Report local DKB search backend health')
-  .argument('<registry-path>', 'Directory containing dkb.json or nested DKB packages')
+  .argument('<library-path>', 'Directory containing a Library, Collection, or DKB manifest')
   .action(async (target: string) => {
     const { describeSearchBackend } = await import('../indexes/vectorStore.js');
     const result = await describeSearchBackend(path.resolve(target, DKB_ARTIFACTS_DIR));
@@ -1524,7 +1808,7 @@ program
 program
   .command('search-sync')
   .description('Sync compiled chunk documents into the configured search backend')
-  .argument('<registry-path>', 'Directory containing DKB packages and compiled chunk artifacts')
+  .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
   .action(async (target: string) => {
     const { loadCompose } = await import('../protocol/manifest.js');
     const { readSourceIndex, SOURCE_VECTOR_PATH } = await import('../indexes/sourceIndex.js');
@@ -1538,7 +1822,7 @@ program
 program
   .command('search-query')
   .description('Query the configured DKB search backend directly')
-  .argument('<registry-path>', 'Directory containing DKB packages and compiled chunk artifacts')
+  .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
   .argument('<query>', 'Search query')
   .option('-l, --limit <number>', 'Maximum result count', parseLimit, 10)
   .action(async (target: string, query: string, options: { limit: number }) => {
@@ -1559,8 +1843,8 @@ program
 
 program
   .command('search-reset')
-  .description('Delete configured DKB search backend indexes for a DKB registry')
-  .argument('<registry-path>', 'Directory containing dkb.json or nested DKB packages')
+  .description('Delete configured search backend indexes for a DKB Library')
+  .argument('<library-path>', 'Directory containing a Library manifest')
   .action(async (target: string) => {
     const { loadCompose } = await import('../protocol/manifest.js');
     const { resetSearchBackend } = await import('../indexes/vectorStore.js');
@@ -1571,8 +1855,8 @@ program
 
 program
   .command('watch')
-  .description('Watch a DKB registry and rebuild indexes on source changes')
-  .argument('<registry-path>', 'Directory containing dkb.json or nested DKB packages')
+  .description('Watch a DKB Library and rebuild indexes on source changes')
+  .argument('<library-path>', 'Directory containing a Library manifest')
   .option('--once', 'Close the watcher after the first rebuild event')
   .action(async (target: string, options: { once?: boolean }) => {
     const { watchComposeProject } = await import('../watch/index.js');
@@ -1585,8 +1869,8 @@ program
 
 program
   .command('audit-alignment')
-  .description('Audit whether DKB package or registry chunk artifacts are protocol aligned')
-  .argument('<path>', 'Directory containing dkb.json or nested DKB packages')
+  .description('Audit whether DKB retrieval artifacts are protocol aligned')
+  .argument('<path>', 'Directory containing a Library, Collection, or DKB manifest')
   .option('--strict', 'Exit with code 1 when any chunk artifact is ignored')
   .action(async (target: string, options: { strict?: boolean }) => {
     const { auditKnowledgeAlignment } = await import('../knowledge/alignment.js');
@@ -1606,7 +1890,7 @@ const trace = program
 trace
   .command('latest')
   .description('Show the latest retrieval trace')
-  .option('--root <path>', 'Runtime or registry root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_REGISTRY_PATH || '.')
+  .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .action(async (options: { root: string }) => {
     const { latestTrace } = await import('../runtime/trace.js');
 
@@ -1616,7 +1900,7 @@ trace
 trace
   .command('list')
   .description('List recent retrieval traces')
-  .option('--root <path>', 'Runtime or registry root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_REGISTRY_PATH || '.')
+  .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .option('--limit <number>', 'Maximum trace summaries to return', parseLimit, 20)
   .action(async (options: { root: string; limit: number }) => {
     const { listTraces } = await import('../runtime/trace.js');
@@ -1628,7 +1912,7 @@ trace
   .command('get')
   .description('Show one retrieval trace by id')
   .argument('<trace-id>', 'Trace id from trace list/latest')
-  .option('--root <path>', 'Runtime or registry root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_REGISTRY_PATH || '.')
+  .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .action(async (traceId: string, options: { root: string }) => {
     const { getTrace } = await import('../runtime/trace.js');
 
@@ -1769,11 +2053,11 @@ function formatCliHelp(command: Command, helper: Help): string {
   const groups = [
     {
       title: 'Common Commands',
-      names: ['init', 'install', 'list', 'remove', 'publish', 'retrieve', 'serve', 'inspect', 'validate', 'health', 'help'],
+      names: ['init', 'install', 'list', 'uninstall', 'publish', 'retrieve', 'serve', 'inspect', 'validate', 'health', 'help'],
     },
     {
       title: 'Management Commands',
-      names: ['artifact', 'compiler', 'mcp', 'profile', 'registry', 'remote', 'runtime', 'trace'],
+      names: ['artifact', 'collection', 'compiler', 'library', 'mcp', 'profile', 'registry', 'remote', 'runtime', 'trace'],
     },
     {
       title: 'Advanced Commands',
@@ -1859,6 +2143,127 @@ function summarizeInitResult(value: unknown): string[] {
   ];
 }
 
+function summarizeLibrarySync(value: unknown): string[] {
+  const result = value as { status?: unknown; lock?: { generation?: unknown; entries?: Record<string, unknown> } };
+  const count = Object.keys(result.lock?.entries ?? {}).length;
+  return [
+    `status: ${String(result.status ?? 'synchronized')}`,
+    `generation: ${String(result.lock?.generation ?? '-')}`,
+    `active entries: ${count}`,
+  ];
+}
+
+function summarizeCollectionMutation(value: unknown): string[] {
+  const result = value as {
+    identity?: unknown;
+    collectionIdentity?: unknown;
+    dkbIdentity?: unknown;
+    selector?: unknown;
+    status?: unknown;
+    root?: unknown;
+  };
+  return [
+    `status: ${String(result.status ?? 'updated')}`,
+    result.identity ? `collection: ${String(result.identity)}` : '',
+    result.collectionIdentity ? `collection: ${String(result.collectionIdentity)}` : '',
+    result.dkbIdentity ? `DKB: ${String(result.dkbIdentity)}${result.selector ? `@${String(result.selector)}` : ''}` : '',
+    result.root ? `path: ${String(result.root)}` : '',
+  ];
+}
+
+function summarizeCollectionOverview(value: unknown): string[] {
+  const result = value as {
+    identity?: unknown;
+    displayName?: unknown;
+    active?: unknown;
+    members?: Array<{ identity?: unknown; selector?: unknown }>;
+  };
+  const members = result.members ?? [];
+  const tree = members.length === 0
+    ? ['(none)']
+    : members.map((member, index) => `${index === members.length - 1 ? '└──' : '├──'} ${String(member.identity ?? '-')}@${String(member.selector ?? 'latest')}`);
+  return [
+    String(result.identity ?? '-'),
+    `name: ${String(result.displayName ?? '-')}`,
+    `status: ${result.active ? 'active' : 'inactive'}`,
+    ...tree,
+  ];
+}
+
+function summarizeCollectionRevision(value: unknown): string[] {
+  const result = value as {
+    collectionId?: unknown;
+    revision?: unknown;
+    digest?: unknown;
+    manifest?: { members?: unknown[] };
+  };
+  return [
+    'status: published',
+    `collection: ${String(result.collectionId ?? '-')}`,
+    `revision: r${String(result.revision ?? '-')}`,
+    `members: ${String(result.manifest?.members?.length ?? 0)}`,
+    typeof result.digest === 'string' ? `digest: ${result.digest}` : '',
+  ];
+}
+
+function summarizeCollectionInstall(value: unknown): string[] {
+  const result = value as {
+    status?: unknown;
+    collectionId?: unknown;
+    revision?: unknown;
+    members?: unknown[];
+    libraryRoot?: unknown;
+  };
+  return [
+    `status: ${humanStatus(result.status ?? 'installed')}`,
+    `collection: ${String(result.collectionId ?? '-')}`,
+    `revision: r${String(result.revision ?? '-')}`,
+    `members: ${String(result.members?.length ?? 0)}`,
+    typeof result.libraryRoot === 'string' ? `library: ${result.libraryRoot}` : '',
+  ];
+}
+
+function summarizeCollectionUninstall(value: unknown): string[] {
+  const result = value as {
+    status?: unknown;
+    collectionId?: unknown;
+    removedDkbs?: unknown[];
+    libraryRoot?: unknown;
+  };
+  return [
+    `status: ${humanStatus(result.status ?? 'removed')}`,
+    `collection: ${String(result.collectionId ?? '-')}`,
+    `pruned DKBs: ${String(result.removedDkbs?.length ?? 0)}`,
+    typeof result.libraryRoot === 'string' ? `library: ${result.libraryRoot}` : '',
+  ];
+}
+
+function summarizeLibraryOverview(value: unknown): string[] {
+  const result = value as {
+    root?: unknown;
+    name?: unknown;
+    registryUrl?: unknown;
+    generation?: unknown;
+    entries?: Array<Record<string, unknown>>;
+    counts?: Record<string, unknown>;
+  };
+  const entries = (result.entries ?? []).map((entry) => ({
+    identity: entry.identity ?? '-',
+    kind: entry.kind ?? '-',
+    source: entry.source ?? '-',
+    version: entry.version ?? '-',
+    status: entry.status ?? '-',
+  }));
+  return [
+    `library: ${String(result.name ?? '-')}`,
+    typeof result.root === 'string' ? `path: ${result.root}` : '',
+    `registry: ${String(result.registryUrl ?? 'not configured')}`,
+    `generation: ${String(result.generation ?? 0)}`,
+    `installed: ${String(result.counts?.installed ?? 0)}, inactive: ${String(result.counts?.inactive ?? 0)}, broken: ${String(result.counts?.broken ?? 0)}, untracked: ${String(result.counts?.untracked ?? 0)}`,
+    ...humanSummary({ packages: entries }),
+  ];
+}
+
 function summarizeRegistryConfiguration(value: unknown): string[] {
   const result = value as {
     status?: unknown;
@@ -1903,7 +2308,7 @@ function summarizeInstalledPackages(value: unknown): string[] {
   const packages = Array.isArray(record.packages) ? record.packages : [];
 
   return [
-    typeof record.runtimeRoot === 'string' ? `runtime: ${record.runtimeRoot}` : '',
+    typeof record.libraryRoot === 'string' ? `library: ${record.libraryRoot}` : '',
     typeof record.registryUrl === 'string'
       ? `registry: ${record.registryUrl}${record.registrySource ? ` (${String(record.registrySource)})` : ''}`
       : '',
@@ -2088,12 +2493,12 @@ function summarizeInstallResult(value: unknown): string[] {
 }
 
 function summarizeRemoveResult(value: unknown): string[] {
-  const result = value as { status?: unknown; id?: unknown; registryPath?: unknown };
+  const result = value as { status?: unknown; id?: unknown; libraryPath?: unknown };
 
   return [
     `status: ${humanStatus(result.status ?? 'ok')}`,
     `package: ${String(result.id ?? 'unknown')}`,
-    typeof result.registryPath === 'string' ? `runtime: ${result.registryPath}` : '',
+    typeof result.libraryPath === 'string' ? `library: ${result.libraryPath}` : '',
   ];
 }
 

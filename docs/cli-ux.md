@@ -49,7 +49,7 @@ event records for their lifetime.
 ## Install behavior
 
 `dkb install` resolves lightweight release metadata first and compares it with
-the runtime lock before downloading the package archive.
+the Library lock before downloading the package archive.
 
 - The same version and release digest returns `already installed` without an
   archive request.
@@ -60,7 +60,7 @@ the runtime lock before downloading the package archive.
 - A package directory without matching runtime lock metadata is reported as an
   incomplete installation; `--force` repairs it.
 - New and forced installs stream the archive directly to disk, verify its
-  registry digest, extract it once, verify package contents and signatures,
+  Registry digest, extract it once, verify package contents and signatures,
   validate the retrieval index, and atomically activate it. Activation reports
   its actual subphases (package promotion, catalog refresh, install recording,
   runtime-readiness verification, and finalization) as indeterminate work; it
@@ -69,14 +69,20 @@ the runtime lock before downloading the package archive.
 The runtime performs a second installed-path check immediately before
 activation to cover concurrent installs.
 
-`dkb list --runtime-root <path>` shows locally installed packages in a compact
-table. It also identifies nested registry-package directories that are missing
-their lock entry as `incomplete`, so a failed activation is visible before the
-next install attempt.
+`dkb list --library <path>` shows installed DKBs and Collections in a compact
+table, including compiled record counts for DKBs. `dkb library status` also
+distinguishes installed, inactive, broken, and untracked entries. A folder is
+never called installed merely because it exists.
+
+Collection install resolves the immutable revision and all exact member
+releases before mutation. Shared members with the same identity, version, and
+digest are reused. Conflicting versions fail before download. Uninstall removes
+the Collection ownership edge and prunes only Registry DKBs with no remaining
+root or Collection owner.
 
 ## Registry selection
 
-Each DKB registry/runtime folder can keep its own upstream package-registry URL
+Each DKB Library can keep its own upstream Registry URL
 in `.dkb/config.json`. This is local operator configuration: it is not written
 to portable `dkb.json`, package sources, release receipts, or signed lock data.
 
@@ -84,14 +90,14 @@ Registry selection uses this precedence:
 
 1. command `--url`;
 2. `DKB_REGISTRY_URL`;
-3. the target registry folder's `.dkb/config.json`;
+3. the target Library's `.dkb/config.json`;
 4. the user fallback at `~/.dkb/config.json` (or `DKB_CLI_CONFIG`);
 5. `http://127.0.0.1:8000`.
 
-From inside a DKB registry folder, `dkb registry use <url>` updates that
-folder. `--root <path>` selects another DKB registry folder and `--global`
-updates only the user fallback. `dkb install --runtime-root <path>` resolves
-the URL for that runtime folder automatically. `dkb list` displays the
+From inside a DKB Library, `dkb registry use <url>` updates that Library.
+`--root <path>` selects another Library and `--global` updates only the user
+fallback. `dkb install --library <path>` resolves the URL for that Library
+automatically. `dkb list` displays the
 resolved URL and its source.
 
 `dkb registry use` always saves a syntactically valid URL. If the endpoint is
@@ -101,14 +107,13 @@ the same initialization and URL-selection path as `dkb init`; `--yes` permits
 explicit noninteractive creation, while `--registry-url` and `--no-verify`
 control the upstream selection.
 
-Bare `dkb init` checks the current directory and initializes it as a registry
+Bare `dkb init` checks the current directory and initializes it as a Library
 only when needed. It prompts for the upstream URL in an interactive terminal,
 attempts verification, and stores it in `.dkb/config.json`. An unavailable
 upstream does not block local creation; the result includes a warning and the
 exact `dkb registry use <url>` retry command. Noninteractive use automatically
 accepts the resolved default, while `--registry-url <url> --yes` selects one
-explicitly. `--no-verify` is available for an intentionally offline registry.
-The older `--here` switch remains a deprecated compatibility alias.
+explicitly. `--no-verify` is available for an intentionally offline Library.
 
 ## Registry transport safety
 
@@ -133,20 +138,20 @@ remains successful and the retained path is reported as a warning.
 
 ```powershell
 # Human output with interactive progress
-dkb install assembly-toolbox-jd --version 0.1.10 --url http://127.0.0.1:8017
+dkb install @sjshovan/assembly-toolbox-jd --version 0.1.10 --url http://127.0.0.1:8017
 
 # Human output without animation
 dkb --no-progress registry packages
 
 # Stable automation output
-dkb --json install assembly-toolbox-jd --version 0.1.10
+dkb --json install @sjshovan/assembly-toolbox-jd --version 0.1.10
 
-# Set this runtime folder's upstream package registry
-dkb registry use https://registry.example.com --root C:\knowledge\runtime
+# Set this Library's upstream Registry
+dkb registry use https://registry.example.com --root C:\knowledge\library
 
 # Set the user-wide fallback
 dkb registry use https://registry.example.com --global
 
 # Replace a previously downloaded archive intentionally
-dkb registry pull assembly-toolbox-jd --version 0.1.10 --force
+dkb registry pull @sjshovan/assembly-toolbox-jd --version 0.1.10 --force
 ```

@@ -1,29 +1,33 @@
-﻿import fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from './errors.js';
+import { identityDisplayName, parseDkbIdentity, registryPackagePath } from './identity.js';
 import { manifestPath, resolveContainedPath } from './paths.js';
 import { validateDkbManifest } from './validation.js';
 import type {
+  DiscoveredLibraryEntry,
   DkbManifest,
   DkbSourceManifest,
   DkbStore,
   DkcManifest,
   DkrManifest,
+  DkbVersionSelector,
   LoadedCollection,
   LoadedDkb,
-  LoadedRegistry,
+  LoadedLibrary,
 } from './types.js';
 
 const DKB_MANIFEST_FILENAME = 'dkb.json';
-const LOCAL_VERSION = '0.0.0-local';
-const DISCOVERY_IGNORES = new Set([
+const LOCAL_LIBRARY_VERSION = '0.0.0-local';
+const DIRECT_ENTRY_IGNORES = new Set([
   '.dkb',
   '.git',
   '.idea',
   'node_modules',
   'dist',
   'archives',
+  'vendor',
 ]);
 const SYSTEM_ARTIFACT_FILENAMES = new Set([
   'dkb-lock.json',
@@ -31,108 +35,158 @@ const SYSTEM_ARTIFACT_FILENAMES = new Set([
   'dkb-release.json',
   '.dkb-package.json',
 ]);
-const REGISTRY_LOCAL_SOURCE_IGNORES = new Set([
-  ...DISCOVERY_IGNORES,
-  'vendor',
-  DKB_MANIFEST_FILENAME,
-  ...SYSTEM_ARTIFACT_FILENAMES,
-]);
 const SQLITE_EXTENSIONS = new Set(['.sqlite', '.sqlite3', '.db']);
-const LOCAL_TEXT_SOURCE_EXTENSIONS = new Set([
-  '.adoc',
-  '.csv',
-  '.htm',
-  '.html',
-  '.ini',
-  '.json',
-  '.jsonl',
-  '.log',
-  '.md',
-  '.rst',
-  '.sql',
-  '.toml',
-  '.tsv',
-  '.txt',
-  '.xml',
-  '.yaml',
-  '.yml',
-]);
 
 export async function loadDkb(root: string): Promise<LoadedDkb> {
   const resolvedRoot = path.resolve(root);
   const source = manifestPath(resolvedRoot, DKB_MANIFEST_FILENAME);
   const manifest = validateDkbManifest(await readJson(source), source);
 
-  if (isRegistryProjectManifest(manifest)) {
-    throw new DkbError(`Registry project manifests cannot be loaded as DKB packages: ${source}`);
+  if (manifest.type !== 'dkb') {
+    throw new DkbError(`${entryKindLabel(manifest.type)} manifests cannot be loaded as DKBs: ${source}`);
   }
 
   await assertNoNestedDkbManifest(resolvedRoot, source);
 
-  return normalizeDkb(resolvedRoot, manifest, dkbIdForRoot(resolvedRoot, manifest), source);
+  return normalizeDkb(resolvedRoot, manifest, source);
 }
 
-export async function loadDkbPackage(root: string, idOverride?: string): Promise<LoadedDkb> {
+export async function loadDkbPackage(root: string, identityOverride?: string): Promise<LoadedDkb> {
   const dkb = await loadDkb(root);
 
-  return idOverride && idOverride !== dkb.manifest.id
-    ? {
-        ...dkb,
-        manifest: {
-          ...dkb.manifest,
-          id: idOverride,
-          domains: dkb.manifest.domains.length > 0 ? dkb.manifest.domains : [idOverride],
-        },
-      }
-    : dkb;
+  if (identityOverride && identityOverride !== dkb.manifest.id) {
+    parseDkbIdentity(identityOverride, 'Installed DKB identity');
+    throw new DkbError(`Installed DKB identity mismatch: expected ${identityOverride}, manifest declares ${dkb.manifest.id}`);
+  }
+
+  return dkb;
 }
 
 export async function loadCollection(root: string, collectionId?: string): Promise<LoadedCollection> {
-  const registry = await loadRegistry(root);
+  const resolvedRoot = path.resolve(root);
+  const source = manifestPath(resolvedRoot, DKB_MANIFEST_FILENAME);
+
+  if (await exists(source)) {
+    const manifest = validateDkbManifest(await readJson(source), source);
+
+    if (manifest.type === 'collection') {
+      const libraryRoot = path.dirname(resolvedRoot);
+      const library = await loadLibrary(libraryRoot);
+      const selected = library.collections.find((candidate) => candidate.manifest.id === manifest.name);
+
+      if (!selected) {
+        throw new DkbError(`Collection ${manifest.name} is present but is not an active Library root`);
+      }
+
+      return selected;
+    }
+  }
+
+  const library = await loadLibrary(resolvedRoot);
 
   if (collectionId) {
-    const collection = registry.collections.find((candidate) => candidate.manifest.id === collectionId);
+    parseDkbIdentity(collectionId, 'Collection identity');
+    const collection = library.collections.find((candidate) => candidate.manifest.id === collectionId);
 
     if (!collection) {
-      throw new DkbError(`Unknown DKB collection id: ${collectionId}`);
+      throw new DkbError(`Unknown active Collection: ${collectionId}`);
     }
 
     return collection;
   }
 
-  return defaultCollectionFromRegistry(registry);
-}
-
-export async function loadRegistry(root: string): Promise<LoadedRegistry> {
-  const resolvedRoot = path.resolve(root);
-  const roots = await discoverDkbRoots(resolvedRoot);
-  const rootManifest = await maybeReadRegistryProjectManifest(resolvedRoot);
-
-  const packageDkbs = await Promise.all(roots.map((dkbRoot) => loadDkb(dkbRoot)));
-  const uniquePackages = uniqueDkbs(packageDkbs);
-  const registryManifest = registryManifestFor(resolvedRoot, uniquePackages, rootManifest);
-  const implicitLocalDkb = await maybeLoadImplicitLocalDkb(resolvedRoot, registryManifest, rootManifest, uniquePackages);
-  const unique = uniqueDkbs([
-    ...uniquePackages,
-    ...(implicitLocalDkb ? [implicitLocalDkb] : []),
-  ]);
-
-  if (unique.length === 0 && !rootManifest) {
-    throw new DkbError(`No ${DKB_MANIFEST_FILENAME} manifest or eligible registry-local sources found at ${resolvedRoot}`);
+  if (library.collections.length === 1 && library.dkbs.length === 0) {
+    return library.collections[0]!;
   }
 
-  const collections = collectionsFromDkbs(resolvedRoot, registryManifest, unique);
-  const collectionDkbIds = new Set(collections.flatMap((collection) => collection.dkbs.map((dkb) => dkb.manifest.id)));
+  throw new DkbError('A Collection identity is required when the Library has more than one active root');
+}
+
+export async function loadLibrary(root: string): Promise<LoadedLibrary> {
+  const resolvedRoot = path.resolve(root);
+  const source = manifestPath(resolvedRoot, DKB_MANIFEST_FILENAME);
+
+  if (!(await exists(source))) {
+    throw new DkbError(`No Library ${DKB_MANIFEST_FILENAME} manifest found at ${resolvedRoot}`);
+  }
+
+  const sourceManifest = validateDkbManifest(await readJson(source), source);
+
+  if (sourceManifest.type !== 'library') {
+    throw new DkbError(`Expected a Library manifest at ${source}; found ${sourceManifest.type}`);
+  }
+
+  const directEntries = await discoverLibraryEntries(resolvedRoot);
+  const entriesByIdentity = new Map(directEntries.map((entry) => [entry.manifest.name, entry]));
+  const libraryManifest = normalizeLibraryManifest(resolvedRoot, sourceManifest);
+  const activeCollections: LoadedCollection[] = [];
+  const standaloneDkbs: LoadedDkb[] = [];
+  const collectionMemberIds = new Set<string>();
+
+  for (const [identity, requirement] of Object.entries(sourceManifest.roots ?? {}).sort(([left], [right]) => left.localeCompare(right))) {
+    parseDkbIdentity(identity, 'Library root identity');
+    const entry = await resolveLibraryEntry(resolvedRoot, identity, requirement, entriesByIdentity);
+
+    if (entry.manifest.type === 'dkb') {
+      assertDkbSelector(identity, entry.manifest.version!, requirement.version);
+      standaloneDkbs.push(await loadDkb(entry.root));
+      continue;
+    }
+
+    if (entry.manifest.type !== 'collection') {
+      throw new DkbError(`Library root ${identity} resolves to a ${entry.manifest.type} manifest`);
+    }
+
+    const collection = await resolveCollection(resolvedRoot, entry, sourceManifest, entriesByIdentity);
+    activeCollections.push(collection);
+    for (const dkb of collection.dkbs) {
+      collectionMemberIds.add(dkb.manifest.id);
+    }
+  }
 
   return {
     root: resolvedRoot,
-    manifest: registryManifest,
-    collections,
-    dkbs: unique.filter((dkb) => !collectionDkbIds.has(dkb.manifest.id)),
+    manifest: libraryManifest,
+    collections: activeCollections,
+    dkbs: uniqueLoadedDkbs(standaloneDkbs).filter((dkb) => !collectionMemberIds.has(dkb.manifest.id)),
   };
 }
 
-export const loadCompose = loadRegistry;
+export async function loadCompose(root: string): Promise<LoadedLibrary> {
+  const resolvedRoot = path.resolve(root);
+  const sourceManifest = await loadManifest(resolvedRoot);
+
+  if (sourceManifest.type === 'library') {
+    return loadLibrary(resolvedRoot);
+  }
+  if (sourceManifest.type === 'collection') {
+    const collection = await loadCollection(resolvedRoot);
+    return {
+      root: resolvedRoot,
+      manifest: {
+        id: safeId(sourceManifest.name),
+        name: sourceManifest.displayName ?? identityDisplayName(sourceManifest.name),
+        version: LOCAL_LIBRARY_VERSION,
+        roots: { [sourceManifest.name]: { path: '.' } },
+      },
+      collections: [collection],
+      dkbs: [],
+    };
+  }
+
+  const dkb = await loadDkb(resolvedRoot);
+  return {
+    root: resolvedRoot,
+    manifest: {
+      id: safeId(dkb.manifest.id),
+      name: dkb.manifest.name,
+      version: LOCAL_LIBRARY_VERSION,
+      roots: { [dkb.manifest.id]: { path: '.' } },
+    },
+    collections: [],
+    dkbs: [dkb],
+  };
+}
 
 export async function loadManifest(root: string): Promise<DkbSourceManifest> {
   const resolvedRoot = path.resolve(root);
@@ -145,74 +199,179 @@ export async function loadManifest(root: string): Promise<DkbSourceManifest> {
   throw new DkbError(`No ${DKB_MANIFEST_FILENAME} manifest found at ${resolvedRoot}`);
 }
 
-async function discoverDkbRoots(root: string): Promise<string[]> {
-  const rootManifestPath = manifestPath(root, DKB_MANIFEST_FILENAME);
+export async function discoverLibraryEntries(root: string): Promise<DiscoveredLibraryEntry[]> {
+  const resolvedRoot = path.resolve(root);
+  const entries = await safeReadDir(resolvedRoot);
+  const discovered: DiscoveredLibraryEntry[] = [];
+  const seen = new Map<string, string>();
 
-  if (await exists(rootManifestPath) && !isRegistryProjectManifest(await readJson(rootManifestPath))) {
-    return [root];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || DIRECT_ENTRY_IGNORES.has(entry.name) || entry.name.includes('.replace-')) {
+      continue;
+    }
+
+    const entryRoot = path.join(resolvedRoot, entry.name);
+    const source = manifestPath(entryRoot, DKB_MANIFEST_FILENAME);
+
+    if (!(await exists(source))) {
+      continue;
+    }
+
+    const manifest = validateDkbManifest(await readJson(source), source);
+
+    if (manifest.type === 'library') {
+      throw new DkbError(`Libraries cannot be nested: ${source}`);
+    }
+
+    const previous = seen.get(manifest.name);
+    if (previous) {
+      throw new DkbError(`Duplicate Library identity ${manifest.name}: ${previous} and ${source}`);
+    }
+
+    seen.set(manifest.name, source);
+    discovered.push({ root: entryRoot, source: 'local', manifest });
   }
 
-  const entries = await safeReadDir(root);
-  const nested = await Promise.all(entries
-    .filter((entry) => entry.isDirectory() && !DISCOVERY_IGNORES.has(entry.name) && !entry.name.includes('.replace-'))
-    .map((entry) => discoverDkbRoots(path.join(root, entry.name))));
-
-  return nested.flat().sort((left, right) => left.localeCompare(right));
+  return discovered;
 }
 
-function isRegistryProjectManifest(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false;
+async function resolveLibraryEntry(
+  libraryRoot: string,
+  identity: string,
+  requirement: NonNullable<DkbSourceManifest['roots']>[string],
+  directEntries: Map<string, DiscoveredLibraryEntry>,
+): Promise<DiscoveredLibraryEntry> {
+  if (requirement.path) {
+    const entryRoot = resolveContainedPath(libraryRoot, requirement.path, `Library root ${identity} path`);
+    const source = manifestPath(entryRoot, DKB_MANIFEST_FILENAME);
+    const manifest = validateDkbManifest(await readJson(source), source);
+
+    if (manifest.type === 'library') {
+      throw new DkbError(`Library root ${identity} cannot point to another Library`);
+    }
+    if (manifest.name !== identity) {
+      throw new DkbError(`Library root identity mismatch: ${identity} points to ${manifest.name} at ${source}`);
+    }
+
+    return { root: entryRoot, source: 'local', manifest };
   }
 
-  const manifest = value as DkbSourceManifest;
-
-  return manifest.type === 'registry'
-    || (manifest.dependencies !== undefined && typeof manifest.dependencies === 'object' && !Array.isArray(manifest.dependencies));
-}
-
-async function safeReadDir(root: string): Promise<import('node:fs').Dirent[]> {
-  try {
-    return await fs.readdir(root, { withFileTypes: true });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-
-    throw new DkbError(`Unable to read DKB registry root at ${root}: ${reason}`);
+  const local = directEntries.get(identity);
+  if (local) {
+    throw new DkbError(`Library root ${identity} is local; declare it with { "path": "${path.basename(local.root)}" }`);
   }
-}
 
-async function maybeReadRegistryProjectManifest(root: string): Promise<DkbSourceManifest | null> {
-  const source = manifestPath(root, DKB_MANIFEST_FILENAME);
+  const entryRoot = registryPackagePath(libraryRoot, identity);
+  const source = manifestPath(entryRoot, DKB_MANIFEST_FILENAME);
 
   if (!(await exists(source))) {
-    return null;
+    throw new DkbError(`Installed Registry entry is missing for ${identity}: ${entryRoot}`);
   }
 
-  const raw = await readJson(source);
+  const manifest = validateDkbManifest(await readJson(source), source);
+  if (manifest.type === 'library' || manifest.name !== identity) {
+    throw new DkbError(`Installed Registry entry identity mismatch for ${identity}: ${source}`);
+  }
 
-  return isRegistryProjectManifest(raw) ? validateDkbManifest(raw, source) : null;
+  if (requirement.revision !== undefined && manifest.type !== 'collection') {
+    throw new DkbError(`Library root ${identity} requests a Collection revision but resolves to a DKB`);
+  }
+  if (requirement.version !== undefined && manifest.type !== 'dkb') {
+    throw new DkbError(`Library root ${identity} requests a DKB version but resolves to a Collection`);
+  }
+
+  return { root: entryRoot, source: 'registry', manifest };
 }
 
-async function normalizeDkb(root: string, manifest: DkbSourceManifest, id: string, source: string): Promise<LoadedDkb> {
+async function resolveCollection(
+  libraryRoot: string,
+  entry: DiscoveredLibraryEntry,
+  library: DkbSourceManifest,
+  directEntries: Map<string, DiscoveredLibraryEntry>,
+): Promise<LoadedCollection> {
+  const manifest = entry.manifest;
+  const override = library.collectionOverrides?.[manifest.name];
+  const members = { ...(manifest.members ?? {}), ...(override?.include ?? {}) };
+  for (const excluded of override?.exclude ?? []) {
+    delete members[excluded];
+  }
+
+  const dkbs: LoadedDkb[] = [];
+  for (const [identity, selector] of Object.entries(members).sort(([left], [right]) => left.localeCompare(right))) {
+    parseDkbIdentity(identity, `Collection ${manifest.name} member identity`);
+    const local = directEntries.get(identity);
+    const memberRoot = local?.root ?? registryPackagePath(libraryRoot, identity);
+    const source = manifestPath(memberRoot, DKB_MANIFEST_FILENAME);
+
+    if (!(await exists(source))) {
+      throw new DkbError(`Collection ${manifest.name} member ${identity} is not available in the Library`);
+    }
+
+    const memberManifest = validateDkbManifest(await readJson(source), source);
+    if (memberManifest.type !== 'dkb') {
+      throw new DkbError(`Collection ${manifest.name} member ${identity} must resolve to a DKB`);
+    }
+    if (memberManifest.name !== identity) {
+      throw new DkbError(`Collection member identity mismatch: ${identity} resolves to ${memberManifest.name}`);
+    }
+
+    assertDkbSelector(identity, memberManifest.version!, selector);
+    dkbs.push(await loadDkb(memberRoot));
+  }
+
+  const revision = collectionRevision(manifest);
+  const collectionManifest: DkcManifest = {
+    id: manifest.name,
+    name: manifest.displayName ?? identityDisplayName(manifest.name),
+    version: revision ? `r${revision}` : LOCAL_LIBRARY_VERSION,
+    ...(revision ? { revision } : {}),
+    ...(typeof manifest.meta?.digest === 'string' ? { digest: manifest.meta.digest } : {}),
+    description: manifest.description,
+    namespace: manifest.namespace,
+    appId: manifest.appId,
+    roles: manifest.roles,
+    members,
+    meta: manifest.meta,
+    extensions: manifest.extensions,
+  };
+
+  return {
+    root: entry.root,
+    manifest: collectionManifest,
+    dkbs: uniqueLoadedDkbs(dkbs),
+  };
+}
+
+function collectionRevision(manifest: DkbSourceManifest): number | undefined {
+  const revision = manifest.meta?.revision;
+  return typeof revision === 'number' && Number.isInteger(revision) && revision > 0 ? revision : undefined;
+}
+
+function assertDkbSelector(identity: string, installedVersion: string, selector: DkbVersionSelector | undefined): void {
+  if (selector && selector !== 'latest' && selector !== installedVersion) {
+    throw new DkbError(`Version conflict for ${identity}: Library requires ${selector}, installed manifest is ${installedVersion}`);
+  }
+}
+
+async function normalizeDkb(root: string, manifest: DkbSourceManifest, source: string): Promise<LoadedDkb> {
   assertDkbRuntimeRules(manifest, source);
+  parseDkbIdentity(manifest.name);
 
   const stores = await discoverStores(root);
   const singleStore = stores.length === 1 ? stores[0] : null;
   const adapter = singleStore ? adapterForStore(singleStore) : 'compose';
   const entrypoint = singleStore?.path ?? singleStore?.connectionRef ?? '.';
-  const collection = normalizeCollection(manifest.collection);
 
   return {
     root,
     manifest: {
-      id,
-      name: manifest.name,
-      version: manifest.version ?? LOCAL_VERSION,
+      id: manifest.name,
+      name: manifest.displayName ?? identityDisplayName(manifest.name),
+      version: manifest.version!,
       description: manifest.description,
-      namespace: manifest.namespace,
+      namespace: manifest.namespace ?? parseDkbIdentity(manifest.name).namespace,
       appId: manifest.appId,
       owner: manifest.owner ?? manifest.author,
-      collection,
       permissions: {
         read: manifest.permissions?.read ?? true,
         write: manifest.permissions?.write ?? false,
@@ -220,7 +379,7 @@ async function normalizeDkb(root: string, manifest: DkbSourceManifest, id: strin
       adapter,
       entrypoint,
       stores,
-      domains: manifest.domains ?? [id],
+      domains: manifest.domains ?? [manifest.name],
       roles: manifest.roles,
       write: manifest.write,
       meta: manifest.meta,
@@ -228,207 +387,24 @@ async function normalizeDkb(root: string, manifest: DkbSourceManifest, id: strin
     },
     packagePath: source,
     manifestHash: stableHash(manifest),
-    identityKey: `dkb:${root}`,
+    identityKey: `dkb:${manifest.name}`,
   };
 }
 
-function registryManifestFor(root: string, dkbs: LoadedDkb[], rootManifest: DkbSourceManifest | null): DkrManifest {
-  const owner = dkbs.find((dkb) => dkb.manifest.owner)?.manifest.owner;
-  const namespace = commonValue(dkbs.map((dkb) => dkb.manifest.namespace));
-  const appId = commonValue(dkbs.map((dkb) => dkb.manifest.appId));
-  const registryName = rootManifest?.name ?? titleFromId(path.basename(root) || 'Local Registry');
-
+function normalizeLibraryManifest(root: string, manifest: DkbSourceManifest): DkrManifest {
   return {
-    id: safeId(rootManifest?.package ?? rootManifest?.name ?? (path.basename(root) || 'local-registry')),
-    name: registryName,
-    version: rootManifest?.version ?? LOCAL_VERSION,
-    namespace: rootManifest?.namespace ?? namespace,
-    appId: rootManifest?.appId ?? appId,
-    owner: rootManifest?.owner ?? rootManifest?.author ?? owner,
-    dkbs: dkbs.map((dkb) => ({ path: dkb.root })),
-    retrievalProfile: rootManifest?.retrievalProfile,
-  };
-}
-
-async function maybeLoadImplicitLocalDkb(
-  root: string,
-  registry: DkrManifest,
-  rootManifest: DkbSourceManifest | null,
-  existing: LoadedDkb[],
-): Promise<LoadedDkb | null> {
-  if (!rootManifest || rootManifest.localSources?.enabled === false) {
-    return null;
-  }
-
-  const stores = await discoverRegistryLocalStores(root, rootManifest);
-
-  if (stores.length === 0) {
-    return null;
-  }
-
-  const id = implicitLocalDkbIdFor(registry.id, existing.map((dkb) => dkb.manifest.id), root);
-  const manifest = {
-    id,
-    name: `${registry.name} Local Sources`,
-    version: LOCAL_VERSION,
-    description: 'Implicit registry-local sources compiled from eligible raw files.',
-    namespace: registry.namespace,
-    appId: registry.appId,
-    owner: registry.owner,
-    permissions: {
-      read: true,
-      write: false,
-    },
-    adapter: stores.length === 1 && stores[0]!.type === 'filesystem' ? 'folder' as const : 'compose' as const,
-    entrypoint: '.',
-    stores,
-    domains: [id, registry.id],
-    meta: {
-      registryId: registry.id,
-      sourceOrigin: 'registry-local',
-      implicit: true,
-    },
-  };
-
-  return {
-    root,
-    origin: 'local',
-    manifest,
-    packagePath: null,
-    manifestHash: stableHash({
-      registry: registry.id,
-      localSources: rootManifest.localSources ?? {},
-      stores,
-    }),
-    identityKey: `dkb:${root}:registry-local`,
-  };
-}
-
-async function discoverRegistryLocalStores(root: string, manifest: DkbSourceManifest): Promise<DkbStore[]> {
-  const sourceRoot = resolveContainedPath(root, manifest.localSources?.root ?? '.', 'localSources.root');
-  const policyExcludes = new Set((manifest.localSources?.excludes ?? [])
-    .map((item) => item.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/g, ''))
-    .filter(Boolean));
-  const entries = await safeReadDir(sourceRoot);
-  const files = entries
-    .filter((entry) => isEligibleRegistryLocalSourceEntry(entry, policyExcludes))
-    .map((entry) => path.join(sourceRoot, entry.name))
-    .sort((left, right) => left.localeCompare(right));
-  const textFiles = files
-    .filter((file) => LOCAL_TEXT_SOURCE_EXTENSIONS.has(path.extname(file).toLowerCase()))
-    .map((file) => path.relative(root, file).replace(/\\/g, '/'));
-  const sqliteFiles = files
-    .filter((file) => SQLITE_EXTENSIONS.has(path.extname(file).toLowerCase()))
-    .map((file) => path.relative(root, file).replace(/\\/g, '/'));
-  const stores: DkbStore[] = [];
-
-  if (textFiles.length > 0) {
-    stores.push({
-      id: 'registry-local-files',
-      type: 'filesystem',
-      path: path.relative(root, sourceRoot).replace(/\\/g, '/') || '.',
-      mode: 'read',
-      meta: {
-        includePaths: textFiles,
-        sourceOrigin: 'registry-local',
-      },
-    });
-  }
-
-  stores.push(...sqliteFiles.map((relative) => ({
-    id: `registry-local-sqlite-${stableHash(relative).replace(/^sha256:/, '').slice(0, 12)}`,
-    type: 'sqlite' as const,
-    path: relative,
-    mode: 'read' as const,
-    meta: {
-      sourceOrigin: 'registry-local',
-    },
-  })));
-
-  return stores;
-}
-
-function isEligibleRegistryLocalSourceEntry(entry: import('node:fs').Dirent, excludes: Set<string>): boolean {
-  if (!entry.isFile() || entry.isSymbolicLink()) {
-    return false;
-  }
-
-  if (entry.name.startsWith('.') || REGISTRY_LOCAL_SOURCE_IGNORES.has(entry.name) || excludes.has(entry.name)) {
-    return false;
-  }
-
-  const extension = path.extname(entry.name).toLowerCase();
-
-  return LOCAL_TEXT_SOURCE_EXTENSIONS.has(extension) || SQLITE_EXTENSIONS.has(extension);
-}
-
-function implicitLocalDkbIdFor(registryId: string, existingIds: string[], root: string): string {
-  const base = `${registryId}.local`;
-
-  if (!existingIds.includes(base)) {
-    return base;
-  }
-
-  return `${base}-${stableHash(root).replace(/^sha256:/, '').slice(0, 8)}`;
-}
-
-function collectionsFromDkbs(root: string, registry: DkrManifest, dkbs: LoadedDkb[]): LoadedCollection[] {
-  const byCollection = new Map<string, LoadedDkb[]>();
-
-  for (const dkb of dkbs) {
-    const collectionId = dkb.manifest.collection?.id;
-
-    if (!collectionId) {
-      continue;
-    }
-
-    byCollection.set(collectionId, [...(byCollection.get(collectionId) ?? []), dkb]);
-  }
-
-  return [...byCollection.entries()]
-    .filter(([, collectionDkbs]) => collectionDkbs.length >= 2)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([id, collectionDkbs]) => {
-      const first = collectionDkbs.find((dkb) => dkb.manifest.collection?.id === id);
-      const manifest: DkcManifest = {
-        id,
-        name: first?.manifest.collection?.name ?? titleFromId(id),
-        version: registry.version,
-        description: first?.manifest.collection?.description,
-        namespace: registry.namespace,
-        appId: registry.appId,
-        dkbs: collectionDkbs.map((dkb) => ({ path: dkb.root })),
-      };
-
-      return {
-        root,
-        manifest,
-        dkbs: collectionDkbs,
-      };
-    });
-}
-
-function defaultCollectionFromRegistry(registry: LoadedRegistry): LoadedCollection {
-  if (registry.collections.length === 1 && registry.dkbs.length === 0) {
-    return registry.collections[0];
-  }
-
-  const allDkbs = uniqueDkbs([
-    ...registry.collections.flatMap((collection) => collection.dkbs),
-    ...registry.dkbs,
-  ]);
-
-  return {
-    root: registry.root,
-    manifest: {
-      id: `${registry.manifest.id}-all`,
-      name: `${registry.manifest.name} All DKBs`,
-      version: registry.manifest.version,
-      namespace: registry.manifest.namespace,
-      appId: registry.manifest.appId,
-      dkbs: allDkbs.map((dkb) => ({ path: dkb.root })),
-    },
-    dkbs: allDkbs,
+    id: safeId(manifest.name || path.basename(root) || 'local-library'),
+    name: manifest.displayName ?? manifest.name,
+    version: LOCAL_LIBRARY_VERSION,
+    namespace: manifest.namespace,
+    appId: manifest.appId,
+    owner: manifest.owner ?? manifest.author,
+    roots: manifest.roots ?? {},
+    collectionOverrides: manifest.collectionOverrides,
+    registry: manifest.registry,
+    retrievalProfile: manifest.retrievalProfile,
+    meta: manifest.meta,
+    extensions: manifest.extensions,
   };
 }
 
@@ -436,35 +412,23 @@ function assertDkbRuntimeRules(manifest: DkbSourceManifest, source: string): voi
   if (manifest.permissions?.read === false) {
     throw new DkbError(`Invalid manifest at ${source}: permissions.read must be true for queryable DKBs`);
   }
-
   if (manifest.permissions?.write === true && !manifest.write) {
     throw new DkbError(`Invalid manifest at ${source}: permissions.write requires a write block`);
   }
-
   if (manifest.write && manifest.permissions?.write === false) {
     throw new DkbError(`Invalid manifest at ${source}: write block cannot be declared when permissions.write is false`);
   }
 }
 
 function adapterForStore(store: DkbStore): 'folder' | 'sqlite' | 'postgres' {
-  if (store.type === 'filesystem') {
-    return 'folder';
-  }
-
-  if (store.type === 'sqlite') {
-    return 'sqlite';
-  }
-
-  if (store.type === 'postgres') {
-    return 'postgres';
-  }
-
+  if (store.type === 'filesystem') return 'folder';
+  if (store.type === 'sqlite') return 'sqlite';
+  if (store.type === 'postgres') return 'postgres';
   throw new DkbError(`Unsupported store type: ${store.type}`);
 }
 
 async function discoverStores(root: string): Promise<DkbStore[]> {
-  const sqliteFiles = (await listDkbSourceFiles(root))
-    .filter((file) => SQLITE_EXTENSIONS.has(path.extname(file).toLowerCase()));
+  const sqliteFiles = (await listDkbSourceFiles(root)).filter((file) => SQLITE_EXTENSIONS.has(path.extname(file).toLowerCase()));
   const sqliteRelativePaths = sqliteFiles.map((file) => path.relative(root, file).replace(/\\/g, '/'));
   const writable = await writableStoreMode(root);
 
@@ -474,15 +438,10 @@ async function discoverStores(root: string): Promise<DkbStore[]> {
       type: 'filesystem',
       path: '.',
       mode: writable === 'filesystem' ? 'readwrite' : 'read',
-      meta: sqliteRelativePaths.length > 0
-        ? {
-            claimedByAdapters: sqliteRelativePaths,
-          }
-        : undefined,
+      meta: sqliteRelativePaths.length > 0 ? { claimedByAdapters: sqliteRelativePaths } : undefined,
     },
     ...sqliteFiles.map((file) => {
       const relative = path.relative(root, file).replace(/\\/g, '/');
-
       return {
         id: `sqlite-${stableHash(relative).replace(/^sha256:/, '').slice(0, 12)}`,
         type: 'sqlite' as const,
@@ -494,15 +453,10 @@ async function discoverStores(root: string): Promise<DkbStore[]> {
 }
 
 async function writableStoreMode(root: string): Promise<'filesystem' | 'sqlite' | null> {
-  const manifest = validateDkbManifest(await readJson(manifestPath(root, DKB_MANIFEST_FILENAME)), manifestPath(root, DKB_MANIFEST_FILENAME));
-
-  if (manifest.permissions?.write !== true) {
-    return null;
-  }
-
-  const sqliteFiles = (await listDkbSourceFiles(root))
-    .filter((file) => SQLITE_EXTENSIONS.has(path.extname(file).toLowerCase()));
-
+  const source = manifestPath(root, DKB_MANIFEST_FILENAME);
+  const manifest = validateDkbManifest(await readJson(source), source);
+  if (manifest.permissions?.write !== true) return null;
+  const sqliteFiles = (await listDkbSourceFiles(root)).filter((file) => SQLITE_EXTENSIONS.has(path.extname(file).toLowerCase()));
   return sqliteFiles.length === 1 ? 'sqlite' : 'filesystem';
 }
 
@@ -511,17 +465,10 @@ async function listDkbSourceFiles(root: string): Promise<string[]> {
   const files: string[] = [];
 
   for (const entry of entries) {
-    if (entry.name === '.dkb' || SYSTEM_ARTIFACT_FILENAMES.has(entry.name)) {
-      continue;
-    }
-
+    if (entry.isSymbolicLink() || entry.name === '.dkb' || SYSTEM_ARTIFACT_FILENAMES.has(entry.name)) continue;
     const target = path.join(root, entry.name);
-
-    if (entry.isDirectory()) {
-      files.push(...await listDkbSourceFiles(target));
-    } else if (entry.isFile()) {
-      files.push(target);
-    }
+    if (entry.isDirectory()) files.push(...await listDkbSourceFiles(target));
+    else if (entry.isFile()) files.push(target);
   }
 
   return files.sort((left, right) => left.localeCompare(right));
@@ -530,36 +477,18 @@ async function listDkbSourceFiles(root: string): Promise<string[]> {
 async function assertNoNestedDkbManifest(root: string, topManifest: string): Promise<void> {
   const nested = (await listDkbSourceFiles(root))
     .filter((file) => path.basename(file) === DKB_MANIFEST_FILENAME && path.resolve(file) !== path.resolve(topManifest));
-
   if (nested.length > 0) {
     throw new DkbError(`Nested ${DKB_MANIFEST_FILENAME} manifests are not allowed inside a DKB: ${path.relative(root, nested[0]!).replace(/\\/g, '/')}`);
   }
 }
 
-function normalizeCollection(collection: DkbSourceManifest['collection']): DkbManifest['collection'] {
-  if (!collection) {
-    return undefined;
+async function safeReadDir(root: string): Promise<import('node:fs').Dirent[]> {
+  try {
+    return await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new DkbError(`Unable to read DKB Library at ${root}: ${reason}`);
   }
-
-  if (typeof collection === 'string') {
-    return {
-      id: safeId(collection),
-      name: collection,
-    };
-  }
-
-  const name = collection.name ?? collection.id;
-  const id = collection.id ?? safeId(name ?? 'collection');
-
-  return {
-    id,
-    name,
-    description: collection.description,
-  };
-}
-
-function dkbIdForRoot(root: string, manifest: DkbSourceManifest): string {
-  return safeId(path.basename(root) || manifest.name);
 }
 
 async function readJson(source: string): Promise<unknown> {
@@ -567,7 +496,6 @@ async function readJson(source: string): Promise<unknown> {
     return JSON.parse((await fs.readFile(source, 'utf8')).replace(/^\uFEFF/, '')) as unknown;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-
     throw new DkbError(`Unable to read JSON at ${source}: ${reason}`);
   }
 }
@@ -575,43 +503,28 @@ async function readJson(source: string): Promise<unknown> {
 async function exists(target: string): Promise<boolean> {
   try {
     await fs.access(target);
-
     return true;
   } catch {
     return false;
   }
 }
 
-function uniqueDkbs(dkbs: LoadedDkb[]): LoadedDkb[] {
+export function uniqueLoadedDkbs(dkbs: LoadedDkb[]): LoadedDkb[] {
   const seen = new Set<string>();
-
   return dkbs.filter((dkb) => {
-    if (seen.has(dkb.manifest.id)) {
-      return false;
-    }
-
+    if (seen.has(dkb.manifest.id)) return false;
     seen.add(dkb.manifest.id);
-
     return true;
   });
 }
 
 function safeId(value: string): string {
   const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-
-  return id || 'local-registry';
+  return id || 'local-library';
 }
 
-function titleFromId(value: string): string {
-  return value
-    .split(/[-_.]+/g)
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(' ') || value;
-}
-
-function commonValue(values: Array<string | undefined>): string | undefined {
-  const present = [...new Set(values.filter((value): value is string => Boolean(value)))];
-
-  return present.length === 1 ? present[0] : undefined;
+function entryKindLabel(type: DkbSourceManifest['type']): string {
+  if (type === 'library') return 'Library';
+  if (type === 'collection') return 'Collection';
+  return 'DKB';
 }

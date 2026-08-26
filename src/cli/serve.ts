@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createInterface, type Interface } from 'node:readline/promises';
 import { compileComposeProject } from '../compiler/compile.js';
 import { DkbError } from '../protocol/errors.js';
-import { loadRegistry } from '../protocol/manifest.js';
+import { loadLibrary } from '../protocol/manifest.js';
 import {
   configuredRegistry,
   normalizeRegistryUrl,
@@ -24,7 +24,7 @@ export interface PrepareServeOptions {
   createPrompt?: (input: NodeJS.ReadStream, output: NodeJS.WriteStream) => Pick<Interface, 'question' | 'close'>;
 }
 
-export interface PreparedServeRegistry {
+export interface PreparedServeLibrary {
   root: string;
   initialized: boolean;
   compiled: boolean;
@@ -45,16 +45,16 @@ export interface ResolvedRegistryInitialization {
 
 const DKB_MANIFEST_FILENAME = 'dkb.json';
 
-export async function prepareServeRegistry(options: PrepareServeOptions = {}): Promise<PreparedServeRegistry> {
+export async function prepareServeLibrary(options: PrepareServeOptions = {}): Promise<PreparedServeLibrary> {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const explicitRoot = options.root ? path.resolve(cwd, options.root) : null;
   const targetRoot = explicitRoot
-    ? await isRegistryRoot(explicitRoot) ? explicitRoot : null
-    : await nearestRegistryRoot(cwd);
+    ? await isLibraryRoot(explicitRoot) ? explicitRoot : null
+    : await nearestLibraryRoot(cwd);
 
   if (targetRoot) {
     const registry = await configuredRegistry({ root: targetRoot });
-    const compileResult = await compileRegistryForServe(targetRoot);
+    const compileResult = await compileLibraryForServe(targetRoot);
 
     return {
       root: targetRoot,
@@ -76,9 +76,9 @@ export async function prepareServeRegistry(options: PrepareServeOptions = {}): P
     stderr: options.stderr,
     createPrompt: options.createPrompt,
   });
-  await initializeRegistryManifest(root);
+  await initializeLibraryManifest(root);
   const registry = selectedRegistry.configured ?? await writeConfiguredRegistryUrl(selectedRegistry.url, { root });
-  const compileResult = await compileRegistryForServe(root);
+  const compileResult = await compileLibraryForServe(root);
 
   return {
     root,
@@ -138,9 +138,9 @@ export async function resolveRegistryInitializationConfiguration(options: {
   const normalized = normalizeRegistryUrl(registryUrl);
   const verification = options.verify ? await verifyRegistryEndpoint(normalized) : undefined;
   const warning = verification && !verification.ok
-    ? `Upstream registry ${normalized} could not be verified. The local registry was still created and can be used offline.`
+    ? `Upstream Registry ${normalized} could not be verified. The local Library was still created and can be used offline.`
     : !options.verify
-      ? `Upstream registry ${normalized} was not verified because verification was skipped.`
+      ? `Upstream Registry ${normalized} was not verified because verification was skipped.`
       : undefined;
 
   return {
@@ -155,11 +155,11 @@ export async function resolveRegistryInitializationConfiguration(options: {
   };
 }
 
-export async function nearestRegistryRoot(start: string): Promise<string | null> {
+export async function nearestLibraryRoot(start: string): Promise<string | null> {
   let current = path.resolve(start);
 
   while (true) {
-    if (await isRegistryRoot(current)) {
+    if (await isLibraryRoot(current)) {
       return current;
     }
 
@@ -173,47 +173,42 @@ export async function nearestRegistryRoot(start: string): Promise<string | null>
   }
 }
 
-export async function initializeRegistryManifest(root: string): Promise<string> {
+export async function initializeLibraryManifest(root: string): Promise<string> {
   const manifestPath = path.join(root, DKB_MANIFEST_FILENAME);
 
   if (await exists(manifestPath)) {
-    throw new DkbError(`Cannot initialize registry because ${DKB_MANIFEST_FILENAME} already exists at ${manifestPath}`);
+    throw new DkbError(`Cannot initialize Library because ${DKB_MANIFEST_FILENAME} already exists at ${manifestPath}`);
   }
 
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(manifestPath, `${JSON.stringify(registryManifestForFolder(root), null, 2)}\n`, 'utf8');
+  await fs.writeFile(manifestPath, `${JSON.stringify(libraryManifestForFolder(root), null, 2)}\n`, 'utf8');
 
   return manifestPath;
 }
 
-export function registryManifestForFolder(root: string) {
-  const name = titleFromId(path.basename(path.resolve(root)) || 'Local Registry');
+export function libraryManifestForFolder(root: string) {
+  const name = titleFromId(path.basename(path.resolve(root)) || 'DKB Library');
 
   return {
     manifestVersion: 1,
-    type: 'registry',
+    type: 'library',
     name,
-    version: '0.0.0-local',
-    description: 'Local DKB registry.',
-    localSources: {
-      enabled: true,
-      root: '.',
-    },
-    dependencies: {},
+    description: 'Local DKB Library.',
+    roots: {},
   };
 }
 
-async function compileRegistryForServe(root: string): Promise<Awaited<ReturnType<typeof compileComposeProject>>> {
+async function compileLibraryForServe(root: string): Promise<Awaited<ReturnType<typeof compileComposeProject>>> {
   try {
     return await compileComposeProject(root);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
     if (/compile lock/i.test(message)) {
-      throw new DkbError(`Unable to prepare DKB registry at ${root}: another compile appears to be running. ${message}`);
+      throw new DkbError(`Unable to prepare DKB Library at ${root}: another compile appears to be running. ${message}`);
     }
 
-    throw new DkbError(`Unable to prepare DKB registry at ${root}: ${message}`);
+    throw new DkbError(`Unable to prepare DKB Library at ${root}: ${message}`);
   }
 }
 
@@ -226,7 +221,7 @@ async function confirmServeInitialization(root: string, options: PrepareServeOpt
   const stderr = options.stderr ?? process.stderr;
 
   if (!stdin.isTTY) {
-    throw new DkbError(`No DKB registry found from ${root}. Noninteractive dkb serve will not create files. Run: dkb init --yes`);
+    throw new DkbError(`No DKB Library found from ${root}. Noninteractive dkb serve will not create files. Run: dkb init --yes`);
   }
 
   const prompt = options.createPrompt
@@ -234,17 +229,17 @@ async function confirmServeInitialization(root: string, options: PrepareServeOpt
     : createInterface({ input: stdin, output: stderr });
 
   try {
-    const first = await prompt.question(`No DKB registry was found. Initialize ${root} as a DKB registry? [y/N] `);
+    const first = await prompt.question(`No DKB Library was found. Initialize ${root} as a DKB Library? [y/N] `);
 
     if (!isAffirmative(first)) {
-      throw new DkbError('DKB registry initialization cancelled.');
+      throw new DkbError('DKB Library initialization cancelled.');
     }
 
     if (await isNonEmptyDirectory(root)) {
       const second = await prompt.question('This folder is not empty. No existing files will be moved or deleted; eligible sources will be compiled. Continue? [y/N] ');
 
       if (!isAffirmative(second)) {
-        throw new DkbError('DKB registry initialization cancelled.');
+        throw new DkbError('DKB Library initialization cancelled.');
       }
     }
   } finally {
@@ -252,15 +247,15 @@ async function confirmServeInitialization(root: string, options: PrepareServeOpt
   }
 }
 
-async function isRegistryRoot(root: string): Promise<boolean> {
+async function isLibraryRoot(root: string): Promise<boolean> {
   const manifestPath = path.join(root, DKB_MANIFEST_FILENAME);
 
-  if (!(await isRegistryManifestFile(manifestPath))) {
+  if (!(await isLibraryManifestFile(manifestPath))) {
     return false;
   }
 
   try {
-    await loadRegistry(root);
+    await loadLibrary(root);
 
     return true;
   } catch {
@@ -268,12 +263,11 @@ async function isRegistryRoot(root: string): Promise<boolean> {
   }
 }
 
-async function isRegistryManifestFile(manifestPath: string): Promise<boolean> {
+async function isLibraryManifestFile(manifestPath: string): Promise<boolean> {
   try {
-    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { type?: unknown; dependencies?: unknown };
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { type?: unknown };
 
-    return manifest.type === 'registry'
-      || (manifest.dependencies !== undefined && typeof manifest.dependencies === 'object' && !Array.isArray(manifest.dependencies));
+    return manifest.type === 'library';
   } catch {
     return false;
   }

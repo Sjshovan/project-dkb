@@ -27,7 +27,7 @@ proxies; it is not a substitute for a public OAuth deployment.
 ## Configuration
 
 ```text
-DKB_REGISTRY_PATH=/knowledge/runtime
+DKB_LIBRARY_PATH=/knowledge/library
 DKB_QUERY_EMBEDDER_URL=http://127.0.0.1:8090/embed
 DKB_MCP_BEARER_TOKEN=<secret>
 DKB_MCP_HTTP_HOST=127.0.0.1
@@ -42,7 +42,7 @@ DKB_MCP_ALLOW_INSECURE_NO_AUTH=false
 
 `DKB_QUERY_EMBEDDER_URL` is the complete query endpoint, including `/embed`.
 The query embedder must use the model and dimensions recorded by the active
-registry profile.
+Library profile.
 
 `DKB_MCP_PUBLIC_DOCUMENTS=true` makes immutable evidence available at
 `/documents/{chunk-id}` so citations can open in a browser. Enable it only for
@@ -64,3 +64,7 @@ mandatory by default.
 The grounding test should require ChatGPT to search, fetch, cite only fetched
 evidence, ignore source instructions, and return an evidence-insufficient
 answer for an unsupported question.
+
+One HTTP MCP process serves one Library. Collections and their member DKBs are
+resolved through that Library's lock and applied-state ledger; MCP does not scan
+folders or maintain a second package list.

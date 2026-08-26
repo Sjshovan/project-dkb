@@ -1,8 +1,8 @@
 # 0001 - CLI Control Plane And Public-Release Gate
 
-- **Status:** Accepted direction; implementation pending
+- **Status:** Accepted; coherent Library context implemented, public-release gate pending
 - **Date:** 2026-08-26
-- **Scope:** DKB CLI, local registry/runtime context, package lifecycle,
+- **Scope:** DKB CLI, local Library/runtime context, package lifecycle,
   authentication, distribution, and public-release readiness
 
 ## TL;DR
@@ -15,6 +15,13 @@ artifact passes clean-install CI.
 
 The current human presentation is good enough to preserve. The next pass is a
 workflow and release-hardening pass, not a visual rewrite or new RAG runtime.
+
+The local-control-plane portion was implemented by the hard cutover recorded in
+[`0002-library-and-collections-hard-cutover.md`](0002-library-and-collections-hard-cutover.md):
+top-level install/list/uninstall resolve the nearest Library, one Runtime serves
+that Library, and namespaced Collections own exact shared dependencies. The
+remaining commands and distribution checks in this record are still release
+gates, not current-product claims.
 
 ## Evidence Snapshot
 
@@ -46,7 +53,7 @@ security claims. Re-run the checks at release time.
 Introduce one shared context resolver for ordinary CLI commands. From any
 directory inside an initialized DKB registry, it must resolve:
 
-- the nearest registry root;
+- the nearest Library root;
 - the active local runtime state root;
 - the upstream package registry URL and its source;
 - credentials;
@@ -54,7 +61,7 @@ directory inside an initialized DKB registry, it must resolve:
 
 `init`, `install`, `list`, `show`, `retrieve`, `uninstall`, and `serve` must use
 that same resolved state by default. A package installed from the current
-registry folder must be visible to both local retrieval and the MCP server
+Library folder must be visible to both local retrieval and the MCP server
 started from that folder.
 
 Explicit HTTP runtime administration remains supported, but it should be

@@ -10,6 +10,9 @@ These rules extend the repository-level `AGENTS.md` for `src/registry/`.
   are never canonical publication input. Build releases from clean source.
 - Published package versions are immutable. A reused version with a different
   digest is an error, not an update.
+- DKBs and Collections share the canonical `@namespace/name` identity space.
+  Collection revisions are Registry-assigned immutable snapshots of exact DKB
+  versions and release digests; never publish unresolved `latest` selectors.
 - Publisher-account private keys and registry signing keys stay server-side.
   Clients receive receipts, signatures, fingerprints, and public keys only.
 - Validate package identity, version, tree hash, archive hash, signatures, and
@@ -36,6 +39,8 @@ These rules extend the repository-level `AGENTS.md` for `src/registry/`.
   archives when lightweight metadata can answer the question.
 - Preserve clean rollback paths for failed compilation, signing, download,
   extraction, or activation.
+- A failed fresh activation must remove the newly promoted vendor target as
+  well as restoring any previous target, lock, ledger, and aggregate catalog.
 
 ## Verification
 

@@ -6,6 +6,10 @@ export type DkbWriteMode = 'read_only' | 'queued' | 'direct';
 export type DkbAvailability = 'ready' | 'unavailable';
 export type DkbIndexFreshness = 'fresh' | 'stale' | 'unknown';
 export type DkbWriteOperation = 'write' | 'append' | 'delete' | 'update' | 'supersede';
+export type DkbEntryKind = 'dkb' | 'collection';
+export type DkbEntrySource = 'local' | 'registry';
+export type DkbEntryStatus = 'installed' | 'broken';
+export type DkbVersionSelector = 'latest' | string;
 
 export interface DkbAccepts {
   lanes?: string[];
@@ -51,6 +55,17 @@ export interface DkbLocalSourcesPolicy {
   enabled?: boolean;
   root?: string;
   excludes?: string[];
+}
+
+export interface DkbLibraryRootRequirement {
+  path?: string;
+  version?: DkbVersionSelector;
+  revision?: number | 'latest';
+}
+
+export interface DkbCollectionOverride {
+  include?: Record<string, DkbVersionSelector>;
+  exclude?: string[];
 }
 
 export interface DkbRetrievalProfileConfig {
@@ -111,8 +126,9 @@ export interface DkbManifest extends DkbSpaceFields {
 
 export interface DkbSourceManifest extends DkbSpaceFields {
   manifestVersion?: number;
-  type?: 'package' | 'registry';
+  type: 'dkb' | 'collection' | 'library';
   name: string;
+  displayName?: string;
   version?: string;
   description?: string;
   publisher?: string;
@@ -120,8 +136,12 @@ export interface DkbSourceManifest extends DkbSpaceFields {
   owner?: DkbOwner;
   author?: DkbOwner;
   license?: string;
-  collection?: string | DkbCollectionRef;
-  dependencies?: Record<string, string>;
+  members?: Record<string, DkbVersionSelector>;
+  roots?: Record<string, DkbLibraryRootRequirement>;
+  collectionOverrides?: Record<string, DkbCollectionOverride>;
+  registry?: {
+    url?: string;
+  };
   localSources?: DkbLocalSourcesPolicy;
   retrievalProfile?: DkbRetrievalProfileConfig;
   permissions?: DkbPermissions;
@@ -136,9 +156,12 @@ export interface DkcManifest extends DkbSpaceFields {
   id: string;
   name: string;
   version: string;
+  revision?: number;
+  digest?: string;
   description?: string;
   roles?: string[];
-  dkbs: Array<{ path: string }>;
+  members: Record<string, DkbVersionSelector>;
+  dkbs?: Array<{ path: string }>;
   meta?: Record<string, unknown>;
   extensions?: Record<string, unknown>;
 }
@@ -148,8 +171,11 @@ export interface DkrManifest extends DkbSpaceFields {
   name: string;
   version: string;
   owner?: DkbOwner;
-  collections?: Array<{ path: string }>;
-  dkbs?: Array<{ path: string }>;
+  roots: Record<string, DkbLibraryRootRequirement>;
+  collectionOverrides?: Record<string, DkbCollectionOverride>;
+  registry?: {
+    url?: string;
+  };
   retrievalProfile?: DkbRetrievalProfileConfig;
   meta?: Record<string, unknown>;
   extensions?: Record<string, unknown>;
@@ -209,6 +235,29 @@ export interface DkbLockManifest {
     recordCount: number;
     compiledAt: string;
   };
+}
+
+export interface DkbLibraryLockEntry {
+  identity: string;
+  kind: DkbEntryKind;
+  source: DkbEntrySource;
+  version?: string;
+  revision?: number;
+  digest?: string;
+  path: string;
+  registryUrl?: string;
+  requiredBy: string[];
+  installedAt: string;
+}
+
+export interface DkbLibraryLockManifest {
+  library: {
+    name: string;
+    retrievalProfileDigest?: string;
+  };
+  generation: number;
+  entries: Record<string, DkbLibraryLockEntry>;
+  resolvedAt: string;
 }
 
 export interface DkbSigningKeyRecord {
@@ -317,11 +366,17 @@ export interface LoadedCollection {
   dkbs: LoadedDkb[];
 }
 
-export interface LoadedRegistry {
+export interface LoadedLibrary {
   root: string;
   manifest: DkrManifest;
   collections: LoadedCollection[];
   dkbs: LoadedDkb[];
+}
+
+export interface DiscoveredLibraryEntry {
+  root: string;
+  source: DkbEntrySource;
+  manifest: DkbSourceManifest;
 }
 
 export interface DkbRecord {

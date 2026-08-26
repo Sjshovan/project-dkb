@@ -1,7 +1,8 @@
 # DKB Artifact Architecture
 
-DKB keeps the user-facing project simple: a registry or package is rooted by
-`dkb.json`, and public source assets remain the source of truth. Runtime
+DKB keeps the user-facing project simple: a Library, Collection, or DKB is
+identified by the `type` in `dkb.json`, and source assets remain the source of
+truth. Runtime
 retrieval reads compiled chunks, not raw files.
 
 ## Current Contracts To Preserve
@@ -18,7 +19,7 @@ retrieval reads compiled chunks, not raw files.
 - Agent navigation is reference-first: semantic and exact search discover
   stable compiled chunk IDs, and an explicit read returns stored evidence with
   provenance. DKB does not choose an agent's investigation workflow.
-- One registry activates one retrieval profile. Packages compiled with a
+- One Library activates one retrieval profile. Packages compiled with a
   different model, dimension count, metric, parser, or chunker profile are
   rejected before they can enter the live query snapshot.
 
@@ -139,8 +140,8 @@ or direct source flows:
   the local signing and verification path for OCI artifact references.
 
 The current local vertical slice is intentionally narrow: compile source,
-package the compiled artifact, push to a local OCI registry, sign and verify the
-immutable digest, pull the package, install it into a runtime registry, and
+package the compiled artifact, push to an OCI Registry, sign and verify the
+immutable digest, pull the package, install it into a Library, and
 retrieve evidence through MCP.
 
 Compiled artifact install is not a source import. After verification and
@@ -173,7 +174,7 @@ publish/list/pull/verify/install target Laravel's `/api/registry` routes with a
 bearer token. The CLI uploads source as a source archive, waits for the Laravel
 compile job to publish the immutable version, downloads the compiled `.dkbpkg`,
 verifies the embedded receipt against Laravel's public registry keys, and
-installs the verified archive into the local runtime registry.
+installs the verified archive into the local Library.
 
 Laravel does not run Docling, LlamaIndex, FastEmbed, FAISS, or query serving in
 its web process. It calls the private DKB registry compiler service over HTTP:
@@ -183,3 +184,9 @@ rewrites only registry-owned package metadata, runs the pinned compiler path,
 and returns the compiled archive, lock payload, artifact manifest, logs, hashes,
 and compiler metadata. Laravel validates that response, signs the receipt, and
 publishes the artifact.
+
+Published Collections add no second artifact format. The Registry stores an
+immutable Collection revision containing exact DKB identities, versions, and
+release digests. Clients install those existing signed DKB artifacts into
+`vendor/@namespace/name`, then atomically commit the Collection and dependency
+ownership edges in the Library lock and ledger.

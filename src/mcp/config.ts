@@ -1,17 +1,17 @@
 import { DkbError } from '../protocol/errors.js';
 
-export function defaultRegistryPath(): string | null {
-  return process.env.DKB_REGISTRY_PATH || process.env.DKB_RUNTIME_STATE_ROOT || null;
+export function defaultLibraryPath(): string | null {
+  return process.env.DKB_LIBRARY_PATH || process.env.DKB_RUNTIME_STATE_ROOT || null;
 }
 
-export function configuredRegistryPath(): string {
-  const configured = defaultRegistryPath();
+export function configuredLibraryPath(): string {
+  const configured = defaultLibraryPath();
 
   if (configured) {
     return configured;
   }
 
-  throw new DkbError('DKB_REGISTRY_PATH is required for agent-facing MCP ID tools');
+  throw new DkbError('DKB_LIBRARY_PATH is required for agent-facing MCP ID tools');
 }
 
 export function requirePath(value: string | undefined, label: string): string {
@@ -19,13 +19,13 @@ export function requirePath(value: string | undefined, label: string): string {
     return value;
   }
 
-  const configured = defaultRegistryPath();
+  const configured = defaultLibraryPath();
 
   if (configured) {
     return configured;
   }
 
-  throw new DkbError(`${label} is required unless DKB_REGISTRY_PATH is configured`);
+  throw new DkbError(`${label} is required unless DKB_LIBRARY_PATH is configured`);
 }
 
 export function debugMcp(event: string, payload: Record<string, unknown>): void {

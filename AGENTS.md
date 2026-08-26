@@ -32,6 +32,7 @@ python -m graphify update src
 | Area | Responsibility |
 | --- | --- |
 | `src/protocol/`, `schemas/` | Stable manifests, contracts, paths, capabilities, and validation |
+| `src/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and status |
 | `src/adapters/` | Source discovery and reads; no retrieval orchestration |
 | `src/compiler/`, `compiler/llamaindex/` | Source and Evidence IR compilation, Docling/LlamaIndex routing, embeddings |
 | `src/artifacts/`, `src/signing/`, `src/oci/` | Compiled artifact identity, verification, signing, and transport |
@@ -44,11 +45,18 @@ python -m graphify update src
 
 ## Product Contracts
 
-- `dkb.json` is the author-facing package or registry manifest.
+- `dkb.json` is the author-facing Library, Collection, or DKB manifest. Its
+  `type` is authoritative; do not infer kind or installed state from paths.
+- DKBs and Collections use canonical lowercase `@namespace/name` identities.
+  Editable entries are direct Library children; Registry downloads live only
+  under `vendor/@namespace/name`.
+- `dkb-lock.json` is exact resolved state and `.dkb/state.sqlite` is applied
+  state. Filesystem presence alone never means installed.
 - Original source assets and embedding-free Evidence IR are canonical and
   portable. Chunks, vectors, FAISS indexes, and runtime catalogs are derived,
   retrieval-profile-specific artifacts.
-- One active registry uses one compatible retrieval profile. Reject model,
+- One Runtime serves one Library, and one active Library uses one compatible
+  retrieval profile. Reject model,
   dimensions, metric, parser, chunker, or compiler mismatches before activation.
 - Registry publish compiles from clean source, ignores uploaded generated state
   as canonical truth, signs an immutable release, and creates a `.dkbpkg`.
@@ -66,13 +74,14 @@ handles, or an attention subsystem without an explicit architecture decision.
 
 ## Current Direction
 
-`docs/decisions/0001-cli-control-plane-and-release-gate.md` records the accepted
-CLI hardening direction. It is a target, not a claim about current behavior.
-Until that work is complete, verify actual command behavior in source and tests.
+`docs/decisions/0001-cli-control-plane-and-release-gate.md` records the remaining
+public-release gate. `docs/decisions/0002-library-and-collections-hard-cutover.md`
+records the implemented Library and Collection model. Verify actual behavior in
+source and tests rather than treating either record as runtime evidence.
 
-In particular, do not add another command-specific root or connection resolver.
-The next CLI pass must converge top-level package operations on one shared
-workspace context and keep explicitly remote runtime operations distinguishable.
+Do not add another command-specific root or connection resolver. Top-level
+package operations use the nearest Library; explicitly remote Runtime
+administration stays under `dkb runtime`.
 
 ## Change Rules
 

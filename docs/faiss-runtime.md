@@ -19,7 +19,7 @@ Install/update order:
 
 1. Verify package receipt, package tree hash, and artifact hashes.
 2. Validate package-local FAISS catalog and segment.
-3. Promote the package into `vendor/<publisher>/<package>`.
+3. Promote the package into `vendor/@namespace/name` with its signed receipt.
 4. Refresh the local aggregate catalog without rebuilding a global search index.
 5. Load active package segments into one in-memory FAISS `IndexShards` view.
 6. Mark the runtime query snapshot active only after the expected package/version is present.
@@ -40,7 +40,11 @@ FAISS never embeds text and does not own provenance. It only stores/searches vec
 
 ## Compatibility
 
-All active packages in one runtime must use the same embedding profile: compiler ID, model, dimensions, and metric. If a package differs, activation fails with a clear embedding-profile mismatch before it becomes queryable.
+One Runtime serves one Library. All active packages in that Library must use
+the same embedding profile: compiler ID, model, dimensions, and metric. If a
+package differs, activation fails with a clear embedding-profile mismatch and
+the previous manifest, lock, ledger, installed paths, and query catalog are
+restored.
 
 ## Current Performance Gate
 

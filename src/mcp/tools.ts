@@ -8,7 +8,7 @@ import { enqueueQueryAudit } from '../runtime/queryAudit.js';
 import { auditKnowledgeAlignment } from '../knowledge/alignment.js';
 import { queryKnowledgeTarget } from '../knowledge/target.js';
 import { DkbError } from '../protocol/errors.js';
-import { loadDkb, loadRegistry } from '../protocol/manifest.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest } from '../protocol/manifest.js';
 import { resolveDkbCapabilities } from '../protocol/capabilities.js';
 import { evaluateDkbWrite, evaluateDkbWriteIntent, type DkbWriteIntent } from '../protocol/writeGate.js';
 import type { DkbWriteOperation, DkbReadRequest } from '../protocol/types.js';
@@ -18,7 +18,7 @@ import { enqueueWrite, listQueuedWrites, loadQueuedWrite } from '../writes/queue
 import { processWriteQueue } from '../writes/processor.js';
 import type { ProcessWriteQueueInput, QueuedWriteStatus, WriteTarget } from '../writes/types.js';
 import { describeCollection } from './catalog.js';
-import { configuredRegistryPath, debugMcp } from './config.js';
+import { configuredLibraryPath, debugMcp } from './config.js';
 import { modelSafeToolResult } from '../security/sourceContent.js';
 import { describeSources, lexicalSearch, semanticSearch, type DkbNavigationScope } from '../read/navigation.js';
 import { discoverRemoteDkb } from '../remote/discovery.js';
@@ -45,11 +45,11 @@ export async function describeCollectionTool(collectionId?: string) {
 }
 
 export async function describeRegistryTool() {
-  return describeRegistry(configuredRegistryPath());
+  return describeRegistry(configuredLibraryPath());
 }
 
 export async function describeRegistryChunksTool() {
-  return buildRegistryChunks(configuredRegistryPath());
+  return buildRegistryChunks(configuredLibraryPath());
 }
 
 export async function auditAlignmentTool(targetId?: string) {
@@ -259,7 +259,7 @@ export async function restoreIndexesTool(targetId?: string) {
 
 async function maybeQueryContext(root: string, collectionId?: string) {
   try {
-    const contextId = collectionId ?? (await loadRegistry(root)).manifest.id;
+    const contextId = collectionId ?? (await loadLibrary(root)).manifest.id;
 
     return await getQueryContext(root, contextId);
   } catch {
@@ -374,7 +374,7 @@ export async function enqueueWriteTool(input: {
 }
 
 async function resolveTargetPath(targetId?: string): Promise<string> {
-  const configuredRoot = path.resolve(configuredRegistryPath());
+  const configuredRoot = path.resolve(configuredLibraryPath());
   const catalog = await configuredTargets(configuredRoot);
 
   if (!targetId || targetId === catalog.rootId) {
@@ -397,7 +397,7 @@ async function resolveTargetPath(targetId?: string): Promise<string> {
 }
 
 async function resolveCollectionTarget(collectionId?: string): Promise<{ root: string; id?: string }> {
-  const configuredRoot = path.resolve(configuredRegistryPath());
+  const configuredRoot = path.resolve(configuredLibraryPath());
   const catalog = await configuredTargets(configuredRoot);
   const collections = catalog.targets.filter((target) => target.type === 'collection');
 
@@ -425,7 +425,7 @@ async function resolveCollectionTarget(collectionId?: string): Promise<{ root: s
 }
 
 async function resolveDkbPath(dkbId: string): Promise<string> {
-  const catalog = await configuredTargets(path.resolve(configuredRegistryPath()));
+  const catalog = await configuredTargets(path.resolve(configuredLibraryPath()));
   const matches = catalog.targets.filter((target) => target.type === 'dkb' && target.id === dkbId);
 
   if (matches.length === 0) {
@@ -443,26 +443,22 @@ async function resolveDkbPath(dkbId: string): Promise<string> {
 
 async function configuredTargets(root: string): Promise<{
   rootId: string;
-  rootType: 'registry' | 'collection' | 'dkb';
-  targets: Array<{ id: string; root: string; type: 'registry' | 'collection' | 'dkb' }>;
+  rootType: 'library' | 'collection' | 'dkb';
+  targets: Array<{ id: string; root: string; type: 'library' | 'collection' | 'dkb' }>;
 }> {
   if (!(await exists(manifestPath(root, 'dkb.json')))) {
-    try {
-      const registry = await loadRegistry(root);
+    const rootId = safeTargetId(path.basename(root) || 'runtime');
 
-      return targetsForRegistry(registry);
-    } catch {
-      return {
-        rootId: safeTargetId(path.basename(root) || 'runtime'),
-        rootType: 'registry',
-        targets: [
-          { id: safeTargetId(path.basename(root) || 'runtime'), root, type: 'registry' },
-        ],
-      };
-    }
+    return {
+      rootId,
+      rootType: 'library',
+      targets: [{ id: rootId, root, type: 'library' }],
+    };
   }
 
-  try {
+  const manifest = await loadManifest(root);
+
+  if (manifest.type === 'dkb') {
     const dkb = await loadDkb(root);
 
     return {
@@ -472,40 +468,43 @@ async function configuredTargets(root: string): Promise<{
         { id: dkb.manifest.id, root: dkb.root, type: 'dkb' },
       ],
     };
-  } catch (error) {
-    if (!isRegistryManifestLoadError(error)) {
-      throw error;
-    }
-
-    return targetsForRegistry(await loadRegistry(root));
   }
+
+  if (manifest.type === 'collection') {
+    const collection = await loadCollection(root);
+
+    return {
+      rootId: collection.manifest.id,
+      rootType: 'collection',
+      targets: [
+        { id: collection.manifest.id, root: collection.root, type: 'collection' },
+        ...collection.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const })),
+      ],
+    };
+  }
+
+  return targetsForLibrary(await loadLibrary(root));
 }
 
-function targetsForRegistry(registry: Awaited<ReturnType<typeof loadRegistry>>): {
+function targetsForLibrary(library: Awaited<ReturnType<typeof loadLibrary>>): {
   rootId: string;
-  rootType: 'registry';
-  targets: Array<{ id: string; root: string; type: 'registry' | 'collection' | 'dkb' }>;
+  rootType: 'library';
+  targets: Array<{ id: string; root: string; type: 'library' | 'collection' | 'dkb' }>;
 } {
   return {
-    rootId: registry.manifest.id,
-    rootType: 'registry',
+    rootId: library.manifest.id,
+    rootType: 'library',
     targets: [
-      { id: registry.manifest.id, root: registry.root, type: 'registry' },
-      ...registry.collections.map((collection) => ({
+      { id: library.manifest.id, root: library.root, type: 'library' },
+      ...library.collections.map((collection) => ({
         id: collection.manifest.id,
         root: collection.root,
         type: 'collection' as const,
       })),
-      ...registry.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const })),
-      ...registry.collections.flatMap((collection) => collection.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const }))),
+      ...library.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const })),
+      ...library.collections.flatMap((collection) => collection.dkbs.map((dkb) => ({ id: dkb.manifest.id, root: dkb.root, type: 'dkb' as const }))),
     ],
   };
-}
-
-function isRegistryManifestLoadError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-
-  return message.includes('Registry project manifests cannot be loaded as DKB packages');
 }
 
 function safeTargetId(value: string): string {

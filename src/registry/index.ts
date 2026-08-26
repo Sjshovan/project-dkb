@@ -3,9 +3,9 @@ import { stableHash } from '../contracts/hash.js';
 import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { sourceIndexForInstalledDkb } from '../runtime/catalog.js';
 import { resolveDkbCapabilities, type DkbCapabilities } from '../protocol/capabilities.js';
-import { loadRegistry } from '../protocol/manifest.js';
+import { loadLibrary } from '../protocol/manifest.js';
 import { deriveKnowledgeSpace, type KnowledgeSpaceIdentity } from '../protocol/space.js';
-import type { LoadedCollection, LoadedDkb, LoadedRegistry } from '../protocol/types.js';
+import type { LoadedCollection, LoadedDkb, LoadedLibrary } from '../protocol/types.js';
 
 export interface DkrOrigin {
   registryId: string;
@@ -66,14 +66,14 @@ export interface RegistryChunkIndex {
 }
 
 export async function describeRegistry(registryPath: string): Promise<RegistryCatalog> {
-  return catalogFromRegistry(await loadRegistry(registryPath));
+  return catalogFromRegistry(await loadLibrary(registryPath));
 }
 
 export async function buildRegistryChunks(registryPath: string): Promise<RegistryChunkIndex> {
-  return buildRegistryChunksFromRegistry(await loadRegistry(registryPath));
+  return buildRegistryChunksFromRegistry(await loadLibrary(registryPath));
 }
 
-export function catalogFromRegistry(registry: LoadedRegistry): RegistryCatalog {
+export function catalogFromRegistry(registry: LoadedLibrary): RegistryCatalog {
   const duplicateTracker = createDuplicateTracker();
   const collections = registry.collections.map((collection) => {
     for (const dkb of collection.dkbs) {
@@ -133,7 +133,7 @@ export function catalogFromRegistry(registry: LoadedRegistry): RegistryCatalog {
   };
 }
 
-export async function buildRegistryChunksFromRegistry(registry: LoadedRegistry): Promise<RegistryChunkIndex> {
+export async function buildRegistryChunksFromRegistry(registry: LoadedLibrary): Promise<RegistryChunkIndex> {
   const registryHash = stableHash({
     id: registry.manifest.id,
     version: registry.manifest.version,

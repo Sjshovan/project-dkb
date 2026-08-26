@@ -1,10 +1,8 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readSourceIndex } from '../indexes/sourceIndex.js';
-import { loadDkb, loadRegistry } from '../protocol/manifest.js';
-import { manifestPath } from '../protocol/paths.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest } from '../protocol/manifest.js';
 
-export type AlignmentTargetType = 'dkr' | 'dkc' | 'dkb';
+export type AlignmentTargetType = 'library' | 'collection' | 'dkb';
 export type AlignmentAuditStatus = 'aligned' | 'issues';
 
 export interface KnowledgeAlignmentAuditChunk {
@@ -57,10 +55,12 @@ export interface KnowledgeAlignmentAudit {
 
 export async function auditKnowledgeAlignment(targetPath: string): Promise<KnowledgeAlignmentAudit> {
   const resolvedPath = path.resolve(targetPath);
-  const isPackage = await exists(manifestPath(resolvedPath, 'dkb.json'));
-  const target = isPackage
+  const manifest = await loadManifest(resolvedPath);
+  const target = manifest.type === 'dkb'
     ? await packageTarget(resolvedPath)
-    : await registryTarget(resolvedPath);
+    : manifest.type === 'collection'
+      ? await collectionTarget(resolvedPath)
+      : await libraryTarget(resolvedPath);
   const sourceIndex = await readSourceIndex(resolvedPath).catch(() => ({ assets: [], units: [], edges: [] }));
   const chunks = sourceIndex.units.map((unit): KnowledgeAlignmentAuditChunk => {
     const issues = [
@@ -97,15 +97,27 @@ async function packageTarget(resolvedPath: string): Promise<KnowledgeAlignmentAu
   };
 }
 
-async function registryTarget(resolvedPath: string): Promise<KnowledgeAlignmentAudit['target']> {
-  const registry = await loadRegistry(resolvedPath);
+async function collectionTarget(resolvedPath: string): Promise<KnowledgeAlignmentAudit['target']> {
+  const collection = await loadCollection(resolvedPath);
 
   return {
     path: resolvedPath,
-    type: 'dkr',
-    id: registry.manifest.id,
-    name: registry.manifest.name,
-    version: registry.manifest.version,
+    type: 'collection',
+    id: collection.manifest.id,
+    name: collection.manifest.name,
+    version: collection.manifest.version,
+  };
+}
+
+async function libraryTarget(resolvedPath: string): Promise<KnowledgeAlignmentAudit['target']> {
+  const library = await loadLibrary(resolvedPath);
+
+  return {
+    path: resolvedPath,
+    type: 'library',
+    id: library.manifest.id,
+    name: library.manifest.name,
+    version: library.manifest.version,
   };
 }
 
@@ -165,14 +177,4 @@ function issueCounts(chunks: KnowledgeAlignmentAuditChunk[]): Record<string, num
   }
 
   return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
-}
-
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-
-    return true;
-  } catch {
-    return false;
-  }
 }

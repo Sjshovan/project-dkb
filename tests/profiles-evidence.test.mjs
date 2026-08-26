@@ -117,9 +117,9 @@ test('generated retrieval profile locks do not invalidate package source hashes'
 
   await fs.writeFile(path.join(root, 'dkb.json'), `${JSON.stringify({
     manifestVersion: 1,
-    type: 'package',
-    name: 'Profile hash proof',
-    package: 'profile-hash-proof',
+    type: 'dkb',
+    name: '@test/profile-hash-proof',
+    displayName: 'Profile hash proof',
     version: '1.0.0',
     permissions: { read: true, write: false },
   }, null, 2)}\n`, 'utf8');

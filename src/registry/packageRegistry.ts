@@ -10,10 +10,12 @@ import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.
 import { validateFaissPackageQueryability, validateFaissRuntimeReady } from '../indexes/faissStore.js';
 import { canonicalJson, stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
+import { parseDkbIdentity, registryPackagePath } from '../protocol/identity.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
-import { loadDkb, loadDkbPackage, loadRegistry } from '../protocol/manifest.js';
+import { loadDkb, loadDkbPackage, loadLibrary } from '../protocol/manifest.js';
 import { manifestPath } from '../protocol/paths.js';
-import { validateDkbLockManifest } from '../protocol/validation.js';
+import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '../library/state.js';
+import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '../library/artifactSnapshot.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
 import {
   createSignedPackageReceipt,
@@ -23,7 +25,6 @@ import {
   parsePackageReceipt,
   verifyPackageReceipt,
 } from '../signing/index.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '../protocol/types.js';
 
 export const MOCK_REGISTRY_DB = 'registry.sqlite';
@@ -258,14 +259,18 @@ export async function loginMockRegistry(options: {
 
 export async function publishDkbToMockRegistry(options: MockRegistryPublishOptions): Promise<MockRegistryPublishResult> {
   const paths = await ensureMockRegistry(options.registryRoot);
+  const sourceRoot = path.resolve(options.sourcePath);
+  const dkb = await loadDkb(sourceRoot);
+  const identity = parseDkbIdentity(dkb.manifest.id);
   const account = await loginMockRegistry({
     registryRoot: options.registryRoot,
-    accountId: options.accountId,
+    accountId: options.accountId ?? identity.namespace,
     name: options.accountName,
     email: options.accountEmail,
   });
-  const sourceRoot = path.resolve(options.sourcePath);
-  const dkb = await loadDkb(sourceRoot);
+  if (account.account.id !== identity.namespace) {
+    throw new DkbError(`Cannot publish ${dkb.manifest.id} as ${account.account.id}; the authenticated account must own @${identity.namespace}`);
+  }
   const version = dkb.manifest.version;
   const packageId = dkb.manifest.id;
   const packagePath = path.join(paths.packagesDir, packageId, version);
@@ -299,7 +304,6 @@ export async function publishDkbToMockRegistry(options: MockRegistryPublishOptio
     try {
       const publisherKey = activeKey(database, account.key.id);
       const registryKey = activeRegistryKey(database);
-      await fs.rm(manifestPath(buildRoot, 'dkb-lock.json'), { force: true });
       await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
       const packageTreeHash = await hashPackageTree(buildRoot);
       const receipt = createSignedPackageReceipt(compiled.lock, {
@@ -559,11 +563,8 @@ export async function preflightDkbInstall(options: {
     );
   }
   const installedVersion = installedDkb.manifest.version;
-  const lock = await readExistingLock(path.join(runtime.stateRoot, 'dkb-lock.json'));
-  const lockEntry = Object.values(lock?.packages ?? {}).find((item) => (
-    item.id === options.candidate.packageId
-    || packageIdFromResolvedRelease(item.resolved) === options.candidate.packageId
-  ));
+  const state = await readLibraryState(runtime.stateRoot);
+  const lockEntry = state.entries[options.candidate.packageId];
 
   if (!lockEntry) {
     if (options.force) {
@@ -579,13 +580,14 @@ export async function preflightDkbInstall(options: {
   if (installedVersion === options.candidate.version) {
     const archiveChanged = Boolean(
       options.candidate.archiveHash
-      && lockEntry?.archiveHash
-      && options.candidate.archiveHash !== lockEntry.archiveHash,
+      && lockEntry?.digest
+      && !options.candidate.packageTreeHash
+      && options.candidate.archiveHash !== lockEntry.digest,
     );
     const packageTreeChanged = Boolean(
       options.candidate.packageTreeHash
-      && lockEntry?.packageTreeHash
-      && options.candidate.packageTreeHash !== lockEntry.packageTreeHash,
+      && lockEntry?.digest
+      && options.candidate.packageTreeHash !== lockEntry.digest,
     );
 
     if (archiveChanged || packageTreeChanged) {
@@ -661,7 +663,7 @@ export async function installDkbArchiveIntoRuntime(options: {
     const receipt = parsePackageReceipt(JSON.parse(await fs.readFile(path.join(extractedRoot, DKB_PACKAGE_RECEIPT_PATH), 'utf8')), path.join(extractedRoot, DKB_PACKAGE_RECEIPT_PATH));
     const target = runtimeVendorPackagePath(runtime.stateRoot, receipt, verification.packageId, verification.version);
     const installed = await installedPackageRoots(runtime.stateRoot, verification.packageId);
-    const registryId = (await loadRegistry(runtime.stateRoot)).manifest.id;
+    const registryId = (await loadLibrary(runtime.stateRoot)).manifest.id;
     const stagedDkb = await loadDkbPackage(extractedRoot, verification.packageId);
     options.progress?.(progressStart({
       phase: 'validate-retrieval',
@@ -684,7 +686,6 @@ export async function installDkbArchiveIntoRuntime(options: {
     }
 
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.rm(path.join(extractedRoot, DKB_PACKAGE_RECEIPT_PATH), { force: true });
     const backup = await backupInstalledRoots(installed, target);
 
     options.progress?.(progressStart({
@@ -694,11 +695,32 @@ export async function installDkbArchiveIntoRuntime(options: {
       unit: 'steps',
     }));
 
+    let activation: { rollback: () => Promise<void> } | null = null;
+    let artifactSnapshot: LibraryArtifactSnapshot | null = null;
+
     try {
+      artifactSnapshot = await snapshotLibraryArtifacts(runtime.stateRoot);
       await fs.rename(extractedRoot, target);
       options.progress?.(progressFinish({
         phase: 'activate-package',
         label: 'Activate package',
+        total: 1,
+        unit: 'steps',
+      }));
+
+      options.progress?.(progressStart({
+        phase: 'record-installation',
+        label: 'Record installation',
+        total: 0,
+        unit: 'steps',
+      }));
+      activation = await updateRuntimeInstallManifests(runtime.stateRoot, receipt, {
+        archiveHash,
+        installedPath: path.relative(runtime.stateRoot, target).replace(/\\/g, '/'),
+      });
+      options.progress?.(progressFinish({
+        phase: 'record-installation',
+        label: 'Record installation',
         total: 1,
         unit: 'steps',
       }));
@@ -713,23 +735,6 @@ export async function installDkbArchiveIntoRuntime(options: {
       options.progress?.(progressFinish({
         phase: 'refresh-runtime-catalog',
         label: 'Refresh runtime catalog',
-        total: 1,
-        unit: 'steps',
-      }));
-
-      options.progress?.(progressStart({
-        phase: 'record-installation',
-        label: 'Record installation',
-        total: 0,
-        unit: 'steps',
-      }));
-      await updateRuntimeInstallManifests(runtime.stateRoot, receipt, {
-        archiveHash,
-        installedPath: path.relative(runtime.stateRoot, target).replace(/\\/g, '/'),
-      });
-      options.progress?.(progressFinish({
-        phase: 'record-installation',
-        label: 'Record installation',
         total: 1,
         unit: 'steps',
       }));
@@ -760,7 +765,6 @@ export async function installDkbArchiveIntoRuntime(options: {
         total: 0,
         unit: 'steps',
       }));
-      await removeInstalledRootsBackup(backup);
       invalidateRuntimeQuerySnapshot(runtime.stateRoot);
       options.progress?.(progressFinish({
         phase: 'finalize-activation',
@@ -768,6 +772,8 @@ export async function installDkbArchiveIntoRuntime(options: {
         total: 1,
         unit: 'steps',
       }));
+      await removeInstalledRootsBackup(backup);
+      await artifactSnapshot.commit();
 
       return {
         status: 'installed',
@@ -780,6 +786,8 @@ export async function installDkbArchiveIntoRuntime(options: {
       };
     } catch (error) {
       await restoreInstalledRootsBackup(backup).catch(() => undefined);
+      await activation?.rollback().catch(() => undefined);
+      await artifactSnapshot?.rollback().catch(() => undefined);
       invalidateRuntimeQuerySnapshot(runtime.stateRoot);
 
       throw error;
@@ -1261,135 +1269,115 @@ async function copyDkbSourceOnly(sourceRoot: string, targetRoot: string): Promis
 async function writeRegistryPackageManifest(root: string, dkb: LoadedDkb, publisherId: string): Promise<void> {
   const source = manifestPath(root, 'dkb.json');
   const manifest = await readJsonObject(source);
-  const packageName = dependencyNameFor(publisherId, dkb.manifest.id);
+  const identity = parseDkbIdentity(dkb.manifest.id);
+
+  if (safeId(publisherId) !== identity.namespace) {
+    throw new DkbError(`Publisher ${publisherId} does not own ${dkb.manifest.id}`);
+  }
 
   delete manifest.dependencies;
+  delete manifest.publisher;
+  delete manifest.package;
+  delete manifest.collection;
 
   await fs.writeFile(source, `${JSON.stringify({
     manifestVersion: typeof manifest.manifestVersion === 'number' ? manifest.manifestVersion : 1,
-    type: 'package',
+    type: 'dkb',
     ...manifest,
-    name: dkb.manifest.name,
+    name: dkb.manifest.id,
+    displayName: dkb.manifest.name,
     version: dkb.manifest.version,
-    publisher: publisherId,
-    package: packageName,
   }, null, 2)}\n`, 'utf8');
 }
 
 async function updateRuntimeInstallManifests(root: string, receipt: DkbPackageReceipt, install: {
   archiveHash: string;
   installedPath: string;
-}): Promise<void> {
+}): Promise<{ rollback: () => Promise<void> }> {
   const rootManifestPath = manifestPath(root, 'dkb.json');
   const rootManifest = await ensureRuntimeProjectManifest(rootManifestPath, root);
-  const dependencyName = dependencyNameFor(receipt.publisher.accountId, receipt.package.id);
-  const dependencies = {
-    ...(isRecord(rootManifest.dependencies) ? rootManifest.dependencies as Record<string, string> : {}),
-    [dependencyName]: receipt.package.version,
-  };
-
-  await fs.writeFile(rootManifestPath, `${JSON.stringify({
-    ...rootManifest,
-    dependencies,
-  }, null, 2)}\n`, 'utf8');
-
-  const lockPath = manifestPath(root, 'dkb-lock.json');
-  const existingLock = await readExistingLock(lockPath);
+  const identity = receipt.package.id;
+  parseDkbIdentity(identity, 'Registry DKB identity');
+  const previousManifest = await fs.readFile(rootManifestPath, 'utf8');
+  const previousLock = await maybeReadLibraryLock(root);
   const receiptPackage = receipt.payload.lock.packages[receipt.package.id];
 
   if (!receiptPackage) {
     throw new DkbError(`Package receipt does not contain package lock entry: ${receipt.package.id}`);
   }
 
-  const packages = {
-    ...(existingLock?.packages ?? {}),
-    [dependencyName]: {
-      ...receiptPackage,
-      publisher: receipt.publisher.accountId,
-      package: dependencyName,
-      resolved: `${receipt.registry.registryId}:${receipt.package.id}@${receipt.package.version}`,
-      integrity: install.archiveHash,
-      archiveHash: install.archiveHash,
-      receiptHash: stableHash(receipt),
-      packageTreeHash: receipt.payload.packageTreeHash,
-      payloadHash: receipt.payloadHash,
-      publisherSignature: receipt.publisher,
-      registrySignature: receipt.registry,
-      installedPath: install.installedPath,
-      registryId: receipt.registry.registryId,
-      installedAt: new Date().toISOString(),
-    },
+  const now = new Date().toISOString();
+  const roots = {
+    ...(isRecord(rootManifest.roots) ? rootManifest.roots as Record<string, unknown> : {}),
+    [identity]: { version: receipt.package.version },
   };
-  const artifacts = await runtimeLockArtifacts(root);
-  const recordCount = Object.values(packages).reduce((total, item) => total + item.recordCount, 0);
+  const nextManifest = { ...rootManifest, roots };
+  const nextLock = {
+    library: {
+      name: String(rootManifest.name),
+      ...(previousLock?.library.retrievalProfileDigest
+        ? { retrievalProfileDigest: previousLock.library.retrievalProfileDigest }
+        : {}),
+    },
+    generation: (previousLock?.generation ?? 0) + 1,
+    entries: {
+      ...(previousLock?.entries ?? {}),
+      [identity]: {
+        identity,
+        kind: 'dkb' as const,
+        source: 'registry' as const,
+        version: receipt.package.version,
+        digest: receipt.payload.packageTreeHash ?? receipt.payloadHash ?? install.archiveHash,
+        path: install.installedPath,
+        requiredBy: [`root:${identity}`],
+        installedAt: now,
+      },
+    },
+    resolvedAt: now,
+  };
 
-  await fs.writeFile(lockPath, `${JSON.stringify({
-    registry: {
-      id: safeId(path.basename(root) || 'runtime'),
-      name: String(rootManifest.name ?? titleFromId(path.basename(root) || 'Runtime Registry')),
-      version: String(rootManifest.version ?? '0.0.0-local'),
-    },
-    packages,
-    artifacts,
-    compiled: {
-      path: SOURCE_INDEX_PATH,
-      artifactHash: artifacts.sourceIndex.hash,
-      chunkRepositoryHash: stableHash(packages),
-      indexHash: stableHash(artifacts),
-      recordCount,
-      compiledAt: new Date().toISOString(),
-    },
-  }, null, 2)}\n`, 'utf8');
+  const restore = async () => {
+    await fs.writeFile(rootManifestPath, previousManifest, 'utf8');
+    if (previousLock) {
+      await applyLibraryLock(root, previousLock);
+    } else {
+      await applyLibraryLock(root, {
+        library: { name: String(rootManifest.name) },
+        generation: 0,
+        entries: {},
+        resolvedAt: now,
+      });
+      await fs.rm(path.join(root, 'dkb-lock.json'), { force: true });
+    }
+  };
+
+  try {
+    await writeJsonAtomic(rootManifestPath, nextManifest);
+    await applyLibraryLock(root, nextLock);
+  } catch (error) {
+    await restore().catch(() => undefined);
+    throw error;
+  }
+
+  return { rollback: restore };
 }
 
 async function ensureRuntimeProjectManifest(manifestFile: string, root: string): Promise<Record<string, unknown>> {
   const existing = await maybeReadJsonObject(manifestFile);
 
   if (existing) {
-    return {
-      version: '0.0.0-local',
-      ...existing,
-      manifestVersion: typeof existing.manifestVersion === 'number' ? existing.manifestVersion : 1,
-      type: 'registry',
-      dependencies: isRecord(existing.dependencies) ? existing.dependencies : {},
-    };
+    if (existing.type !== 'library') {
+      throw new DkbError(`Runtime root uses the removed ${String(existing.type ?? 'legacy')} manifest format. Initialize a new DKB Library.`);
+    }
+    return { ...existing, roots: isRecord(existing.roots) ? existing.roots : {} };
   }
 
   return {
     manifestVersion: 1,
-    type: 'registry',
-    name: titleFromId(path.basename(root) || 'Runtime Registry'),
-    version: '0.0.0-local',
-    description: 'Local DKB runtime registry.',
-    dependencies: {},
-  };
-}
-
-async function readExistingLock(lockPath: string): Promise<DkbLockManifest | null> {
-  try {
-    return validateDkbLockManifest(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
-  } catch {
-    return null;
-  }
-}
-
-async function runtimeLockArtifacts(root: string): Promise<DkbLockManifest['artifacts']> {
-  const sourceIndexHash = await hashPath(path.join(root, SOURCE_INDEX_PATH));
-  const sourceGraphHash = await hashPath(path.join(root, SOURCE_GRAPH_PATH));
-  const sourceVectorHash = await hashPath(path.join(root, SOURCE_VECTOR_PATH));
-
-  return {
-    sourceIndex: lockArtifact(SOURCE_INDEX_PATH, sourceIndexHash),
-    sourceGraph: lockArtifact(SOURCE_GRAPH_PATH, sourceGraphHash),
-    sourceVector: lockArtifact(SOURCE_VECTOR_PATH, sourceVectorHash),
-  };
-}
-
-function lockArtifact(pathValue: string, hash: string | null): DkbLockArtifact {
-  return {
-    path: pathValue,
-    hash,
-    status: hash ? 'built' : 'missing',
+    type: 'library',
+    name: titleFromId(path.basename(root) || 'DKB Library'),
+    description: 'Local DKB Library.',
+    roots: {},
   };
 }
 
@@ -1573,7 +1561,7 @@ async function installedPackageRoots(stateRoot: string, packageId: string): Prom
   const roots = new Set<string>();
 
   try {
-    const registry = await loadRegistry(stateRoot);
+    const registry = await loadLibrary(stateRoot);
     const dkbs = [
       ...registry.collections.flatMap((collection) => collection.dkbs),
       ...registry.dkbs,
@@ -1589,40 +1577,21 @@ async function installedPackageRoots(stateRoot: string, packageId: string): Prom
     // behind by an interrupted install before the runtime manifest was updated.
   }
 
-  const vendorRoot = path.join(path.resolve(stateRoot), 'vendor');
-
-  try {
-    for (const publisher of await fs.readdir(vendorRoot, { withFileTypes: true })) {
-      if (!publisher.isDirectory()) {
-        continue;
-      }
-
-      const candidate = path.join(vendorRoot, publisher.name, safeId(packageId));
-
-      if (await exists(path.join(candidate, 'dkb.json'))) {
-        roots.add(path.resolve(candidate));
-      }
-    }
-  } catch {
-    // A new runtime has no vendor directory entries yet.
-  }
+  const candidate = registryPackagePath(stateRoot, packageId);
+  if (await exists(path.join(candidate, 'dkb.json'))) roots.add(path.resolve(candidate));
 
   return [...roots];
 }
 
 function runtimeVendorPackagePath(stateRoot: string, receipt: DkbPackageReceipt, packageId: string, version: string): string {
+  void receipt;
   void version;
-
-  return path.join(
-    path.resolve(stateRoot),
-    'vendor',
-    safeId(receipt.publisher.accountId),
-    safeId(packageId),
-  );
+  return registryPackagePath(stateRoot, packageId);
 }
 
 interface InstalledRootsBackup {
   root: string;
+  target: string;
   entries: Array<{
     original: string;
     backup: string;
@@ -1652,10 +1621,12 @@ async function backupInstalledRoots(installed: string[], target: string): Promis
     entries.push({ original: root, backup: backupPath });
   }
 
-  return { root: backupRoot, entries };
+  return { root: backupRoot, target: path.resolve(target), entries };
 }
 
 async function restoreInstalledRootsBackup(backup: InstalledRootsBackup): Promise<void> {
+  await fs.rm(backup.target, { recursive: true, force: true });
+
   for (const entry of [...backup.entries].reverse()) {
     await fs.rm(entry.original, { recursive: true, force: true });
     await fs.mkdir(path.dirname(entry.original), { recursive: true });
@@ -1818,6 +1789,23 @@ async function readJsonObject(source: string): Promise<Record<string, unknown>> 
   return value;
 }
 
+async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
+  const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
+  const hadTarget = await exists(target);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  if (hadTarget) await fs.rename(target, backup);
+  try {
+    await fs.rename(temp, target);
+    await fs.rm(backup, { force: true });
+  } catch (error) {
+    await fs.rm(target, { force: true });
+    if (hadTarget && await exists(backup)) await fs.rename(backup, target);
+    throw error;
+  }
+}
+
 async function maybeReadJsonObject(source: string): Promise<Record<string, unknown> | null> {
   try {
     const value = JSON.parse(await fs.readFile(source, 'utf8')) as unknown;
@@ -1860,18 +1848,6 @@ function isDkbSystemArtifactPath(sourceRoot: string, candidate: string): boolean
   const name = path.basename(candidate);
 
   return parts.includes('.dkb') || name === 'dkb-lock.json' || name === 'dkb-release.json' || name === DKB_PACKAGE_RECEIPT_PATH;
-}
-
-function dependencyNameFor(publisherId: string, packageId: string): string {
-  return `@${safeId(publisherId)}/${safeId(packageId)}`;
-}
-
-function packageIdFromResolvedRelease(resolved: string | undefined): string | null {
-  if (!resolved) {
-    return null;
-  }
-
-  return resolved.split(':').pop()?.split('@')[0] ?? null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

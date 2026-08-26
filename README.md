@@ -6,15 +6,18 @@ into local, installable knowledgebases.
 The project provides:
 
 - `dkb.json` package manifests
+- flat local Libraries with ledger-based installed state
+- first-class namespaced DKBs and Collections
 - source compilation into chunk and provenance indexes
-- registry-local source discovery for root-level raw knowledge files
+- direct-child authoring discovery and npm-style `vendor/` installs
 - signed `.dkbpkg` package archives
-- local registry publish and install flows
+- remote Registry publish, install, update, and uninstall flows
 - runtime retrieval over a compact CLI and MCP surface
 
 ## Documentation
 
 - [`docs/cli-ux.md`](docs/cli-ux.md) — implemented human and automation output contract
+- [`docs/library-and-collections.md`](docs/library-and-collections.md) — Library layout, Collection snapshots, locks, and lifecycle
 - [`docs/decisions/`](docs/decisions/) — accepted directions and implementation status
 - [`docs/artifact-architecture.md`](docs/artifact-architecture.md) — portable evidence and compiled artifact boundaries
 - [`docs/agent-navigation.md`](docs/agent-navigation.md) — model-facing search, reference, read, and source primitives
@@ -53,8 +56,8 @@ download, archive verification, single-pass extraction, package/signature
 verification, retrieval-index validation, and activation phases before its
 final result and `Done.`
 
-Every initialized DKB registry/runtime folder remembers its own upstream
-package-registry URL in `.dkb/config.json`. Bare `dkb init` initializes the
+Every initialized DKB Library remembers its upstream Registry URL in
+`.dkb/config.json`. Bare `dkb init` initializes the
 current directory, asks for the upstream URL, and attempts to verify it. An
 unavailable upstream never blocks local creation: the CLI stores the URL, warns,
 and prints the `dkb registry use <url>` command for retrying later. Set it later
@@ -66,7 +69,7 @@ config is now a fallback. `dkb list` shows the resolved registry and source.
 See [`docs/cli-ux.md`](docs/cli-ux.md) for the complete output and exit-code
 contract.
 
-Serve a folder as a local knowledge registry:
+Serve a Library through one local runtime:
 
 ```bash
 cd ~/SecondBrain
@@ -74,8 +77,8 @@ dkb serve
 ```
 
 `dkb serve` resolves the current folder first, then walks upward to the nearest
-parent registry manifest. If no registry exists and the command is running in an
-interactive terminal, it can initialize the current folder as a registry,
+parent Library manifest. If no Library exists and the command is running in an
+interactive terminal, it can initialize the current folder as a Library,
 compile eligible local source files, and start the runtime against that folder.
 Existing files are not moved or deleted during initialization.
 
@@ -87,17 +90,33 @@ dkb init --registry-url http://127.0.0.1:8000 --yes
 dkb serve
 ```
 
-Use `--root` when the registry folder should be selected explicitly:
+Use `--root` when the Library should be selected explicitly:
 
 ```bash
 dkb serve --root ~/SecondBrain
 ```
 
-Create a package:
+Create a namespaced DKB inside a Library:
 
 ```bash
-node dist/src/cli/index.js init "My DKB"
+cd ~/SecondBrain
+dkb init @my-team/my-dkb
 ```
+
+Create a Collection, add exact dependencies, and publish its immutable Registry
+snapshot:
+
+```bash
+dkb collection create @my-team/starter-knowledge
+dkb collection add @my-team/starter-knowledge @my-team/my-dkb --version 0.1.0
+dkb collection publish ./starter-knowledge
+```
+
+A Library is flat. Editable DKBs and Collections are direct child folders;
+Registry downloads live only under `vendor/@namespace/name`. The manifest says
+what an entry is, while `dkb.json`, `dkb-lock.json`, and `.dkb/state.sqlite`
+say what is active. Filesystem presence alone never means installed. See
+[`docs/library-and-collections.md`](docs/library-and-collections.md).
 
 Compile and inspect a package:
 
@@ -125,7 +144,7 @@ node dist/src/cli/index.js compiler stop
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to force the older one-shot compiler
 container path for a single process.
 
-Each registry has one retrieval profile. The profile locks the compiler,
+Each Library has one retrieval profile. The profile locks the compiler,
 parser, chunker, embedding model, dimensions, distance metric, and relevant
 versions used by every installed package. Profile changes are whole-registry,
 staged migrations: DKB compiles and validates the complete replacement before
@@ -150,20 +169,21 @@ node dist/src/cli/index.js artifact cosign-keypair --out ./cosign --password "$C
 node dist/src/cli/index.js artifact cosign-sign localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.key --password "$COSIGN_PASSWORD"
 node dist/src/cli/index.js artifact cosign-verify localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.pub
 node dist/src/cli/index.js artifact oci-pull localhost:5000/dkb/my-dkb:0.1.0 --out ./pulled
-node dist/src/cli/index.js artifact install ./pulled --runtime-root .dkb/runtime
+node dist/src/cli/index.js artifact install ./pulled --library ~/SecondBrain
 ```
 
-Use the configured package registry. By default the CLI targets the local
-development registry at `http://127.0.0.1:8000`; later this can be pointed at a
-hosted registry or a registry you operate yourself:
+Use the configured remote Registry. By default the CLI targets the development
+Registry at `http://127.0.0.1:8000`; it can instead point at a hosted Registry
+or one you operate yourself:
 
 ```bash
 node dist/src/cli/index.js registry status
 node dist/src/cli/index.js registry use http://127.0.0.1:8000
 node dist/src/cli/index.js registry packages
 node dist/src/cli/index.js publish ./my-dkb
-node dist/src/cli/index.js install my-dkb
-node dist/src/cli/index.js list --runtime-root .dkb/runtime
+node dist/src/cli/index.js install @my-team/my-dkb --version 0.1.0
+node dist/src/cli/index.js list
+node dist/src/cli/index.js uninstall @my-team/my-dkb
 ```
 
 For local CLI fixture work, the in-process development registry is still
@@ -172,7 +192,7 @@ available explicitly:
 ```bash
 node dist/src/cli/index.js registry serve --root .dkb/mock-registry
 node dist/src/cli/index.js publish ./my-dkb --registry .dkb/mock-registry
-node dist/src/cli/index.js install my-dkb --registry .dkb/mock-registry
+node dist/src/cli/index.js install @my-team/my-dkb --version 0.1.0 --registry .dkb/mock-registry --library ~/SecondBrain
 ```
 
 Retrieve knowledge:
@@ -181,7 +201,7 @@ Retrieve knowledge:
 node dist/src/cli/index.js retrieve "what does this knowledgebase say?"
 ```
 
-Registry-local files become queryable after compilation:
+Library knowledge becomes queryable after compilation or verified install:
 
 ```bash
 node dist/src/cli/index.js compile .
@@ -198,7 +218,7 @@ The local stdio server keeps the full DKB tool surface. Remote agents receive a
 separate read-only HTTP surface with only `search` and `fetch`:
 
 ```bash
-DKB_REGISTRY_PATH=/knowledge/runtime \
+DKB_LIBRARY_PATH=/knowledge/library \
 DKB_QUERY_EMBEDDER_URL=http://127.0.0.1:8090/embed \
 DKB_MCP_BEARER_TOKEN=replace-with-a-secret \
 node dist/src/cli/index.js mcp serve-http --host 127.0.0.1 --port 7332
@@ -231,8 +251,9 @@ node dist/src/cli/index.js runtime serve --state-root ~/SecondBrain
 ```
 
 Docker-backed runtime commands remain available for local process management,
-but the folder-first flow is the default way to bind a runtime to a specific
-registry root.
+but the folder-first flow is the default. One runtime serves one Library; the
+Library may contain many DKBs and Collections but it has one compatible
+retrieval profile and one upstream Registry configuration.
 
 ## Runtime Artifacts
 
