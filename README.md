@@ -23,6 +23,7 @@ The project provides:
 - [`docs/agent-navigation.md`](docs/agent-navigation.md) — model-facing search, reference, read, and source primitives
 - [`docs/chatgpt-mcp.md`](docs/chatgpt-mcp.md) — local and remote MCP authority and security boundary
 - [`docs/faiss-runtime.md`](docs/faiss-runtime.md) — installed FAISS/SQLite runtime model
+- [`docs/provider-pipeline.md`](docs/provider-pipeline.md) — plugin resolution, pipeline targets, and managed-index lifecycle
 - [`docs/remote-hosting.md`](docs/remote-hosting.md) — verified hosted-runtime discovery
 
 ## Install
@@ -40,7 +41,7 @@ as compile, publish, install, artifact transport, verification, and package
 removal. Automation opts into one JSON document explicitly:
 
 ```bash
-dkb --json compile ./my-dkb --compiler llamaindex --artifact-profile faiss-package
+dkb --json compile ./my-dkb
 dkb --no-progress compiler status
 ```
 
@@ -122,7 +123,7 @@ Compile and inspect a package:
 
 ```bash
 node dist/src/cli/index.js validate ./my-dkb
-node dist/src/cli/index.js compile ./my-dkb --compiler llamaindex --artifact-profile faiss-package
+node dist/src/cli/index.js compile ./my-dkb
 node dist/src/cli/index.js verify ./my-dkb
 node dist/src/cli/index.js inspect ./my-dkb
 node dist/src/cli/index.js artifact inspect ./my-dkb
@@ -130,9 +131,10 @@ node dist/src/cli/index.js artifact validate ./my-dkb
 node dist/src/cli/index.js artifact pack ./my-dkb --out ./my-dkb.dkbpkg
 ```
 
-The LlamaIndex/Docling/FastEmbed compiler runs through a local-only Docker
-service by default so repeated compiles reuse initialized parser and embedding
-state. The service is separate from the query runtime:
+The bundled LlamaIndex/Docling ingestion provider runs through a local Docker
+service by default so repeated compiles reuse initialized parser state. The
+same provider pipeline is invoked directly by the local CLI and through HTTP by
+the Registry compiler:
 
 ```bash
 node dist/src/cli/index.js compiler start
@@ -144,21 +146,25 @@ node dist/src/cli/index.js compiler stop
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to force the older one-shot compiler
 container path for a single process.
 
-Each Library has one retrieval profile. The profile locks the compiler,
-parser, chunker, embedding model, dimensions, distance metric, and relevant
-versions used by every installed package. Profile changes are whole-registry,
-staged migrations: DKB compiles and validates the complete replacement before
-atomically promoting it.
+Each Library has one active pipeline target. A target selects ingestion (or a
+parser and chunker), ordered processors, embedding, index, retrieval, and
+provider-owned options. The generated `dkb-profile.lock.json` records the exact
+providers and a separate compatibility digest for the embedding and retrieval
+space used by every installed package.
 
 ```bash
-node dist/src/cli/index.js profile show .
-node dist/src/cli/index.js profile plan . --model BAAI/bge-base-en-v1.5
-node dist/src/cli/index.js profile migrate . --model BAAI/bge-base-en-v1.5 --yes
+node dist/src/cli/index.js pipeline show .
+node dist/src/cli/index.js pipeline verify .
+node dist/src/cli/index.js plugin list .
 ```
 
-The built-in FastEmbed profiles currently resolve `BAAI/bge-small-en-v1.5` to
-384 dimensions and `BAAI/bge-base-en-v1.5` to 768 dimensions. A package whose
-profile differs from the active runtime is rejected before activation.
+The bundled default target selects Docling/LlamaIndex, FastEmbed with
+`BAAI/bge-small-en-v1.5` at 384 dimensions, packaged FAISS, and DKB hybrid
+retrieval. A target can instead select the 768-dimensional base model or the
+managed `@dkb/meilisearch` index provider. An incompatible target or package is
+rejected before activation; use `pipeline set ... --no-activate` to stage a
+future target without changing the working Library. See
+[`docs/provider-pipeline.md`](docs/provider-pipeline.md).
 
 Move a compiled package through a local OCI registry:
 
@@ -264,9 +270,14 @@ committed:
 .dkb/artifacts/
 .dkb/cache/
 .dkb/locks/
+.dkb/plugins/
 .dkb/runs/
 .dkb/trace.sqlite
 ```
+
+`.dkb/plugins/` contains operator-installed Library-local code and is preserved
+locally, but it and `.dkb/config.json` are always excluded from `.dkbpkg`
+artifacts. Knowledge packages cannot install or select executable plugins.
 
 `source.index` is the chunk-first retrieval artifact. It stores compiled source
 units with source asset provenance, chunk ordinals, offsets, hashes, and
@@ -289,8 +300,8 @@ and `.htm` are converted with Docling and chunked with Docling
 `HybridChunker`; plain text, Markdown, CSV, SQLite, and configured database
 sources continue through the existing LlamaIndex/database lanes. Every lane
 emits the same DKB compiled chunk and provenance records, so package install,
-FAISS import, HTTP retrieval, and MCP retrieval do not need source-specific
-runtime behavior.
+index-provider import, HTTP retrieval, and MCP retrieval do not need
+source-specific runtime behavior.
 
 Docling routing can be controlled in the compiler container with:
 
@@ -315,8 +326,11 @@ dkb.read             -> read selected compiled chunks with provenance
 dkb.sources          -> describe active source assets and chunk counts
 ```
 
-Semantic search uses the active FAISS shard view. Exact search uses the
-package-local SQLite lexical tables generated with the compiled chunk catalog.
-Both return stable package/source/chunk references first; `dkb.read` is the
-explicit evidence step. The existing `dkb.retrieve_knowledge` tool remains
-available for compatibility with answer-oriented integrations.
+Semantic search uses the active index provider. Packaged FAISS opens immutable
+package segments as one shard view; managed Meilisearch fans out across one
+immutable index per active package release and fuses the results. Exact search
+uses provider-supplied lexical search when available and otherwise the compiled
+source catalog. Both return stable package/source/chunk references first;
+`dkb.read` is the explicit evidence step. The existing
+`dkb.retrieve_knowledge` tool remains available for compatibility with
+answer-oriented integrations.

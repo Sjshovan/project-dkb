@@ -11,7 +11,7 @@ import { loadCompose } from '../protocol/manifest.js';
 import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, artifactLockPath, manifestPath, resolveFrom } from '../protocol/paths.js';
 import { validateDkbLockManifest } from '../protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '../protocol/types.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
 import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
 import type { LlamaIndexCompilerResult } from './llamaindex.js';
@@ -30,10 +30,11 @@ import {
   type DkbRetrievalProfileLock,
 } from '../profiles/retrievalProfile.js';
 import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '../evidence/ir.js';
-import { BUNDLED_PROVIDER_PLUGINS, assertLlamaIndexNativeResult } from '../providers/bundled.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
 import { DkbProviderHost } from '../providers/host.js';
+import { sourceUnitFromPipelineRecord } from '../providers/records.js';
 import { compileDkbWithProviderHost } from '../providers/runner.js';
-import type { DkbCompiledPipeline, DkbIndexProvider } from '../providers/types.js';
+import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '../providers/types.js';
 import { loadFaissPackageArtifact } from '../indexes/faissStore.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
@@ -343,6 +344,7 @@ async function writeAtomicCompileArtifacts(
     await writeCompilerBundles(stageRoot, state.compilerArtifacts, state.providerHost, {
       writeAggregate: false,
       writeRecordBundles: artifactProfile === 'full',
+      compatibility: state.retrievalProfileLock?.compatibility ?? {},
     });
     await writeProfileArtifacts(stageRoot, state);
     timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
@@ -411,7 +413,7 @@ async function writeCompilerBundles(
   stageRoot: string,
   compilerArtifacts: CompilerArtifactState[],
   providerHost: DkbProviderHost,
-  options: { writeAggregate: boolean; writeRecordBundles: boolean },
+  options: { writeAggregate: boolean; writeRecordBundles: boolean; compatibility: Record<string, unknown> },
 ): Promise<void> {
   if (compilerArtifacts.length === 0) {
     return;
@@ -450,6 +452,7 @@ async function writeCompilerBundles(
       root: stageRoot,
       dkb: primary.dkb,
       compiled: primary.compiled,
+      compatibility: options.compatibility,
       options: providerHost.optionsFor(target.index),
     });
   }
@@ -1027,6 +1030,21 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
     // Packages without a FAISS catalog verify against direct source adapters.
   }
 
+  try {
+    const sourceIndex = await readSourceIndex(dkb.root);
+
+    if (sourceIndex.units.length > 0) {
+      const sourceAnalysis = analyzeSourceUnits(sourceIndex.units);
+
+      return {
+        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
+        sourceAnalysis,
+      };
+    }
+  } catch {
+    // Packages without a portable source index verify against direct adapters.
+  }
+
   const state = await collectDkbState(dkb, undefined, artifactRoot);
 
   return {
@@ -1104,7 +1122,7 @@ async function buildSourceUnitsForDkb(
 }> {
   if (providerHost) {
     const compiled = await compileDkbWithProviderHost(providerHost, dkb);
-    const result = assertLlamaIndexNativeResult(compiled.nativeResult);
+    const result = compilerResultForPipeline(dkb, desiredProfile, compiled);
 
     if (desiredProfile && result.compiler.model !== desiredProfile.embedding.model) {
       throw new DkbError(`Pipeline embedding model mismatch: configured ${desiredProfile.embedding.model}, provider produced ${result.compiler.model}`);
@@ -1127,6 +1145,73 @@ async function buildSourceUnitsForDkb(
   return {
     units: batches.flat().sort((a, b) => a.id.localeCompare(b.id)),
   };
+}
+
+function compilerResultForPipeline(
+  dkb: LoadedDkb,
+  desiredProfile: DkbResolvedRetrievalProfile | undefined,
+  compiled: DkbCompiledPipeline,
+): LlamaIndexCompilerResult {
+  if (!desiredProfile) {
+    throw new DkbError(`Provider compilation for ${dkb.manifest.id} requires a resolved pipeline profile`);
+  }
+  const native = llamaIndexResult(compiled.nativeResult);
+  const compilerReceipt = compiled.receipts.find((receipt) => receipt.providerId === desiredProfile.compiler)
+    ?? compiled.receipts[0];
+  const compilerId = optionalString(compilerReceipt?.build.compilerId)
+    ?? native?.compiler.id
+    ?? compilerReceipt?.providerId
+    ?? desiredProfile.compiler;
+  const compilerImage = optionalString(compilerReceipt?.build.compilerImage)
+    ?? native?.compiler.image
+    ?? `plugin:${compilerReceipt?.providerId ?? desiredProfile.compiler}@${compilerReceipt?.providerVersion ?? 'unknown'}`;
+
+  return {
+    compiler: {
+      id: compilerId,
+      model: desiredProfile.embedding.model,
+      image: compilerImage,
+    },
+    ...(native?.execution ? { execution: native.execution } : {}),
+    records: compiled.records.map((record) => compilerRecordForPipeline(dkb, record)),
+    ...(native?.cache ? { cache: native.cache } : {}),
+  };
+}
+
+function compilerRecordForPipeline(dkb: LoadedDkb, record: DkbPipelineRecord): LlamaIndexCompilerResult['records'][number] {
+  const unit = sourceUnitFromPipelineRecord(dkb, record);
+  const sourceMetadata = isRecord(record.metadata.sourceMetadata) ? record.metadata.sourceMetadata : {};
+
+  return {
+    id: unit.id,
+    assetId: unit.assetId,
+    storeId: unit.storeId,
+    type: unit.type === 'postgres' ? 'database' : unit.type,
+    locator: unit.locator,
+    assetLocator: unit.assetLocator,
+    title: unit.title,
+    text: unit.text,
+    hash: unit.hash,
+    updatedAt: unit.updatedAt,
+    chunkOrdinal: unit.chunkOrdinal,
+    chunkStart: unit.chunkStart,
+    chunkEnd: unit.chunkEnd,
+    metadata: {
+      ...sourceMetadata,
+      dkb_package_id: dkb.manifest.id,
+      dkb_package_version: dkb.manifest.version,
+      dkb_path: typeof sourceMetadata.dkb_path === 'string' ? sourceMetadata.dkb_path : JSON.stringify(unit.assetLocator),
+      dkb_source_hash: typeof sourceMetadata.dkb_source_hash === 'string' ? sourceMetadata.dkb_source_hash : unit.hash,
+    },
+    embedding: [...(record.embedding ?? [])],
+  };
+}
+
+function llamaIndexResult(value: unknown): LlamaIndexCompilerResult | null {
+  if (!isRecord(value) || !isRecord(value.compiler) || !Array.isArray(value.records)) {
+    return null;
+  }
+  return value as unknown as LlamaIndexCompilerResult;
 }
 
 async function buildSourceUnitsForStore(dkb: LoadedDkb, store: DkbStore): Promise<IndexedSourceUnit[]> {
@@ -1450,4 +1535,12 @@ function artifact(pathValue: string, hash: string | null): DkbLockArtifact {
 
 function sameArtifact(left: DkbLockArtifact, right: DkbLockArtifact): boolean {
   return left.path === right.path && left.hash === right.hash && left.status === right.status;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

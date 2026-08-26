@@ -1864,69 +1864,6 @@ program
   });
 
 program
-  .command('search-health')
-  .description('Report local DKB search backend health')
-  .argument('<library-path>', 'Directory containing a Library, Collection, or DKB manifest')
-  .action(async (target: string) => {
-    const { describeSearchBackend } = await import('../indexes/vectorStore.js');
-    const result = await describeSearchBackend(path.resolve(target, DKB_ARTIFACTS_DIR));
-
-    printJson(result);
-
-    if (result.status === 'unavailable') {
-      process.exitCode = 1;
-    }
-  });
-
-program
-  .command('search-sync')
-  .description('Sync compiled chunk documents into the configured search backend')
-  .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
-  .action(async (target: string) => {
-    const { loadCompose } = await import('../protocol/manifest.js');
-    const { readSourceIndex, SOURCE_VECTOR_PATH } = await import('../indexes/sourceIndex.js');
-    const { vectorDocumentsForSourceUnits, writeSearchArtifacts } = await import('../indexes/vectorStore.js');
-    const registry = await loadCompose(target);
-    const sourceIndex = await readSourceIndex(target);
-
-    await presenter().run('Synchronizing search index', async () => writeSearchArtifacts(registry.manifest.id, path.resolve(target, SOURCE_VECTOR_PATH), vectorDocumentsForSourceUnits(sourceIndex.units)));
-  });
-
-program
-  .command('search-query')
-  .description('Query the configured DKB search backend directly')
-  .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
-  .argument('<query>', 'Search query')
-  .option('-l, --limit <number>', 'Maximum result count', parseLimit, 10)
-  .action(async (target: string, query: string, options: { limit: number }) => {
-    const { loadCompose } = await import('../protocol/manifest.js');
-    const { readSourceIndex } = await import('../indexes/sourceIndex.js');
-    const { searchBackendQuery, vectorDocumentsForSourceUnits } = await import('../indexes/vectorStore.js');
-    const registry = await loadCompose(target);
-    const sourceIndex = await readSourceIndex(target);
-
-    printJson(await searchBackendQuery({
-      registryId: registry.manifest.id,
-      artifactRoot: path.resolve(target, DKB_ARTIFACTS_DIR),
-      documents: vectorDocumentsForSourceUnits(sourceIndex.units),
-      query,
-      limit: options.limit,
-    }));
-  });
-
-program
-  .command('search-reset')
-  .description('Delete configured search backend indexes for a DKB Library')
-  .argument('<library-path>', 'Directory containing a Library manifest')
-  .action(async (target: string) => {
-    const { loadCompose } = await import('../protocol/manifest.js');
-    const { resetSearchBackend } = await import('../indexes/vectorStore.js');
-    const registry = await loadCompose(target);
-
-    await presenter().run('Resetting search index', async () => resetSearchBackend(registry.manifest.id, path.resolve(target, DKB_ARTIFACTS_DIR)));
-  });
-
-program
   .command('watch')
   .description('Watch a DKB Library and rebuild indexes on source changes')
   .argument('<library-path>', 'Directory containing a Library manifest')
@@ -2130,7 +2067,7 @@ function formatCliHelp(command: Command, helper: Help): string {
     },
     {
       title: 'Management Commands',
-      names: ['artifact', 'collection', 'compiler', 'library', 'mcp', 'profile', 'registry', 'remote', 'runtime', 'trace'],
+      names: ['artifact', 'collection', 'compiler', 'library', 'mcp', 'pipeline', 'plugin', 'registry', 'remote', 'runtime', 'trace'],
     },
     {
       title: 'Advanced Commands',
@@ -2141,10 +2078,6 @@ function formatCliHelp(command: Command, helper: Help): string {
         'read',
         'read-targets',
         'restore',
-        'search-health',
-        'search-query',
-        'search-reset',
-        'search-sync',
         'verify',
         'watch',
       ],
@@ -2619,12 +2552,13 @@ function summarizeInstallResult(value: unknown): string[] {
 }
 
 function summarizeRemoveResult(value: unknown): string[] {
-  const result = value as { status?: unknown; id?: unknown; libraryPath?: unknown };
+  const result = value as { status?: unknown; id?: unknown; libraryPath?: unknown; warning?: unknown };
 
   return [
     `status: ${humanStatus(result.status ?? 'ok')}`,
     `package: ${String(result.id ?? 'unknown')}`,
     typeof result.libraryPath === 'string' ? `library: ${result.libraryPath}` : '',
+    typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
   ];
 }
 

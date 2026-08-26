@@ -5,7 +5,6 @@ import {
   type IndexedSourceUnit,
 } from '../indexes/sourceIndex.js';
 import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
-import { searchFaissSnapshot } from '../indexes/faissStore.js';
 import type { LexicalSearchScope } from '../indexes/lexicalStore.js';
 import { tokenize } from '../router/scoring.js';
 import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '../security/sourceContent.js';
@@ -83,7 +82,12 @@ export async function semanticSearch(
   const scopedUnits = units.filter((unit) => unitMatchesScope(unit, scope));
 
   if (scopedUnits.length === 0) {
-    return { status: 'empty', query, results: [], trace: { engine: 'faiss', status: 'empty' } };
+    return {
+      status: 'empty',
+      query,
+      results: [],
+      trace: { engine: queryContext?.index?.providerId ?? 'unavailable', status: 'empty' },
+    };
   }
 
   const scopedIds = new Set(scopedUnits.map((unit) => unit.id));
@@ -98,8 +102,8 @@ export async function semanticSearch(
       })
       .filter((reference): reference is DkbNavigationReference => Boolean(reference))
     : memoryLexicalSearch(scopedUnits, query, searchLimit);
-  const result = queryContext?.faiss
-    ? await searchFaissSnapshot(queryContext.faiss, query, searchLimit, queryContext.embedQuery)
+  const result = queryContext?.index
+    ? await queryContext.index.search(query, searchLimit)
     : await querySearchDocuments(
       queryContext?.searchRegistryId ?? 'compose-index',
       queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(scopedUnits),

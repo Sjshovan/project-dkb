@@ -68,15 +68,6 @@ export interface DkbCollectionOverride {
   exclude?: string[];
 }
 
-export interface DkbRetrievalProfileConfig {
-  compiler?: 'llamaindex';
-  embedding?: {
-    adapter?: 'fastembed';
-    model?: string;
-    dimensions?: number;
-  };
-}
-
 export interface DkbStore {
   id: string;
   type: DkbStoreType;

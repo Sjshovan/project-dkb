@@ -156,13 +156,13 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   await writeDkb(dkbRoot, '@test/core', '1.0.0');
   await writeCompilerRecord(dkbRoot, '@test/core', 'CORE-MARKER-19');
 
-  const activated = await refreshRuntimeCatalogFromInstalledArtifacts(root, { syncSearch: false });
+  const activated = await refreshRuntimeCatalogFromInstalledArtifacts(root);
   assert.equal(activated.recordCount, 1);
   assert.equal((await verifyComposeProject(root)).ok, true);
   assert.equal((await inspectDkbArtifactManifest(root)).counts.packages, 1);
 
   await writeLibrary(root, {});
-  const removed = await refreshRuntimeCatalogFromInstalledArtifacts(root, { syncSearch: false });
+  const removed = await refreshRuntimeCatalogFromInstalledArtifacts(root);
   assert.equal(removed.recordCount, 0);
   assert.equal((await verifyComposeProject(root)).ok, true);
   assert.equal((await inspectDkbArtifactManifest(root)).counts.packages, 0);

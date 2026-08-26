@@ -19,7 +19,16 @@ export async function createDkbPackageArchive(sourceRoot: string, archivePath: s
     gzip: true,
     portable: true,
     noMtime: true,
+    filter: (entryPath) => !isOperatorControlledPath(entryPath),
   }, ['.']);
+}
+
+function isOperatorControlledPath(entryPath: string): boolean {
+  const normalized = entryPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+
+  return normalized === '.dkb/config.json'
+    || normalized === '.dkb/plugins'
+    || normalized.startsWith('.dkb/plugins/');
 }
 
 export async function extractDkbPackageArchive(archivePath: string, targetRoot: string, options: { progress?: DkbProgressReporter } = {}): Promise<void> {

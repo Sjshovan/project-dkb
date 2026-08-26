@@ -1,4 +1,5 @@
 import type { LoadedDkb } from '../protocol/types.js';
+import type { IndexedSourceAsset, IndexedSourceUnit } from '../indexes/sourceIndex.js';
 
 export type DkbProviderKind = 'ingestion' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
 export type DkbProcessorStage = 'document' | 'chunk' | 'record';
@@ -47,6 +48,13 @@ export interface DkbIngestionProvider {
   compile(input: {
     dkb: LoadedDkb;
     options: Readonly<Record<string, unknown>>;
+    embedding: {
+      id: string;
+      version: string;
+      options: Readonly<Record<string, unknown>>;
+      compatibility: Readonly<Record<string, unknown>>;
+      embedDocuments(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
+    };
     signal?: AbortSignal;
   }): Promise<{
     documents?: DkbPipelineDocument[];
@@ -101,20 +109,29 @@ export interface DkbEmbeddingProvider {
 export interface DkbIndexProvider {
   kind: 'index';
   mode: 'packaged' | 'managed';
+  format: string;
   compilePackage?(input: {
     root: string;
     dkb: LoadedDkb;
     compiled: DkbCompiledPipeline;
+    compatibility: Record<string, unknown>;
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;
   }): Promise<DkbProviderBuildReceipt | null>;
+  validatePackage?(input: {
+    dkb: LoadedDkb;
+    compatibility: Record<string, unknown>;
+    options: Readonly<Record<string, unknown>>;
+    signal?: AbortSignal;
+  }): Promise<{ documentCount: number }>;
   installPackage?(input: {
     libraryRoot: string;
     libraryId: string;
     dkb: LoadedDkb;
+    compatibility: Record<string, unknown>;
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;
-  }): Promise<{ indexId: string; documentCount: number }>;
+  }): Promise<DkbIndexMutationResult>;
   uninstallPackage?(input: {
     libraryRoot: string;
     libraryId: string;
@@ -122,15 +139,61 @@ export interface DkbIndexProvider {
     packageVersion: string;
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;
-  }): Promise<{ indexId: string; removed: boolean; warning?: string }>;
+  }): Promise<DkbIndexMutationResult>;
+  verifyRuntime?(input: {
+    libraryRoot: string;
+    libraryId: string;
+    packageId?: string;
+    packageVersion?: string;
+    compatibility: Record<string, unknown>;
+    options: Readonly<Record<string, unknown>>;
+    signal?: AbortSignal;
+  }): Promise<DkbIndexMutationResult>;
+  openRuntime(input: {
+    libraryRoot: string;
+    libraryId: string;
+    compatibility: Record<string, unknown>;
+    embedQuery(text: string, signal?: AbortSignal): Promise<number[]>;
+    options: Readonly<Record<string, unknown>>;
+    signal?: AbortSignal;
+  }): Promise<DkbIndexRuntime | null>;
   health?(): Promise<DkbProviderHealth>;
   dispose?(): Promise<void> | void;
 }
 
 export interface DkbRetrievalProvider {
   kind: 'retrieval';
+  protocol: string;
   health?(): Promise<DkbProviderHealth>;
   dispose?(): Promise<void> | void;
+}
+
+export interface DkbIndexMutationResult {
+  indexId: string;
+  documentCount: number;
+  status: 'ready' | 'removed' | 'orphaned';
+  created?: boolean;
+  warning?: string;
+}
+
+export interface DkbIndexRuntime {
+  providerId: string;
+  mode: DkbIndexProvider['mode'];
+  format: string;
+  packages: Array<{ id: string; version: string; indexId: string; documentCount: number }>;
+  assets: IndexedSourceAsset[];
+  units: IndexedSourceUnit[];
+  lexicalSearch?(query: string, limit: number, scope?: {
+    dkbId?: string;
+    packageVersion?: string;
+    assetId?: string;
+    sourceType?: string;
+  }): Array<{ unitId: string; score: number; matchedTokens: string[] }>;
+  search(query: string, limit: number, signal?: AbortSignal): Promise<{
+    hits: Array<{ id: string; score: number }>;
+    trace: Record<string, unknown>;
+  }>;
+  close(): Promise<void> | void;
 }
 
 export type DkbProvider =

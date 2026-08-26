@@ -35,6 +35,7 @@ python -m graphify update src
 | `src/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and status |
 | `src/adapters/` | Source discovery and reads; no retrieval orchestration |
 | `src/compiler/`, `compiler/llamaindex/` | Source and Evidence IR compilation, Docling/LlamaIndex routing, embeddings |
+| `src/providers/` | Per-context plugin discovery, pipeline contracts, shared compiler runner, and runtime index lifecycle |
 | `src/artifacts/`, `src/signing/`, `src/oci/` | Compiled artifact identity, verification, signing, and transport |
 | `src/registry/` | Package publication, immutable releases, registry client/server, installation transport |
 | `src/runtime/` | Installed package state, aggregate catalog, HTTP runtime, snapshots, and traces |
@@ -56,8 +57,10 @@ python -m graphify update src
   portable. Chunks, vectors, FAISS indexes, and runtime catalogs are derived,
   retrieval-profile-specific artifacts.
 - One Runtime serves one Library, and one active Library uses one compatible
-  retrieval profile. Reject model,
-  dimensions, metric, parser, chunker, or compiler mismatches before activation.
+  retrieval space. Reject embedding space, dimensions, metric, normalization,
+  index format, or evidence-protocol mismatches before activation. Parser,
+  chunker, compiler, processor, and provider-code details remain exact build
+  provenance but do not make evidence incompatible by themselves.
 - Registry publish compiles from clean source, ignores uploaded generated state
   as canonical truth, signs an immutable release, and creates a `.dkbpkg`.
 - Runtime install verifies and promotes compiled artifacts atomically. Normal

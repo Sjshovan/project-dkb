@@ -116,6 +116,7 @@ const OPTIONAL_ARTIFACT_PATHS = [
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   DKB_EVIDENCE_IR_PATH,
 ];
+const PROVIDER_ARTIFACTS_DIR = `${DKB_ARTIFACTS_DIR}/providers`;
 
 export async function writeDkbArtifactManifest(root: string, lock: DkbLockManifest, options: { compiler?: DkbArtifactCompiler } = {}): Promise<DkbArtifactManifest> {
   const resolvedRoot = path.resolve(root);
@@ -305,7 +306,13 @@ async function buildDkbArtifactManifest(root: string, lock: DkbLockManifest, opt
 
   // The artifact manifest describes its payload. Including the manifest itself
   // would hash the previous revision and make every forced rebuild invalid.
-  for (const item of [DKB_ARTIFACT_LOCK_PATH, ...REQUIRED_ARTIFACT_PATHS, ...OPTIONAL_ARTIFACT_PATHS, ...await compilerRecordArtifactPaths(root)]) {
+  for (const item of [
+    DKB_ARTIFACT_LOCK_PATH,
+    ...REQUIRED_ARTIFACT_PATHS,
+    ...OPTIONAL_ARTIFACT_PATHS,
+    ...await compilerRecordArtifactPaths(root),
+    ...await listRelativeFiles(resolveFrom(root, PROVIDER_ARTIFACTS_DIR), PROVIDER_ARTIFACTS_DIR),
+  ]) {
     const file = await artifactFileFor(root, item);
 
     if (file) {
@@ -500,7 +507,10 @@ function shouldExcludePackageEntry(relative: string, entry: import('node:fs').Di
     || normalized === '.dkb/locks'
     || normalized.startsWith('.dkb/locks/')
     || normalized === '.dkb/runs'
-    || normalized.startsWith('.dkb/runs/');
+    || normalized.startsWith('.dkb/runs/')
+    || normalized === '.dkb/config.json'
+    || normalized === '.dkb/plugins'
+    || normalized.startsWith('.dkb/plugins/');
 }
 
 async function fileDigest(target: string): Promise<{ hash: string; size: number } | null> {

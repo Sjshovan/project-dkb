@@ -8,15 +8,35 @@ import {
   inspectLlamaIndexCompiler,
   startLlamaIndexCompilerService,
   stopLlamaIndexCompilerService,
-  type LlamaIndexCompilerResult,
 } from '../compiler/llamaindex.js';
 import type { DkbBundledPlugin } from './host.js';
-import type { DkbEmbeddingProvider, DkbIngestionProvider } from './types.js';
-import { writeFaissPackageArtifacts } from '../indexes/faissStore.js';
+import type { DkbEmbeddingProvider, DkbIndexRuntime, DkbIngestionProvider } from './types.js';
+import {
+  buildFaissRuntimeSnapshot,
+  closeFaissSnapshot,
+  loadFaissPackageArtifact,
+  searchFaissSnapshot,
+  validateFaissPackageQueryability,
+  validateFaissRuntimeReady,
+  writeFaissPackageArtifacts,
+} from '../indexes/faissStore.js';
+import {
+  MEILISEARCH_INDEX_FORMAT,
+  MEILISEARCH_PROVIDER_ID,
+  installMeilisearchPackage,
+  meilisearchProviderHealth,
+  openMeilisearchRuntime,
+  uninstallMeilisearchPackage,
+  validateMeilisearchPackageArtifact,
+  verifyMeilisearchRuntime,
+  writeMeilisearchPackageArtifacts,
+} from '../indexes/meilisearchProvider.js';
+import { buildLexicalRuntimeSnapshot } from '../indexes/lexicalStore.js';
 
 export const DKB_LLAMA_INDEX_PLUGIN_ID = '@dkb/llamaindex';
 export const DKB_FASTEMBED_PLUGIN_ID = '@dkb/fastembed';
 export const DKB_FAISS_PLUGIN_ID = '@dkb/faiss';
+export const DKB_MEILISEARCH_PLUGIN_ID = MEILISEARCH_PROVIDER_ID;
 export const DKB_HYBRID_RETRIEVAL_PLUGIN_ID = '@dkb/hybrid';
 export const DKB_BUNDLED_PROVIDER_VERSION = '1.0.0';
 const DEFAULT_FASTEMBED_MODEL = 'BAAI/bge-small-en-v1.5';
@@ -37,9 +57,9 @@ export const BUNDLED_PROVIDER_PLUGINS: readonly DkbBundledPlugin[] = [
           stop: () => stopLlamaIndexCompilerService(),
           doctor: () => doctorLlamaIndexCompilerService(),
         },
-        async compile({ dkb, options, signal }) {
+        async compile({ dkb, options, embedding, signal }) {
           throwIfAborted(signal, DKB_LLAMA_INDEX_PLUGIN_ID);
-          const model = optionalString(options.model);
+          const model = optionalString(embedding.compatibility.embeddingSpace);
           const image = optionalString(options.image);
           const timeout = positiveInteger(options.timeoutMs);
           const workers = positiveInteger(options.workers);
@@ -154,9 +174,9 @@ export const BUNDLED_PROVIDER_PLUGINS: readonly DkbBundledPlugin[] = [
       context.registerProvider({
         kind: 'index',
         mode: 'packaged',
-        async compilePackage({ root, dkb, compiled }) {
-          const result = assertLlamaIndexNativeResult(compiled.nativeResult);
-          const manifest = await writeFaissPackageArtifacts(root, dkb, result);
+        format: 'IndexIDMap2(IndexFlatIP)',
+        async compilePackage({ root, dkb, compiled, compatibility }) {
+          const manifest = await writeFaissPackageArtifacts(root, dkb, compiled, compatibility);
           return manifest ? {
             providerId: DKB_FAISS_PLUGIN_ID,
             providerVersion: DKB_BUNDLED_PROVIDER_VERSION,
@@ -164,7 +184,75 @@ export const BUNDLED_PROVIDER_PLUGINS: readonly DkbBundledPlugin[] = [
             compatibility: { ...manifest.embedding },
           } : null;
         },
+        async validatePackage({ dkb }) {
+          await validateFaissPackageQueryability(dkb);
+          return { documentCount: (await loadFaissPackageArtifact(dkb)).units.length };
+        },
+        async verifyRuntime({ libraryRoot, libraryId, packageId, packageVersion }) {
+          const result = await validateFaissRuntimeReady({ root: libraryRoot, registryId: libraryId, packageId, packageVersion });
+          return {
+            indexId: result.backend.index,
+            documentCount: result.documentCount,
+            status: 'ready',
+          };
+        },
+        async openRuntime({ libraryRoot, libraryId, compatibility, embedQuery }) {
+          const snapshot = await buildFaissRuntimeSnapshot(libraryRoot, libraryId);
+
+          if (!snapshot) {
+            return null;
+          }
+          if (compatibility.embeddingSpace !== snapshot.embedding.model || compatibility.dimensions !== snapshot.embedding.dimensions) {
+            await closeFaissSnapshot(snapshot);
+            throw new DkbError(`Selected embedding provider is incompatible with installed FAISS packages: expected ${snapshot.embedding.model}/${snapshot.embedding.dimensions}, got ${String(compatibility.embeddingSpace)}/${String(compatibility.dimensions)}`);
+          }
+          const lexical = buildLexicalRuntimeSnapshot({
+            packages: snapshot.packages,
+            numericIdToUnitId: snapshot.numericIdToUnitId,
+            unitsById: snapshot.unitsById,
+          }) ?? undefined;
+          let closed = false;
+          const runtime: DkbIndexRuntime = {
+            providerId: DKB_FAISS_PLUGIN_ID,
+            mode: 'packaged',
+            format: 'IndexIDMap2(IndexFlatIP)',
+            packages: snapshot.packages.map((item) => ({ id: item.id, version: item.version, indexId: item.segmentPath, documentCount: item.chunkCount })),
+            assets: snapshot.assets,
+            units: snapshot.units,
+            ...(lexical ? { lexicalSearch: (query, limit, scope) => lexical.search(query, limit, scope) } : {}),
+            search: (query, limit) => searchFaissSnapshot(snapshot, query, limit, embedQuery),
+            async close() {
+              if (closed) return;
+              closed = true;
+              lexical?.close();
+              await closeFaissSnapshot(snapshot);
+            },
+          };
+
+          return runtime;
+        },
         health: async () => ({ ok: true, detail: 'Packaged FAISS indexes' }),
+      });
+    },
+  },
+  {
+    id: DKB_MEILISEARCH_PLUGIN_ID,
+    version: DKB_BUNDLED_PROVIDER_VERSION,
+    setup(context) {
+      context.registerProvider({
+        kind: 'index',
+        mode: 'managed',
+        format: MEILISEARCH_INDEX_FORMAT,
+        compilePackage: (input) => writeMeilisearchPackageArtifacts({ ...input, providerVersion: DKB_BUNDLED_PROVIDER_VERSION }),
+        async validatePackage({ dkb, compatibility }) {
+          const artifact = await validateMeilisearchPackageArtifact(dkb, compatibility);
+          return { documentCount: artifact.records.length };
+        },
+        installPackage: installMeilisearchPackage,
+        uninstallPackage: uninstallMeilisearchPackage,
+        verifyRuntime: verifyMeilisearchRuntime,
+        openRuntime: openMeilisearchRuntime,
+        health: () => meilisearchProviderHealth(context.options),
       });
     },
   },
@@ -172,21 +260,13 @@ export const BUNDLED_PROVIDER_PLUGINS: readonly DkbBundledPlugin[] = [
     id: DKB_HYBRID_RETRIEVAL_PLUGIN_ID,
     version: DKB_BUNDLED_PROVIDER_VERSION,
     setup(context) {
-      context.registerProvider({ kind: 'retrieval', health: async () => ({ ok: true, detail: 'DKB lexical/vector evidence fusion' }) });
+      context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', health: async () => ({ ok: true, detail: 'DKB lexical/vector evidence fusion' }) });
     },
   },
 ] as const;
 
 export function bundledProviderIds(): string[] {
   return BUNDLED_PROVIDER_PLUGINS.map((plugin) => plugin.id);
-}
-
-export function assertLlamaIndexNativeResult(value: unknown): LlamaIndexCompilerResult {
-  if (!value || typeof value !== 'object' || !('compiler' in value) || !('records' in value) || !Array.isArray((value as { records?: unknown }).records)) {
-    throw new DkbError(`${DKB_LLAMA_INDEX_PLUGIN_ID} returned an invalid native compiler result`);
-  }
-
-  return value as LlamaIndexCompilerResult;
 }
 
 async function requestFastEmbed(

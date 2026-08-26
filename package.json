@@ -7,12 +7,24 @@
   "bin": {
     "dkb": "./dist/src/cli/index.js"
   },
+  "files": [
+    "dist/",
+    "!dist/src/testing/",
+    "schemas/",
+    "compiler/llamaindex/compile.py",
+    "compiler/llamaindex/embedder.py",
+    "compiler/llamaindex/service.py",
+    "compiler/llamaindex/requirements.txt",
+    "compiler/llamaindex/Dockerfile",
+    "compiler/llamaindex/Dockerfile.gpu"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
+    "proof:meilisearch": "npm run build && node scripts/prove-meilisearch-lifecycle.mjs",
     "dkb": "node dist/src/cli/index.js",
     "mcp": "node dist/src/cli/index.js mcp serve"
   },

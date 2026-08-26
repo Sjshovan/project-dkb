@@ -5,7 +5,6 @@ import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateD
 import { compileComposeProject } from '../compiler/compile.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { closeQueryContext, getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
-import { closeFaissSnapshot, validateFaissPackageQueryability, validateFaissRuntimeReady, type FaissPackageMutationResult } from '../indexes/faissStore.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { renderModelEvidence } from '../read/modelEvidence.js';
 import { recordRetrievalTrace, retrievalTraceEnabled } from './trace.js';
@@ -20,11 +19,14 @@ import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '../lib
 import { syncLibrary } from '../library/resolver.js';
 import { snapshotLibraryArtifacts } from '../library/artifactSnapshot.js';
 import {
+  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   assertMatchingRetrievalProfiles,
   maybeReadRetrievalProfileLock,
   writeRetrievalProfileLock,
   type DkbRetrievalProfileLock,
 } from '../profiles/retrievalProfile.js';
+import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
+import type { DkbIndexMutationResult } from '../providers/types.js';
 
 // Runtime snapshots are invalidated by managed mutations, not revalidated on
 // every request. This keeps the hot MCP path independent of artifact I/O.
@@ -95,8 +97,8 @@ export interface ImportCompiledDkbArtifactResult {
   validation: ValidateDkbArtifactManifestResult;
   catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>>;
   search: {
-    upsert: FaissPackageMutationResult;
-    removedPrevious?: FaissPackageMutationResult;
+    upsert: DkbIndexMutationResult;
+    removedPrevious?: DkbIndexMutationResult;
   };
 }
 
@@ -267,9 +269,9 @@ export async function importDkbIntoRuntime(options: ImportDkbOptions, stateRoot?
       force: true,
       mode: 'library',
     });
-  // A precompiled package still needs its chunks and vectors activated in the
-  // shared runtime catalog. Skipping compilation must never mean skipping
-  // installation into the search index.
+  // A precompiled package still needs its compiled chunks activated in the
+  // shared runtime catalog. Provider-specific index activation is handled by
+  // the selected index provider during compiled-package installation.
   if (options.compile === false) {
     await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot);
   }
@@ -319,6 +321,8 @@ export async function importCompiledDkbArtifactIntoRuntime(
   const previousLibraryLock = await maybeReadLibraryLock(paths.stateRoot);
   const artifactSnapshot = await snapshotLibraryArtifacts(paths.stateRoot);
   let libraryActivated = false;
+  let preparedIndex: PreparedRuntimeIndexPackage | null = null;
+  let indexCommitted = false;
 
   try {
     const tempValidation = await validateDkbArtifactManifest(tempPath, { progress: options.progress });
@@ -341,11 +345,11 @@ export async function importCompiledDkbArtifactIntoRuntime(
     }
 
     const registryId = await runtimeRegistryId(paths);
-    await validateFaissPackageQueryability(stagedDkb);
+    preparedIndex = await prepareRuntimeIndexPackage({ libraryRoot: paths.stateRoot, libraryId: registryId, dkb: stagedDkb });
     let finalValidation: ValidateDkbArtifactManifestResult | undefined;
     let catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>> | undefined;
-    let searchUpsert: FaissPackageMutationResult | undefined;
-    let removedPrevious: FaissPackageMutationResult | undefined;
+    let searchUpsert: DkbIndexMutationResult | undefined;
+    let removedPrevious: DkbIndexMutationResult | undefined;
 
     const activationTotal = 4;
 
@@ -380,7 +384,7 @@ export async function importCompiledDkbArtifactIntoRuntime(
         total: activationTotal,
         unit: 'steps',
       }));
-      catalog = await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false });
+      catalog = await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot);
       invalidateRuntimeQuerySnapshot(paths.stateRoot);
       options.progress?.(progressUpdate({
         phase: 'activate',
@@ -389,12 +393,16 @@ export async function importCompiledDkbArtifactIntoRuntime(
         total: activationTotal,
         unit: 'steps',
       }));
-      searchUpsert = await validateFaissRuntimeReady({
-        root: paths.stateRoot,
-        registryId,
+      searchUpsert = await verifyRuntimeIndex({
+        libraryRoot: paths.stateRoot,
+        libraryId: registryId,
         packageId: stagedDkb.manifest.id,
         packageVersion: stagedDkb.manifest.version,
-      });
+      }) ?? preparedIndex!.installed ?? {
+        indexId: preparedIndex!.providerId,
+        documentCount: preparedIndex!.validation.documentCount,
+        status: 'ready',
+      };
       if (!activeProfile && candidateProfile) {
         await writeRetrievalProfileLock(paths.stateRoot, candidateProfile);
       }
@@ -414,8 +422,14 @@ export async function importCompiledDkbArtifactIntoRuntime(
     }));
 
     if (existing && existing.dkb.manifest.version !== stagedDkb.manifest.version) {
-      removedPrevious = searchUpsert;
+      removedPrevious = await cleanupRuntimeIndexPackage({
+        libraryRoot: paths.stateRoot,
+        libraryId: registryId,
+        packageId: existing.dkb.manifest.id,
+        packageVersion: existing.dkb.manifest.version,
+      }) ?? undefined;
     }
+    indexCommitted = true;
     invalidateRuntimeQuerySnapshot(paths.stateRoot);
     await artifactSnapshot.commit();
 
@@ -430,8 +444,12 @@ export async function importCompiledDkbArtifactIntoRuntime(
         upsert: searchUpsert!,
         removedPrevious,
       },
+      ...(removedPrevious?.warning ? { warning: removedPrevious.warning } : {}),
     };
   } catch (error) {
+    if (!indexCommitted) {
+      await preparedIndex?.rollback().catch(() => undefined);
+    }
     await fs.rm(tempPath, { recursive: true, force: true });
     if (libraryActivated) {
       await fs.writeFile(libraryManifestPath, previousLibraryManifest, 'utf8').catch(() => undefined);
@@ -472,6 +490,11 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
     : [];
 
   const registryId = await runtimeRegistryId(paths);
+  const installed = (await installedDkbs(paths)).find((dkb) => dkb.manifest.id === id);
+
+  if (!installed) {
+    throw new DkbError(`Runtime DKB content is unavailable: ${id}`);
+  }
   const total = packageRoots.length + 3;
   let completed = 0;
   const uninstallRoot = path.join(paths.stateDir, 'tmp', `uninstall-${safeId(id)}-${process.pid}-${Date.now().toString(36)}`);
@@ -514,7 +537,7 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
       total,
       unit: 'steps',
     }));
-    await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false });
+    const catalog = await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot);
     completed += 1;
     options.progress?.(progressUpdate({
       phase: 'uninstall',
@@ -523,7 +546,16 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
       total,
       unit: 'steps',
     }));
-    const remaining = await validateFaissRuntimeReady({ root: paths.stateRoot, registryId }).catch(() => null);
+    const removedIndex = await cleanupRuntimeIndexPackage({
+      libraryRoot: paths.stateRoot,
+      libraryId: registryId,
+      packageId: installed.manifest.id,
+      packageVersion: installed.manifest.version,
+    });
+    const remaining = await verifyRuntimeIndex({ libraryRoot: paths.stateRoot, libraryId: registryId }).catch(() => null);
+    if (catalog.packageCount === 0) {
+      await fs.rm(path.join(paths.stateRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), { force: true });
+    }
     completed += 1;
     options.progress?.(progressUpdate({
       phase: 'uninstall',
@@ -546,8 +578,10 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
       id,
       libraryPath: paths.stateRoot,
       search: {
-        removed: remaining ? [remaining] : [],
+        removed: removedIndex ? [removedIndex] : [],
+        remaining,
       },
+      ...(removedIndex?.warning ? { warning: removedIndex.warning } : {}),
     };
   } catch (error) {
     for (const item of stagedPackages.reverse()) {
@@ -628,9 +662,6 @@ function isMissingCompiledArtifactError(error: unknown): boolean {
 export function invalidateRuntimeQuerySnapshot(stateRoot?: string): number {
   if (!stateRoot) {
     const count = runtimeQueryContexts.size;
-    for (const context of runtimeQueryContexts.values()) {
-      void closeFaissSnapshot(context.faiss);
-    }
     runtimeQueryContexts.clear();
     invalidateQueryContext();
 
@@ -638,9 +669,7 @@ export function invalidateRuntimeQuerySnapshot(stateRoot?: string): number {
   }
 
   const root = path.resolve(stateRoot);
-  const context = runtimeQueryContexts.get(root);
   const removed = runtimeQueryContexts.delete(root) ? 1 : 0;
-  void closeFaissSnapshot(context?.faiss);
   invalidateQueryContext(root);
 
   return removed;
@@ -654,7 +683,7 @@ async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
 
   if (context && residentClosed === 0) {
     context.lexical?.close();
-    await closeFaissSnapshot(context.faiss);
+    await context.index?.close();
     await context.providerHost.dispose();
   }
 
@@ -972,13 +1001,18 @@ function isEphemeralDkbStatePath(sourceRoot: string, source: string): boolean {
   const cachePath = path.join('.dkb', 'cache');
   const locksPath = path.join('.dkb', 'locks');
   const runsPath = path.join('.dkb', 'runs');
+  const pluginsPath = path.join('.dkb', 'plugins');
+  const configPath = path.join('.dkb', 'config.json');
 
   return relative === cachePath
     || relative.startsWith(`${cachePath}${path.sep}`)
     || relative === locksPath
     || relative.startsWith(`${locksPath}${path.sep}`)
     || relative === runsPath
-    || relative.startsWith(`${runsPath}${path.sep}`);
+    || relative.startsWith(`${runsPath}${path.sep}`)
+    || relative === pluginsPath
+    || relative.startsWith(`${pluginsPath}${path.sep}`)
+    || relative === configPath;
 }
 
 async function exists(target: string): Promise<boolean> {

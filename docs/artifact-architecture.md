@@ -19,9 +19,11 @@ retrieval reads compiled chunks, not raw files.
 - Agent navigation is reference-first: semantic and exact search discover
   stable compiled chunk IDs, and an explicit read returns stored evidence with
   provenance. DKB does not choose an agent's investigation workflow.
-- One Library activates one retrieval profile. Packages compiled with a
-  different model, dimension count, metric, parser, or chunker profile are
-  rejected before they can enter the live query snapshot.
+- One Library activates one retrieval compatibility space. Packages with a
+  different embedding space, dimension count, metric, normalization, index
+  format, or evidence protocol are rejected before they can enter the live
+  query snapshot. Parser, chunker, processor, and provider-code identities
+  remain exact build provenance.
 
 ## Portable And Runtime-Specific Layers
 

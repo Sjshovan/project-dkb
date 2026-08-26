@@ -11,7 +11,6 @@ import {
   type SourceUnitQueryEvidence,
 } from '../indexes/sourceIndex.js';
 import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
-import { searchFaissSnapshot } from '../indexes/faissStore.js';
 import { validateDkbReadRequest } from '../protocol/validation.js';
 import type {
   DkbEvidence,
@@ -160,8 +159,8 @@ export async function retrieveKnowledge(
     : querySourceChunks(sourceUnits, sourceIndexQuery, candidateLimit);
   const lexicalQueryMs = performance.now() - lexicalStart;
   const vectorStart = performance.now();
-  const vectorResult = queryContext?.faiss
-    ? await searchFaissSnapshot(queryContext.faiss, query, candidateLimit, queryContext.embedQuery)
+  const vectorResult = queryContext?.index
+    ? await queryContext.index.search(query, candidateLimit)
     : await querySearchDocuments(
       queryContext?.searchRegistryId ?? 'compose-index',
       queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(sourceUnits),

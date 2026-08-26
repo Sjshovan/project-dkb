@@ -8,7 +8,7 @@ return an entire source by default.
 
 The MCP server exposes:
 
-- `dkb.semantic_search`: FastEmbed query vector plus the active FAISS shard view.
+- `dkb.semantic_search`: selected query embedder plus the active index-provider view.
   Results are stable references with package, source, locator, chunk offsets,
   hash, score, and a bounded preview.
 - `dkb.find`: exact-token search over the package-local SQLite lexical tables.
@@ -27,12 +27,13 @@ references, then call `dkb.read` for the evidence they choose to inspect.
 
 ## Storage Boundary
 
-Each package's `.dkb/artifacts/faiss/chunks.sqlite` contains the canonical
-compiled chunk text and provenance plus a derived `lexical_tokens` table. Each
-package's FAISS segment contains only precomputed vectors. The runtime opens
-the active package catalogs as one lexical view and one FAISS `IndexShards`
-view; package install, update, and uninstall continue to activate or remove
-only the affected package state.
+Each package contains compiled chunk text, provenance, and precomputed vectors
+for its selected index provider. Packaged FAISS releases carry SQLite lexical
+tables and immutable vector segments. Managed Meilisearch releases carry an
+import manifest and existing vectors while live indexes stay outside the
+package. The runtime opens either one FAISS shard view or fans out across one
+immutable managed index per active package release; install, update, and
+uninstall affect only that package state.
 
 The first navigation slice deliberately does not add agent reasoning,
 automatic multi-step workflows, graph traversal, or AI-generated knowledge

@@ -343,6 +343,26 @@ function validateProvider(provider: DkbProvider, pluginId: string): void {
   if (!provider || !['ingestion', 'parser', 'chunker', 'embedding', 'index', 'retrieval'].includes(provider.kind)) {
     throw new DkbError(`Plugin ${pluginId} registered an invalid provider`);
   }
+  if (provider.kind === 'ingestion' && typeof provider.compile !== 'function') {
+    throw new DkbError(`Plugin ${pluginId} ingestion provider must implement compile()`);
+  }
+  if (provider.kind === 'parser' && typeof provider.parse !== 'function') {
+    throw new DkbError(`Plugin ${pluginId} parser provider must implement parse()`);
+  }
+  if (provider.kind === 'chunker' && typeof provider.chunk !== 'function') {
+    throw new DkbError(`Plugin ${pluginId} chunker provider must implement chunk()`);
+  }
+  if (provider.kind === 'embedding'
+    && (typeof provider.embedDocuments !== 'function' || typeof provider.embedQuery !== 'function' || typeof provider.compatibility !== 'function')) {
+    throw new DkbError(`Plugin ${pluginId} embedding provider must implement document/query embedding and compatibility`);
+  }
+  if (provider.kind === 'index'
+    && (!['packaged', 'managed'].includes(provider.mode) || typeof provider.format !== 'string' || provider.format.length === 0 || typeof provider.openRuntime !== 'function')) {
+    throw new DkbError(`Plugin ${pluginId} index provider must declare mode/format and implement openRuntime()`);
+  }
+  if (provider.kind === 'retrieval' && (typeof provider.protocol !== 'string' || provider.protocol.length === 0)) {
+    throw new DkbError(`Plugin ${pluginId} retrieval provider must declare its stable evidence protocol`);
+  }
 }
 
 function validateProcessor(processor: DkbProcessor, pluginId: string): void {

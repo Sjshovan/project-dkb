@@ -43,8 +43,8 @@ event records for their lifetime.
 - Successful commands exit `0`; validation failures and command errors exit
   nonzero.
 - Diagnostic commands also return nonzero when their printed report is not
-  healthy: `health` requires `ready`, `search-health` rejects `unavailable`,
-  and `compiler doctor` requires `ok: true`.
+  healthy: `health` requires `ready`, `pipeline verify` requires every selected
+  provider to be healthy, and `compiler doctor` requires `ok: true`.
 
 ## Install behavior
 

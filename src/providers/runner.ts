@@ -1,6 +1,7 @@
 import { DkbError } from '../protocol/errors.js';
 import type { LoadedDkb } from '../protocol/types.js';
 import { DkbProviderHost } from './host.js';
+import { pipelineRecordMetadata, refreshMutatedRecordHashes } from './records.js';
 import type {
   DkbChunkerProvider,
   DkbCompiledPipeline,
@@ -16,6 +17,10 @@ export async function compileDkbWithProviderHost(
   options: { signal?: AbortSignal } = {},
 ): Promise<DkbCompiledPipeline> {
   const target = host.config.target;
+  const embedding = host.provider<DkbEmbeddingProvider>('embedding');
+  const embeddingOptions = host.optionsFor(target.embedding);
+  const embeddingRegistration = host.describe().providers.find((provider) => provider.kind === 'embedding');
+  const embeddingCompatibility = await embedding.compatibility(embeddingOptions);
   let result: DkbCompiledPipeline;
 
   if (target.ingestion) {
@@ -23,13 +28,28 @@ export async function compileDkbWithProviderHost(
     const compiled = await ingestion.compile({
       dkb,
       options: host.optionsFor(target.ingestion),
+      embedding: {
+        id: target.embedding,
+        version: embeddingRegistration?.version ?? 'unknown',
+        options: embeddingOptions,
+        compatibility: embeddingCompatibility,
+        embedDocuments: (texts, signal) => embedding.embedDocuments({ texts, options: embeddingOptions, ...(signal ? { signal } : {}) }),
+      },
       ...(options.signal ? { signal: options.signal } : {}),
     });
     result = {
       documents: compiled.documents ?? [],
       chunks: compiled.chunks ?? [],
       records: compiled.records,
-      receipts: [compiled.receipt],
+      receipts: [
+        compiled.receipt,
+        {
+          providerId: target.embedding,
+          providerVersion: embeddingRegistration?.version ?? 'unknown',
+          build: {},
+          compatibility: embeddingCompatibility,
+        },
+      ],
       ...(compiled.nativeResult !== undefined ? { nativeResult: compiled.nativeResult } : {}),
     };
   } else {
@@ -41,27 +61,36 @@ export async function compileDkbWithProviderHost(
     }
     const parser = host.provider<DkbParserProvider>('parser');
     const chunker = host.provider<DkbChunkerProvider>('chunker');
-    const embedding = host.provider<DkbEmbeddingProvider>('embedding');
     const documents = await parser.parse({ dkb, options: host.optionsFor(parserId), ...(options.signal ? { signal: options.signal } : {}) });
     const mutatedDocuments = await host.mutate('document', documents, options.signal);
     const chunks = await chunker.chunk({ documents: mutatedDocuments, options: host.optionsFor(chunkerId), ...(options.signal ? { signal: options.signal } : {}) });
     const mutatedChunks = await host.mutate('chunk', chunks, options.signal);
     const vectors = await embedding.embedDocuments({
       texts: mutatedChunks.map((chunk) => chunk.text),
-      options: host.optionsFor(target.embedding),
+      options: embeddingOptions,
       ...(options.signal ? { signal: options.signal } : {}),
     });
 
     if (vectors.length !== mutatedChunks.length) {
       throw new DkbError(`Embedding provider ${target.embedding} returned ${vectors.length} vectors for ${mutatedChunks.length} chunks`);
     }
-    const records: DkbPipelineRecord[] = mutatedChunks.map((chunk, index) => ({
-      id: chunk.id,
-      chunkId: chunk.id,
-      text: chunk.text,
-      embedding: vectors[index],
-      metadata: { ...chunk.metadata, documentId: chunk.documentId },
-    }));
+    const documentsById = new Map(mutatedDocuments.map((document) => [document.id, document]));
+    const ordinalByDocument = new Map<string, number>();
+    const records: DkbPipelineRecord[] = mutatedChunks.map((chunk, index) => {
+      const ordinal = ordinalByDocument.get(chunk.documentId) ?? 0;
+      ordinalByDocument.set(chunk.documentId, ordinal + 1);
+
+      return {
+        id: chunk.id,
+        chunkId: chunk.id,
+        text: chunk.text,
+        embedding: vectors[index],
+        metadata: {
+          ...pipelineRecordMetadata(dkb, documentsById.get(chunk.documentId), chunk, ordinal),
+          documentId: chunk.documentId,
+        },
+      };
+    });
     result = {
       documents: mutatedDocuments,
       chunks: mutatedChunks,
@@ -71,9 +100,9 @@ export async function compileDkbWithProviderHost(
         { providerId: chunkerId, providerVersion: host.describe().providers.find((provider) => provider.kind === 'chunker')?.version ?? 'unknown', build: {} },
         {
           providerId: target.embedding,
-          providerVersion: host.describe().providers.find((provider) => provider.kind === 'embedding')?.version ?? 'unknown',
+          providerVersion: embeddingRegistration?.version ?? 'unknown',
           build: {},
-          compatibility: await embedding.compatibility(host.optionsFor(target.embedding)),
+          compatibility: embeddingCompatibility,
         },
       ],
     };
@@ -83,7 +112,22 @@ export async function compileDkbWithProviderHost(
     result.documents = await host.mutate('document', result.documents, options.signal);
     result.chunks = await host.mutate('chunk', result.chunks, options.signal);
   }
-  result.records = await host.mutate('record', result.records, options.signal);
+  const beforeRecordMutation = result.records;
+  result.records = refreshMutatedRecordHashes(
+    beforeRecordMutation,
+    await host.mutate('record', beforeRecordMutation, options.signal),
+  );
+  const processorReceipts = host.describe().processors.map((processor, order) => ({
+    providerId: processor.id,
+    providerVersion: processor.version,
+    build: {
+      kind: 'processor',
+      stage: processor.stage,
+      order,
+      sourceDigest: processor.sourceDigest,
+    },
+  }));
+  result.receipts.push(...processorReceipts);
 
   return result;
 }

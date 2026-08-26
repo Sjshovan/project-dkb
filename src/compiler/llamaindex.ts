@@ -40,7 +40,7 @@ export interface LlamaIndexCompilerRecord {
 
 export interface LlamaIndexCompilerResult {
   compiler: {
-    id: typeof LLAMAINDEX_COMPILER_ID;
+    id: string;
     model: string;
     image: string;
   };

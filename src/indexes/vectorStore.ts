@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { performance } from 'node:perf_hooks';
 import { stableHash } from '../contracts/hash.js';
 import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
 import { tokenize } from '../router/scoring.js';
@@ -15,12 +14,8 @@ import {
 
 const LOCAL_ENGINE = 'dkb-local-hash';
 const LANCEDB_ENGINE = 'lancedb';
-const MEILI_ENGINE = 'meilisearch';
 const SEMANTIC_EDGE_THRESHOLD = 0.18;
 const QUERY_SCORE_THRESHOLD = 0.12;
-const DEFAULT_MEILI_URL = 'http://127.0.0.1:7700';
-const DEFAULT_SEMANTIC_RATIO = 0.5;
-const DEFAULT_RANKING_SCORE_THRESHOLD = 0.15;
 
 export interface VectorDocument {
   id: string;
@@ -55,20 +50,8 @@ export interface VectorArtifactBuild {
   backend: SearchBackendDescription;
 }
 
-export interface PackageSearchMutationResult {
-  backend: SearchBackendDescription;
-  documentCount: number;
-  taskUid?: number;
-  timingsMs: {
-    total: number;
-    ensureIndex: number;
-    taskWait: number;
-    verify: number;
-  };
-}
-
 export interface SearchBackendDescription {
-  engine: 'meilisearch' | 'lancedb' | 'dkb-local-hash';
+  engine: 'lancedb' | 'dkb-local-hash';
   status: 'ready' | 'fallback' | 'unavailable';
   reason?: string;
   url?: string;
@@ -163,59 +146,6 @@ export async function querySearchDocuments(
   });
 }
 
-export async function upsertSearchPackage(input: {
-  registryId: string;
-  artifactRoot?: string;
-  dkbId: string;
-  packageVersion: string;
-  documents: VectorDocument[];
-}): Promise<PackageSearchMutationResult> {
-  const backend = searchBackendForEnvironment();
-
-  if (backend instanceof MeilisearchBackend) {
-    return backend.upsertPackage(input);
-  }
-
-  return {
-    backend: backend.describe(),
-    documentCount: input.documents.length,
-    timingsMs: { total: 0, ensureIndex: 0, taskWait: 0, verify: 0 },
-  };
-}
-
-export async function deleteSearchPackage(input: {
-  registryId: string;
-  artifactRoot?: string;
-  dkbId: string;
-  packageVersion: string;
-  documents?: VectorDocument[];
-}): Promise<PackageSearchMutationResult> {
-  const backend = searchBackendForEnvironment();
-
-  if (backend instanceof MeilisearchBackend) {
-    return backend.deletePackage(input);
-  }
-
-  return {
-    backend: backend.describe(),
-    documentCount: 0,
-    timingsMs: { total: 0, ensureIndex: 0, taskWait: 0, verify: 0 },
-  };
-}
-
-export async function countSearchPackageDocuments(input: {
-  registryId: string;
-  dkbId: string;
-  packageVersion: string;
-  documents?: VectorDocument[];
-}): Promise<number> {
-  const backend = searchBackendForEnvironment();
-
-  return backend instanceof MeilisearchBackend
-    ? backend.countPackageDocuments(input)
-    : 0;
-}
-
 export async function writeSearchArtifacts(
   registryId: string,
   vectorPath: string,
@@ -225,7 +155,7 @@ export async function writeSearchArtifacts(
   const artifactRoot = path.dirname(vectorPath);
   await removeLegacyLanceRoot(artifactRoot);
   const sync = await backend.syncDocuments({ registryId, artifactRoot, documents });
-  const backendDescription = sync.engine === MEILI_ENGINE || sync.engine === LANCEDB_ENGINE
+  const backendDescription = sync.engine === LANCEDB_ENGINE
     ? sync
     : backend.describe();
   const semanticNeighbors = canBuildSemanticGraphEdges(backendDescription)
@@ -275,35 +205,7 @@ export async function searchBackendQuery(input: {
 }
 
 export function searchBackendForEnvironment(): SearchIndexBackend {
-  if (shouldUseLanceDb()) {
-    return new LanceDbBackend();
-  }
-
-  if (shouldUseMeilisearch()) {
-    return new MeilisearchBackend();
-  }
-
-  return new LocalHashSearchBackend();
-}
-
-function shouldUseLanceDb(): boolean {
-  const engine = (process.env.DKB_SEARCH_ENGINE ?? 'lancedb').toLowerCase();
-
-  return engine === 'embedded' || engine === 'lancedb';
-}
-
-function shouldUseMeilisearch(): boolean {
-  const engine = (process.env.DKB_SEARCH_ENGINE ?? 'auto').toLowerCase();
-
-  return engine === 'meilisearch' || (engine === 'auto' && Boolean(process.env.MEILI_URL));
-}
-
-function meiliUrl(): string {
-  return process.env.MEILI_URL ?? DEFAULT_MEILI_URL;
-}
-
-function meiliApiKey(): string | undefined {
-  return process.env.MEILI_MASTER_KEY || process.env.MEILI_API_KEY || undefined;
+  return new LanceDbBackend();
 }
 
 function indexUidFor(registryId: string): string {
@@ -315,7 +217,7 @@ function safeIndexPart(value: string): string {
 }
 
 class LocalHashSearchBackend implements SearchIndexBackend {
-  constructor(private readonly fallbackReason = 'Meilisearch is not configured; using deterministic local hash search.') {}
+  constructor(private readonly fallbackReason = 'LanceDB is unavailable; using deterministic local hash search.') {}
 
   describe(): SearchBackendDescription {
     return {
@@ -533,395 +435,13 @@ class LanceDbBackend implements SearchIndexBackend {
   }
 }
 
-class MeilisearchBackend implements SearchIndexBackend {
-  describe(): SearchBackendDescription {
-    return {
-      engine: MEILI_ENGINE,
-      status: 'ready',
-      url: meiliUrl(),
-      embedder: hasMeiliEmbedder() ? embedderName() : undefined,
-      semanticRatio: hasMeiliEmbedder() ? semanticRatio() : 0,
-      rankingScoreThreshold: rankingScoreThreshold(),
-    };
-  }
-
-  async health(): Promise<SearchBackendHealth> {
-    try {
-      const client = await createMeiliClient();
-
-      await client.health();
-
-      return {
-        engine: MEILI_ENGINE,
-        status: 'ready',
-        url: meiliUrl(),
-      };
-    } catch (error) {
-      return {
-        engine: MEILI_ENGINE,
-        status: 'unavailable',
-        url: meiliUrl(),
-        reason: errorMessage(error),
-      };
-    }
-  }
-
-  async syncDocuments(input: { registryId: string; documents: VectorDocument[] }): Promise<SearchBackendDescription> {
-    const uid = indexUidFor(input.registryId);
-
-    try {
-      const client = await createMeiliClient();
-
-      await this.ensureIndex(client, uid);
-      const index = client.index<SearchDocument>(uid);
-      const settingsTask = await index.updateSettings(meiliSettings());
-
-      await client.tasks.waitForTask(settingsTask, { timeout: 30000, interval: 100 });
-
-      const deleteTask = await index.deleteAllDocuments();
-
-      await client.tasks.waitForTask(deleteTask, { timeout: 30000, interval: 100 });
-
-      if (input.documents.length > 0) {
-        const addTask = await index.addDocuments(input.documents.map(searchDocumentFor), { primaryKey: 'id' });
-
-        await client.tasks.waitForTask(addTask, { timeout: 60000, interval: 100 });
-      }
-
-      return {
-        ...this.describe(),
-        indexUid: uid,
-      };
-    } catch (error) {
-      return {
-        engine: MEILI_ENGINE,
-        status: 'unavailable',
-        url: meiliUrl(),
-        reason: errorMessage(error),
-      };
-    }
-  }
-
-  async upsertPackage(input: {
-    registryId: string;
-    dkbId: string;
-    packageVersion: string;
-    documents: VectorDocument[];
-  }): Promise<PackageSearchMutationResult> {
-    const started = performance.now();
-    const uid = indexUidFor(input.registryId);
-    const client = await createMeiliClient();
-    const ensureStart = performance.now();
-
-    await this.ensureIndex(client, uid);
-    const ensureDone = performance.now();
-    const index = client.index<SearchDocument>(uid);
-    let taskUid: number | undefined;
-    let taskWaitMs = 0;
-
-    if (input.documents.length > 0) {
-      const task = await index.addDocuments(input.documents.map((document) => packageSearchDocumentFor(document, input.dkbId, input.packageVersion)), { primaryKey: 'id' });
-      const waitStarted = performance.now();
-
-      taskUid = task.taskUid;
-      await client.tasks.waitForTask(task, { timeout: 60000, interval: 100 });
-      taskWaitMs = performance.now() - waitStarted;
-    }
-
-    const verifyStart = performance.now();
-    const documentCount = await this.countPackageDocuments({
-      registryId: input.registryId,
-      dkbId: input.dkbId,
-      packageVersion: input.packageVersion,
-      documents: input.documents,
-    });
-    const verifyMs = performance.now() - verifyStart;
-
-    if (documentCount !== input.documents.length) {
-      throw new Error(`Meilisearch package upsert verification failed for ${input.dkbId}@${input.packageVersion}: expected ${input.documents.length}, got ${documentCount}`);
-    }
-
-    return {
-      backend: {
-        ...this.describe(),
-        indexUid: uid,
-      },
-      documentCount,
-      taskUid,
-      timingsMs: {
-        total: roundMs(performance.now() - started),
-        ensureIndex: roundMs(ensureDone - ensureStart),
-        taskWait: roundMs(taskWaitMs),
-        verify: roundMs(verifyMs),
-      },
-    };
-  }
-
-  async deletePackage(input: {
-    registryId: string;
-    dkbId: string;
-    packageVersion: string;
-    documents?: VectorDocument[];
-  }): Promise<PackageSearchMutationResult> {
-    const started = performance.now();
-    const uid = indexUidFor(input.registryId);
-    const client = await createMeiliClient();
-    const ensureStart = performance.now();
-
-    await this.ensureIndex(client, uid);
-    const ensureDone = performance.now();
-    const index = client.index<SearchDocument>(uid);
-    const documentIds = input.documents?.map((document) => packageSearchDocumentFor(document, input.dkbId, input.packageVersion).id);
-    const task = documentIds
-      ? await index.deleteDocuments(documentIds)
-      : await index.deleteDocuments({
-          filter: packageFilter(input.dkbId, input.packageVersion),
-        } as never);
-    const waitStarted = performance.now();
-
-    await client.tasks.waitForTask(task, { timeout: 60000, interval: 100 });
-    const taskWaitMs = performance.now() - waitStarted;
-    const verifyStart = performance.now();
-    const documentCount = await this.countPackageDocuments(input);
-    const verifyMs = performance.now() - verifyStart;
-
-    if (documentCount !== 0) {
-      throw new Error(`Meilisearch package delete verification failed for ${input.dkbId}@${input.packageVersion}: ${documentCount} documents remain`);
-    }
-
-    return {
-      backend: {
-        ...this.describe(),
-        indexUid: uid,
-      },
-      documentCount,
-      taskUid: task.taskUid,
-      timingsMs: {
-        total: roundMs(performance.now() - started),
-        ensureIndex: roundMs(ensureDone - ensureStart),
-        taskWait: roundMs(taskWaitMs),
-        verify: roundMs(verifyMs),
-      },
-    };
-  }
-
-  async countPackageDocuments(input: {
-    registryId: string;
-    dkbId: string;
-    packageVersion: string;
-    documents?: VectorDocument[];
-  }): Promise<number> {
-    const client = await createMeiliClient();
-    const index = client.index<SearchDocument>(indexUidFor(input.registryId));
-
-    if (input.documents) {
-      const ids = input.documents.map((document) => packageSearchDocumentFor(document, input.dkbId, input.packageVersion).id);
-      const results = await Promise.all(ids.map((id) => index.getDocument(id).then(() => true, () => false)));
-
-      return results.filter(Boolean).length;
-    }
-
-    const response = await index.search('', {
-      limit: 0,
-      filter: packageFilter(input.dkbId, input.packageVersion),
-    } as never) as { estimatedTotalHits?: number };
-
-    return Number(response.estimatedTotalHits ?? 0);
-  }
-
-  async query(input: { registryId: string; documents: VectorDocument[]; query: string; limit: number; lexicalQueries?: string[] }): Promise<SearchQueryResult> {
-    const uid = indexUidFor(input.registryId);
-
-    try {
-      const client = await createMeiliClient();
-      const index = client.index<SearchDocument>(uid);
-      const queryVector = isUserProvidedEmbedder() ? await embedQuery(input.query) : undefined;
-      const vectorResponse = await index.search<SearchDocument>(input.query, {
-        limit: input.limit,
-        showRankingScore: true,
-        rankingScoreThreshold: rankingScoreThreshold(),
-        hybrid: hasMeiliEmbedder() ? {
-          embedder: embedderName(),
-          semanticRatio: semanticRatio(),
-        } : undefined,
-        vector: queryVector,
-      } as never);
-      const lexicalQueries = hasMeiliEmbedder() ? uniqueLexicalQueries([input.query, ...(input.lexicalQueries ?? [])]) : [];
-      const lexicalResponses = await Promise.all(lexicalQueries.map((lexicalQuery) => index.search<SearchDocument>(lexicalQuery, {
-            limit: input.limit,
-            showRankingScore: true,
-            rankingScoreThreshold: rankingScoreThreshold(),
-          } as never)));
-      const hits = mergeMeiliHits([
-        ...vectorResponse.hits,
-        ...lexicalResponses.flatMap((response) => response.hits),
-      ], input.limit);
-
-      return {
-        hits: hits.map((hit) => ({
-          id: typeof hit.canonicalId === 'string' ? hit.canonicalId : canonicalMeiliDocumentId(hit.id),
-          score: typeof hit._rankingScore === 'number' ? hit._rankingScore : 0,
-          source: MEILI_ENGINE,
-        })),
-        trace: {
-          ...this.describe(),
-          indexUid: uid,
-        },
-      };
-    } catch (error) {
-      return {
-        hits: [],
-        trace: {
-          engine: MEILI_ENGINE,
-          status: 'unavailable',
-          url: meiliUrl(),
-          indexUid: uid,
-          reason: `Meilisearch query failed: ${errorMessage(error)}`,
-        },
-      };
-    }
-  }
-
-  async semanticNeighbors(input: { registryId: string; documents: VectorDocument[] }): Promise<SemanticNeighbor[]> {
-    if (!hasMeiliEmbedder()) {
-      return localSemanticNeighbors(input.documents);
-    }
-
-    const uid = indexUidFor(input.registryId);
-
-    try {
-      const client = await createMeiliClient();
-      const index = client.index<SearchDocument>(uid);
-      const edges = new Map<string, SemanticNeighbor>();
-
-      for (const document of input.documents) {
-        const response = await index.search<SearchDocument>(document.text, {
-          limit: Math.min(input.documents.length, 8),
-          showRankingScore: true,
-          rankingScoreThreshold: SEMANTIC_EDGE_THRESHOLD,
-          hybrid: {
-            embedder: embedderName(),
-            semanticRatio: 1,
-          },
-        } as never);
-
-        for (const hit of response.hits) {
-          const hitId = canonicalMeiliDocumentId(hit.id);
-
-          if (hitId === document.id) {
-            continue;
-          }
-
-          const score = typeof hit._rankingScore === 'number' ? hit._rankingScore : 0;
-
-          if (score < SEMANTIC_EDGE_THRESHOLD) {
-            continue;
-          }
-
-          const [left, right] = [document.id, hitId].sort((a, b) => a.localeCompare(b));
-          const key = `${left}->${right}`;
-          const existing = edges.get(key);
-
-          if (!existing || score > existing.score) {
-            edges.set(key, {
-              sourceId: left,
-              targetId: right,
-              score: roundScore(score),
-            });
-          }
-        }
-      }
-
-      return [...edges.values()].sort((a, b) => b.score - a.score || a.sourceId.localeCompare(b.sourceId) || a.targetId.localeCompare(b.targetId));
-    } catch {
-      return localSemanticNeighbors(input.documents);
-    }
-  }
-
-  async deleteIndex(input: { registryId: string }): Promise<SearchBackendDescription> {
-    const uid = indexUidFor(input.registryId);
-
-    try {
-      const client = await createMeiliClient();
-
-      await client.deleteIndexIfExists(uid);
-
-      return {
-        ...this.describe(),
-        indexUid: uid,
-      };
-    } catch (error) {
-      return {
-        engine: MEILI_ENGINE,
-        status: 'unavailable',
-        url: meiliUrl(),
-        reason: errorMessage(error),
-      };
-    }
-  }
-
-  private async ensureIndex(client: MeiliClient, uid: string): Promise<void> {
-    try {
-      await client.getIndex(uid);
-    } catch {
-      const task = await client.createIndex(uid, { primaryKey: 'id' });
-
-      await client.tasks.waitForTask(task, { timeout: 30000, interval: 100 });
-      const index = client.index<SearchDocument>(uid);
-      const settingsTask = await index.updateSettings(meiliSettings());
-
-      await client.tasks.waitForTask(settingsTask, { timeout: 30000, interval: 100 });
-    }
-  }
-}
-
-function mergeMeiliHits(hits: SearchDocument[], limit: number): SearchDocument[] {
-  const byId = new Map<string, SearchDocument>();
-
-  for (const hit of hits) {
-    const id = typeof hit.canonicalId === 'string' ? hit.canonicalId : canonicalMeiliDocumentId(hit.id);
-    const existing = byId.get(id);
-
-    if (!existing || Number(hit._rankingScore ?? 0) > Number(existing._rankingScore ?? 0)) {
-      byId.set(id, hit);
-    }
-  }
-
-  return [...byId.values()]
-    .sort((left, right) => Number(right._rankingScore ?? 0) - Number(left._rankingScore ?? 0)
-      || (typeof left.canonicalId === 'string' ? left.canonicalId : left.id)
-        .localeCompare(typeof right.canonicalId === 'string' ? right.canonicalId : right.id))
-    .slice(0, limit);
-}
-
-function uniqueLexicalQueries(values: string[]): string[] {
-  return [...new Set(values
-    .map((value) => value.trim())
-    .filter(Boolean))]
-    .slice(0, 6);
-}
-
-type MeiliClient = InstanceType<(typeof import('meilisearch'))['MeiliSearch']>;
-
-async function createMeiliClient(): Promise<MeiliClient> {
-  const { MeiliSearch } = await import('meilisearch');
-
-  return new MeiliSearch({
-    host: meiliUrl(),
-    apiKey: meiliApiKey(),
-  });
-}
-
 interface LanceSearchRow {
   id?: unknown;
   _distance?: unknown;
 }
 
-interface SearchDocument {
+interface LanceSearchDocument {
   id: string;
-  canonicalId?: string;
-  packageId?: string;
-  packageVersion?: string;
   dkbId: string;
   recordId: string;
   title: string;
@@ -935,8 +455,6 @@ interface SearchDocument {
   sourceType: string;
   updatedAt: string;
   sourceHash: string | null;
-  _vectors?: Record<string, number[]>;
-  _rankingScore?: number;
 }
 
 function lanceRootFor(artifactRoot: string): string {
@@ -957,68 +475,7 @@ function lanceTableNameFor(registryId: string): string {
   return `chunks_${safeIndexPart(registryId)}`;
 }
 
-function searchDocumentFor(document: VectorDocument): SearchDocument {
-  return {
-    // Meilisearch primary keys may only contain alphanumerics, hyphens, and
-    // underscores. DKB canonical IDs intentionally contain separators such as
-    // "/" and ":", so keep the canonical form in memory and store a lossless
-    // backend-safe representation in Meilisearch.
-    id: meiliDocumentId(versionedMeiliDocumentId(document)),
-    canonicalId: document.id,
-    packageId: document.packageId ?? document.dkbId,
-    packageVersion: document.packageVersion ?? '0.0.0',
-    dkbId: document.dkbId,
-    recordId: document.recordId,
-    title: document.title,
-    summary: document.summary,
-    text: document.text,
-    domains: document.domains,
-    topics: document.topics,
-    keywords: document.keywords,
-    entities: document.entities,
-    aliases: document.aliases,
-    sourceType: document.sourceType,
-    updatedAt: document.updatedAt,
-    sourceHash: document.sourceHash,
-    ...(document.embedding ? { _vectors: { [embedderName()]: document.embedding } } : {}),
-  };
-}
-
-function packageSearchDocumentFor(document: VectorDocument, dkbId: string, packageVersion: string): SearchDocument {
-  return searchDocumentFor({
-    ...document,
-    packageId: dkbId,
-    packageVersion,
-  });
-}
-
-function meiliDocumentId(canonicalId: string): string {
-  return Buffer.from(canonicalId, 'utf8').toString('base64url');
-}
-
-function canonicalMeiliDocumentId(id: string): string {
-  try {
-    const decoded = Buffer.from(id, 'base64url').toString('utf8');
-    const parts = decoded.split('|');
-
-    return parts.length >= 4 ? parts.slice(3).join('|') : decoded;
-  } catch {
-    // Preserve compatibility with an existing index created by an older
-    // runtime. It will be rebuilt on the next lifecycle operation.
-    return id;
-  }
-}
-
-function versionedMeiliDocumentId(document: VectorDocument): string {
-  return [
-    document.packageId ?? document.dkbId,
-    document.packageVersion ?? '0.0.0',
-    document.sourceHash ?? '',
-    document.id,
-  ].join('|');
-}
-
-function lanceDocumentFor(document: VectorDocument): Omit<SearchDocument, 'domains' | 'topics' | 'keywords' | 'entities' | 'aliases' | 'sourceHash'> & {
+function lanceDocumentFor(document: VectorDocument): Omit<LanceSearchDocument, 'domains' | 'topics' | 'keywords' | 'entities' | 'aliases' | 'sourceHash'> & {
   domains: string;
   topics: string;
   keywords: string;
@@ -1042,151 +499,6 @@ function lanceDocumentFor(document: VectorDocument): Omit<SearchDocument, 'domai
     updatedAt: document.updatedAt,
     sourceHash: document.sourceHash ?? '',
   };
-}
-
-function meiliSettings(): Record<string, unknown> {
-  const settings: Record<string, unknown> = {
-    searchableAttributes: ['title', 'summary', 'keywords', 'topics', 'entities', 'aliases', 'text'],
-    filterableAttributes: ['packageId', 'packageVersion', 'dkbId', 'recordId', 'sourceType', 'updatedAt'],
-    sortableAttributes: ['updatedAt'],
-    displayedAttributes: [
-      'id',
-      'canonicalId',
-      'packageId',
-      'packageVersion',
-      'dkbId',
-      'recordId',
-      'title',
-      'summary',
-      'topics',
-      'entities',
-      'aliases',
-      'sourceType',
-      'updatedAt',
-      'sourceHash',
-    ],
-  };
-  const source = process.env.DKB_MEILI_EMBEDDER_SOURCE ?? '';
-
-  if (source) {
-    settings.embedders = {
-      [embedderName()]: embedderConfig(source),
-    };
-  }
-
-  return settings;
-}
-
-function packageFilter(dkbId: string, packageVersion: string): string {
-  return `packageId = "${escapeMeiliFilterString(dkbId)}" AND packageVersion = "${escapeMeiliFilterString(packageVersion)}"`;
-}
-
-function escapeMeiliFilterString(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-function roundMs(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-function embedderConfig(source: string): Record<string, unknown> {
-  if (source === 'userProvided') {
-    return {
-      source: 'userProvided',
-      dimensions: Number(process.env.DKB_MEILI_EMBEDDER_DIMENSIONS ?? 384),
-    };
-  }
-  if (source === 'ollama') {
-    return {
-      source: 'ollama',
-      model: process.env.DKB_MEILI_EMBEDDER_MODEL ?? 'nomic-embed-text',
-      url: process.env.DKB_MEILI_EMBEDDER_URL ?? 'http://host.docker.internal:11434/api/embeddings',
-      documentTemplate: "{{doc.title}} {{doc.summary}} {{doc.topics}} {{doc.entities}} {{doc.aliases}}",
-    };
-  }
-
-  if (source === 'huggingFace') {
-    return {
-      source: 'huggingFace',
-      model: process.env.DKB_MEILI_EMBEDDER_MODEL ?? 'BAAI/bge-base-en-v1.5',
-      documentTemplate: "{{doc.title}} {{doc.summary}} {{doc.topics}} {{doc.entities}} {{doc.aliases}}",
-    };
-  }
-
-  if (source === 'rest') {
-    return {
-      source: 'rest',
-      url: process.env.DKB_MEILI_EMBEDDER_URL,
-      request: {
-        input: '{{text}}',
-      },
-      response: {
-        data: [
-          {
-            embedding: '{{embedding}}',
-          },
-        ],
-      },
-      dimensions: Number(process.env.DKB_MEILI_EMBEDDER_DIMENSIONS ?? 768),
-      documentTemplate: "{{doc.title}} {{doc.summary}} {{doc.topics}} {{doc.entities}} {{doc.aliases}}",
-    };
-  }
-
-  return {
-    source,
-    model: process.env.DKB_MEILI_EMBEDDER_MODEL,
-    documentTemplate: "{{doc.title}} {{doc.summary}} {{doc.topics}} {{doc.entities}} {{doc.aliases}}",
-  };
-}
-
-function embedderName(): string {
-  return process.env.DKB_MEILI_EMBEDDER_NAME ?? 'dkb-local';
-}
-
-function hasMeiliEmbedder(): boolean {
-  return Boolean(process.env.DKB_MEILI_EMBEDDER_SOURCE);
-}
-
-function isUserProvidedEmbedder(): boolean {
-  return process.env.DKB_MEILI_EMBEDDER_SOURCE === 'userProvided';
-}
-
-async function embedQuery(query: string): Promise<number[]> {
-  const url = process.env.DKB_QUERY_EMBEDDER_URL;
-
-  if (!url) {
-    throw new Error('DKB_QUERY_EMBEDDER_URL is required when using a userProvided Meilisearch embedder');
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ texts: [query] }),
-  });
-  const body = await response.json() as { vectors?: unknown };
-  const vector = Array.isArray(body.vectors) && Array.isArray(body.vectors[0])
-    ? body.vectors[0]
-    : null;
-
-  if (!response.ok || !vector || !vector.every((value) => typeof value === 'number')) {
-    throw new Error(`DKB query embedder failed (${response.status})`);
-  }
-
-  return vector;
-}
-
-function semanticRatio(): number {
-  return boundedNumber(process.env.DKB_MEILI_SEMANTIC_RATIO, DEFAULT_SEMANTIC_RATIO, 0, 1);
-}
-
-function rankingScoreThreshold(): number {
-  return boundedNumber(process.env.DKB_MEILI_RANKING_SCORE_THRESHOLD, DEFAULT_RANKING_SCORE_THRESHOLD, 0, 1);
-}
-
-function boundedNumber(value: string | undefined, fallback: number, min: number, max: number): number {
-  const parsed = Number(value);
-
-  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
 async function writeVectorManifest(

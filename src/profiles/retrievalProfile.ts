@@ -3,24 +3,13 @@ import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
 import { resolveFrom } from '../protocol/paths.js';
-import type { DkbRetrievalProfileConfig, LoadedLibrary } from '../protocol/types.js';
 import type { DkbProviderHost, DkbProviderHostDescription } from '../providers/host.js';
-import type { DkbEmbeddingProvider } from '../providers/types.js';
-import { DKB_FAISS_PLUGIN_ID, DKB_FASTEMBED_PLUGIN_ID, DKB_HYBRID_RETRIEVAL_PLUGIN_ID, DKB_LLAMA_INDEX_PLUGIN_ID } from '../providers/bundled.js';
-import {
-  LLAMAINDEX_COMPILER_ID,
-  LLAMAINDEX_COMPILER_IMAGE,
-  type LlamaIndexCompilerResult,
-} from '../compiler/llamaindex.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from '../providers/types.js';
+import { DKB_FAISS_PLUGIN_ID, DKB_HYBRID_RETRIEVAL_PLUGIN_ID } from '../providers/bundled.js';
+import type { LlamaIndexCompilerResult } from '../compiler/llamaindex.js';
 
 export const DKB_RETRIEVAL_PROFILE_LOCK_PATH = 'dkb-profile.lock.json';
 export const DKB_RETRIEVAL_PROFILE_FORMAT = 'dkb.retrieval-profile.v2';
-export const DEFAULT_EMBEDDING_MODEL = 'BAAI/bge-small-en-v1.5';
-
-const SUPPORTED_FASTEMBED_MODELS: Record<string, number> = {
-  'BAAI/bge-small-en-v1.5': 384,
-  'BAAI/bge-base-en-v1.5': 768,
-};
 
 export interface DkbResolvedRetrievalProfile {
   target: string;
@@ -29,6 +18,7 @@ export interface DkbResolvedRetrievalProfile {
   providers: DkbProviderHostDescription['providers'];
   processors: DkbProviderHostDescription['processors'];
   compiler: string;
+  indexMode: DkbIndexProvider['mode'];
   embedding: {
     adapter: string;
     model: string;
@@ -59,10 +49,10 @@ export interface DkbRetrievalProfileLock {
       modelRevision: string | null;
       modelDigest: string | null;
       dimensions: number;
-      metric: 'cosine';
-      normalized: true;
-      queryMode: 'query';
-      documentMode: 'passage';
+      metric: string;
+      normalized: boolean;
+      queryMode: string;
+      documentMode: string;
     };
     extraction: {
       richParser: string;
@@ -92,77 +82,19 @@ export interface DkbRetrievalProfileLock {
   generatedAt: string;
 }
 
-export function resolveLibraryRetrievalProfile(library: LoadedLibrary, overrideModel?: string): DkbResolvedRetrievalProfile {
-  void library;
-  return resolveRetrievalProfile(undefined, overrideModel);
-}
-
-export function resolveRetrievalProfile(config?: DkbRetrievalProfileConfig, overrideModel?: string): DkbResolvedRetrievalProfile {
-  const compiler = config?.compiler ?? 'llamaindex';
-  const adapter = config?.embedding?.adapter ?? 'fastembed';
-  const requestedOverride = overrideModel?.trim();
-  const configuredModel = config?.embedding?.model?.trim();
-  const model = requestedOverride || configuredModel || DEFAULT_EMBEDDING_MODEL;
-
-  if (compiler !== 'llamaindex') {
-    throw new DkbError(`Unsupported DKB retrieval compiler: ${compiler}`);
-  }
-  if (adapter !== 'fastembed') {
-    throw new DkbError(`Unsupported DKB embedding adapter: ${adapter}`);
-  }
-
-  const knownDimensions = SUPPORTED_FASTEMBED_MODELS[model];
-  const configuredDimensions = !requestedOverride || requestedOverride === configuredModel
-    ? config?.embedding?.dimensions
-    : undefined;
-  const dimensions = configuredDimensions ?? knownDimensions;
-
-  if (!dimensions || dimensions <= 0) {
-    throw new DkbError(`Embedding model ${model} is not registered. Set positive dimensions in the selected embedding provider options.`);
-  }
-  if (knownDimensions && configuredDimensions && configuredDimensions !== knownDimensions) {
-    throw new DkbError(`Embedding model ${model} requires ${knownDimensions} dimensions, not ${configuredDimensions}`);
-  }
-
-  return {
-    target: 'default',
-    configDigest: stableHash({ model, dimensions }),
-    providerBuildDigest: stableHash({
-      ingestion: DKB_LLAMA_INDEX_PLUGIN_ID,
-      embedding: DKB_FASTEMBED_PLUGIN_ID,
-      index: DKB_FAISS_PLUGIN_ID,
-      retrieval: DKB_HYBRID_RETRIEVAL_PLUGIN_ID,
-    }),
-    providers: [],
-    processors: [],
-    compiler,
-    embedding: {
-      adapter,
-      model,
-      dimensions,
-    },
-    compatibility: {
-      embeddingSpace: model,
-      dimensions,
-      metric: 'cosine',
-      normalized: true,
-      indexFormat: 'IndexIDMap2(IndexFlatIP)',
-      protocol: 'dkb.evidence.v1',
-    },
-  };
-}
-
 export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Promise<DkbResolvedRetrievalProfile> {
   const description = host.describe();
   const target = host.config.target;
   const embedding = host.provider<DkbEmbeddingProvider>('embedding');
+  const index = host.provider<DkbIndexProvider>('index');
+  const retrieval = host.provider<DkbRetrievalProvider>('retrieval');
   const rawCompatibility = await embedding.compatibility(host.optionsFor(target.embedding));
   const model = stringValue(rawCompatibility.embeddingSpace, `${target.embedding} compatibility embeddingSpace`);
   const dimensions = positiveIntegerValue(rawCompatibility.dimensions, `${target.embedding} compatibility dimensions`);
   const metric = stringValue(rawCompatibility.metric, `${target.embedding} compatibility metric`);
   const normalized = booleanValue(rawCompatibility.normalized, `${target.embedding} compatibility normalized`);
-  const indexFormat = target.index === DKB_FAISS_PLUGIN_ID ? 'IndexIDMap2(IndexFlatIP)' : stringValue(rawCompatibility.indexFormat, `${target.index} compatibility indexFormat`);
-  const protocol = typeof rawCompatibility.protocol === 'string' ? rawCompatibility.protocol : 'dkb.evidence.v1';
+  const indexFormat = index.format;
+  const protocol = retrieval.protocol;
 
   return {
     target: description.target,
@@ -171,6 +103,7 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
     providers: description.providers,
     processors: description.processors,
     compiler: target.ingestion ?? `${target.parser}+${target.chunker}`,
+    indexMode: index.mode,
     embedding: { adapter: target.embedding, model, dimensions },
     compatibility: { embeddingSpace: model, dimensions, metric, normalized, indexFormat, protocol },
   };
@@ -193,9 +126,6 @@ export function retrievalProfileLockForCompilerResults(
   for (const result of results) {
     const dimensions = result.records.find((record) => record.embedding.length > 0)?.embedding.length ?? 0;
 
-    if (result.compiler.id !== LLAMAINDEX_COMPILER_ID) {
-      throw new DkbError(`Compiler profile mismatch: expected ${LLAMAINDEX_COMPILER_ID}, got ${result.compiler.id}`);
-    }
     if (result.compiler.model !== desired.embedding.model) {
       throw new DkbError(`Compiler model mismatch: expected ${desired.embedding.model}, got ${result.compiler.model}`);
     }
@@ -205,16 +135,22 @@ export function retrievalProfileLockForCompilerResults(
   }
 
   const compilerImages = [...new Set(results.map((result) => result.compiler.image))];
+  const compilerIds = [...new Set(results.map((result) => result.compiler.id))];
 
-  if (compilerImages.length !== 1) {
-    throw new DkbError(`Compiler image mismatch across packages: ${compilerImages.join(', ')}`);
+  if (compilerImages.length !== 1 || compilerIds.length !== 1) {
+    throw new DkbError(`Compiler implementation mismatch across packages: ${compilerIds.join(', ')} / ${compilerImages.join(', ')}`);
   }
+  const ingestion = desired.providers.find((provider) => provider.kind === 'ingestion');
+  const parser = desired.providers.find((provider) => provider.kind === 'parser');
+  const chunker = desired.providers.find((provider) => provider.kind === 'chunker');
+  const parserId = ingestion?.id ?? parser?.id ?? desired.compiler;
+  const chunkerId = ingestion?.id ?? chunker?.id ?? desired.compiler;
 
   const profile: DkbRetrievalProfileLock['profile'] = {
     compiler: {
       adapter: desired.compiler,
-      id: LLAMAINDEX_COMPILER_ID,
-      image: compilerImages[0] ?? LLAMAINDEX_COMPILER_IMAGE,
+      id: compilerIds[0] ?? desired.compiler,
+      image: compilerImages[0] ?? `plugin:${desired.compiler}`,
       imageDigest: options.compilerImageDigest ?? null,
     },
     embedding: {
@@ -223,16 +159,16 @@ export function retrievalProfileLockForCompilerResults(
       modelRevision: options.modelRevision ?? null,
       modelDigest: options.modelDigest ?? null,
       dimensions: desired.embedding.dimensions,
-      metric: 'cosine',
-      normalized: true,
+      metric: desired.compatibility.metric,
+      normalized: desired.compatibility.normalized,
       queryMode: 'query',
       documentMode: 'passage',
     },
     extraction: {
-      richParser: 'docling',
-      richChunker: 'docling.hybrid',
-      fallbackParser: 'llamaindex',
-      fallbackChunker: 'llamaindex.sentence',
+      richParser: parserId,
+      richChunker: chunkerId,
+      fallbackParser: parserId,
+      fallbackChunker: chunkerId,
     },
     target: desired.target,
     configDigest: desired.configDigest,
@@ -241,7 +177,7 @@ export function retrievalProfileLockForCompilerResults(
     processors: desired.processors,
     index: {
       provider: desired.providers.find((provider) => provider.kind === 'index')?.id ?? DKB_FAISS_PLUGIN_ID,
-      mode: desired.providers.find((provider) => provider.kind === 'index')?.id === '@dkb/meilisearch' ? 'managed' : 'packaged',
+      mode: desired.indexMode,
       format: desired.compatibility.indexFormat,
     },
     retrieval: {
@@ -360,10 +296,4 @@ function booleanValue(value: unknown, label: string): boolean {
     throw new DkbError(`${label} must be a boolean`);
   }
   return value;
-}
-
-export function supportedRetrievalModels(): Array<{ model: string; dimensions: number }> {
-  return Object.entries(SUPPORTED_FASTEMBED_MODELS)
-    .map(([model, dimensions]) => ({ model, dimensions }))
-    .sort((left, right) => left.model.localeCompare(right.model));
 }

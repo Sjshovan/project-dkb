@@ -14,14 +14,10 @@ import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
 import { loadLibrary, uniqueLoadedDkbs } from '../protocol/manifest.js';
 import { capabilitiesForSourceType, sourceAssetsFromChunks, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LoadedDkb } from '../protocol/types.js';
-import {
-  LLAMAINDEX_COMPILER_ID,
-  LLAMAINDEX_COMPILER_IMAGE,
-  type LlamaIndexCompilerRecord,
-  type LlamaIndexCompilerResult,
-} from '../compiler/llamaindex.js';
-import { sourceUnitFromLlamaIndexRecord } from '../compiler/llamaindexArtifacts.js';
 import { tokenize } from '../router/scoring.js';
+import { sourceUnitFromPipelineRecord } from '../providers/records.js';
+import type { DkbCompiledPipeline } from '../providers/types.js';
+import { LLAMAINDEX_COMPILER_IMAGE } from '../compiler/llamaindex.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -34,7 +30,7 @@ const FAISS_RUNTIME_FORMAT = 'dkb.faiss.runtime.v1';
 const FAISS_HELPER_TIMEOUT_MS = 30_000;
 
 export interface FaissEmbeddingProfile {
-  compilerId: typeof LLAMAINDEX_COMPILER_ID;
+  embeddingProvider: string;
   model: string;
   dimensions: number;
   metric: 'cosine';
@@ -113,21 +109,32 @@ export interface FaissPackageMutationResult {
   };
 }
 
+interface FaissCompiledRecord {
+  unit: IndexedSourceUnit;
+  embedding: number[];
+  metadata: Record<string, unknown>;
+}
+
 export async function writeFaissPackageArtifacts(
   root: string,
   dkb: LoadedDkb,
-  result: LlamaIndexCompilerResult,
+  compiled: DkbCompiledPipeline,
+  compatibility: Record<string, unknown>,
 ): Promise<FaissPackageManifest | null> {
-  if (result.records.length === 0) {
+  if (compiled.records.length === 0) {
     return null;
   }
-  const profile = embeddingProfileFor(result);
-  const records = result.records.slice().sort((left, right) => left.id.localeCompare(right.id));
-  const numericIdToRecord = new Map<string, LlamaIndexCompilerRecord>();
+  const profile = embeddingProfileFor(compiled, compatibility);
+  const records = compiled.records.map((record) => ({
+    unit: sourceUnitFromPipelineRecord(dkb, record),
+    embedding: [...(record.embedding ?? [])],
+    metadata: record.metadata,
+  })).sort((left, right) => left.unit.id.localeCompare(right.unit.id));
+  const numericIdToRecord = new Map<string, FaissCompiledRecord>();
 
   for (const record of records) {
     assertCompatibleRecordEmbedding(record, profile, dkb.manifest.id, dkb.manifest.version);
-    const numericId = faissNumericIdFor(dkb.manifest.id, dkb.manifest.version, record.id);
+    const numericId = faissNumericIdFor(dkb.manifest.id, dkb.manifest.version, record.unit.id);
 
     if (numericIdToRecord.has(numericId)) {
       throw new DkbError(`FAISS numeric ID collision in ${dkb.manifest.id}@${dkb.manifest.version}: ${numericId}`);
@@ -147,7 +154,7 @@ export async function writeFaissPackageArtifacts(
   await fs.mkdir(tempDir, { recursive: true });
 
   try {
-    await writeFaissCatalog(tempCatalog, dkb, records, numericIdToRecord);
+    await writeFaissCatalog(tempCatalog, dkb, numericIdToRecord);
     await writeFaissVectors(tempVectors, dkb, records);
     await runFaissHelper(['build', '--vectors', tempVectors, '--out', tempSegment]);
 
@@ -178,14 +185,14 @@ export async function writeFaissPackageArtifacts(
   }
 }
 
-async function writeFaissVectors(target: string, dkb: LoadedDkb, records: LlamaIndexCompilerRecord[]): Promise<void> {
+async function writeFaissVectors(target: string, dkb: LoadedDkb, records: FaissCompiledRecord[]): Promise<void> {
   async function* jsonChunks(): AsyncGenerator<string> {
     yield '{"ids":[';
     for (let index = 0; index < records.length; index += 1) {
       if (index > 0) {
         yield ',';
       }
-      yield JSON.stringify(faissNumericIdFor(dkb.manifest.id, dkb.manifest.version, records[index]!.id));
+      yield JSON.stringify(faissNumericIdFor(dkb.manifest.id, dkb.manifest.version, records[index]!.unit.id));
     }
     yield '],"vectors":[';
     for (let index = 0; index < records.length; index += 1) {
@@ -395,16 +402,26 @@ export async function validateFaissRuntimeReady(input: {
   }
 }
 
-function embeddingProfileFor(result: LlamaIndexCompilerResult): FaissEmbeddingProfile {
-  const dimensions = result.records.find((record) => record.embedding.length > 0)?.embedding.length ?? 0;
+function embeddingProfileFor(compiled: DkbCompiledPipeline, compatibility: Record<string, unknown>): FaissEmbeddingProfile {
+  const dimensions = compiled.records.find((record) => (record.embedding?.length ?? 0) > 0)?.embedding?.length ?? 0;
 
   if (dimensions <= 0) {
     throw new DkbError('FAISS package artifacts require compiler vectors');
   }
+  if (compatibility.dimensions !== dimensions) {
+    throw new DkbError(`FAISS embedding dimensions do not match pipeline compatibility: expected ${String(compatibility.dimensions)}, got ${dimensions}`);
+  }
+  if (compatibility.metric !== 'cosine' || compatibility.normalized !== true) {
+    throw new DkbError('FAISS IndexFlatIP packages require normalized cosine embeddings');
+  }
+  if (typeof compatibility.embeddingSpace !== 'string' || compatibility.embeddingSpace.length === 0) {
+    throw new DkbError('FAISS pipeline compatibility must declare an embedding space');
+  }
+  const embeddingProvider = compiled.receipts.find((receipt) => receipt.compatibility)?.providerId ?? 'unknown';
 
   return {
-    compilerId: LLAMAINDEX_COMPILER_ID,
-    model: result.compiler.model,
+    embeddingProvider,
+    model: compatibility.embeddingSpace,
     dimensions,
     metric: 'cosine',
     normalized: true,
@@ -412,11 +429,11 @@ function embeddingProfileFor(result: LlamaIndexCompilerResult): FaissEmbeddingPr
   };
 }
 
-function assertCompatibleRecordEmbedding(record: LlamaIndexCompilerRecord, profile: FaissEmbeddingProfile, packageId: string, version: string): void {
-  if (!(Array.isArray(record.embedding) || record.embedding instanceof Float32Array)
+function assertCompatibleRecordEmbedding(record: FaissCompiledRecord, profile: FaissEmbeddingProfile, packageId: string, version: string): void {
+  if (!Array.isArray(record.embedding)
     || record.embedding.length !== profile.dimensions
     || !record.embedding.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-    throw new DkbError(`Compiler record ${record.id} in ${packageId}@${version} has an incompatible FastEmbed vector`);
+    throw new DkbError(`Compiler record ${record.unit.id} in ${packageId}@${version} has an incompatible embedding vector`);
   }
 }
 
@@ -427,7 +444,7 @@ function assertSingleEmbeddingProfile(profiles: FaissEmbeddingProfile[]): FaissE
     throw new DkbError('No FAISS embedding profiles loaded');
   }
   for (const profile of profiles.slice(1)) {
-    if (profile.compilerId !== first.compilerId || profile.model !== first.model || profile.dimensions !== first.dimensions || profile.metric !== first.metric) {
+    if (profile.model !== first.model || profile.dimensions !== first.dimensions || profile.metric !== first.metric || profile.normalized !== first.normalized) {
       throw new DkbError(`Installed DKB embedding profile mismatch: expected ${first.model}/${first.dimensions}, got ${profile.model}/${profile.dimensions}`);
     }
   }
@@ -438,8 +455,7 @@ function assertSingleEmbeddingProfile(profiles: FaissEmbeddingProfile[]): FaissE
 function writeFaissCatalog(
   target: string,
   dkb: LoadedDkb,
-  records: LlamaIndexCompilerRecord[],
-  numericIdToRecord: Map<string, LlamaIndexCompilerRecord>,
+  numericIdToRecord: Map<string, FaissCompiledRecord>,
 ): void {
   const database = new DatabaseSync(target);
 
@@ -490,7 +506,7 @@ function writeFaissCatalog(
     database.exec('begin');
     try {
       for (const [numericId, record] of numericIdToRecord.entries()) {
-        const unit = sourceUnitFromLlamaIndexRecord(dkb, record);
+        const unit = record.unit;
         insert.run(
           numericId,
           dkb.manifest.id,

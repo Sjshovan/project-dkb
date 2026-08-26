@@ -17,6 +17,8 @@ import {
 import { BUNDLED_PROVIDER_PLUGINS } from './bundled.js';
 import { DkbProviderHost, pluginPath } from './host.js';
 import type { DkbPluginModule } from './types.js';
+import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
+import { stableHash } from '../contracts/hash.js';
 
 export type DkbPluginScope = 'local' | 'global';
 
@@ -163,6 +165,20 @@ export async function setPipelineTarget(input: {
 
     if (unhealthy.length > 0) {
       throw new DkbError(`Pipeline validation failed: ${unhealthy.map((result) => `${result.id}: ${result.detail ?? 'unhealthy'}`).join('; ')}`);
+    }
+    if (input.activate) {
+      const installedProfile = await maybeReadRetrievalProfileLock(root);
+
+      if (installedProfile) {
+        const selectedProfile = await resolveProviderRetrievalProfile(host);
+        const selectedCompatibilityDigest = stableHash(selectedProfile.compatibility);
+
+        if (selectedCompatibilityDigest !== installedProfile.compatibilityDigest) {
+          throw new DkbError(
+            `Cannot activate pipeline target "${input.name}": installed packages require compatibility ${installedProfile.compatibilityDigest}, but the target provides ${selectedCompatibilityDigest}. Save it with --no-activate, rebuild or remove incompatible packages, then activate it.`,
+          );
+        }
+      }
     }
     const description = host.describe();
     await writeDkbContextConfig(targetPath, candidate);

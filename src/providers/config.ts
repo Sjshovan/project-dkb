@@ -222,12 +222,21 @@ function mergeTarget(
     return undefined;
   }
 
-  return {
+  const result: Partial<DkbPipelineTargetConfig> = {
     ...base,
     ...override,
     processors: override && Object.hasOwn(override, 'processors') ? [...(override.processors ?? [])] : [...(base?.processors ?? [])],
     options: mergeOptions(base?.options, override?.options),
   };
+
+  if (override?.ingestion) {
+    delete result.parser;
+    delete result.chunker;
+  } else if (override?.parser || override?.chunker) {
+    delete result.ingestion;
+  }
+
+  return result;
 }
 
 function mergeOptions(

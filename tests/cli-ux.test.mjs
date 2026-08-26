@@ -471,6 +471,30 @@ test('archive extraction reports a single indeterminate pass with an explicit co
   }
 });
 
+test('package archives exclude operator-controlled plugins and pipeline configuration', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-archive-boundary-'));
+  const sourceRoot = path.join(tempRoot, 'source');
+  const outputRoot = path.join(tempRoot, 'output');
+  const archivePath = path.join(tempRoot, 'sample.dkbpkg');
+
+  try {
+    await fs.mkdir(path.join(sourceRoot, '.dkb/plugins/@host/provider'), { recursive: true });
+    await fs.mkdir(path.join(sourceRoot, '.dkb/artifacts'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, '.dkb/config.json'), '{"activeTarget":"host-only"}\n');
+    await fs.writeFile(path.join(sourceRoot, '.dkb/plugins/@host/provider/plugin.mjs'), 'throw new Error("must not install")\n');
+    await fs.writeFile(path.join(sourceRoot, '.dkb/artifacts/evidence.json'), '{"portable":true}\n');
+    await fs.writeFile(path.join(sourceRoot, 'dkb.json'), '{"type":"dkb"}\n');
+    await createDkbPackageArchive(sourceRoot, archivePath);
+    await extractDkbPackageArchive(archivePath, outputRoot);
+
+    await assert.rejects(fs.access(path.join(outputRoot, '.dkb/config.json')), (error) => error?.code === 'ENOENT');
+    await assert.rejects(fs.access(path.join(outputRoot, '.dkb/plugins/@host/provider/plugin.mjs')), (error) => error?.code === 'ENOENT');
+    assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/artifacts/evidence.json'), 'utf8'), '{"portable":true}\n');
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('install preflight rejects version digest drift and incomplete runtime state', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-preflight-errors-'));
   const packageRoot = path.join(tempRoot, 'vendor', '@acct-test', 'example');
@@ -847,13 +871,6 @@ test('diagnostic commands return nonzero when their report is not healthy', asyn
     assert.equal(health.code, 1);
     assert.equal(JSON.parse(health.stdout).status, 'degraded');
 
-    const search = await runCli(['--json', 'search-health', tempRoot], {
-      DKB_SEARCH_ENGINE: 'meilisearch',
-      MEILI_URL: 'http://127.0.0.1:1',
-    });
-    assert.equal(search.code, 1);
-    assert.equal(JSON.parse(search.stdout).status, 'unavailable');
-
     const doctor = await runCli(['--json', 'compiler', 'doctor'], {
       PATH: '',
       Path: '',
@@ -898,6 +915,8 @@ test('root help separates common, management, and advanced commands', async () =
   assert.equal(result.code, 0);
   assert.match(result.stdout, /Common Commands:/);
   assert.match(result.stdout, /Management Commands:/);
+  assert.match(result.stdout, /pipeline\s+Inspect, select, and verify the provider pipeline/);
+  assert.match(result.stdout, /plugin\s+Manage trusted filesystem plugins/);
   assert.match(result.stdout, /Advanced Commands:/);
   assert.match(result.stdout, /Run 'dkb <command> --help'/);
 });

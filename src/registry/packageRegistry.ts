@@ -7,7 +7,6 @@ import { DatabaseSync } from 'node:sqlite';
 import { compileComposeProject } from '../compiler/compile.js';
 import { invalidateRuntimeQuerySnapshot, ensureRuntimeState } from '../runtime/state.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.js';
-import { validateFaissPackageQueryability, validateFaissRuntimeReady } from '../indexes/faissStore.js';
 import { canonicalJson, stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '../protocol/identity.js';
@@ -26,6 +25,8 @@ import {
   verifyPackageReceipt,
 } from '../signing/index.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '../protocol/types.js';
+import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
+import { assertMatchingRetrievalProfiles, maybeReadRetrievalProfileLock, writeRetrievalProfileLock } from '../profiles/retrievalProfile.js';
 
 export const MOCK_REGISTRY_DB = 'registry.sqlite';
 export const MOCK_REGISTRY_PACKAGES_DIR = 'packages';
@@ -132,6 +133,7 @@ export interface MockRegistryInstallResult {
     recordCount: number;
     packageCount: number;
   };
+  warning?: string;
 }
 
 export interface DkbInstallCandidate {
@@ -297,6 +299,7 @@ export async function publishDkbToMockRegistry(options: MockRegistryPublishOptio
     const compiled = await compileComposeProject(buildRoot, {
       force: true,
       mode: 'package',
+      contextRoot: paths.root,
     });
     const database = openRegistryDatabase(paths.databasePath);
 
@@ -664,25 +667,39 @@ export async function installDkbArchiveIntoRuntime(options: {
     const installed = await installedPackageRoots(runtime.stateRoot, verification.packageId);
     const registryId = (await loadLibrary(runtime.stateRoot)).manifest.id;
     const stagedDkb = await loadDkbPackage(extractedRoot, verification.packageId);
-    options.progress?.(progressStart({
-      phase: 'validate-retrieval',
-      label: 'Validate retrieval index',
-      total: 0,
-      unit: 'steps',
-    }));
-    await validateFaissPackageQueryability(stagedDkb);
-    options.progress?.(progressFinish({
-      phase: 'validate-retrieval',
-      label: 'Validate retrieval index',
-      total: 1,
-      unit: 'steps',
-    }));
+    const candidateProfile = await maybeReadRetrievalProfileLock(extractedRoot);
+    const activeProfile = await maybeReadRetrievalProfileLock(runtime.stateRoot);
+
+    if (activeProfile && candidateProfile) {
+      assertMatchingRetrievalProfiles(activeProfile, candidateProfile, `${stagedDkb.manifest.id}@${stagedDkb.manifest.version}`);
+    }
 
     if (installed.length > 0 || await exists(target)) {
       if (!options.force) {
         throw new DkbError(`Runtime DKB already exists: ${verification.packageId}. Use force to replace it.`);
       }
     }
+
+    const previousPackages = (await Promise.all(installed.map(async (installedRoot) => loadDkbPackage(installedRoot, verification.packageId).catch(() => null))))
+      .filter((dkb): dkb is LoadedDkb => Boolean(dkb));
+    options.progress?.(progressStart({
+      phase: 'validate-retrieval',
+      label: 'Prepare retrieval index',
+      total: 0,
+      unit: 'steps',
+    }));
+    let preparedIndex: PreparedRuntimeIndexPackage | null = await prepareRuntimeIndexPackage({
+      libraryRoot: runtime.stateRoot,
+      libraryId: registryId,
+      dkb: stagedDkb,
+    });
+    let indexCommitted = false;
+    options.progress?.(progressFinish({
+      phase: 'validate-retrieval',
+      label: 'Prepare retrieval index',
+      total: 1,
+      unit: 'steps',
+    }));
 
     await fs.mkdir(path.dirname(target), { recursive: true });
     const backup = await backupInstalledRoots(installed, target);
@@ -730,7 +747,10 @@ export async function installDkbArchiveIntoRuntime(options: {
         total: 0,
         unit: 'steps',
       }));
-      const catalog = await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot, { syncSearch: false });
+      const catalog = await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot);
+      if (!activeProfile && candidateProfile) {
+        await writeRetrievalProfileLock(runtime.stateRoot, candidateProfile);
+      }
       options.progress?.(progressFinish({
         phase: 'refresh-runtime-catalog',
         label: 'Refresh runtime catalog',
@@ -745,9 +765,9 @@ export async function installDkbArchiveIntoRuntime(options: {
         total: 0,
         unit: 'steps',
       }));
-      await validateFaissRuntimeReady({
-        root: runtime.stateRoot,
-        registryId,
+      await verifyRuntimeIndex({
+        libraryRoot: runtime.stateRoot,
+        libraryId: registryId,
         packageId: stagedDkb.manifest.id,
         packageVersion: stagedDkb.manifest.version,
       });
@@ -771,6 +791,19 @@ export async function installDkbArchiveIntoRuntime(options: {
         total: 1,
         unit: 'steps',
       }));
+      const cleanupWarnings: string[] = [];
+      for (const previous of previousPackages) {
+        if (previous.manifest.version !== stagedDkb.manifest.version) {
+          const cleanup = await cleanupRuntimeIndexPackage({
+            libraryRoot: runtime.stateRoot,
+            libraryId: registryId,
+            packageId: previous.manifest.id,
+            packageVersion: previous.manifest.version,
+          });
+          if (cleanup?.warning) cleanupWarnings.push(cleanup.warning);
+        }
+      }
+      indexCommitted = true;
       await removeInstalledRootsBackup(backup);
       await artifactSnapshot.commit();
 
@@ -782,8 +815,12 @@ export async function installDkbArchiveIntoRuntime(options: {
         packagePath: target,
         verification,
         catalog,
+        ...(cleanupWarnings.length > 0 ? { warning: cleanupWarnings.join(' ') } : {}),
       };
     } catch (error) {
+      if (!indexCommitted) {
+        await preparedIndex?.rollback().catch(() => undefined);
+      }
       await restoreInstalledRootsBackup(backup).catch(() => undefined);
       await activation?.rollback().catch(() => undefined);
       await artifactSnapshot?.rollback().catch(() => undefined);

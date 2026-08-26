@@ -186,7 +186,7 @@ export async function installRegistryCollection(options: {
       originalRootIds,
     );
     await pruneOldCollectionMembers(libraryRoot, state, collectionId, new Set(releases.map((release) => release.packageId)));
-    await refreshRuntimeCatalogFromInstalledArtifacts(libraryRoot, { syncSearch: false });
+    await refreshRuntimeCatalogFromInstalledArtifacts(libraryRoot);
     invalidateRuntimeQuerySnapshot(libraryRoot);
     await transaction.commit();
 
@@ -228,7 +228,7 @@ export async function uninstallRegistryCollection(options: {
     for (const identity of [collectionId, ...removable]) {
       await fs.rm(registryPackagePath(libraryRoot, identity), { recursive: true, force: true });
     }
-    await refreshRuntimeCatalogFromInstalledArtifacts(libraryRoot, { syncSearch: false });
+    await refreshRuntimeCatalogFromInstalledArtifacts(libraryRoot);
     invalidateRuntimeQuerySnapshot(libraryRoot);
     await transaction.commit();
 

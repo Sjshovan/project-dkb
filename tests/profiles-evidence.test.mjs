@@ -5,7 +5,6 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   assertMatchingRetrievalProfiles,
-  resolveRetrievalProfile,
   retrievalProfileLockForCompilerResults,
   validateRetrievalProfileLock,
 } from '../dist/src/profiles/retrievalProfile.js';
@@ -52,25 +51,12 @@ function compilerResult(model, dimensions) {
   };
 }
 
-test('built-in FastEmbed profiles resolve to 384 and 768 dimensions', () => {
-  assert.equal(resolveRetrievalProfile(undefined, 'BAAI/bge-small-en-v1.5').embedding.dimensions, 384);
-  assert.equal(resolveRetrievalProfile(undefined, 'BAAI/bge-base-en-v1.5').embedding.dimensions, 768);
-  assert.equal(resolveRetrievalProfile({
-    compiler: 'llamaindex',
-    embedding: { adapter: 'fastembed', model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
-  }, 'BAAI/bge-base-en-v1.5').embedding.dimensions, 768);
-  assert.throws(
-    () => resolveRetrievalProfile(undefined, 'unregistered/model'),
-    /not registered/,
-  );
-});
-
 test('profile locks reject model, dimension, and digest mismatches', () => {
-  const small = resolveRetrievalProfile(undefined, 'BAAI/bge-small-en-v1.5');
+  const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
   const smallLock = retrievalProfileLockForCompilerResults(small, [compilerResult(small.embedding.model, 384)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
-  const base = resolveRetrievalProfile(undefined, 'BAAI/bge-base-en-v1.5');
+  const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
   const baseLock = retrievalProfileLockForCompilerResults(base, [compilerResult(base.embedding.model, 768)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
@@ -87,10 +73,10 @@ test('profile locks reject model, dimension, and digest mismatches', () => {
 });
 
 test('Evidence IR stays embedding-free and preserves identity across profiles', () => {
-  const small = resolveRetrievalProfile(undefined, 'BAAI/bge-small-en-v1.5');
+  const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
   const smallResult = compilerResult(small.embedding.model, 384);
   const smallLock = retrievalProfileLockForCompilerResults(small, [smallResult]);
-  const base = resolveRetrievalProfile(undefined, 'BAAI/bge-base-en-v1.5');
+  const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
   const baseResult = compilerResult(base.embedding.model, 768);
   const baseLock = retrievalProfileLockForCompilerResults(base, [baseResult]);
   const smallIr = buildEvidenceIr([smallResult], smallLock);
@@ -170,3 +156,28 @@ test('large package source analysis skips unbounded all-pairs lexical graphs', (
   assert.equal(analysis.sourceUnits.length, 5_001);
   assert.equal(analysis.sourceEdges.length, 0);
 });
+
+function resolvedProfile(model, dimensions) {
+  return {
+    target: 'test',
+    configDigest: `config:${model}`,
+    providerBuildDigest: `providers:${model}`,
+    providers: [],
+    processors: [],
+    compiler: '@dkb/llamaindex',
+    indexMode: 'packaged',
+    embedding: {
+      adapter: '@dkb/fastembed',
+      model,
+      dimensions,
+    },
+    compatibility: {
+      embeddingSpace: model,
+      dimensions,
+      metric: 'cosine',
+      normalized: true,
+      indexFormat: 'IndexIDMap2(IndexFlatIP)',
+      protocol: 'dkb.evidence.v1',
+    },
+  };
+}

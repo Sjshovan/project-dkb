@@ -137,7 +137,7 @@ Moving folders by hand never rewrites dependency intent. Use `dkb library add`, 
 
 ## Runtime And Portability Boundary
 
-One Runtime serves one Library. All active DKBs in that Library must use the same retrieval profile: parser, chunker, embedding model, dimensions, metric, compiler, and relevant versions. An incompatible release is verified but rejected before activation, and the previous Library remains unchanged.
+One Runtime serves one Library. All active DKBs in that Library must use the same retrieval compatibility space: embedding space, dimensions, metric, normalization, index format, and evidence protocol. Parser, chunker, compiler, processor, and provider-code details remain exact build provenance but do not make two evidence releases incompatible by themselves. An incompatible release is verified but rejected before activation, and the previous Library remains unchanged.
 
 Original sources and embedding-free Evidence IR are portable. Vectors, FAISS segments, profile-specific chunks, and aggregate indexes are compiled artifacts. A compatible DKB Runtime installs them without recompilation. Another RAG system may ingest the source or Evidence IR using its own pipeline; it is not expected to consume DKB's profile-bound FAISS data.
 
