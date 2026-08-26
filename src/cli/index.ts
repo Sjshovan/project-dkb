@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { Command, CommanderError } from 'commander';
+import { Command, CommanderError, Help } from 'commander';
 import { DkbError } from '../protocol/errors.js';
 import { loadCollection, loadDkb, loadManifest } from '../protocol/manifest.js';
 import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
@@ -12,38 +12,83 @@ import { DKB_PROTOCOL_VERSION } from '../protocol/version.js';
 import {
   countLabel,
   createCliPresenter,
+  failureLine,
+  humanSummary,
   milliseconds,
   printJson as printJsonValue,
+  styleHelpText,
+  terminalText,
   type CliPresenter,
 } from './presentation.js';
 
+installWarningFilter();
+
 const program = new Command();
+const jsonRequested = process.argv.includes('--json');
 
 program
   .name('dkb')
-  .description('Portable, read-only durable knowledgebase protocol CLI')
-  .version(DKB_PROTOCOL_VERSION)
-  .option('--json', 'Force machine-readable JSON output')
-  .option('--no-progress', 'Disable interactive spinners and progress output');
+  .description('Package, verify, install, and serve durable knowledgebases')
+  .version(DKB_PROTOCOL_VERSION, '-V, --cli-version')
+  .option('--json', 'Emit one machine-readable JSON document')
+  .option('--no-progress', 'Keep human output but disable spinners and progress bars')
+  .showSuggestionAfterError(true)
+  .showHelpAfterError("Run 'dkb --help' for usage.")
+  .configureHelp({
+    sortOptions: true,
+    sortSubcommands: true,
+  })
+  .configureOutput({
+    writeErr: (message) => {
+      if (!jsonRequested) {
+        process.stderr.write(message);
+      }
+    },
+  })
+  .addHelpText('after', `
+Examples:
+  dkb init
+  dkb init "My Knowledgebase"
+  dkb install <package-id> --version <version>
+  dkb retrieve "What does this knowledgebase say?"
+  dkb --json registry packages
+
+Run 'dkb <command> --help' for command-specific usage.`);
 
 program
   .command('init')
-  .description('Create a new DKB folder, or initialize the current folder as a registry')
-  .argument('[name]', 'DKB package id or display name')
-  .option('--dir <path>', 'Parent directory where the DKB folder should be created')
-  .option('--here', 'Initialize the current directory as a registry manifest')
+  .description('Initialize this directory as a registry, or create a named DKB package')
+  .argument('[name]', 'Package id or display name; omit to initialize a registry')
+  .option('--dir <path>', 'Target registry directory, or parent directory for a named package')
+  .option('--here', 'Deprecated alias for registry initialization')
+  .option('--registry-url <url>', 'Upstream package registry URL for this registry')
+  .option('--no-verify', 'Save the registry URL without validating it first')
   .option('--yes', 'Use defaults without prompting when possible')
   .option('--owner <id>', 'Owner id to write into dkb.json')
   .option('--email <email>', 'Owner email to write into dkb.json')
   .option('--collection <id>', 'Optional collection id metadata')
-  .action(async (name: string | undefined, options: { dir?: string; here?: boolean; yes?: boolean; owner?: string; email?: string; collection?: string }) => {
-    if (options.here) {
-      const { registryManifestForFolder } = await import('./serve.js');
+  .action(async (name: string | undefined, options: { dir?: string; here?: boolean; registryUrl?: string; verify?: boolean; yes?: boolean; owner?: string; email?: string; collection?: string }) => {
+    const initializeRegistry = Boolean(options.here || !name?.trim());
+
+    if (initializeRegistry) {
+      const { nearestRegistryRoot, registryManifestForFolder, resolveRegistryInitializationConfiguration } = await import('./serve.js');
+      const { writeConfiguredRegistryUrl } = await import('../registry/config.js');
       const root = path.resolve(options.dir ?? '.');
-      if (!options.yes && !name?.trim() && !process.stdin.isTTY) {
-        throw new DkbError('DKB name is required in noninteractive mode unless --yes is set.');
+      const manifestPath = path.join(root, 'dkb.json');
+      const manifestPresent = await exists(manifestPath);
+      const alreadyInitialized = await nearestRegistryRoot(root) === root;
+
+      if (manifestPresent && !alreadyInitialized) {
+        throw new DkbError(`Cannot initialize a registry because ${manifestPath} already belongs to a package or is invalid.`);
       }
-      const displayName = options.yes && !name?.trim() ? undefined : await resolveInitName(name);
+
+      const selectedRegistry = await resolveRegistryInitializationConfiguration({
+        root,
+        registryUrl: options.registryUrl,
+        yes: Boolean(options.yes),
+        verify: options.verify !== false,
+      });
+      const displayName = options.here ? name?.trim() : undefined;
       const manifest = {
         ...registryManifestForFolder(root),
         ...(displayName ? { name: displayName } : {}),
@@ -56,79 +101,123 @@ program
             }
           : {}),
       };
-      const manifestPath = path.join(root, 'dkb.json');
+      await presenter().run('Initializing registry', async () => {
+        let createdManifest = false;
 
+        try {
+          if (!alreadyInitialized) {
+            if (await exists(manifestPath)) {
+              throw new DkbError(`dkb.json already exists at ${manifestPath}`);
+            }
+
+            await fs.mkdir(root, { recursive: true });
+            await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+            createdManifest = true;
+          }
+
+          const configured = selectedRegistry.configured ?? await writeConfiguredRegistryUrl(selectedRegistry.url, { root });
+
+          return {
+            status: alreadyInitialized ? 'already initialized' : 'initialized',
+            type: 'registry',
+            root,
+            manifest: manifestPath,
+            registry: configured,
+            ...(selectedRegistry.verification ? { verification: selectedRegistry.verification } : {}),
+            ...(selectedRegistry.warning
+              ? {
+                  warning: selectedRegistry.warning,
+                  retryCommand: selectedRegistry.retryCommand,
+                }
+              : {}),
+          };
+        } catch (error) {
+          if (createdManifest) {
+            await fs.rm(manifestPath, { force: true });
+          }
+
+          throw error;
+        }
+      }, summarizeInitResult);
+
+      return;
+    }
+
+    if (options.registryUrl || options.verify === false) {
+      throw new DkbError('--registry-url and --no-verify are only valid when initializing a registry with bare `dkb init`.');
+    }
+
+    const displayName = await resolveInitName(name);
+    const id = safeCliId(displayName);
+    const root = path.resolve(options.dir ?? '.', id);
+
+    const manifestPath = path.join(root, 'dkb.json');
+
+    await presenter().run('Initializing package', async () => {
       if (await exists(manifestPath)) {
         throw new DkbError(`dkb.json already exists at ${manifestPath}`);
       }
 
       await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-      await fs.mkdir(path.join(root, '.dkb'), { recursive: true });
+      await fs.writeFile(manifestPath, `${JSON.stringify({
+        name: displayName,
+        version: '0.1.0',
+        description: '',
+        author: options.owner || options.email
+          ? {
+              id: options.owner ?? 'local',
+              email: options.email,
+            }
+          : undefined,
+        collection: options.collection
+          ? options.collection
+          : undefined,
+      }, null, 2)}\n`, 'utf8');
 
-      printJson({
-        ok: true,
-        type: 'registry',
+      return {
+        status: 'initialized',
+        type: 'package',
         root,
         manifest: manifestPath,
-      });
-
-      return;
-    }
-
-    const displayName = options.yes && !name?.trim() ? path.basename(path.resolve(options.dir ?? '.')) || 'DKB' : await resolveInitName(name);
-    const id = safeCliId(displayName);
-    const root = path.resolve(options.dir ?? '.', id);
-
-    await fs.mkdir(root, { recursive: true });
-    const manifestPath = path.join(root, 'dkb.json');
-
-    if (await exists(manifestPath)) {
-      throw new DkbError(`dkb.json already exists at ${manifestPath}`);
-    }
-
-    await fs.writeFile(manifestPath, `${JSON.stringify({
-      name: displayName,
-      version: '0.1.0',
-      description: '',
-      author: options.owner || options.email
-        ? {
-            id: options.owner ?? 'local',
-            email: options.email,
-          }
-        : undefined,
-      collection: options.collection
-        ? options.collection
-        : undefined,
-    }, null, 2)}\n`, 'utf8');
-
-    printJson({
-      ok: true,
-      root,
-      manifest: manifestPath,
-    });
+      };
+    }, summarizeInitResult);
   });
 
 program
   .command('serve')
   .description('Serve the nearest DKB registry from the current folder')
   .option('--root <path>', 'Registry root to serve instead of discovering from the current folder')
+  .option('--registry-url <url>', 'Upstream package registry URL when initializing a new registry')
+  .option('--no-verify', 'Save the registry URL without validating it first')
+  .option('--yes', 'Initialize a missing registry without prompting')
   .option('--host <host>', 'Host to bind', process.env.DKB_RUNTIME_HOST || '127.0.0.1')
   .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_RUNTIME_PORT || '7331', 10))
-  .action(async (options: { root?: string; host: string; port: number }) => {
+  .action(async (options: { root?: string; registryUrl?: string; verify?: boolean; yes?: boolean; host: string; port: number }) => {
     const { prepareServeRegistry } = await import('./serve.js');
     const { serveDkbRuntime } = await import('../runtime/server.js');
     const prepared = await prepareServeRegistry({
       root: options.root,
+      registryUrl: options.registryUrl,
+      verifyRegistry: options.verify !== false,
+      yes: Boolean(options.yes),
     });
 
-    console.error(JSON.stringify({
-      event: 'dkb.serve.registry_resolved',
+    presenter().print({
+      status: 'serving',
       root: prepared.root,
       initialized: prepared.initialized,
       compiled: prepared.compiled,
       recordCount: prepared.compileResult?.recordCount,
-    }));
+      registry: prepared.registry,
+      ...(prepared.verification ? { verification: prepared.verification } : {}),
+      ...(prepared.warning
+        ? {
+            warning: prepared.warning,
+            retryCommand: prepared.retryCommand,
+          }
+        : {}),
+      url: `http://${options.host}:${options.port}`,
+    });
 
     await serveDkbRuntime({
       host: options.host,
@@ -163,6 +252,7 @@ runtime
   .option('-f, --file <path>', 'Docker compose file', process.env.DKB_RUNTIME_COMPOSE_FILE || 'docker-compose.yml')
   .action((options: { file: string }) => {
     runDockerCompose(options.file, ['up', '-d', 'dkb-runtime']);
+    printJson({ status: 'started', service: 'dkb-runtime', composeFile: path.resolve(options.file) });
   });
 
 runtime
@@ -171,6 +261,7 @@ runtime
   .option('-f, --file <path>', 'Docker compose file', process.env.DKB_RUNTIME_COMPOSE_FILE || 'docker-compose.yml')
   .action((options: { file: string }) => {
     runDockerCompose(options.file, ['stop', 'dkb-runtime']);
+    printJson({ status: 'stopped', service: 'dkb-runtime', composeFile: path.resolve(options.file) });
   });
 
 runtime
@@ -180,7 +271,7 @@ runtime
   .action(async (options: { url: string }) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    await presenter().run('Checking runtime status', async () => new DkbRuntimeClient({ baseUrl: options.url }).status());
+    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).status());
   });
 
 runtime
@@ -217,9 +308,10 @@ registry
   .command('status')
   .description('Show and verify the configured DKB registry')
   .option('--url <url>', 'Registry API URL to verify instead of the configured registry')
-  .action(async (options: { url?: string }) => {
+  .option('--root <path>', 'DKB registry folder whose upstream registry should be inspected')
+  .action(async (options: { url?: string; root?: string }) => {
     const { configuredRegistry, verifyRegistryEndpoint } = await import('../registry/config.js');
-    const configured = await configuredRegistry({ url: options.url });
+    const configured = await configuredRegistry({ url: options.url, root: options.root });
     const verification = await verifyRegistryEndpoint(configured.url);
 
     printJson({
@@ -234,25 +326,42 @@ registry
 
 registry
   .command('use')
-  .description('Set the default DKB registry URL')
+  .description('Set the upstream registry URL for the current DKB registry folder')
   .argument('<url>', 'Registry API URL')
+  .option('--root <path>', 'DKB registry folder to configure')
+  .option('--global', 'Set the user-wide fallback instead of a folder-specific URL')
   .option('--no-verify', 'Save the URL without validating it first')
-  .action(async (url: string, options: { verify?: boolean }) => {
+  .action(async (url: string, options: { root?: string; global?: boolean; verify?: boolean }) => {
     const { verifyRegistryEndpoint, writeConfiguredRegistryUrl } = await import('../registry/config.js');
-    const verification = options.verify === false ? undefined : await verifyRegistryEndpoint(url);
 
-    if (verification && !verification.ok) {
-      printJson({ registry: { url }, verification });
-      throw new DkbError('Registry validation failed. Use --no-verify only if you intentionally want to save this URL anyway.');
+    if (options.global && options.root) {
+      throw new DkbError('Registry configuration cannot use --global and --root together.');
     }
 
-    const configured = await writeConfiguredRegistryUrl(url);
+    await presenter().run('Configuring registry', async () => {
+      const verification = options.verify === false ? undefined : await verifyRegistryEndpoint(url);
+      const configured = await writeConfiguredRegistryUrl(url, {
+        root: options.root,
+        global: Boolean(options.global),
+      });
 
-    printJson({
-      ok: true,
-      registry: configured,
-      ...(verification ? { verification } : {}),
-    });
+      return {
+        status: 'configured',
+        registry: configured,
+        ...(verification ? { verification } : {}),
+        ...(verification && !verification.ok
+          ? {
+              warning: `Upstream registry URL was saved, but ${configured.url} could not be verified.`,
+              retryCommand: `dkb registry status --url ${configured.url}`,
+            }
+          : options.verify === false
+            ? {
+                warning: `Upstream registry ${configured.url} was saved without verification.`,
+                retryCommand: `dkb registry status --url ${configured.url}`,
+              }
+            : {}),
+      };
+    }, summarizeRegistryConfiguration);
   });
 
 registry
@@ -283,7 +392,7 @@ registry
       const { configuredRegistry } = await import('../registry/config.js');
       const registryConfig = await configuredRegistry({ url: options.url });
 
-      printJson(await new DkbRegistryClient({ baseUrl: registryConfig.url }).login({
+      await presenter().run('Creating registry session', async () => new DkbRegistryClient({ baseUrl: registryConfig.url }).login({
         accountId: options.account,
         name: options.name,
         email: options.email,
@@ -294,8 +403,8 @@ registry
 
     const { loginMockRegistry } = await import('../registry/packageRegistry.js');
 
-    printJson(await loginMockRegistry({
-      registryRoot: options.root,
+    await presenter().run('Creating registry session', async () => loginMockRegistry({
+      registryRoot: options.root!,
       accountId: options.account,
       name: options.name,
       email: options.email,
@@ -314,14 +423,14 @@ registry
       const { configuredRegistry } = await import('../registry/config.js');
       const registryConfig = await configuredRegistry({ url: options.url });
 
-      printJson(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).packages());
+      presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).packages(), summarizePackageListing);
 
       return;
     }
 
     const { listMockRegistryPackages } = await import('../registry/packageRegistry.js');
 
-    printJson(await listMockRegistryPackages(options.root));
+    presenter().print(await listMockRegistryPackages(options.root), summarizePackageListing);
   });
 
 registry
@@ -336,14 +445,14 @@ registry
       const { configuredRegistry } = await import('../registry/config.js');
       const registryConfig = await configuredRegistry({ url: options.url });
 
-      printJson(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).publicKeys());
+      presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).publicKeys(), summarizeKeyListing);
 
       return;
     }
 
     const { registryPublicKeys } = await import('../registry/packageRegistry.js');
 
-    printJson(await registryPublicKeys(options.root));
+    presenter().print(await registryPublicKeys(options.root), summarizeKeyListing);
   });
 
 const registryRemote = registry
@@ -370,7 +479,7 @@ registryRemote
     const packageId = release.slice(0, separator);
     const version = release.slice(separator + 1);
 
-    printJson(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).claimRemoteEndpoint(packageId, version, options.url));
+    await presenter().run('Registering hosted runtime', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).claimRemoteEndpoint(packageId, version, options.url));
   });
 
 registry
@@ -379,11 +488,16 @@ registry
   .argument('<package-id>', 'Registry package id')
   .option('--version <version>', 'Package version')
   .option('--output <path>', 'Archive path to write')
+  .option('--force', 'Replace an existing output archive')
   .option('--root <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; output?: string; root?: string; url?: string; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; output?: string; force?: boolean; root?: string; url?: string; token?: string }) => {
     const outputPath = path.resolve(options.output ?? defaultPackageArchiveName(packageId, options.version));
+
+    if (!options.force && await exists(outputPath)) {
+      throw new DkbError(`Output archive already exists: ${outputPath}. Use --force to replace it.`);
+    }
 
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
@@ -393,18 +507,28 @@ registry
       const registryConfig = await configuredRegistry({ url: options.url });
       const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
 
-      await fs.writeFile(outputPath, await client.packageArchive(packageId, options.version));
-      printJson({
-        status: 'pulled',
-        packageId,
-        version: options.version,
-        archivePath: outputPath,
-        registry: registryConfig.url,
-      });
+      await presenter().run('Pulling package', async (progress) => {
+        const release = await client.packageRelease(packageId, options.version);
+        const download = await client.writePackageArchive(packageId, outputPath, release.version, {
+          progress,
+          force: Boolean(options.force),
+        });
+
+        return {
+          status: 'pulled',
+          packageId,
+          version: release.version,
+          archivePath: outputPath,
+          archiveBytes: download.bytes,
+          registry: registryConfig.url,
+          ...(download.warning ? { warning: download.warning, cleanupPath: download.cleanupPath } : {}),
+        };
+      }, summarizeArtifactTransport);
 
       return;
     }
 
+    const { writeArchiveFileFromPath } = await import('../registry/client.js');
     const { exportMockRegistryPackageArchive } = await import('../registry/packageRegistry.js');
     const result = await exportMockRegistryPackageArchive({
       registryRoot: options.root,
@@ -412,12 +536,17 @@ registry
       version: options.version,
     });
 
-    await fs.copyFile(result.archivePath, outputPath);
-    printJson({
-      ...result,
-      status: 'pulled',
-      archivePath: outputPath,
-    });
+    await presenter().run('Pulling package', async () => {
+      const output = await writeArchiveFileFromPath(result.archivePath, outputPath, { force: Boolean(options.force) });
+
+      return {
+        ...result,
+        status: 'pulled',
+        archivePath: outputPath,
+        archiveBytes: output.bytes,
+        ...(output.warning ? { warning: output.warning, cleanupPath: output.cleanupPath } : {}),
+      };
+    }, summarizeArtifactTransport);
   });
 
 registry
@@ -440,14 +569,18 @@ registry
       const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
 
       try {
-        await fs.writeFile(archivePath, await client.packageArchive(packageId, options.version));
-        const publicKeys = await client.publicKeys() as { keys: Parameters<typeof verifyDkbArchiveFile>[0]['trustedKeys'] };
-        const result = await verifyDkbArchiveFile({
-          archivePath,
-          trustedKeys: publicKeys.keys,
-        });
+        const result = await presenter().check('Package verification', async (progress) => {
+          const release = await client.packageRelease(packageId, options.version);
+          await client.writePackageArchive(packageId, archivePath, release.version, { progress });
+          const publicKeys = await client.publicKeys() as { keys: Parameters<typeof verifyDkbArchiveFile>[0]['trustedKeys'] };
 
-        printJson(result);
+          return verifyDkbArchiveFile({
+            archivePath,
+            trustedKeys: publicKeys.keys,
+            expectedArchiveHash: release.archiveHash,
+            progress,
+          });
+        }, (value) => value.ok);
 
         if (!result.ok) {
           process.exitCode = 1;
@@ -461,13 +594,11 @@ registry
 
     const { verifyDownloadedMockRelease } = await import('../registry/packageRegistry.js');
 
-    const result = await verifyDownloadedMockRelease({
-      registryRoot: options.root,
+    const result = await presenter().check('Package verification', async () => verifyDownloadedMockRelease({
+      registryRoot: options.root!,
       packageId,
       version: options.version,
-    });
-
-    printJson(result);
+    }), (value) => value.ok);
 
     if (!result.ok) {
       process.exitCode = 1;
@@ -484,14 +615,14 @@ registry
     if (options.url) {
       const { DkbRegistryClient } = await import('../registry/client.js');
 
-      printJson(await new DkbRegistryClient({ baseUrl: options.url }).rotateAccountKey(accountId));
+      await presenter().run('Rotating publisher key', async () => new DkbRegistryClient({ baseUrl: options.url }).rotateAccountKey(accountId));
 
       return;
     }
 
     const { rotateMockRegistryAccountKey } = await import('../registry/packageRegistry.js');
 
-    printJson(await rotateMockRegistryAccountKey({
+    await presenter().run('Rotating publisher key', async () => rotateMockRegistryAccountKey({
       registryRoot: options.root,
       accountId,
     }));
@@ -506,14 +637,14 @@ registry
     if (options.url) {
       const { DkbRegistryClient } = await import('../registry/client.js');
 
-      printJson(await new DkbRegistryClient({ baseUrl: options.url }).rotateRegistryKey());
+      await presenter().run('Rotating registry key', async () => new DkbRegistryClient({ baseUrl: options.url }).rotateRegistryKey());
 
       return;
     }
 
     const { rotateMockRegistrySigningKey } = await import('../registry/packageRegistry.js');
 
-    printJson(await rotateMockRegistrySigningKey({
+    await presenter().run('Rotating registry key', async () => rotateMockRegistrySigningKey({
       registryRoot: options.root,
     }));
   });
@@ -528,14 +659,14 @@ registry
     if (options.url) {
       const { DkbRegistryClient } = await import('../registry/client.js');
 
-      printJson(await new DkbRegistryClient({ baseUrl: options.url }).revokeKey(keyId));
+      await presenter().run('Revoking signing key', async () => new DkbRegistryClient({ baseUrl: options.url }).revokeKey(keyId));
 
       return;
     }
 
     const { revokeMockRegistryKey } = await import('../registry/packageRegistry.js');
 
-    printJson(await revokeMockRegistryKey({
+    await presenter().run('Revoking signing key', async () => revokeMockRegistryKey({
       registryRoot: options.root,
       keyId,
     }));
@@ -599,30 +730,42 @@ program
   .option('--version <version>', 'Package version')
   .option('--registry <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
-  .option('--runtime-root <path>', 'Managed runtime state root', process.env.DKB_RUNTIME_STATE_ROOT)
-  .option('--force', 'Replace an existing installed DKB')
+  .option('--runtime-root <path>', 'Managed runtime state root', process.env.DKB_RUNTIME_STATE_ROOT || '.dkb/runtime')
+  .option('--force', 'Repair an incomplete install or replace an installed DKB')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; registry?: string; url?: string; runtimeRoot?: string; force?: boolean; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; registry?: string; url?: string; runtimeRoot: string; force?: boolean; token?: string }) => {
     if (!options.registry) {
       const { DkbRegistryClient } = await import('../registry/client.js');
       const { DKB_PACKAGE_EXTENSION } = await import('../registry/archive.js');
-      const { installDkbArchiveIntoRuntime } = await import('../registry/packageRegistry.js');
+      const { installDkbArchiveIntoRuntime, preflightDkbInstall } = await import('../registry/packageRegistry.js');
       const { configuredRegistry } = await import('../registry/config.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
+      const registryConfig = await configuredRegistry({ url: options.url, root: options.runtimeRoot });
       const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
 
       await presenter().run('Installing package', async (progress) => {
+        const release = await client.packageRelease(packageId, options.version);
+        const existing = await preflightDkbInstall({
+          runtimeRoot: options.runtimeRoot,
+          candidate: release,
+          force: Boolean(options.force),
+        });
+
+        if (existing) {
+          return existing;
+        }
+
         const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-install-download-'));
         const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
 
         try {
-          await fs.writeFile(archivePath, await client.packageArchive(packageId, options.version, { progress }));
+          await client.writePackageArchive(packageId, archivePath, release.version, { progress });
           const publicKeys = await client.publicKeys() as { keys: Parameters<typeof installDkbArchiveIntoRuntime>[0]['trustedKeys'] };
 
           return await installDkbArchiveIntoRuntime({
             archivePath,
             trustedKeys: publicKeys.keys,
             runtimeRoot: options.runtimeRoot,
+            expectedArchiveHash: release.archiveHash,
             force: Boolean(options.force),
             progress,
           });
@@ -647,8 +790,29 @@ program
       packageId,
       version: options.version,
       force: Boolean(options.force),
+      allowAlreadyInstalled: true,
       progress,
     }), summarizeInstallResult);
+  });
+
+program
+  .command('list')
+  .description('List packages installed in a local managed runtime')
+  .option('--runtime-root <path>', 'Managed runtime state root', process.env.DKB_RUNTIME_STATE_ROOT || '.dkb/runtime')
+  .action(async (options: { runtimeRoot: string }) => {
+    const { listRuntimePackages } = await import('../runtime/state.js');
+    const { configuredRegistry } = await import('../registry/config.js');
+    const runtimeRoot = path.resolve(options.runtimeRoot);
+    const [listing, upstream] = await Promise.all([
+      listRuntimePackages(runtimeRoot),
+      configuredRegistry({ root: runtimeRoot }),
+    ]);
+
+    presenter().print({
+      ...listing,
+      registryUrl: upstream.url,
+      registrySource: upstream.source,
+    }, summarizeInstalledPackages);
   });
 
 const remote = program
@@ -666,7 +830,7 @@ remote
     const { DkbRegistryClient } = await import('../registry/client.js');
     const registryConfig = await configuredRegistry({ url: options.registryUrl });
 
-    printJson(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).searchPackages(query));
+    presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).searchPackages(query), summarizePackageListing);
   });
 
 remote
@@ -679,17 +843,15 @@ remote
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (target: string, options: { version?: string; endpoint?: string; registryUrl?: string; token?: string }) => {
     const { addDirectRemote, addRegisteredRemote } = await import('../remote/manager.js');
-    const result = /^https?:\/\//i.test(target)
-      ? await addDirectRemote({ url: target })
-      : await addRegisteredRemote({
-          packageId: target,
-          version: options.version,
-          endpointUrl: options.endpoint,
-          registryUrl: options.registryUrl,
-          token: options.token,
-        });
-
-    printJson(result);
+    await presenter().run('Adding remote', async () => /^https?:\/\//i.test(target)
+      ? addDirectRemote({ url: target })
+      : addRegisteredRemote({
+        packageId: target,
+        version: options.version,
+        endpointUrl: options.endpoint,
+        registryUrl: options.registryUrl,
+        token: options.token,
+      }));
   });
 
 remote
@@ -723,8 +885,11 @@ remote
   .action(async (id: string) => {
     const { removeRegisteredRemote } = await import('../remote/manager.js');
 
-    await removeRegisteredRemote(id);
-    printJson({ status: 'removed', remoteId: id });
+    await presenter().run('Removing remote', async () => {
+      await removeRegisteredRemote(id);
+
+      return { status: 'removed', remoteId: id };
+    });
   });
 
 remote
@@ -747,7 +912,7 @@ remote
   .action(async (targetUrl: string, options: { ttl?: number; url: string }) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).remoteAttach({
+    await presenter().run('Attaching remote', async () => new DkbRuntimeClient({ baseUrl: options.url }).remoteAttach({
       url: targetUrl,
       ttlSeconds: options.ttl,
     }));
@@ -771,7 +936,7 @@ remote
   .action(async (sessionId: string, options: { url: string }) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).remoteDetach(sessionId));
+    await presenter().run('Detaching remote', async () => new DkbRuntimeClient({ baseUrl: options.url }).remoteDetach(sessionId));
   });
 
 remote
@@ -792,7 +957,7 @@ remote
     const persistent = (await listRegisteredRemotes()).remotes.find((remote) => remote.id === sessionId);
 
     if (persistent) {
-      printJson(await queryRegisteredRemote({
+      presenter().print(await queryRegisteredRemote({
         id: sessionId,
         request: {
           need,
@@ -800,19 +965,19 @@ remote
           limit: options.limit,
           profile: Boolean(options.profile),
         },
-      }));
+      }), summarizeRetrievalResult);
 
       return;
     }
 
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).remoteRetrieve(sessionId, {
+    presenter().print(await new DkbRuntimeClient({ baseUrl: options.url }).remoteRetrieve(sessionId, {
       need,
       intent: options.intent,
       limit: options.limit,
       profile: Boolean(options.profile),
-    }));
+    }), summarizeRetrievalResult);
   });
 
 runtime
@@ -836,13 +1001,13 @@ runtime
     const client = new DkbRuntimeClient({ baseUrl: options.url });
 
     if (action === 'start') {
-      printJson(await client.startWatch());
+      await presenter().run('Starting runtime watcher', async () => client.startWatch());
 
       return;
     }
 
     if (action === 'stop') {
-      printJson(await client.stopWatch());
+      await presenter().run('Stopping runtime watcher', async () => client.stopWatch());
 
       return;
     }
@@ -873,17 +1038,56 @@ program
     stage?: boolean;
   }) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
-    const sourcePath = options.stage === false
-      ? target
+    const stagedImport = options.stage === false
+      ? undefined
       : await stageRuntimeImport(target, options.hostImportRoot, options.containerImportRoot, options.id);
 
-    await presenter().run('Importing package into runtime', async () => new DkbRuntimeClient({ baseUrl: options.url }).importDkb({
-      sourcePath,
-      id: options.id,
-      name: options.name,
-      force: Boolean(options.force),
-      compile: options.compile,
-    }), summarizeInstallResult);
+    await presenter().run('Importing package into runtime', async () => {
+      let result: unknown;
+
+      try {
+        result = await new DkbRuntimeClient({ baseUrl: options.url }).importDkb({
+          sourcePath: stagedImport?.containerPath ?? target,
+          id: options.id,
+          name: options.name,
+          force: Boolean(options.force),
+          compile: options.compile,
+        });
+      } catch (error) {
+        if (stagedImport) {
+          try {
+            await fs.rm(stagedImport.hostPath, { recursive: true, force: true });
+          } catch (cleanupError) {
+            throw new DkbError(
+              `${error instanceof Error ? error.message : String(error)} `
+              + `The failed import staging directory also could not be removed: ${stagedImport.hostPath} `
+              + `(${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)})`,
+            );
+          }
+        }
+
+        throw error;
+      }
+
+      if (!stagedImport) {
+        return result;
+      }
+
+      try {
+        await fs.rm(stagedImport.hostPath, { recursive: true, force: true });
+        return result;
+      } catch (error) {
+        const baseResult = result && typeof result === 'object' && !Array.isArray(result)
+          ? result as Record<string, unknown>
+          : { result };
+
+        return {
+          ...baseResult,
+          warning: `Import succeeded, but its staging directory could not be removed: ${stagedImport.hostPath}`,
+          cleanupPath: stagedImport.hostPath,
+        };
+      }
+    }, summarizeInstallResult);
   });
 
 program
@@ -911,12 +1115,12 @@ program
   ) => {
     const { DkbRuntimeClient } = await import('../runtime/client.js');
 
-    printJson(await new DkbRuntimeClient({ baseUrl: options.url }).retrieve({
+    presenter().print(await new DkbRuntimeClient({ baseUrl: options.url }).retrieve({
       need,
       intent: options.intent,
       limit: options.limit,
       profile: Boolean(options.profile),
-    }));
+    }), summarizeRetrievalResult);
   });
 
 program
@@ -935,9 +1139,7 @@ program
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .action(async (target: string) => {
       const { validateDkbArtifactManifest } = await import('../artifacts/manifest.js');
-      const result = await validateDkbArtifactManifest(path.resolve(target));
-
-      printJson(result);
+      const result = await presenter().check('Compiled artifact validation', async (progress) => validateDkbArtifactManifest(path.resolve(target), { progress }), (value) => value.ok);
 
       if (!result.ok) {
         process.exitCode = 1;
@@ -1009,7 +1211,7 @@ program
     .action(async (options: { out: string; password: string }) => {
       const { cosignGenerateKeyPair } = await import('../oci/tools.js');
 
-      printJson(await cosignGenerateKeyPair({ outputPrefix: path.resolve(options.out), password: options.password }));
+      await presenter().run('Creating Cosign key pair', async () => cosignGenerateKeyPair({ outputPrefix: path.resolve(options.out), password: options.password }));
     }))
   .addCommand(new Command('cosign-sign')
     .description('Sign an OCI artifact with Cosign')
@@ -1019,7 +1221,7 @@ program
     .action(async (ref: string, options: { key: string; password: string }) => {
       const { cosignSignArtifact } = await import('../oci/tools.js');
 
-      printJson(await cosignSignArtifact({ ref, keyPath: path.resolve(options.key), password: options.password }));
+      await presenter().run('Signing artifact', async () => cosignSignArtifact({ ref, keyPath: path.resolve(options.key), password: options.password }));
     }))
   .addCommand(new Command('cosign-verify')
     .description('Verify a signed OCI artifact with Cosign')
@@ -1027,9 +1229,7 @@ program
     .requiredOption('--key <path>', 'Cosign public key')
     .action(async (ref: string, options: { key: string }) => {
       const { cosignVerifyArtifact } = await import('../oci/tools.js');
-      const result = await cosignVerifyArtifact({ ref, publicKeyPath: path.resolve(options.key) });
-
-      printJson(result);
+      const result = await presenter().check('Artifact signature verification', async () => cosignVerifyArtifact({ ref, publicKeyPath: path.resolve(options.key) }), (value) => value.ok);
 
       if (!result.ok) {
         process.exitCode = 1;
@@ -1142,7 +1342,7 @@ profile
   .action(async (target: string, options: { model: string; yes?: boolean }) => {
     const { migrateRetrievalProfile } = await import('../profiles/migration.js');
 
-    printJson(await migrateRetrievalProfile(target, options.model, { confirmed: Boolean(options.yes) }));
+    await presenter().run('Migrating retrieval profile', async () => migrateRetrievalProfile(target, options.model, { confirmed: Boolean(options.yes) }));
   });
 
 program
@@ -1152,7 +1352,7 @@ program
     .description('Report whether the standalone LlamaIndex compiler image and local service are available')
     .action(async () => {
       const { inspectLlamaIndexCompiler } = await import('../compiler/llamaindex.js');
-      await presenter().run('Inspecting compiler environment', async () => inspectLlamaIndexCompiler(), summarizeCompilerStatus);
+      presenter().print(await inspectLlamaIndexCompiler(), summarizeCompilerStatus);
     }))
   .addCommand(new Command('start')
     .description('Start or reuse the warm local LlamaIndex compiler service')
@@ -1165,7 +1365,7 @@ program
     .description('Show warm local LlamaIndex compiler service status')
     .action(async () => {
       const { compilerServiceStatus } = await import('../compiler/llamaindex.js');
-      await presenter().run('Checking compiler service', async () => compilerServiceStatus(), summarizeCompilerStatus);
+      presenter().print(await compilerServiceStatus(), summarizeCompilerStatus);
     }))
   .addCommand(new Command('stop')
     .description('Stop the warm local LlamaIndex compiler service')
@@ -1177,7 +1377,12 @@ program
     .description('Diagnose Docker/image/service readiness for the warm compiler')
     .action(async () => {
       const { doctorLlamaIndexCompilerService } = await import('../compiler/llamaindex.js');
-      await presenter().run('Checking compiler doctor', async () => doctorLlamaIndexCompilerService(), summarizeCompilerStatus);
+      const result = await doctorLlamaIndexCompilerService();
+      presenter().print(result, summarizeCompilerStatus);
+
+      if (!result.ok) {
+        process.exitCode = 1;
+      }
     }))
   .addCommand(new Command('compile')
     .description('Compile one DKB folder with LlamaIndex, Docling rich-file routing, and FastEmbed/ONNX')
@@ -1187,15 +1392,18 @@ program
       const root = path.resolve(target);
       const dkb = await loadDkb(root);
       const { compileDkbWithLlamaIndex } = await import('../compiler/llamaindex.js');
-      const result = await compileDkbWithLlamaIndex(dkb, { model: options.model });
       const outputPath = path.join(root, DKB_ARTIFACTS_DIR, 'llamaindex.compiler.json');
 
-      await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
-      presenter().print({
-        compiler: result.compiler,
-        recordCount: result.records.length,
-        outputPath,
+      await presenter().run('Compiling package', async () => {
+        const result = await compileDkbWithLlamaIndex(dkb, { model: options.model });
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+
+        return {
+          compiler: result.compiler,
+          recordCount: result.records.length,
+          outputPath,
+        };
       }, summarizeCompilerCompileResult);
     }));
 
@@ -1206,21 +1414,22 @@ program
   .option('--strict', 'Require all generated artifacts to be built')
   .action(async (target: string, options: { strict?: boolean }) => {
     const { verifyComposeProject } = await import('../compiler/compile.js');
-    const result = await verifyComposeProject(target);
-    const strictFailures = options.strict
-      ? Object.entries(result.ok ? result.checks : result.checks)
-        .filter(([, check]) => !check.ok)
-        .map(([name]) => name)
-      : [];
-    const output = {
-      ...result,
-      strict: Boolean(options.strict),
-      strictFailures,
-    };
+    const output = await presenter().check('Compiled registry verification', async () => {
+      const result = await verifyComposeProject(target);
+      const strictFailures = options.strict
+        ? Object.entries(result.checks)
+          .filter(([, check]) => !check.ok)
+          .map(([name]) => name)
+        : [];
 
-    printJson(output);
+      return {
+        ...result,
+        strict: Boolean(options.strict),
+        strictFailures,
+      };
+    }, (value) => value.ok && value.strictFailures.length === 0);
 
-    if (!result.ok || strictFailures.length > 0) {
+    if (!output.ok || output.strictFailures.length > 0) {
       process.exitCode = 1;
     }
   });
@@ -1229,7 +1438,6 @@ program
   .command('inspect')
   .description('Inspect a DKB package or implicit registry before use')
   .argument('<path>', 'Directory containing a DKB manifest')
-  .option('--json', 'Emit JSON output', true)
   .action(async (target: string) => {
     const { inspectTarget } = await import('../inspect/index.js');
 
@@ -1243,8 +1451,13 @@ program
   .option('--queue-root <path>', 'Write queue root to inspect', process.env.DKB_QUEUE_ROOT || process.env.DKB_WRITE_QUEUE_ROOT)
   .action(async (target: string, options: { queueRoot?: string }) => {
     const { healthReport } = await import('../lifecycle/health.js');
+    const result = await healthReport(target, options.queueRoot);
 
-    printJson(await healthReport(target, options.queueRoot));
+    printJson(result);
+
+    if (result.status !== 'ready') {
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -1254,7 +1467,7 @@ program
   .action(async (target: string) => {
     const { restoreIndexes } = await import('../lifecycle/health.js');
 
-    printJson(await restoreIndexes(target));
+    await presenter().run('Restoring generated indexes', async () => restoreIndexes(target));
   });
 
 program
@@ -1266,7 +1479,7 @@ program
   .action(async (target: string, query: string, options: { limit?: number }) => {
     const { queryKnowledgeTarget } = await import('../knowledge/target.js');
 
-    printJson((await queryKnowledgeTarget(target, query, { limit: options.limit })).response);
+    presenter().print((await queryKnowledgeTarget(target, query, { limit: options.limit })).response, summarizeQueryResult);
   });
 
 program
@@ -1299,8 +1512,13 @@ program
   .argument('<registry-path>', 'Directory containing dkb.json or nested DKB packages')
   .action(async (target: string) => {
     const { describeSearchBackend } = await import('../indexes/vectorStore.js');
+    const result = await describeSearchBackend(path.resolve(target, DKB_ARTIFACTS_DIR));
 
-    printJson(await describeSearchBackend(path.resolve(target, DKB_ARTIFACTS_DIR)));
+    printJson(result);
+
+    if (result.status === 'unavailable') {
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -1314,7 +1532,7 @@ program
     const registry = await loadCompose(target);
     const sourceIndex = await readSourceIndex(target);
 
-    printJson(await writeSearchArtifacts(registry.manifest.id, path.resolve(target, SOURCE_VECTOR_PATH), vectorDocumentsForSourceUnits(sourceIndex.units)));
+    await presenter().run('Synchronizing search index', async () => writeSearchArtifacts(registry.manifest.id, path.resolve(target, SOURCE_VECTOR_PATH), vectorDocumentsForSourceUnits(sourceIndex.units)));
   });
 
 program
@@ -1348,7 +1566,7 @@ program
     const { resetSearchBackend } = await import('../indexes/vectorStore.js');
     const registry = await loadCompose(target);
 
-    printJson(await resetSearchBackend(registry.manifest.id, path.resolve(target, DKB_ARTIFACTS_DIR)));
+    await presenter().run('Resetting search index', async () => resetSearchBackend(registry.manifest.id, path.resolve(target, DKB_ARTIFACTS_DIR)));
   });
 
 program
@@ -1442,17 +1660,36 @@ mcp
     await serveDkbMcpHttp(options);
   });
 
-program.exitOverride();
+configureCommandTree(program);
+program.configureHelp({
+  ...program.configureHelp(),
+  formatHelp: formatCliHelp,
+});
 
 try {
   await program.parseAsync();
 } catch (error) {
   if (error instanceof CommanderError && (error.code === 'commander.helpDisplayed' || error.code === 'commander.version')) {
     process.exitCode = error.exitCode;
+  } else if (error instanceof CommanderError) {
+    if (jsonRequested) {
+      printJsonValue({
+        ok: false,
+        error: {
+          code: error.code,
+          message: error.message.replace(/^error:\s*/i, ''),
+        },
+      });
+    }
+    process.exitCode = error.exitCode || 1;
   } else {
     const message = error instanceof DkbError || error instanceof Error ? error.message : String(error);
 
-    console.error(message);
+    if (jsonRequested) {
+      printJsonValue({ ok: false, error: { code: 'DKB_ERROR', message } });
+    } else {
+      console.error(`${failureLine('Error:')} ${message}`);
+    }
     process.exitCode = 1;
   }
 }
@@ -1467,7 +1704,114 @@ function presenter(): CliPresenter {
 }
 
 function printJson(value: unknown): void {
-  printJsonValue(value);
+  presenter().print(value);
+}
+
+function installWarningFilter(): void {
+  process.removeAllListeners('warning');
+  process.on('warning', (warning) => {
+    if (warning.name === 'ExperimentalWarning' && /SQLite is an experimental feature/i.test(warning.message)) {
+      return;
+    }
+
+    console.error(warning.stack ?? `${warning.name}: ${warning.message}`);
+  });
+}
+
+function configureCommandTree(command: Command): void {
+  const usagePath = commandPath(command);
+
+  command
+    .exitOverride()
+    .showSuggestionAfterError(true)
+    .showHelpAfterError(`\nRun '${usagePath} --help' for usage.`)
+    .configureHelp({
+      sortOptions: true,
+      sortSubcommands: true,
+    })
+    .configureOutput({
+      writeErr: (message) => {
+        if (!jsonRequested) {
+          process.stderr.write(message.replace(/^error:/m, terminalText(['bold', 'red'], 'dkb:', process.stderr)));
+        }
+      },
+    });
+
+  for (const child of command.commands) {
+    configureCommandTree(child);
+  }
+}
+
+function commandPath(command: Command): string {
+  const names: string[] = [];
+  let current: Command | null = command;
+
+  while (current) {
+    names.unshift(current.name());
+    current = current.parent;
+  }
+
+  return names.join(' ');
+}
+
+function formatCliHelp(command: Command, helper: Help): string {
+  const standard = new Help();
+  standard.sortOptions = helper.sortOptions;
+  standard.sortSubcommands = helper.sortSubcommands;
+  standard.showGlobalOptions = helper.showGlobalOptions;
+  standard.helpWidth = helper.helpWidth;
+  const output = standard.formatHelp(command, standard);
+
+  if (command.name() !== 'dkb') {
+    return styleHelpText(output);
+  }
+
+  const groups = [
+    {
+      title: 'Common Commands',
+      names: ['init', 'install', 'list', 'remove', 'publish', 'retrieve', 'serve', 'inspect', 'validate', 'health', 'help'],
+    },
+    {
+      title: 'Management Commands',
+      names: ['artifact', 'compiler', 'mcp', 'profile', 'registry', 'remote', 'runtime', 'trace'],
+    },
+    {
+      title: 'Advanced Commands',
+      names: [
+        'audit-alignment',
+        'compile',
+        'query',
+        'read',
+        'read-targets',
+        'restore',
+        'search-health',
+        'search-query',
+        'search-reset',
+        'search-sync',
+        'verify',
+        'watch',
+      ],
+    },
+  ];
+  const commands = standard.visibleCommands(command);
+  const termWidth = standard.padWidth(command, standard);
+  const helpWidth = standard.helpWidth || 80;
+  const grouped = groups.flatMap((group) => {
+    const items = group.names
+      .map((name) => commands.find((candidate) => candidate.name() === name))
+      .filter((candidate): candidate is Command => Boolean(candidate))
+      .map((candidate) => {
+        const term = standard.subcommandTerm(candidate);
+        const description = standard.subcommandDescription(candidate);
+        const line = description ? `${term.padEnd(termWidth + 2)}${description}` : term;
+
+        return `  ${standard.wrap(line, helpWidth - 2, termWidth + 2)}`;
+      });
+
+    return items.length > 0 ? [`${group.title}:`, ...items, ''] : [];
+  });
+
+  return styleHelpText(output.replace(/Commands:\n[\s\S]*$/u, grouped.join('\n')));
 }
 
 function summarizeCompileResult(value: unknown): string[] {
@@ -1489,6 +1833,183 @@ function summarizeCompileResult(value: unknown): string[] {
     aggregate ? `artifact work: ${aggregate}` : '',
     typeof result.artifactManifestPath === 'string' ? `artifact: ${result.artifactManifestPath}` : '',
   ];
+}
+
+function summarizeInitResult(value: unknown): string[] {
+  const result = value as {
+    status?: unknown;
+    type?: unknown;
+    root?: unknown;
+    manifest?: unknown;
+    registry?: { url?: unknown; source?: unknown };
+    warning?: unknown;
+    retryCommand?: unknown;
+  };
+
+  return [
+    `status: ${String(result.status ?? 'initialized')}`,
+    `type: ${String(result.type ?? 'package')}`,
+    typeof result.root === 'string' ? `path: ${result.root}` : '',
+    typeof result.manifest === 'string' ? `manifest: ${result.manifest}` : '',
+    typeof result.registry?.url === 'string'
+      ? `registry: ${result.registry.url} (${String(result.registry.source ?? 'project')})`
+      : '',
+    typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
+    typeof result.retryCommand === 'string' ? `retry: ${result.retryCommand}` : '',
+  ];
+}
+
+function summarizeRegistryConfiguration(value: unknown): string[] {
+  const result = value as {
+    status?: unknown;
+    registry?: { url?: unknown; source?: unknown };
+    verification?: { ok?: unknown };
+    warning?: unknown;
+    retryCommand?: unknown;
+  };
+
+  return [
+    `status: ${String(result.status ?? 'configured')}`,
+    typeof result.registry?.url === 'string'
+      ? `registry: ${result.registry.url} (${String(result.registry.source ?? 'project')})`
+      : '',
+    result.verification ? `verification: ${result.verification.ok ? 'passed' : 'failed'}` : 'verification: skipped',
+    typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
+    typeof result.retryCommand === 'string' ? `retry: ${result.retryCommand}` : '',
+  ];
+}
+
+function summarizePackageListing(value: unknown): string[] {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const items = Array.isArray(record.data)
+    ? record.data
+    : Array.isArray(record.packages)
+      ? record.packages
+      : [];
+  const packages = items
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      id: item.id ?? item.packageId ?? '-',
+      version: item.latestVersion ?? item.version ?? '-',
+      visibility: item.visibility ?? '-',
+      name: item.name ?? '-',
+    }));
+
+  return humanSummary({ packages });
+}
+
+function summarizeInstalledPackages(value: unknown): string[] {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const packages = Array.isArray(record.packages) ? record.packages : [];
+
+  return [
+    typeof record.runtimeRoot === 'string' ? `runtime: ${record.runtimeRoot}` : '',
+    typeof record.registryUrl === 'string'
+      ? `registry: ${record.registryUrl}${record.registrySource ? ` (${String(record.registrySource)})` : ''}`
+      : '',
+    ...humanSummary({ packages: packages.map((item) => {
+      const entry = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+
+      return {
+        id: entry.id ?? '-',
+        version: entry.version ?? '-',
+        status: entry.status ?? '-',
+        records: entry.recordCount ?? '-',
+      };
+    }) }),
+  ];
+}
+
+function summarizeKeyListing(value: unknown): string[] {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const items = Array.isArray(record.keys) ? record.keys : [];
+  const keys = items
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      id: item.id ?? '-',
+      role: item.subjectType ?? item.role ?? '-',
+      subject: item.subjectId ?? '-',
+      status: item.status ?? '-',
+      fingerprint: item.publicKeyFingerprint ?? item.fingerprint ?? '-',
+    }));
+
+  return humanSummary({ results: keys });
+}
+
+function summarizeRetrievalResult(value: unknown): string[] {
+  const outer = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const response = outer.response && typeof outer.response === 'object'
+    ? outer.response as Record<string, unknown>
+    : outer;
+  const sufficiency = response.sufficiency && typeof response.sufficiency === 'object'
+    ? response.sufficiency as Record<string, unknown>
+    : {};
+  const evidence = Array.isArray(response.evidence)
+    ? response.evidence.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  const lines = [
+    `status: ${humanStatus(response.status ?? 'unknown')}`,
+    `evidence: ${evidence.length} ${evidence.length === 1 ? 'item' : 'items'}`,
+    sufficiency.reason ? `sufficiency: ${humanStatus(sufficiency.reason)}` : '',
+    typeof sufficiency.confidence === 'number' ? `confidence: ${(sufficiency.confidence * 100).toFixed(1)}%` : '',
+  ];
+
+  for (const [index, item] of evidence.entries()) {
+    const source = item.source && typeof item.source === 'object' ? item.source as Record<string, unknown> : {};
+    const locator = source.locator && typeof source.locator === 'object'
+      ? source.locator as Record<string, unknown>
+      : {};
+    const citation = source.evidenceId ?? source.chunkId ?? `${index + 1}`;
+    const location = typeof locator.path === 'string'
+      ? `${locator.path}${locator.line ? `:${String(locator.line)}` : ''}`
+      : Object.keys(locator).length > 0
+        ? JSON.stringify(locator)
+        : '-';
+    const text = typeof item.text === 'string'
+      ? item.text
+      : item.value !== undefined
+        ? JSON.stringify(item.value)
+        : item.rows !== undefined
+          ? JSON.stringify(item.rows)
+          : '';
+
+    lines.push(
+      '',
+      `[${String(citation)}] ${String(item.label ?? 'Evidence')}`,
+      `  Package: ${String(source.dkbId ?? '-')}${source.packageVersion ? `@${String(source.packageVersion)}` : ''}`,
+      `  Source: ${location}`,
+      ...clipText(text, 800).split('\n').map((line) => `  ${line}`),
+    );
+  }
+
+  return lines;
+}
+
+function summarizeQueryResult(value: unknown): string[] {
+  const response = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const items = Array.isArray(response.results)
+    ? response.results.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  const results = items.map((item) => ({
+    score: typeof item.score === 'number' ? item.score.toFixed(4) : '-',
+    package: item.dkbId ?? '-',
+    id: item.id ?? '-',
+    title: item.title ?? '-',
+    source: item.source ?? '-',
+  }));
+
+  return [
+    typeof response.query === 'string' ? `query: ${response.query}` : '',
+    `results: ${results.length}`,
+    '',
+    ...humanSummary({ results }),
+  ];
+}
+
+function clipText(value: string, maximum: number): string {
+  const compact = value.trim();
+
+  return compact.length <= maximum ? compact : `${compact.slice(0, maximum - 1).trimEnd()}…`;
 }
 
 function summarizeCompilerStatus(value: unknown): string[] {
@@ -1550,15 +2071,19 @@ function summarizeInstallResult(value: unknown): string[] {
     catalog?: { recordCount?: unknown; packageCount?: unknown };
     search?: { upsert?: { documentCount?: unknown; timingsMs?: { total?: unknown } } };
     packagePath?: unknown;
+    warning?: unknown;
+    cleanupPath?: unknown;
   };
 
   return [
-    `status: ${String(result.status ?? 'ok')}`,
+    `status: ${humanStatus(result.status ?? 'ok')}`,
     `package: ${String(result.packageId ?? result.id ?? 'unknown')}${result.version ? `@${String(result.version)}` : ''}`,
     countLabel(result.catalog?.recordCount ?? result.search?.upsert?.documentCount, 'record') ?? '',
     countLabel(result.catalog?.packageCount, 'package') ?? '',
     milliseconds(result.search?.upsert?.timingsMs?.total) ? `search activation: ${milliseconds(result.search?.upsert?.timingsMs?.total)}` : '',
     typeof result.packagePath === 'string' ? `path: ${result.packagePath}` : '',
+    typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
+    typeof result.cleanupPath === 'string' ? `cleanup path: ${result.cleanupPath}` : '',
   ];
 }
 
@@ -1566,7 +2091,7 @@ function summarizeRemoveResult(value: unknown): string[] {
   const result = value as { status?: unknown; id?: unknown; registryPath?: unknown };
 
   return [
-    `status: ${String(result.status ?? 'ok')}`,
+    `status: ${humanStatus(result.status ?? 'ok')}`,
     `package: ${String(result.id ?? 'unknown')}`,
     typeof result.registryPath === 'string' ? `runtime: ${result.registryPath}` : '',
   ];
@@ -1580,15 +2105,19 @@ function summarizePublishResult(value: unknown): string[] {
     archivePath?: unknown;
     compiled?: { recordCount?: unknown };
     receipt?: { packageId?: unknown; version?: unknown };
+    warning?: unknown;
+    retryCommand?: unknown;
   };
   const packageId = result.packageId ?? result.receipt?.packageId;
   const version = result.version ?? result.receipt?.version;
 
   return [
-    `status: ${String(result.status ?? 'published')}`,
+    `status: ${humanStatus(result.status ?? 'published')}`,
     `package: ${String(packageId ?? 'unknown')}${version ? `@${String(version)}` : ''}`,
     countLabel(result.compiled?.recordCount, 'record') ?? '',
     typeof result.archivePath === 'string' ? `archive: ${result.archivePath}` : '',
+    typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
+    typeof result.retryCommand === 'string' ? `retry: ${result.retryCommand}` : '',
   ];
 }
 
@@ -1600,15 +2129,26 @@ function summarizeArtifactTransport(value: unknown): string[] {
     ref?: unknown;
     digest?: unknown;
     archiveBytes?: unknown;
+    packageId?: unknown;
+    version?: unknown;
+    registry?: unknown;
+    warning?: unknown;
+    retryCommand?: unknown;
+    cleanupPath?: unknown;
   };
 
   return [
-    `status: ${String(result.status ?? 'ok')}`,
+    `status: ${humanStatus(result.status ?? 'ok')}`,
+    typeof result.packageId === 'string' ? `package: ${result.packageId}${result.version ? `@${String(result.version)}` : ''}` : '',
     typeof result.ref === 'string' ? `ref: ${result.ref}` : '',
     typeof result.digest === 'string' ? `digest: ${result.digest}` : '',
     typeof result.archivePath === 'string' ? `archive: ${result.archivePath}` : '',
     typeof result.outputDir === 'string' ? `output: ${result.outputDir}` : '',
+    typeof result.registry === 'string' ? `registry: ${result.registry}` : '',
     typeof result.archiveBytes === 'number' ? `size: ${result.archiveBytes} bytes` : '',
+    typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
+    typeof result.retryCommand === 'string' ? `retry: ${result.retryCommand}` : '',
+    typeof result.cleanupPath === 'string' ? `cleanup path: ${result.cleanupPath}` : '',
   ];
 }
 
@@ -1622,6 +2162,10 @@ function parseLimit(value: string): number {
   return limit;
 }
 
+function humanStatus(value: unknown): string {
+  return String(value).replace(/_/g, ' ');
+}
+
 function parsePositiveInteger(value: string): number {
   const parsed = Number.parseInt(value, 10);
 
@@ -1632,19 +2176,11 @@ function parsePositiveInteger(value: string): number {
   return parsed;
 }
 
-function descriptionForTestCommand(command: 'lifecycle'): string {
-  return {
-    lifecycle: 'Run isolated add/update/remove DKB lifecycle checks',
-  }[command];
-}
-
-function defaultBaseUrl(): string {
-  return process.env.DKB_MODEL_BASE_URL || 'http://127.0.0.1:1234/v1';
-}
-
 function runDockerCompose(composeFile: string, args: string[]): void {
+  const humanOutput = presenter().interactive;
   const result = spawnSync('docker', ['compose', '-f', composeFile, ...args], {
-    stdio: 'inherit',
+    stdio: humanOutput ? 'inherit' : 'pipe',
+    encoding: 'utf8',
   });
 
   if (result.error) {
@@ -1652,11 +2188,15 @@ function runDockerCompose(composeFile: string, args: string[]): void {
   }
 
   if (result.status && result.status !== 0) {
-    throw new DkbError(`docker compose exited with code ${result.status}`);
+    const detail = !humanOutput && typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    throw new DkbError(`docker compose exited with code ${result.status}${detail ? `: ${detail}` : ''}`);
   }
 }
 
-async function stageRuntimeImport(source: string, hostRoot: string, containerRoot: string, id?: string): Promise<string> {
+async function stageRuntimeImport(source: string, hostRoot: string, containerRoot: string, id?: string): Promise<{
+  hostPath: string;
+  containerPath: string;
+}> {
   const resolvedSource = path.resolve(source);
   const stat = await fs.stat(resolvedSource);
 
@@ -1674,7 +2214,10 @@ async function stageRuntimeImport(source: string, hostRoot: string, containerRoo
     filter: (candidate) => !isDkbStatePath(resolvedSource, candidate),
   });
 
-  return `${containerRoot.replace(/\/+$/g, '')}/${stageId}`;
+  return {
+    hostPath: hostTarget,
+    containerPath: `${containerRoot.replace(/\/+$/g, '')}/${stageId}`,
+  };
 }
 
 function isDkbStatePath(root: string, candidate: string): boolean {

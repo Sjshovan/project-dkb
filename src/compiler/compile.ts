@@ -264,7 +264,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
     const aggregateStart = performance.now();
     const written = await shouldUseFaissPackageUpdate(resolvedRoot, options, allDkbs)
       ? await writeAtomicFaissPackageUpdateArtifacts(resolvedRoot, registry, state)
-      : await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs);
+      : await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs, options.artifactProfile ?? 'full');
     const aggregateArtifactsMs = elapsedMs(aggregateStart);
     const cacheWriteStart = performance.now();
     const lock = written.lock;
@@ -300,6 +300,7 @@ async function writeAtomicCompileArtifacts(
   registry: LoadedRegistry,
   state: Awaited<ReturnType<typeof collectRegistryState>>,
   allDkbs: LoadedDkb[],
+  artifactProfile: 'full' | 'faiss-package',
 ): Promise<{ lock: DkbLockManifest; timings: AtomicCompileArtifactTimings }> {
   const totalStart = performance.now();
   const timings: AtomicCompileArtifactTimings = {
@@ -336,7 +337,10 @@ async function writeAtomicCompileArtifacts(
     timings.sourceAnalysis = elapsedMs(sourceAnalysisStart);
     timings.chunkIndex = timings.sourceAnalysis;
     const compilerArtifactStart = performance.now();
-    await writeCompilerBundles(stageRoot, state.compilerArtifacts, { writeAggregate: true });
+    await writeCompilerBundles(stageRoot, state.compilerArtifacts, {
+      writeAggregate: false,
+      writeRecordBundles: artifactProfile === 'full',
+    });
     await writeProfileArtifacts(stageRoot, state);
     timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
 
@@ -621,7 +625,7 @@ async function listRelativeFiles(root: string, relativeRoot: string): Promise<st
 async function writeCompilerBundles(
   stageRoot: string,
   compilerArtifacts: CompilerArtifactState[],
-  options: { writeAggregate: boolean },
+  options: { writeAggregate: boolean; writeRecordBundles: boolean },
 ): Promise<void> {
   if (compilerArtifacts.length === 0) {
     return;
@@ -639,10 +643,12 @@ async function writeCompilerBundles(
         records: compilerArtifacts.flatMap((artifact) => artifact.result.records),
       };
 
-  await writeLlamaIndexCompilerBundle(stageRoot, combinedResult, {
-    changedSourceKeys: compilerArtifacts.length === 1 ? primary.result.cache?.changedSourceKeys : undefined,
-    writeAggregate: options.writeAggregate,
-  });
+  if (options.writeRecordBundles) {
+    await writeLlamaIndexCompilerBundle(stageRoot, combinedResult, {
+      changedSourceKeys: compilerArtifacts.length === 1 ? primary.result.cache?.changedSourceKeys : undefined,
+      writeAggregate: options.writeAggregate,
+    });
+  }
 
   // A package release owns one FAISS snapshot. A multi-package registry keeps
   // its aggregate source/vector indexes here and each installed package keeps
@@ -707,7 +713,7 @@ export async function verifyComposeProject(root: string): Promise<VerifyComposeP
     {
       name: 'packages',
       ok: stableHash(lock.packages) === stableHash(expected.packages),
-      detail: 'package manifest, source, and chunk hashes match lockfile',
+      detail: packageVerificationDetail(lock.packages, expected.packages),
     },
     {
       name: 'artifacts.sourceIndex',
@@ -731,6 +737,34 @@ export async function verifyComposeProject(root: string): Promise<VerifyComposeP
     lockPath,
     checks,
   };
+}
+
+function packageVerificationDetail(
+  locked: DkbLockManifest['packages'],
+  current: DkbLockManifest['packages'],
+): string {
+  const differences: string[] = [];
+  const packageIds = [...new Set([...Object.keys(locked), ...Object.keys(current)])].sort();
+
+  for (const packageId of packageIds) {
+    const lockedPackage = locked[packageId];
+    const currentPackage = current[packageId];
+
+    if (!lockedPackage || !currentPackage) {
+      differences.push(`${packageId}:presence`);
+      continue;
+    }
+
+    for (const field of Object.keys(lockedPackage) as Array<keyof typeof lockedPackage>) {
+      if (stableHash(lockedPackage[field]) !== stableHash(currentPackage[field])) {
+        differences.push(`${packageId}:${String(field)}`);
+      }
+    }
+  }
+
+  return differences.length > 0
+    ? `package lock mismatch in ${differences.join(', ')}`
+    : 'package manifest, source, and chunk hashes match lockfile';
 }
 
 async function cachedCompileResultFor(
@@ -1458,7 +1492,11 @@ async function listFiles(root: string): Promise<string[]> {
 }
 
 function isDkbSystemArtifact(name: string): boolean {
-  return name === '.dkb' || name === 'dkb-lock.json' || name === 'dkb-release.json' || name === '.dkb-package.json';
+  return name === '.dkb'
+    || name === 'dkb-lock.json'
+    || name === 'dkb-release.json'
+    || name === '.dkb-package.json'
+    || name === DKB_RETRIEVAL_PROFILE_LOCK_PATH;
 }
 
 async function hashFile(file: string): Promise<string> {

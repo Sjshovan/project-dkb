@@ -87,7 +87,17 @@ export async function semanticSearch(
   }
 
   const scopedIds = new Set(scopedUnits.map((unit) => unit.id));
-  const searchLimit = scope ? Math.max(clampLimit(limit) * 3, scopedUnits.length) : Math.max(clampLimit(limit) * 3, 20);
+  const unitsById = new Map(scopedUnits.map((unit) => [unit.id, unit]));
+  const searchLimit = Math.min(Math.max(clampLimit(limit) * 5, 50), 1_000);
+  const lexicalResults = queryContext?.lexical
+    ? queryContext.lexical.search(query, searchLimit, scope)
+      .map((hit) => {
+        const unit = unitsById.get(hit.unitId);
+
+        return unit ? navigationReference(unit, hit.score, hit.matchedTokens) : null;
+      })
+      .filter((reference): reference is DkbNavigationReference => Boolean(reference))
+    : memoryLexicalSearch(scopedUnits, query, searchLimit);
   const result = queryContext?.faiss
     ? await searchFaissSnapshot(queryContext.faiss, query, searchLimit)
     : await querySearchDocuments(
@@ -97,21 +107,27 @@ export async function semanticSearch(
       searchLimit,
       queryContext?.vectorArtifactRoot,
     );
-  const results = result.hits
+  const vectorResults = result.hits
     .filter((hit) => scopedIds.has(hit.id))
     .map((hit) => {
-      const unit = scopedUnits.find((candidate) => candidate.id === hit.id);
+      const unit = unitsById.get(hit.id);
 
       return unit ? navigationReference(unit, hit.score) : null;
     })
-    .filter((reference): reference is DkbNavigationReference => Boolean(reference))
-    .slice(0, clampLimit(limit));
+    .filter((reference): reference is DkbNavigationReference => Boolean(reference));
+  const results = fuseNavigationReferences(lexicalResults, vectorResults, clampLimit(limit));
 
   return {
     status: results.length > 0 ? 'ready' : 'empty',
     query,
     results,
-    trace: { ...result.trace, navigation: 'reference_first' },
+    trace: {
+      engine: 'hybrid',
+      navigation: 'reference_first',
+      lexicalHits: lexicalResults.length,
+      vectorHits: vectorResults.length,
+      vector: result.trace,
+    },
   };
 }
 
@@ -270,6 +286,40 @@ function memoryLexicalSearch(units: IndexedSourceUnit[], query: string, limit: n
     .sort((left, right) => right.score - left.score || left.unit.id.localeCompare(right.unit.id))
     .slice(0, clampLimit(limit))
     .map((item) => navigationReference(item.unit, item.score, item.matchedTokens));
+}
+
+function fuseNavigationReferences(
+  lexicalResults: DkbNavigationReference[],
+  vectorResults: DkbNavigationReference[],
+  limit: number,
+): DkbNavigationReference[] {
+  const fused = new Map<string, { reference: DkbNavigationReference; score: number }>();
+  const add = (results: DkbNavigationReference[], weight: number): void => {
+    results.forEach((reference, index) => {
+      const current = fused.get(reference.id);
+      const preferred = current?.reference.matchedTokens?.length ? current.reference : reference;
+
+      fused.set(reference.id, {
+        reference: preferred,
+        score: (current?.score ?? 0) + (weight / (index + 1)),
+      });
+    });
+  };
+
+  add(lexicalResults, 0.65);
+  add(vectorResults, 0.35);
+
+  return [...fused.values()]
+    .sort((left, right) => longestMatchedToken(right.reference) - longestMatchedToken(left.reference)
+      || (right.reference.matchedTokens?.length ?? 0) - (left.reference.matchedTokens?.length ?? 0)
+      || right.score - left.score
+      || left.reference.id.localeCompare(right.reference.id))
+    .slice(0, limit)
+    .map(({ reference, score }) => ({ ...reference, score }));
+}
+
+function longestMatchedToken(reference: DkbNavigationReference): number {
+  return Math.max(0, ...(reference.matchedTokens ?? []).map((token) => token.length));
 }
 
 function unitMatchesScope(unit: IndexedSourceUnit, scope?: DkbNavigationScope): boolean {

@@ -1,10 +1,11 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { DkbError } from '../protocol/errors.js';
@@ -13,7 +14,7 @@ import type { LoadedDkb } from '../protocol/types.js';
 
 const execFile = promisify(execFileCallback);
 
-export const LLAMAINDEX_COMPILER_IMAGE = 'dkb-compiler-llamaindex:0.3.0';
+export const LLAMAINDEX_COMPILER_IMAGE = 'dkb-compiler-llamaindex:0.3.6';
 export const LLAMAINDEX_COMPILER_ID = 'llamaindex.fastembed.onnx';
 export const LLAMAINDEX_COMPILER_SERVICE_VERSION = '1';
 const LLAMAINDEX_COMPILER_SERVICE_CONTAINER = 'dkb-llamaindex-compiler-service';
@@ -34,7 +35,7 @@ export interface LlamaIndexCompilerRecord {
   chunkStart: number;
   chunkEnd: number;
   metadata: Record<string, unknown>;
-  embedding: number[];
+  embedding: number[] | Float32Array;
 }
 
 export interface LlamaIndexCompilerResult {
@@ -46,6 +47,13 @@ export interface LlamaIndexCompilerResult {
   execution?: {
     mode?: string;
     workers?: number;
+    batching?: {
+      documentBatchSize?: number;
+      embeddingBatchSize?: number;
+      inferenceBatchSize?: number;
+      provider?: string;
+      recordCount?: number;
+    };
     timingsMs?: Record<string, number>;
     wrapperTimingsMs?: Record<string, number>;
   };
@@ -152,9 +160,11 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
   const request = requestFor(dkb);
   const cachePath = llamaIndexCachePath(dkb.root);
   const checkpointPath = llamaIndexCheckpointPath(dkb.root);
-  const previousCheckpoint = await readCheckpoint(checkpointPath);
-  const cache = await readRecordCache(cachePath, dkb, model);
-  const plan = request.externalSources.length > 0
+  const cacheEnabled = process.env.DKB_LLAMA_RECORD_CACHE === undefined
+    || environmentFlag(process.env.DKB_LLAMA_RECORD_CACHE);
+  const previousCheckpoint = cacheEnabled ? await readCheckpoint(checkpointPath) : null;
+  const cache = cacheEnabled ? await readRecordCache(cachePath, dkb, model) : null;
+  const plan = !cacheEnabled || request.externalSources.length > 0
     ? null
     : await cachePlanFor(dkb, request, cache);
   const resumed = previousCheckpoint?.status === 'running';
@@ -284,8 +294,7 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
     });
     containerMs = elapsedMs(containerStart);
     const outputReadStart = performance.now();
-    const outputPath = path.join(outputDir, 'llamaindex-compiled.json');
-    const parsed = parseOutput(JSON.parse(await fs.readFile(outputPath, 'utf8')) as unknown, outputPath);
+    const parsed = await readCompilerOutput(outputDir);
     outputReadMs = elapsedMs(outputReadStart);
     const records = plan
       ? [...plan.reusedRecords, ...parsed.records].sort(compareRecords)
@@ -451,6 +460,7 @@ export async function startLlamaIndexCompilerService(options: {
     await execFile('docker', [
       'run',
       '-d',
+      ...(environmentFlag(process.env.DKB_LLAMA_GPU) ? ['--gpus', 'all'] : []),
       '--name',
       LLAMAINDEX_COMPILER_SERVICE_CONTAINER,
       '--label',
@@ -467,6 +477,14 @@ export async function startLlamaIndexCompilerService(options: {
       'type=volume,src=dkb-compiler-fastembed-cache,dst=/cache/fastembed',
       '-e',
       `DKB_COMPILER_MODEL=${options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5'}`,
+      '-e',
+      `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? '32'}`,
+      '-e',
+      `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? '32'}`,
+      '-e',
+      `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? '10'}`,
+      '-e',
+      `DKB_FASTEMBED_PROVIDER=${process.env.DKB_FASTEMBED_PROVIDER ?? ''}`,
       '-e',
       'DKB_COMPILER_JOBS_ROOT=/jobs',
       '--entrypoint',
@@ -503,10 +521,18 @@ export async function startLlamaIndexCompilerService(options: {
 export async function stopLlamaIndexCompilerService(): Promise<LlamaIndexCompilerServiceStatus> {
   const image = process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
 
-  await execFile('docker', ['rm', '-f', LLAMAINDEX_COMPILER_SERVICE_CONTAINER], {
-    timeout: 30_000,
-    maxBuffer: 4 * 1024 * 1024,
-  }).catch(() => undefined);
+  try {
+    await execFile('docker', ['rm', '-f', LLAMAINDEX_COMPILER_SERVICE_CONTAINER], {
+      timeout: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    const detail = commandDetail(error);
+
+    if (!/no such (container|object)/iu.test(detail)) {
+      throw new DkbError(`Unable to stop LlamaIndex compiler service: ${detail}`);
+    }
+  }
 
   return compilerServiceStatus({ image });
 }
@@ -1093,10 +1119,50 @@ function llamaIndexCheckpointPath(root: string): string {
   return resolveFrom(root, `${DKB_CACHE_DIR}/llamaindex-job.json`);
 }
 
+async function readCompilerOutput(outputDir: string): Promise<LlamaIndexCompilerOutput> {
+  const metadataPath = path.join(outputDir, 'llamaindex-compiled.meta.json');
+  if (existsSync(metadataPath)) {
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    const recordsFile = typeof metadata.recordsFile === 'string' ? metadata.recordsFile : '';
+    const resolvedOutputDir = path.resolve(outputDir);
+    const recordsPath = path.resolve(resolvedOutputDir, recordsFile);
+
+    if (!recordsFile || path.dirname(recordsPath) !== resolvedOutputDir) {
+      throw new DkbError(`Invalid streamed LlamaIndex records path in ${metadataPath}`);
+    }
+
+    const records: LlamaIndexCompilerRecord[] = [];
+    const lines = createInterface({
+      input: createReadStream(recordsPath, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+
+    for await (const line of lines) {
+      if (line.trim().length === 0) {
+        continue;
+      }
+      const record = JSON.parse(line) as LlamaIndexCompilerRecord;
+      if (Array.isArray(record.embedding)) {
+        record.embedding = Float32Array.from(record.embedding);
+      }
+      records.push(record);
+    }
+
+    if (typeof metadata.recordCount === 'number' && metadata.recordCount !== records.length) {
+      throw new DkbError(`Streamed LlamaIndex record count mismatch: expected ${metadata.recordCount}, got ${records.length}`);
+    }
+
+    return parseOutput({ ...metadata, records }, metadataPath);
+  }
+
+  const outputPath = path.join(outputDir, 'llamaindex-compiled.json');
+  return parseOutput(JSON.parse(await fs.readFile(outputPath, 'utf8')) as unknown, outputPath);
+}
+
 async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
   const tempPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
 
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await fs.writeFile(tempPath, `${JSON.stringify(value, float32JsonReplacer, 2)}\n`, 'utf8');
   await fs.rm(target, { force: true });
   await fs.rename(tempPath, target);
 }
@@ -1202,6 +1268,7 @@ async function runCompiler(
 ): Promise<void> {
   const args = [
     'run', '--rm',
+    ...(environmentFlag(process.env.DKB_LLAMA_GPU) ? ['--gpus', 'all'] : []),
     '--mount', `type=bind,src=${path.resolve(inputRoot)},dst=/input,readonly`,
     '--mount', `type=bind,src=${path.resolve(requestDir)},dst=/request,readonly`,
     '--mount', `type=bind,src=${path.resolve(outputDir)},dst=/output`,
@@ -1213,6 +1280,10 @@ async function runCompiler(
   const env = [
     options.model ? `DKB_COMPILER_MODEL=${options.model}` : null,
     `DKB_LLAMA_ASYNC_WORKERS=${boundedWorkerCount(options.workers ?? Number(process.env.DKB_LLAMA_ASYNC_WORKERS ?? 1))}`,
+    `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? '32'}`,
+    `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? '32'}`,
+    `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? '10'}`,
+    `DKB_FASTEMBED_PROVIDER=${process.env.DKB_FASTEMBED_PROVIDER ?? ''}`,
   ].filter((value): value is string => Boolean(value));
 
   for (const item of env.reverse()) {
@@ -1286,6 +1357,10 @@ function boundedWorkerCount(value: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.min(4, Math.trunc(value))) : 1;
 }
 
+function environmentFlag(value: string | undefined): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
+}
+
 function compilerContextPath(): string {
   const candidates = [
     path.resolve(process.cwd(), 'compiler/llamaindex'),
@@ -1308,11 +1383,20 @@ function parseOutput(value: unknown, source: string): LlamaIndexCompilerOutput {
     throw new DkbError(`Invalid LlamaIndex compiler output contract at ${source}`);
   }
   for (const record of output.records) {
-    if (!record || typeof record.id !== 'string' || typeof record.assetId !== 'string' || !Array.isArray(record.embedding)) {
+    if (!record || typeof record.id !== 'string' || typeof record.assetId !== 'string' || !isNumericEmbedding(record.embedding)) {
       throw new DkbError(`Invalid LlamaIndex compiler record at ${source}`);
     }
   }
   return output as LlamaIndexCompilerOutput;
+}
+
+function isNumericEmbedding(value: unknown): value is number[] | Float32Array {
+  return (Array.isArray(value) && value.every((item) => typeof item === 'number'))
+    || value instanceof Float32Array;
+}
+
+function float32JsonReplacer(_key: string, value: unknown): unknown {
+  return value instanceof Float32Array ? Array.from(value) : value;
 }
 
 function commandDetail(error: unknown): string {

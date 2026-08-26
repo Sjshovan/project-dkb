@@ -12,6 +12,16 @@ The project provides:
 - local registry publish and install flows
 - runtime retrieval over a compact CLI and MCP surface
 
+## Documentation
+
+- [`docs/cli-ux.md`](docs/cli-ux.md) — implemented human and automation output contract
+- [`docs/decisions/`](docs/decisions/) — accepted directions and implementation status
+- [`docs/artifact-architecture.md`](docs/artifact-architecture.md) — portable evidence and compiled artifact boundaries
+- [`docs/agent-navigation.md`](docs/agent-navigation.md) — model-facing search, reference, read, and source primitives
+- [`docs/chatgpt-mcp.md`](docs/chatgpt-mcp.md) — local and remote MCP authority and security boundary
+- [`docs/faiss-runtime.md`](docs/faiss-runtime.md) — installed FAISS/SQLite runtime model
+- [`docs/remote-hosting.md`](docs/remote-hosting.md) — verified hosted-runtime discovery
+
 ## Install
 
 ```bash
@@ -21,17 +31,40 @@ npm run build
 
 ## Basic Usage
 
-Interactive terminals get concise phase output for long-running commands such as
-compile, compiler service management, publish, install, artifact pack/pull, and
-package removal. Automation stays JSON-first:
+The CLI is human-readable by default, including when output is redirected.
+Interactive terminals add concise phase output for long-running commands such
+as compile, publish, install, artifact transport, verification, and package
+removal. Automation opts into one JSON document explicitly:
 
 ```bash
 dkb --json compile ./my-dkb --compiler llamaindex --artifact-profile faiss-package
 dkb --no-progress compiler status
 ```
 
-`--json`, `--no-progress`, and non-TTY/piped output do not emit spinners,
-progress bars, or ANSI presentation output.
+`--no-progress` keeps the human-readable result but disables spinners, progress
+bars, and ANSI presentation. `--json` disables presentation and emits only
+machine-readable JSON, including structured failures. Non-TTY/piped output is
+still human-readable unless `--json` is present.
+
+Install performs release and runtime preflight before downloading. Installing
+the same immutable release is a successful no-op; an incomplete install is
+reported immediately with `--force` as the repair action. A real install shows
+download, archive verification, single-pass extraction, package/signature
+verification, retrieval-index validation, and activation phases before its
+final result and `Done.`
+
+Every initialized DKB registry/runtime folder remembers its own upstream
+package-registry URL in `.dkb/config.json`. Bare `dkb init` initializes the
+current directory, asks for the upstream URL, and attempts to verify it. An
+unavailable upstream never blocks local creation: the CLI stores the URL, warns,
+and prints the `dkb registry use <url>` command for retrying later. Set it later
+from that folder with `dkb registry use <url>`, or target one explicitly with
+`--root <path>`.
+Command `--url` and `DKB_REGISTRY_URL` remain temporary overrides; the user
+config is now a fallback. `dkb list` shows the resolved registry and source.
+
+See [`docs/cli-ux.md`](docs/cli-ux.md) for the complete output and exit-code
+contract.
 
 Serve a folder as a local knowledge registry:
 
@@ -50,7 +83,7 @@ For scripts and other noninteractive environments, initialize explicitly first:
 
 ```bash
 cd ~/SecondBrain
-dkb init --here --yes
+dkb init --registry-url http://127.0.0.1:8000 --yes
 dkb serve
 ```
 
@@ -130,6 +163,7 @@ node dist/src/cli/index.js registry use http://127.0.0.1:8000
 node dist/src/cli/index.js registry packages
 node dist/src/cli/index.js publish ./my-dkb
 node dist/src/cli/index.js install my-dkb
+node dist/src/cli/index.js list --runtime-root .dkb/runtime
 ```
 
 For local CLI fixture work, the in-process development registry is still

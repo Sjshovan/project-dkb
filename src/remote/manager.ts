@@ -55,7 +55,10 @@ export async function addRegisteredRemote(input: {
   discovery: DkbDiscoveryDocument;
   attestation: DkbRemoteEndpointAttestation;
 }> {
-  const registry = await configuredRegistry({ url: input.registryUrl });
+  const registry = await configuredRegistry({
+    url: input.registryUrl,
+    root: input.stateRoot ?? defaultRuntimeStateRoot(),
+  });
   const client = new DkbRegistryClient({ baseUrl: registry.url, token: input.token });
   const packageResponse = await client.download(input.packageId, input.version);
   const packageData = recordField(packageResponse, 'data');
@@ -196,12 +199,14 @@ export async function installRegisteredRemote(input: {
   const archivePath = path.join(tempRoot, packageId.replace(/[^a-zA-Z0-9._-]+/g, '-') + '.dkbpkg');
 
   try {
-    await fs.writeFile(archivePath, await client.packageArchive(packageId, version));
+    const release = await client.packageRelease(packageId, version);
+    await client.writePackageArchive(packageId, archivePath, release.version);
     const publicKeys = signingKeys(await client.publicKeys());
     const result = await installDkbArchiveIntoRuntime({
       archivePath,
       runtimeRoot: input.runtimeRoot,
       trustedKeys: publicKeys,
+      expectedArchiveHash: release.archiveHash,
       force: true,
     });
 

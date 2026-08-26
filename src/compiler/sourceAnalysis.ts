@@ -14,6 +14,10 @@ import {
 const MAX_KEYWORDS_PER_SOURCE = 24;
 const MAX_EDGE_KEYWORDS = 8;
 const RELATION_SCORE_THRESHOLD = 0.45;
+const MAX_LEXICAL_RELATION_UNITS = 5_000;
+const MAX_KEYWORD_MATCHES = 64;
+const MAX_LEXICAL_CANDIDATE_PAIRS = 250_000;
+const MAX_LEXICAL_EDGES = 50_000;
 
 export type SourceUnit = IndexedSourceUnit;
 export type SourceEdge = IndexedSourceEdge;
@@ -108,11 +112,18 @@ function buildSourceEdges(units: SourceUnit[]): SourceEdge[] {
   }
 
   for (const group of groupBy(units, (unit) => unit.dkbId).values()) {
+    // Lexical overlap is supplemental graph metadata, not part of retrieval.
+    // Avoid an all-pairs graph on large corpora: source adjacency remains
+    // available and FAISS/lexical indexes continue to serve every chunk.
+    if (group.length > MAX_LEXICAL_RELATION_UNITS) {
+      continue;
+    }
     const inverted = invertedKeywordIndex(group);
     const pairScores = new Map<string, { left: SourceUnit; right: SourceUnit; score: number; keywords: Set<string> }>();
 
+    keywordLoop:
     for (const [keyword, matches] of inverted) {
-      if (matches.length < 2 || matches.length > Math.max(12, Math.ceil(group.length * 0.2))) {
+      if (matches.length < 2 || matches.length > Math.min(MAX_KEYWORD_MATCHES, Math.max(12, Math.ceil(group.length * 0.2)))) {
         continue;
       }
 
@@ -133,10 +144,14 @@ function buildSourceEdges(units: SourceUnit[]): SourceEdge[] {
           current.score += weight;
           current.keywords.add(keyword);
           pairScores.set(key, current);
+          if (pairScores.size >= MAX_LEXICAL_CANDIDATE_PAIRS) {
+            break keywordLoop;
+          }
         }
       }
     }
 
+    let lexicalEdges = 0;
     for (const pair of pairScores.values()) {
       const normalizedScore = pair.score / Math.max(Math.sqrt(pair.left.keywords.length + pair.right.keywords.length), 1);
 
@@ -150,6 +165,10 @@ function buildSourceEdges(units: SourceUnit[]): SourceEdge[] {
           [...pair.keywords].sort((a, b) => a.localeCompare(b)).slice(0, MAX_EDGE_KEYWORDS),
           'compiled chunks share rare deterministic keywords inside one DKB',
         );
+        lexicalEdges += 1;
+        if (lexicalEdges >= MAX_LEXICAL_EDGES) {
+          break;
+        }
       }
     }
   }

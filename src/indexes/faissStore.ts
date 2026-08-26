@@ -1,8 +1,10 @@
 import { spawn, execFile as execFileCallback, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
@@ -146,10 +148,7 @@ export async function writeFaissPackageArtifacts(
 
   try {
     await writeFaissCatalog(tempCatalog, dkb, records, numericIdToRecord);
-    await fs.writeFile(tempVectors, `${JSON.stringify({
-      ids: records.map((record) => faissNumericIdFor(dkb.manifest.id, dkb.manifest.version, record.id)),
-      vectors: records.map((record) => record.embedding),
-    })}\n`, 'utf8');
+    await writeFaissVectors(tempVectors, dkb, records);
     await runFaissHelper(['build', '--vectors', tempVectors, '--out', tempSegment]);
 
     await fs.mkdir(path.dirname(catalogPath), { recursive: true });
@@ -177,6 +176,31 @@ export async function writeFaissPackageArtifacts(
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+async function writeFaissVectors(target: string, dkb: LoadedDkb, records: LlamaIndexCompilerRecord[]): Promise<void> {
+  async function* jsonChunks(): AsyncGenerator<string> {
+    yield '{"ids":[';
+    for (let index = 0; index < records.length; index += 1) {
+      if (index > 0) {
+        yield ',';
+      }
+      yield JSON.stringify(faissNumericIdFor(dkb.manifest.id, dkb.manifest.version, records[index]!.id));
+    }
+    yield '],"vectors":[';
+    for (let index = 0; index < records.length; index += 1) {
+      if (index > 0) {
+        yield ',';
+      }
+      yield JSON.stringify(Array.from(records[index]!.embedding));
+    }
+    yield ']}\n';
+  }
+
+  await pipeline(
+    Readable.from(jsonChunks()),
+    createWriteStream(target, { encoding: 'utf8' }),
+  );
 }
 
 export async function validateFaissPackageArtifact(root: string): Promise<FaissPackageManifest> {
@@ -384,7 +408,9 @@ function embeddingProfileFor(result: LlamaIndexCompilerResult): FaissEmbeddingPr
 }
 
 function assertCompatibleRecordEmbedding(record: LlamaIndexCompilerRecord, profile: FaissEmbeddingProfile, packageId: string, version: string): void {
-  if (!Array.isArray(record.embedding) || record.embedding.length !== profile.dimensions || !record.embedding.every((value) => typeof value === 'number')) {
+  if (!(Array.isArray(record.embedding) || record.embedding instanceof Float32Array)
+    || record.embedding.length !== profile.dimensions
+    || !record.embedding.every((value) => typeof value === 'number' && Number.isFinite(value))) {
     throw new DkbError(`Compiler record ${record.id} in ${packageId}@${version} has an incompatible FastEmbed vector`);
   }
 }

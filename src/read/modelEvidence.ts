@@ -12,16 +12,19 @@ export const TRUSTED_SECURITY_PREAMBLE = [
 ].join('\n');
 export const TRUSTED_FORMAT_EPILOG = [
   '[TRUSTED_SOURCE_BEGIN]',
-  'ANSWER POLICY: Answer only from the evidence above. Cite only the provided citation ids such as [E1].',
+  'ANSWER POLICY: Return only valid JSON with keys "answer" (a string) and "citations" (an array of citation ids). Do not return Markdown fences or any other text.',
+  'The first character of the response must be { and the last character must be }.',
+  'Answer only from the evidence above. Cite only the provided citation ids such as E1.',
+  'This is a closed-book task: never supplement the evidence with prior knowledge, assumptions, or guesses.',
+  'The answer must directly answer the question in one concise sentence and include both the relevant marker or identifier and the supporting fact when available.',
   'When the question asks for a marker or identifier, copy that exact marker or identifier into the answer.',
-  'If the evidence is insufficient, say that the available DKB evidence is insufficient; do not guess.',
+  'If no DKB evidence was found or the evidence is insufficient, return exactly {"answer":"The available DKB evidence is insufficient.","citations":[]}.',
   '[TRUSTED_SOURCE_END]',
 ].join('\n');
 
 export function renderModelEvidence(response: DkbRetrieveKnowledgeResponse): string {
   const unsupported = response.sufficiency
-    && response.sufficiency.matchedNeed === false
-    && response.sufficiency.confidence <= 0;
+    && response.sufficiency.matchedNeed === false;
 
   if (response.evidence.length === 0 || response.status === 'blocked' || unsupported) {
     return [

@@ -4,11 +4,21 @@ import { createInterface, type Interface } from 'node:readline/promises';
 import { compileComposeProject } from '../compiler/compile.js';
 import { DkbError } from '../protocol/errors.js';
 import { loadRegistry } from '../protocol/manifest.js';
+import {
+  configuredRegistry,
+  normalizeRegistryUrl,
+  verifyRegistryEndpoint,
+  writeConfiguredRegistryUrl,
+  type ConfiguredRegistry,
+  type RegistryVerification,
+} from '../registry/config.js';
 
 export interface PrepareServeOptions {
   cwd?: string;
   root?: string;
   yes?: boolean;
+  registryUrl?: string;
+  verifyRegistry?: boolean;
   stdin?: NodeJS.ReadStream;
   stderr?: NodeJS.WriteStream;
   createPrompt?: (input: NodeJS.ReadStream, output: NodeJS.WriteStream) => Pick<Interface, 'question' | 'close'>;
@@ -18,7 +28,19 @@ export interface PreparedServeRegistry {
   root: string;
   initialized: boolean;
   compiled: boolean;
+  registry: ConfiguredRegistry;
+  verification?: RegistryVerification;
+  warning?: string;
+  retryCommand?: string;
   compileResult?: Awaited<ReturnType<typeof compileComposeProject>>;
+}
+
+export interface ResolvedRegistryInitialization {
+  url: string;
+  configured?: ConfiguredRegistry;
+  verification?: RegistryVerification;
+  warning?: string;
+  retryCommand?: string;
 }
 
 const DKB_MANIFEST_FILENAME = 'dkb.json';
@@ -31,27 +53,105 @@ export async function prepareServeRegistry(options: PrepareServeOptions = {}): P
     : await nearestRegistryRoot(cwd);
 
   if (targetRoot) {
+    const registry = await configuredRegistry({ root: targetRoot });
     const compileResult = await compileRegistryForServe(targetRoot);
 
     return {
       root: targetRoot,
       initialized: false,
       compiled: true,
+      registry,
       compileResult,
     };
   }
 
   const root = explicitRoot ?? cwd;
   await confirmServeInitialization(root, options);
+  const selectedRegistry = await resolveRegistryInitializationConfiguration({
+    root,
+    registryUrl: options.registryUrl,
+    yes: Boolean(options.yes),
+    verify: options.verifyRegistry !== false,
+    stdin: options.stdin,
+    stderr: options.stderr,
+    createPrompt: options.createPrompt,
+  });
   await initializeRegistryManifest(root);
-  await fs.mkdir(path.join(root, '.dkb'), { recursive: true });
+  const registry = selectedRegistry.configured ?? await writeConfiguredRegistryUrl(selectedRegistry.url, { root });
   const compileResult = await compileRegistryForServe(root);
 
   return {
     root,
     initialized: true,
     compiled: true,
+    registry,
     compileResult,
+    ...(selectedRegistry.verification ? { verification: selectedRegistry.verification } : {}),
+    ...(selectedRegistry.warning
+      ? {
+          warning: selectedRegistry.warning,
+          retryCommand: selectedRegistry.retryCommand,
+        }
+      : {}),
+  };
+}
+
+export async function resolveRegistryInitializationConfiguration(options: {
+  root: string;
+  registryUrl?: string;
+  yes: boolean;
+  verify: boolean;
+  stdin?: NodeJS.ReadStream;
+  stderr?: NodeJS.WriteStream;
+  createPrompt?: (input: NodeJS.ReadStream, output: NodeJS.WriteStream) => Pick<Interface, 'question' | 'close'>;
+}): Promise<ResolvedRegistryInitialization> {
+  const current = await configuredRegistry({ root: options.root });
+
+  if (!options.registryUrl && current.source === 'project') {
+    return {
+      url: current.url,
+      configured: current,
+    };
+  }
+
+  let registryUrl = options.registryUrl?.trim();
+
+  if (!registryUrl) {
+    const stdin = options.stdin ?? process.stdin;
+    const stderr = options.stderr ?? process.stderr;
+
+    if (options.yes || !stdin.isTTY) {
+      registryUrl = current.url;
+    } else {
+      const prompt = options.createPrompt
+        ? options.createPrompt(stdin, stderr)
+        : createInterface({ input: stdin, output: stderr });
+
+      try {
+        registryUrl = (await prompt.question(`Upstream package registry URL [${current.url}]: `)).trim() || current.url;
+      } finally {
+        prompt.close();
+      }
+    }
+  }
+
+  const normalized = normalizeRegistryUrl(registryUrl);
+  const verification = options.verify ? await verifyRegistryEndpoint(normalized) : undefined;
+  const warning = verification && !verification.ok
+    ? `Upstream registry ${normalized} could not be verified. The local registry was still created and can be used offline.`
+    : !options.verify
+      ? `Upstream registry ${normalized} was not verified because verification was skipped.`
+      : undefined;
+
+  return {
+    url: normalized,
+    ...(verification ? { verification } : {}),
+    ...(warning
+      ? {
+          warning,
+          retryCommand: `dkb registry use ${normalized}`,
+        }
+      : {}),
   };
 }
 
@@ -126,7 +226,7 @@ async function confirmServeInitialization(root: string, options: PrepareServeOpt
   const stderr = options.stderr ?? process.stderr;
 
   if (!stdin.isTTY) {
-    throw new DkbError(`No DKB registry found from ${root}. Noninteractive dkb serve will not create files. Run: dkb init --here --yes`);
+    throw new DkbError(`No DKB registry found from ${root}. Noninteractive dkb serve will not create files. Run: dkb init --yes`);
   }
 
   const prompt = options.createPrompt

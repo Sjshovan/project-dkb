@@ -24,17 +24,14 @@ export async function createDkbPackageArchive(sourceRoot: string, archivePath: s
 
 export async function extractDkbPackageArchive(archivePath: string, targetRoot: string, options: { progress?: DkbProgressReporter } = {}): Promise<void> {
   const target = path.resolve(targetRoot);
-  const entries = options.progress ? await listArchiveEntries(archivePath) : [];
   let extracted = 0;
 
-  if (options.progress && entries.length > 0) {
-    options.progress(progressStart({
+  options.progress?.(progressStart({
       phase: 'extract',
       label: 'Extract package',
-      total: entries.length,
+      total: 0,
       unit: 'files',
-    }));
-  }
+  }));
 
   await fs.mkdir(target, { recursive: true });
   await tar.x({
@@ -44,7 +41,7 @@ export async function extractDkbPackageArchive(archivePath: string, targetRoot: 
     unlink: true,
     filter: (entryPath, entry) => isSafeTarEntry(entryPath, entry as unknown),
     onentry: () => {
-      if (!options.progress || entries.length === 0) {
+      if (!options.progress) {
         return;
       }
       extracted += 1;
@@ -52,36 +49,18 @@ export async function extractDkbPackageArchive(archivePath: string, targetRoot: 
         phase: 'extract',
         label: 'Extract package',
         value: extracted,
-        total: entries.length,
+        total: 0,
         unit: 'files',
       }));
     },
   });
 
-  if (options.progress && entries.length > 0) {
-    options.progress(progressFinish({
-      phase: 'extract',
-      label: 'Extract package',
-      total: entries.length,
-      unit: 'files',
-    }));
-  }
-}
-
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-
-  await tar.t({
-    file: path.resolve(archivePath),
-    filter: (entryPath, entry) => {
-      isSafeTarEntry(entryPath, entry as unknown);
-      entries.push(entryPath);
-
-      return true;
-    },
-  });
-
-  return entries;
+  options.progress?.(progressFinish({
+    phase: 'extract',
+    label: 'Extract package',
+    total: extracted,
+    unit: 'files',
+  }));
 }
 
 function isSafeTarEntry(entryPath: string, entry: unknown): boolean {

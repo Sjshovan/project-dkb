@@ -242,7 +242,7 @@ function recordForSourceShardHash(record: LlamaIndexCompilerRecord): Record<stri
     text: record.text,
     hash: record.hash,
     metadata: record.metadata,
-    embedding: record.embedding,
+    embedding: Array.from(record.embedding),
   };
 }
 
@@ -254,9 +254,13 @@ async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
   const tempPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
 
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await fs.writeFile(tempPath, `${JSON.stringify(value, float32JsonReplacer, 2)}\n`, 'utf8');
   await fs.rm(target, { force: true });
   await fs.rename(tempPath, target);
+}
+
+function float32JsonReplacer(_key: string, value: unknown): unknown {
+  return value instanceof Float32Array ? Array.from(value) : value;
 }
 
 function hashString(value: string): string {

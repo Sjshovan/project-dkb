@@ -17,6 +17,7 @@ export interface ServeDkbMcpHttpOptions {
   allowedOrigins?: string[];
   publicBaseUrl?: string;
   publicDocuments?: boolean;
+  allowInsecureNoAuth?: boolean;
 }
 
 export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
@@ -26,9 +27,11 @@ export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
   const bearerToken = options.bearerToken ?? process.env.DKB_MCP_BEARER_TOKEN;
   const publicBaseUrl = options.publicBaseUrl ?? process.env.DKB_MCP_PUBLIC_BASE_URL;
   const publicDocuments = options.publicDocuments ?? process.env.DKB_MCP_PUBLIC_DOCUMENTS === 'true';
+  const allowInsecureNoAuth = options.allowInsecureNoAuth
+    ?? process.env.DKB_MCP_ALLOW_INSECURE_NO_AUTH === 'true';
 
-  if (!bearerToken) {
-    throw new DkbError('Authenticated HTTP MCP requires DKB_MCP_BEARER_TOKEN.');
+  if (!bearerToken && !allowInsecureNoAuth) {
+    throw new DkbError('Authenticated HTTP MCP requires DKB_MCP_BEARER_TOKEN. Set DKB_MCP_ALLOW_INSECURE_NO_AUTH=true only for a disposable synthetic-data proof.');
   }
 
   const allowedHosts = unique([
@@ -76,7 +79,7 @@ export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
         return;
       }
 
-      if (!validBearer(request, bearerToken)) {
+      if (!allowInsecureNoAuth && !validBearer(request, bearerToken!)) {
         response.setHeader('www-authenticate', 'Bearer realm="DKB MCP"');
         return sendJson(response, 401, { error: 'unauthorized' });
       }
@@ -106,7 +109,7 @@ export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
     port: listeningPort,
     path: endpointPath,
     mode: 'read-only',
-    authentication: 'bearer',
+    authentication: allowInsecureNoAuth ? 'none' : 'bearer',
     publicDocuments,
   }));
 

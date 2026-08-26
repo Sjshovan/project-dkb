@@ -149,36 +149,46 @@ export async function retrieveKnowledge(
     return blockedRetrievalResponse(request, query);
   }
 
+  const candidateLimit = Math.max(limit * 3, 20);
+  const sourceUnitsById = queryContext?.sourceUnitsById ?? new Map(sourceUnits.map((unit) => [unit.id, unit]));
+  const lexicalStart = performance.now();
+  const lexicalMatches = queryContext?.lexical
+    ? queryContext.lexical.search(query, candidateLimit)
+      .map((hit) => sourceUnitsById.get(hit.unitId))
+      .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
+      .map((unit) => querySourceChunks([unit], sourceIndexQuery, 1)[0] ?? emptyMatch(unit))
+    : querySourceChunks(sourceUnits, sourceIndexQuery, candidateLimit);
+  const lexicalQueryMs = performance.now() - lexicalStart;
   const vectorStart = performance.now();
   const vectorResult = queryContext?.faiss
-    ? await searchFaissSnapshot(queryContext.faiss, query, Math.max(limit * 3, 20))
+    ? await searchFaissSnapshot(queryContext.faiss, query, candidateLimit)
     : await querySearchDocuments(
       queryContext?.searchRegistryId ?? 'compose-index',
       queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(sourceUnits),
       query,
-      Math.max(limit * 3, 20),
+      candidateLimit,
       queryContext?.vectorArtifactRoot,
       request.phrases ?? [],
     );
   const vectorQueryMs = performance.now() - vectorStart;
-  const sourceUnitsById = queryContext?.sourceUnitsById ?? new Map(sourceUnits.map((unit) => [unit.id, unit]));
-  const candidateChunkMatches = vectorResult.hits
+  const vectorMatches = vectorResult.hits
     .map((hit) => sourceUnitsById.get(hit.id))
     .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
     .map((unit) => querySourceChunks([unit], sourceIndexQuery, 1)[0] ?? emptyMatch(unit));
+  const candidateChunkMatches = fuseChunkMatches(lexicalMatches, vectorMatches, candidateLimit);
   const exactMatchRequired = requiresExactCompiledMatch(request, queryEvidence);
   const chunkMatchesForRead = (exactMatchRequired
-    ? candidateChunkMatches.filter((match) => hasCompiledMatchEvidence(match.evidence))
+    ? candidateChunkMatches.filter((match) => satisfiesExactCompiledMatch(match, request, queryEvidence))
     : candidateChunkMatches).slice(0, limit);
 
   const directChunkMatches = chunkMatchesForRead.filter((match) => hasCompiledMatchEvidence(match.evidence));
   const profile = request.profile ? {
     timingsMs: {
-      total: roundMs(vectorQueryMs),
+      total: roundMs(lexicalQueryMs + vectorQueryMs),
       artifactContext: 0,
       dkbFilter: 0,
       tokenize: 0,
-      lexicalScore: 0,
+      lexicalScore: roundMs(lexicalQueryMs),
       vectorQuery: roundMs(vectorQueryMs),
       graphExpansion: 0,
       fusion: 0,
@@ -187,13 +197,13 @@ export async function retrieveKnowledge(
     counts: {
       totalRecords: sourceUnits.length,
       filteredRecords: sourceUnits.length,
-      lexicalHits: 0,
+      lexicalHits: lexicalMatches.filter((match) => hasCompiledMatchEvidence(match.evidence)).length,
       vectorHits: vectorResult.hits.length,
       graphHits: 0,
-      fusedHits: vectorResult.hits.length,
+      fusedHits: candidateChunkMatches.length,
       returnedHits: chunkMatchesForRead.length,
     },
-    passes: ['vector'],
+    passes: ['lexical', 'vector'],
   } : undefined;
 
   if (chunkMatchesForRead.length === 0) {
@@ -426,6 +436,52 @@ function hasCompiledMatchEvidence(evidence: SourceUnitMatch['evidence']): boolea
     || evidence.tokens.length > 0;
 }
 
+function satisfiesExactCompiledMatch(
+  match: SourceUnitMatch,
+  request: DkbRetrieveKnowledgeRequest,
+  queryEvidence: SourceUnitQueryEvidence,
+): boolean {
+  const explicitPhrases = (request.phrases ?? [])
+    .map((phrase) => tokenize(phrase).join(' '))
+    .filter(Boolean);
+
+  if (explicitPhrases.length > 0) {
+    return explicitPhrases.some((phrase) => match.evidence.phrases.includes(phrase));
+  }
+
+  if (queryEvidence.identifiers.length > 0) {
+    return match.evidence.identifiers.length > 0;
+  }
+
+  return hasCompiledMatchEvidence(match.evidence);
+}
+
+function fuseChunkMatches(
+  lexicalMatches: SourceUnitMatch[],
+  vectorMatches: SourceUnitMatch[],
+  limit: number,
+): SourceUnitMatch[] {
+  const fused = new Map<string, { match: SourceUnitMatch; score: number }>();
+  const add = (matches: SourceUnitMatch[], weight: number): void => {
+    matches.forEach((match, index) => {
+      const current = fused.get(match.unit.id);
+
+      fused.set(match.unit.id, {
+        match: current && hasCompiledMatchEvidence(current.match.evidence) ? current.match : match,
+        score: (current?.score ?? 0) + (weight / (index + 1)),
+      });
+    });
+  };
+
+  add(lexicalMatches, 0.65);
+  add(vectorMatches, 0.35);
+
+  return [...fused.values()]
+    .sort((left, right) => right.score - left.score || left.match.unit.id.localeCompare(right.match.unit.id))
+    .slice(0, limit)
+    .map((entry) => entry.match);
+}
+
 function requiresExactCompiledMatch(
   request: DkbRetrieveKnowledgeRequest,
   evidence: SourceUnitQueryEvidence,
@@ -611,28 +667,31 @@ function evaluateEvidenceSufficiency(result: DkbReadResult, needText: string): D
   const evidenceTokens = new Set(tokenize(evidence.map(evidenceToText).join(' ')));
   const matchedCount = tokens.filter((token) => evidenceTokens.has(token)).length;
   const confidence = roundConfidence(matchedCount / tokens.length);
+  const matchedNeed = confidence >= 0.5;
 
   return {
     status: confidence >= 0.75 && result.status === 'complete' ? 'complete' : 'partial',
     confidence,
-    matchedNeed: confidence >= 0.75,
+    matchedNeed,
     expanded: false,
-    reason: confidence >= 0.75 ? 'matched_need' : 'weak_match',
+    reason: matchedNeed ? 'matched_need' : 'weak_match',
     passes: 1,
   };
 }
 
 function evidenceToText(evidence: DkbEvidence): string {
+  const label = evidence.label ? `${evidence.label} ` : '';
+
   if (typeof evidence.text === 'string') {
-    return evidence.text;
+    return `${label}${evidence.text}`;
   }
 
   if (evidence.rows) {
-    return JSON.stringify(evidence.rows);
+    return `${label}${JSON.stringify(evidence.rows)}`;
   }
 
   if (evidence.value !== undefined) {
-    return String(evidence.value);
+    return `${label}${String(evidence.value)}`;
   }
 
   return evidence.label;

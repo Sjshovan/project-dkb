@@ -37,6 +37,7 @@ DKB_MCP_ALLOWED_HOSTS=knowledge.example
 DKB_MCP_ALLOWED_ORIGINS=chatgpt.com
 DKB_MCP_PUBLIC_BASE_URL=https://knowledge.example
 DKB_MCP_PUBLIC_DOCUMENTS=true
+DKB_MCP_ALLOW_INSECURE_NO_AUTH=false
 ```
 
 `DKB_QUERY_EMBEDDER_URL` is the complete query endpoint, including `/embed`.
@@ -53,9 +54,12 @@ when enabled.
 For a non-sensitive development proof, expose the local MCP through a
 disposable HTTPS tunnel, create a private ChatGPT development app pointed at
 `https://<temporary-origin>/mcp`, and confirm that ChatGPT discovers only
-`search` and `fetch`. Stop the tunnel after testing. A no-authentication adapter
-is acceptable only for short-lived synthetic data; do not use it for personal
-or private knowledge.
+`search` and `fetch`. Stop the tunnel after testing.
+
+Enable the no-authentication proof adapter with
+`DKB_MCP_ALLOW_INSECURE_NO_AUTH=true` only for short-lived synthetic data; do
+not use it for personal or private knowledge. Bearer authentication remains
+mandatory by default.
 
 The grounding test should require ChatGPT to search, fetch, cite only fetched
 evidence, ignore source instructions, and return an evidence-insufficient

@@ -12,6 +12,15 @@ export interface DkbRegistryClientOptions {
   token?: string;
 }
 
+export interface DkbRegistryRelease {
+  packageId: string;
+  version: string;
+  status: string;
+  archiveHash?: string;
+  packageTreeHash?: string;
+  recordCount?: number;
+}
+
 export class DkbRegistryClient {
   readonly baseUrl: string;
   readonly token?: string;
@@ -105,7 +114,11 @@ export class DkbRegistryClient {
             remote: await this.claimRemoteEndpoint(dkb.manifest.id, dkb.manifest.version, input.remoteUrl),
           };
         } catch (error) {
-          throw new DkbError(`Package published, but remote endpoint registration failed: ${error instanceof Error ? error.message : String(error)}`);
+          return {
+            ...published,
+            warning: `Package published, but remote endpoint registration failed: ${error instanceof Error ? error.message : String(error)}`,
+            retryCommand: `dkb registry remote claim ${dkb.manifest.id}@${dkb.manifest.version} --url ${input.remoteUrl}`,
+          };
         }
       }
 
@@ -127,6 +140,35 @@ export class DkbRegistryClient {
     return this.download(packageId, version);
   }
 
+  async packageRelease(packageId: string, version?: string): Promise<DkbRegistryRelease> {
+    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const data = resourceData(await this.download(packageId, resolvedVersion));
+
+    if (!data || typeof data.version !== 'string' || typeof data.packageId !== 'string') {
+      throw new DkbError(`Registry returned invalid release metadata for ${packageId}@${resolvedVersion}.`);
+    }
+
+    if (data.packageId !== packageId || data.version !== resolvedVersion) {
+      throw new DkbError(
+        `Registry release identity mismatch: requested ${packageId}@${resolvedVersion}, `
+        + `received ${data.packageId}@${data.version}.`,
+      );
+    }
+
+    if (data.status !== 'published') {
+      throw new DkbError(`Registry release is not installable: ${data.packageId}@${data.version} (${String(data.status ?? 'unknown')}).`);
+    }
+
+    return {
+      packageId: data.packageId,
+      version: data.version,
+      status: data.status,
+      ...(typeof data.archiveHash === 'string' ? { archiveHash: data.archiveHash } : {}),
+      ...(typeof data.packageTreeHash === 'string' ? { packageTreeHash: data.packageTreeHash } : {}),
+      ...(typeof data.recordCount === 'number' ? { recordCount: data.recordCount } : {}),
+    };
+  }
+
   async packageArchive(packageId: string, version?: string, options: { progress?: DkbProgressReporter } = {}): Promise<Buffer> {
     const resolvedVersion = version ?? await this.latestVersion(packageId);
 
@@ -135,6 +177,112 @@ export class DkbRegistryClient {
       progressPhase: 'download',
       progressLabel: 'Download package',
     });
+  }
+
+  async writePackageArchive(packageId: string, targetPath: string, version?: string, options: {
+    progress?: DkbProgressReporter;
+    force?: boolean;
+  } = {}): Promise<{
+    archivePath: string;
+    bytes: number;
+    version: string;
+    warning?: string;
+    cleanupPath?: string;
+  }> {
+    const archivePath = path.resolve(targetPath);
+
+    if (!options.force && await exists(archivePath)) {
+      throw new DkbError(`Output archive already exists: ${archivePath}. Use --force to replace it.`);
+    }
+
+    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const response = await this.binaryResponse(
+      `/api/registry/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`,
+      DKB_PACKAGE_MEDIA_TYPE,
+    );
+    const contentLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+    const knownTotal = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+    const reader = response.body?.getReader();
+
+    if (!reader) {
+      throw new DkbError('Registry package response did not contain a readable body.');
+    }
+
+    await fs.mkdir(path.dirname(archivePath), { recursive: true });
+    const temporaryPath = siblingTemporaryPath(archivePath, 'download');
+    const output = await fs.open(temporaryPath, 'wx');
+    let received = 0;
+
+    options.progress?.(progressStart({
+      phase: 'download',
+      label: 'Download package',
+      total: knownTotal,
+      unit: 'bytes',
+    }));
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        if (value) {
+          let offset = 0;
+
+          while (offset < value.byteLength) {
+            const { bytesWritten } = await output.write(value, offset, value.byteLength - offset, null);
+
+            if (bytesWritten <= 0) {
+              throw new DkbError(`Unable to write package archive: ${archivePath}`);
+            }
+            offset += bytesWritten;
+          }
+          received += value.byteLength;
+          options.progress?.(progressUpdate({
+            phase: 'download',
+            label: 'Download package',
+            value: received,
+            total: knownTotal,
+            unit: 'bytes',
+          }));
+        }
+      }
+      await output.close();
+    } catch (error) {
+      await output.close().catch(() => undefined);
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+
+    if (knownTotal > 0 && received !== knownTotal) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw new DkbError(`Registry package download was incomplete: expected ${knownTotal} bytes, received ${received}.`);
+    }
+
+    let promotion: { warning?: string; cleanupPath?: string };
+
+    try {
+      promotion = await promoteDownloadedFile(temporaryPath, archivePath, Boolean(options.force));
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+
+    options.progress?.(progressFinish({
+      phase: 'download',
+      label: 'Download package',
+      total: knownTotal || received,
+      unit: 'bytes',
+    }));
+
+    return {
+      archivePath,
+      bytes: received,
+      version: resolvedVersion,
+      ...promotion,
+    };
   }
 
   rotateAccountKey(accountId: string) {
@@ -162,7 +310,7 @@ export class DkbRegistryClient {
       ...this.authorizationHeader(),
       ...(headers ?? (body === undefined || body instanceof FormData ? undefined : { 'content-type': 'application/json' })),
     };
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await this.fetchRegistry(path, {
       method,
       headers: Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined,
       body: body === undefined
@@ -174,7 +322,7 @@ export class DkbRegistryClient {
           : JSON.stringify(body),
     });
     const text = await response.text();
-    const parsed = text ? JSON.parse(text) as unknown : null;
+    const parsed = parseJson(text);
 
     if (!response.ok) {
       const message = parsed && typeof parsed === 'object' && 'message' in parsed
@@ -182,6 +330,10 @@ export class DkbRegistryClient {
         : `${method} ${path} failed with HTTP ${response.status}`;
 
       throw new DkbError(message);
+    }
+
+    if (text && parsed === null) {
+      throw new DkbError(`Registry returned invalid JSON for ${method} ${path}.`);
     }
 
     return parsed;
@@ -192,25 +344,7 @@ export class DkbRegistryClient {
     progressPhase?: string;
     progressLabel?: string;
   } = {}): Promise<Buffer> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      headers: this.authorizationHeader(),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      const parsed = text ? JSON.parse(text) as unknown : null;
-      const message = parsed && typeof parsed === 'object' && 'message' in parsed
-        ? String((parsed as { message: unknown }).message)
-        : `GET ${path} failed with HTTP ${response.status}`;
-
-      throw new DkbError(message);
-    }
-
-    const contentType = response.headers.get('content-type') ?? '';
-
-    if (!contentType.startsWith(expectedContentType)) {
-      throw new DkbError(`Registry returned unexpected package content type: ${contentType || 'missing'}`);
-    }
+    const response = await this.binaryResponse(path, expectedContentType);
 
     const contentLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
 
@@ -259,8 +393,42 @@ export class DkbRegistryClient {
     return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
   }
 
+  private async binaryResponse(requestPath: string, expectedContentType: string): Promise<Response> {
+    const response = await this.fetchRegistry(requestPath, {
+      headers: this.authorizationHeader(),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      const parsed = parseJson(text);
+      const message = parsed && typeof parsed === 'object' && 'message' in parsed
+        ? String((parsed as { message: unknown }).message)
+        : `GET ${requestPath} failed with HTTP ${response.status}`;
+
+      throw new DkbError(message);
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+
+    if (!contentType.startsWith(expectedContentType)) {
+      throw new DkbError(`Registry returned unexpected package content type: ${contentType || 'missing'}`);
+    }
+
+    return response;
+  }
+
+  private async fetchRegistry(requestPath: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(`${this.baseUrl}${requestPath}`, init);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+
+      throw new DkbError(`Unable to reach registry ${this.baseUrl}: ${detail}`);
+    }
+  }
+
   private async ensurePackage(input: { id: string; name: string; description?: string; visibility: 'public' | 'private' }) {
-    const response = await fetch(`${this.baseUrl}/api/registry/packages`, {
+    const response = await this.fetchRegistry('/api/registry/packages', {
       method: 'POST',
       headers: {
         ...this.authorizationHeader(),
@@ -274,17 +442,31 @@ export class DkbRegistryClient {
       }),
     });
 
-    if (response.ok || response.status === 422) {
+    if (response.ok) {
       return;
     }
 
     const text = await response.text();
-    const parsed = text ? JSON.parse(text) as unknown : null;
+    const parsed = parseJson(text);
     const message = parsed && typeof parsed === 'object' && 'message' in parsed
       ? String((parsed as { message: unknown }).message)
       : `POST /api/registry/packages failed with HTTP ${response.status}`;
 
+    if (response.status === 422 && await this.packageAlreadyExists(input.id)) {
+      return;
+    }
+
     throw new DkbError(message);
+  }
+
+  private async packageAlreadyExists(packageId: string): Promise<boolean> {
+    try {
+      const existing = resourceData(await this.download(packageId));
+
+      return existing?.id === packageId || existing?.packageId === packageId || existing?.slug === packageId;
+    } catch {
+      return false;
+    }
   }
 
   private async waitForPublishedVersion(packageId: string, version: string, initial: unknown) {
@@ -324,6 +506,51 @@ export class DkbRegistryClient {
 
   private authorizationHeader(): Record<string, string> {
     return this.token ? { authorization: `Bearer ${this.token}` } : {};
+  }
+}
+
+export async function writeArchiveFileFromPath(sourcePath: string, targetPath: string, options: { force?: boolean } = {}): Promise<{
+  archivePath: string;
+  bytes: number;
+  warning?: string;
+  cleanupPath?: string;
+}> {
+  const source = path.resolve(sourcePath);
+  const target = path.resolve(targetPath);
+
+  if (!options.force && await exists(target)) {
+    throw new DkbError(`Output archive already exists: ${target}. Use --force to replace it.`);
+  }
+
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const temporaryPath = siblingTemporaryPath(target, 'copy');
+
+  let promotion: { warning?: string; cleanupPath?: string };
+
+  try {
+    await fs.copyFile(source, temporaryPath);
+    promotion = await promoteDownloadedFile(temporaryPath, target, Boolean(options.force));
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+
+  return {
+    archivePath: target,
+    bytes: (await fs.stat(target)).size,
+    ...promotion,
+  };
+}
+
+function parseJson(text: string): unknown {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
   }
 }
 
@@ -370,4 +597,85 @@ function normalizePublishResult(packageId: string, version: string, value: unkno
       recordCount: data?.recordCount,
     },
   };
+}
+
+function siblingTemporaryPath(targetPath: string, purpose: string): string {
+  return `${targetPath}.${purpose}-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function promoteDownloadedFile(temporaryPath: string, targetPath: string, force: boolean): Promise<{
+  warning?: string;
+  cleanupPath?: string;
+}> {
+  if (!force) {
+    try {
+      await fs.link(temporaryPath, targetPath);
+      try {
+        await fs.rm(temporaryPath, { force: true });
+        return {};
+      } catch {
+        return {
+          warning: `Archive was written, but its temporary file could not be removed: ${temporaryPath}`,
+          cleanupPath: temporaryPath,
+        };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new DkbError(`Output archive already exists: ${targetPath}. Use --force to replace it.`);
+      }
+
+      throw error;
+    }
+  }
+
+  const backupPath = siblingTemporaryPath(targetPath, 'backup');
+  let backupCreated = false;
+
+  try {
+    await fs.rename(targetPath, backupPath);
+    backupCreated = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  try {
+    await fs.rename(temporaryPath, targetPath);
+  } catch (error) {
+    if (backupCreated) {
+      try {
+        await fs.rename(backupPath, targetPath);
+      } catch (restoreError) {
+        throw new DkbError(
+          `Unable to replace ${targetPath}, and the previous archive could not be restored. `
+          + `It is preserved at ${backupPath}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+        );
+      }
+    }
+
+    throw error;
+  }
+
+  if (backupCreated) {
+    try {
+      await fs.rm(backupPath, { force: true });
+    } catch {
+      return {
+        warning: `Archive was replaced, but its previous backup could not be removed: ${backupPath}`,
+        cleanupPath: backupPath,
+      };
+    }
+  }
+
+  return {};
+}
+
+async function exists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
 }

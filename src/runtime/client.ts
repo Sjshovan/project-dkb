@@ -78,13 +78,21 @@ export class DkbRuntimeClient {
   }
 
   private async request(method: string, path: string, body?: unknown): Promise<unknown> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let response: Response;
+
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+
+      throw new DkbError(`Unable to reach DKB Runtime ${this.baseUrl}: ${detail}`);
+    }
     const text = await response.text();
-    const parsed = text ? JSON.parse(text) as unknown : null;
+    const parsed = parseJson(text);
 
     if (!response.ok) {
       const message = parsed && typeof parsed === 'object' && 'message' in parsed
@@ -94,10 +102,49 @@ export class DkbRuntimeClient {
       throw new DkbError(message);
     }
 
+    if (text && parsed === null) {
+      throw new DkbError(`DKB Runtime returned invalid JSON for ${method} ${path}.`);
+    }
+
     return parsed;
   }
 }
 
 function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/+$/g, '');
+  const raw = value.trim();
+  const markdownLink = raw.match(/^\[([^\]]+)]\([^)]+\)$/);
+
+  if (markdownLink) {
+    throw new DkbError(`Runtime URL was pasted as a Markdown link. Use the plain URL instead: ${markdownLink[1]}`);
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new DkbError(`Invalid DKB Runtime URL: ${value}`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new DkbError(`DKB Runtime URL must use http or https: ${value}`);
+  }
+
+  parsed.pathname = parsed.pathname.replace(/\/+$/g, '');
+  parsed.search = '';
+  parsed.hash = '';
+
+  return parsed.toString().replace(/\/+$/g, '');
+}
+
+function parseJson(text: string): unknown {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }

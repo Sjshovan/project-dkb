@@ -160,7 +160,10 @@ function arraySet(value: unknown): Set<string> | null {
 }
 
 function isSystemEntry(name: string): boolean {
-  return name.startsWith('.') || name === 'dkb-lock.json' || name === 'dkb-release.json';
+  return name.startsWith('.')
+    || name === 'dkb-lock.json'
+    || name === 'dkb-profile.lock.json'
+    || name === 'dkb-release.json';
 }
 
 function keywordsFor(value: string): string[] {

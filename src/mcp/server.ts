@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod/v4';
 import { DKB_PROTOCOL_VERSION } from '../protocol/version.js';
+import { tokenize } from '../router/scoring.js';
 import {
   describeCollectionTool,
   describeRegistryChunksTool,
@@ -322,13 +323,24 @@ export function createDkbReadOnlyMcpServer(publicBaseUrl?: string): McpServer {
     },
     async ({ query, limit, dkbId }) => {
       const result = await semanticSearchTool(undefined, query, limit, dkbId ? { dkbId } : undefined);
-      const results = result.results.map((item) => ({
+      const coverage = searchEvidenceCoverage(query, result.results);
+      const visibleResults = coverage >= 0.5 ? result.results : [];
+      const results = visibleResults.map((item) => ({
         ...item,
         citationId: item.evidenceId ?? item.id,
         citationUrl: citationUrl(publicBaseUrl, item.id),
       }));
 
-      return toolResult({ ...result, results });
+      return toolResult({
+        ...result,
+        status: results.length > 0 ? 'ready' : 'empty',
+        results,
+        sufficiency: {
+          matchedNeed: results.length > 0,
+          confidence: coverage,
+          reason: results.length > 0 ? 'matched_need' : 'weak_match',
+        },
+      });
     },
   );
 
@@ -358,12 +370,50 @@ export function serveDkbMcpServer(): void {
   });
 }
 
+function searchEvidenceCoverage(query: string, results: Array<{ matchedTokens?: string[] }>): number {
+  const queryTokens = [...new Set(tokenize(query)
+    .filter((token) => token.length > 2 && !REMOTE_SEARCH_STOPWORDS.has(token)))];
+
+  if (queryTokens.length === 0) {
+    return results.length > 0 ? 1 : 0;
+  }
+
+  const matchedTokens = new Set(results.flatMap((result) => result.matchedTokens ?? []));
+
+  return Math.round((queryTokens.filter((token) => matchedTokens.has(token)).length / queryTokens.length) * 10_000) / 10_000;
+}
+
 function toolResult(value: unknown) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
     structuredContent: value,
   };
 }
+
+const REMOTE_SEARCH_STOPWORDS = new Set([
+  'what',
+  'which',
+  'where',
+  'when',
+  'who',
+  'how',
+  'does',
+  'are',
+  'for',
+  'explain',
+  'especially',
+  'find',
+  'show',
+  'tell',
+  'about',
+  'that',
+  'this',
+  'with',
+  'from',
+  'the',
+  'and',
+  'project',
+]);
 
 function textToolResult(text: string) {
   return {

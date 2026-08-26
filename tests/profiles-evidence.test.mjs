@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
   assertMatchingRetrievalProfiles,
@@ -7,8 +10,14 @@ import {
   validateRetrievalProfileLock,
 } from '../dist/src/profiles/retrievalProfile.js';
 import { buildEvidenceIr, validateEvidenceIr } from '../dist/src/evidence/ir.js';
+import { compileComposeProject, verifyComposeProject } from '../dist/src/compiler/compile.js';
+import {
+  readLlamaIndexCompilerBundleManifest,
+  writeLlamaIndexCompilerBundle,
+} from '../dist/src/compiler/llamaindexArtifacts.js';
+import { analyzeSourceUnits } from '../dist/src/compiler/sourceAnalysis.js';
 
-const image = 'dkb-compiler-llamaindex:0.3.0';
+const image = 'dkb-compiler-llamaindex:0.3.6';
 
 function compilerResult(model, dimensions) {
   return {
@@ -100,4 +109,64 @@ test('Evidence IR stays embedding-free and preserves identity across profiles', 
   const broken = structuredClone(smallIr);
   broken.chunks[0].evidenceId = 'sha256:missing';
   assert.throws(() => validateEvidenceIr(broken), /missing evidence/i);
+});
+
+test('generated retrieval profile locks do not invalidate package source hashes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-profile-source-hash-'));
+  t.after(() => fs.rm(root, { force: true, recursive: true }));
+
+  await fs.writeFile(path.join(root, 'dkb.json'), `${JSON.stringify({
+    manifestVersion: 1,
+    type: 'package',
+    name: 'Profile hash proof',
+    package: 'profile-hash-proof',
+    version: '1.0.0',
+    permissions: { read: true, write: false },
+  }, null, 2)}\n`, 'utf8');
+  await fs.writeFile(path.join(root, 'knowledge.md'), '# Proof\n\nStable source text.\n', 'utf8');
+
+  await compileComposeProject(root, { compiler: 'native', force: true });
+  await fs.writeFile(path.join(root, 'dkb-profile.lock.json'), '{"generated":"derived"}\n', 'utf8');
+
+  const verification = await verifyComposeProject(root);
+  assert.equal(verification.ok, true, JSON.stringify(verification.checks));
+});
+
+test('compiler bundles serialize compact Float32 embeddings as portable JSON arrays', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-float32-bundle-'));
+  t.after(() => fs.rm(root, { force: true, recursive: true }));
+  const result = compilerResult('BAAI/bge-small-en-v1.5', 384);
+  result.records[0].embedding = Float32Array.from(result.records[0].embedding);
+
+  await writeLlamaIndexCompilerBundle(root, result, { writeAggregate: false });
+
+  const manifest = await readLlamaIndexCompilerBundleManifest(root);
+  const shard = JSON.parse(await fs.readFile(path.join(root, manifest.sources[0].recordsPath), 'utf8'));
+  assert.equal(Array.isArray(shard.records[0].embedding), true);
+  assert.equal(shard.records[0].embedding.length, 384);
+});
+
+test('large package source analysis skips unbounded all-pairs lexical graphs', () => {
+  const units = Array.from({ length: 5_001 }, (_, index) => ({
+    id: `chunk-${index.toString().padStart(5, '0')}`,
+    assetId: `asset-${index.toString().padStart(5, '0')}`,
+    dkbId: 'large-package',
+    storeId: 'files',
+    type: 'filesystem',
+    locator: { path: `file-${index}.txt` },
+    assetLocator: { path: `file-${index}.txt` },
+    title: `Source ${index}`,
+    text: 'Every record shares the same rarekeyword marker.',
+    keywords: ['rarekeyword'],
+    capabilities: { read: true, search: true },
+    hash: `sha256:${index}`,
+    updatedAt: '2026-08-25T00:00:00.000Z',
+    chunkOrdinal: 0,
+    chunkStart: 0,
+    chunkEnd: 49,
+  }));
+
+  const analysis = analyzeSourceUnits(units);
+  assert.equal(analysis.sourceUnits.length, 5_001);
+  assert.equal(analysis.sourceEdges.length, 0);
 });

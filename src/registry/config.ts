@@ -4,13 +4,15 @@ import path from 'node:path';
 import { DkbError } from '../protocol/errors.js';
 
 export const DEFAULT_REGISTRY_URL = 'http://127.0.0.1:8000';
+export const DKB_FOLDER_CONFIG_PATH = '.dkb/config.json';
 
-export type RegistryUrlSource = 'argument' | 'environment' | 'config' | 'default';
+export type RegistryUrlSource = 'argument' | 'environment' | 'project' | 'user' | 'default';
 
 export interface ConfiguredRegistry {
   url: string;
   source: RegistryUrlSource;
   configPath: string;
+  root?: string;
 }
 
 export interface RegistryVerificationCheck {
@@ -33,10 +35,20 @@ interface DkbCliConfig {
   };
 }
 
+interface RegistryConfigurationOptions {
+  url?: string;
+  root?: string;
+  cwd?: string;
+}
+
 export function cliConfigPath(): string {
   return process.env.DKB_CLI_CONFIG
     ? path.resolve(process.env.DKB_CLI_CONFIG)
     : path.join(os.homedir(), '.dkb', 'config.json');
+}
+
+export function registryFolderConfigPath(root: string): string {
+  return path.join(path.resolve(root), ...DKB_FOLDER_CONFIG_PATH.split('/'));
 }
 
 export function normalizeRegistryUrl(value: string): string {
@@ -44,6 +56,12 @@ export function normalizeRegistryUrl(value: string): string {
 
   if (!raw) {
     throw new DkbError('Registry URL cannot be empty.');
+  }
+
+  const markdownLink = raw.match(/^\[([^\]]+)]\([^)]+\)$/);
+
+  if (markdownLink) {
+    throw new DkbError(`Registry URL was pasted as a Markdown link. Use the plain URL instead: ${markdownLink[1]}`);
   }
 
   const withProtocol = /^[a-z][a-z\d+\-.]*:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -66,29 +84,56 @@ export function normalizeRegistryUrl(value: string): string {
   return parsed.toString().replace(/\/+$/g, '');
 }
 
-export async function configuredRegistry(options: { url?: string } = {}): Promise<ConfiguredRegistry> {
-  const configPath = cliConfigPath();
+export async function configuredRegistry(options: RegistryConfigurationOptions = {}): Promise<ConfiguredRegistry> {
+  const projectRoot = options.root
+    ? path.resolve(options.root)
+    : await nearestRegistryRoot(options.cwd ?? process.cwd());
+  const projectConfigPath = projectRoot ? registryFolderConfigPath(projectRoot) : null;
+  const userConfigPath = cliConfigPath();
+  const preferredConfigPath = projectConfigPath ?? userConfigPath;
 
   if (options.url) {
-    return { url: normalizeRegistryUrl(options.url), source: 'argument', configPath };
+    return configuredResult(normalizeRegistryUrl(options.url), 'argument', preferredConfigPath, projectRoot);
   }
 
   if (process.env.DKB_REGISTRY_URL) {
-    return { url: normalizeRegistryUrl(process.env.DKB_REGISTRY_URL), source: 'environment', configPath };
+    return configuredResult(normalizeRegistryUrl(process.env.DKB_REGISTRY_URL), 'environment', preferredConfigPath, projectRoot);
   }
 
-  const config = await readCliConfig(configPath);
-  const configuredUrl = config.registry?.url;
+  if (projectConfigPath) {
+    const projectConfig = await readCliConfig(projectConfigPath);
+    const projectUrl = projectConfig.registry?.url;
 
-  if (configuredUrl) {
-    return { url: normalizeRegistryUrl(configuredUrl), source: 'config', configPath };
+    if (projectUrl) {
+      return configuredResult(normalizeRegistryUrl(projectUrl), 'project', projectConfigPath, projectRoot);
+    }
   }
 
-  return { url: DEFAULT_REGISTRY_URL, source: 'default', configPath };
+  const userConfig = await readCliConfig(userConfigPath);
+  const userUrl = userConfig.registry?.url;
+
+  if (userUrl) {
+    return configuredResult(normalizeRegistryUrl(userUrl), 'user', userConfigPath, projectRoot);
+  }
+
+  return configuredResult(DEFAULT_REGISTRY_URL, 'default', preferredConfigPath, projectRoot);
 }
 
-export async function writeConfiguredRegistryUrl(url: string): Promise<ConfiguredRegistry> {
-  const configPath = cliConfigPath();
+export async function writeConfiguredRegistryUrl(url: string, options: {
+  root?: string;
+  cwd?: string;
+  global?: boolean;
+} = {}): Promise<ConfiguredRegistry> {
+  if (options.global && options.root) {
+    throw new DkbError('Registry configuration cannot use --global and --root together.');
+  }
+
+  const projectRoot = options.global
+    ? null
+    : options.root
+      ? await requireRegistryRoot(options.root)
+      : await nearestRegistryRoot(options.cwd ?? process.cwd());
+  const configPath = projectRoot ? registryFolderConfigPath(projectRoot) : cliConfigPath();
   const normalized = normalizeRegistryUrl(url);
   const config = await readCliConfig(configPath);
   const updated: DkbCliConfig = {
@@ -102,30 +147,28 @@ export async function writeConfiguredRegistryUrl(url: string): Promise<Configure
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
 
-  return { url: normalized, source: 'config', configPath };
+  return configuredResult(normalized, projectRoot ? 'project' : 'user', configPath, projectRoot);
 }
 
 export async function verifyRegistryEndpoint(url: string): Promise<RegistryVerification> {
   const normalized = normalizeRegistryUrl(url);
-  const checks: RegistryVerificationCheck[] = [];
+  const checks = await Promise.all([
+    jsonCheck(normalized, '/.well-known/dkb-registry-keys.json', 'public signing keys', true, (body) => {
+      if (!isObject(body) || !Array.isArray(body.keys)) {
+        return 'expected a keys array';
+      }
 
-  checks.push(await jsonCheck(normalized, '/.well-known/dkb-registry-keys.json', 'public signing keys', true, (body) => {
-    if (!isObject(body) || !Array.isArray(body.keys)) {
-      return 'expected a keys array';
-    }
+      return null;
+    }),
+    jsonCheck(normalized, '/api/registry/packages', 'package listing API', true, (body) => {
+      if (!isObject(body) || !Array.isArray(body.data)) {
+        return 'expected a data array';
+      }
 
-    return null;
-  }));
-
-  checks.push(await jsonCheck(normalized, '/api/registry/packages', 'package listing API', true, (body) => {
-    if (!isObject(body) || !Array.isArray(body.data)) {
-      return 'expected a data array';
-    }
-
-    return null;
-  }));
-
-  checks.push(await jsonCheck(normalized, '/health', 'health endpoint', false, () => null));
+      return null;
+    }),
+    jsonCheck(normalized, '/health', 'health endpoint', false, () => null),
+  ]);
 
   return {
     ok: checks.every((check) => check.ok || !check.required),
@@ -153,6 +196,58 @@ async function readCliConfig(configPath: string): Promise<DkbCliConfig> {
   }
 }
 
+async function nearestRegistryRoot(start: string): Promise<string | null> {
+  let current = path.resolve(start);
+
+  while (true) {
+    if (await isRegistryRoot(current)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+
+    if (parent === current) {
+      return null;
+    }
+
+    current = parent;
+  }
+}
+
+async function requireRegistryRoot(root: string): Promise<string> {
+  const resolved = path.resolve(root);
+
+  if (!(await isRegistryRoot(resolved))) {
+    throw new DkbError(`Not a DKB registry folder: ${resolved}. Expected a registry dkb.json.`);
+  }
+
+  return resolved;
+}
+
+async function isRegistryRoot(root: string): Promise<boolean> {
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(root, 'dkb.json'), 'utf8')) as unknown;
+
+    return isObject(manifest) && manifest.type === 'registry';
+  } catch {
+    return false;
+  }
+}
+
+function configuredResult(
+  url: string,
+  source: RegistryUrlSource,
+  configPath: string,
+  root: string | null,
+): ConfiguredRegistry {
+  return {
+    url,
+    source,
+    configPath,
+    ...(root ? { root } : {}),
+  };
+}
+
 async function jsonCheck(
   baseUrl: string,
   endpoint: string,
@@ -161,7 +256,9 @@ async function jsonCheck(
   validate: (body: unknown) => string | null,
 ): Promise<RegistryVerificationCheck> {
   try {
-    const response = await fetch(`${baseUrl}${endpoint}`);
+    const response = await fetch(`${baseUrl}${endpoint}`, {
+      signal: AbortSignal.timeout(5_000),
+    });
     const text = await response.text();
 
     if (!response.ok) {

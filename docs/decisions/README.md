@@ -1,0 +1,16 @@
+# DKB Decision Records
+
+Decision records preserve accepted architectural and product directions that
+may not be fully implemented yet. They complement behavior documentation; they
+do not override current source or test evidence.
+
+Statuses:
+
+- **Proposed**: under discussion.
+- **Accepted direction; implementation pending**: agreed target with unfinished work.
+- **Implemented**: acceptance gate passed in the current release.
+- **Superseded**: replaced by a later numbered decision.
+
+## Index
+
+- [0001 - CLI control plane and public-release gate](0001-cli-control-plane-and-release-gate.md) — Accepted direction; implementation pending.

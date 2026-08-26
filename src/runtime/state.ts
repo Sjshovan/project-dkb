@@ -4,7 +4,7 @@ import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '../signing/index.
 import { validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '../artifacts/manifest.js';
 import { compileComposeProject } from '../compiler/compile.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
-import { getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
+import { closeQueryContext, getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import { closeFaissSnapshot, validateFaissPackageQueryability, validateFaissRuntimeReady, type FaissPackageMutationResult } from '../indexes/faissStore.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { renderModelEvidence } from '../read/modelEvidence.js';
@@ -14,6 +14,7 @@ import { loadDkb, loadDkbPackage, loadRegistry } from '../protocol/manifest.js';
 import { DkbError } from '../protocol/errors.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 import type { DkbSourceManifest, LoadedDkb } from '../protocol/types.js';
+import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
 import {
   assertMatchingRetrievalProfiles,
   maybeReadRetrievalProfileLock,
@@ -44,6 +45,17 @@ export interface DkbRuntimeStatus {
     packageTreeHash?: string;
   }>;
   retrievalProfile: DkbRetrievalProfileLock | null;
+}
+
+export interface DkbRuntimePackageListing {
+  runtimeRoot: string;
+  packages: Array<{
+    id: string;
+    version: string;
+    status: 'installed' | 'installed_artifact' | 'incomplete';
+    recordCount?: number;
+    path: string;
+  }>;
 }
 
 export interface ImportDkbOptions {
@@ -147,6 +159,78 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     dkbIds,
     packages,
     retrievalProfile,
+  };
+}
+
+export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntimePackageListing> {
+  const paths = runtimePaths(stateRoot);
+  const candidates: string[] = [];
+  const lock = await maybeReadJsonObject(path.join(paths.stateRoot, 'dkb-lock.json'));
+  const lockPackages = lock && isRecord(lock.packages)
+    ? Object.values(lock.packages)
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+    : [];
+
+  try {
+    for (const topLevel of await fs.readdir(paths.vendorDir, { withFileTypes: true })) {
+      if (!topLevel.isDirectory() || topLevel.name.includes('.replace-')) {
+        continue;
+      }
+
+      const topPath = path.join(paths.vendorDir, topLevel.name);
+
+      if (await exists(path.join(topPath, 'dkb.json'))) {
+        candidates.push(topPath);
+        continue;
+      }
+
+      for (const nested of await fs.readdir(topPath, { withFileTypes: true })) {
+        if (!nested.isDirectory() || nested.name.includes('.replace-')) {
+          continue;
+        }
+
+        const nestedPath = path.join(topPath, nested.name);
+
+        if (await exists(path.join(nestedPath, 'dkb.json'))) {
+          candidates.push(nestedPath);
+        }
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const packages = await Promise.all(candidates.map(async (packagePath) => {
+    const manifest = await maybeReadJsonObject(path.join(packagePath, 'dkb.json')) ?? {};
+    const packageName = typeof manifest.package === 'string' ? manifest.package.split('/').pop() : null;
+    const id = packageName || path.basename(packagePath);
+    const relativePath = path.relative(paths.stateRoot, packagePath).replace(/\\/g, '/');
+    const lockEntry = lockPackages.find((item) => (
+      item.id === id
+      || item.installedPath === relativePath
+      || (typeof item.resolved === 'string' && item.resolved.includes(`:${id}@`))
+    ));
+    const compiledArtifact = await exists(path.join(packagePath, DKB_ARTIFACTS_DIR, 'dkb-artifact.json'));
+    const vendorDepth = path.relative(paths.vendorDir, packagePath).split(path.sep).filter(Boolean).length;
+
+    return {
+      id,
+      version: typeof manifest.version === 'string' ? manifest.version : '-',
+      status: lockEntry
+        ? 'installed' as const
+        : compiledArtifact && vendorDepth === 1
+          ? 'installed_artifact' as const
+          : 'incomplete' as const,
+      ...(typeof lockEntry?.recordCount === 'number' ? { recordCount: lockEntry.recordCount } : {}),
+      path: packagePath,
+    };
+  }));
+
+  return {
+    runtimeRoot: paths.stateRoot,
+    packages: packages.sort((left, right) => left.id.localeCompare(right.id)),
   };
 }
 
@@ -371,6 +455,8 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
   const registryId = await runtimeRegistryId(paths);
   const total = packageRoots.length + 3;
   let completed = 0;
+  const uninstallRoot = path.join(paths.stateDir, 'tmp', `uninstall-${safeId(id)}-${process.pid}-${Date.now().toString(36)}`);
+  const stagedPackages: Array<{ originalPath: string; stagedPath: string }> = [];
 
   options.progress?.(progressStart({
     phase: 'uninstall',
@@ -379,8 +465,26 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
     unit: 'steps',
   }));
 
-  await Promise.all(packageRoots.map(async (packagePath) => {
-    await fs.rm(packagePath, { recursive: true, force: true });
+  await closeRuntimeQuerySnapshot(paths.stateRoot);
+  await fs.mkdir(uninstallRoot, { recursive: true });
+
+  try {
+    for (const [index, packagePath] of packageRoots.entries()) {
+      const stagedPath = path.join(uninstallRoot, `${index}-${path.basename(packagePath)}`);
+
+      await fs.rename(packagePath, stagedPath);
+      stagedPackages.push({ originalPath: packagePath, stagedPath });
+      completed += 1;
+      options.progress?.(progressUpdate({
+        phase: 'uninstall',
+        label: 'Uninstall package',
+        value: completed,
+        total,
+        unit: 'steps',
+      }));
+    }
+
+    await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false });
     completed += 1;
     options.progress?.(progressUpdate({
       phase: 'uninstall',
@@ -389,50 +493,50 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
       total,
       unit: 'steps',
     }));
-  }));
-  await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false });
-  completed += 1;
-  options.progress?.(progressUpdate({
-    phase: 'uninstall',
-    label: 'Uninstall package',
-    value: completed,
-    total,
-    unit: 'steps',
-  }));
-  await removeRuntimeDependencyEntries(paths.stateRoot, id, packageRoots);
-  completed += 1;
-  options.progress?.(progressUpdate({
-    phase: 'uninstall',
-    label: 'Uninstall package',
-    value: completed,
-    total,
-    unit: 'steps',
-  }));
-  invalidateRuntimeQuerySnapshot(paths.stateRoot);
-  const remaining = await validateFaissRuntimeReady({ root: paths.stateRoot, registryId }).catch(() => null);
-  completed += 1;
-  options.progress?.(progressUpdate({
-    phase: 'uninstall',
-    label: 'Uninstall package',
-    value: completed,
-    total,
-    unit: 'steps',
-  }));
-  options.progress?.(progressFinish({
-    phase: 'uninstall',
-    label: 'Uninstall package',
-    total,
-    unit: 'steps',
-  }));
+    await removeRuntimeDependencyEntries(paths.stateRoot, id, packageRoots);
+    completed += 1;
+    options.progress?.(progressUpdate({
+      phase: 'uninstall',
+      label: 'Uninstall package',
+      value: completed,
+      total,
+      unit: 'steps',
+    }));
+    const remaining = await validateFaissRuntimeReady({ root: paths.stateRoot, registryId }).catch(() => null);
+    completed += 1;
+    options.progress?.(progressUpdate({
+      phase: 'uninstall',
+      label: 'Uninstall package',
+      value: completed,
+      total,
+      unit: 'steps',
+    }));
+    await fs.rm(uninstallRoot, { recursive: true, force: true });
+    options.progress?.(progressFinish({
+      phase: 'uninstall',
+      label: 'Uninstall package',
+      total,
+      unit: 'steps',
+    }));
 
-  return {
-    status: 'removed',
-    id,
-    registryPath: paths.stateRoot,
-    search: {
-      removed: remaining ? [remaining] : [],
-    },
-  };
+    return {
+      status: 'removed',
+      id,
+      registryPath: paths.stateRoot,
+      search: {
+        removed: remaining ? [remaining] : [],
+      },
+    };
+  } catch (error) {
+    for (const item of stagedPackages.reverse()) {
+      if (await exists(item.stagedPath) && !(await exists(item.originalPath))) {
+        await fs.rename(item.stagedPath, item.originalPath).catch(() => undefined);
+      }
+    }
+    await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot, { syncSearch: false }).catch(() => undefined);
+    invalidateRuntimeQuerySnapshot(paths.stateRoot);
+    throw error;
+  }
 }
 
 export async function compileRuntimeDkb(id?: string, stateRoot?: string) {
@@ -517,6 +621,20 @@ export function invalidateRuntimeQuerySnapshot(stateRoot?: string): number {
   const removed = runtimeQueryContexts.delete(root) ? 1 : 0;
   void closeFaissSnapshot(context?.faiss);
   invalidateQueryContext(root);
+
+  return removed;
+}
+
+async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
+  const root = path.resolve(stateRoot);
+  const context = runtimeQueryContexts.get(root);
+  const removed = runtimeQueryContexts.delete(root) ? 1 : 0;
+  const residentClosed = await closeQueryContext(root);
+
+  if (context && residentClosed === 0) {
+    context.lexical?.close();
+    await closeFaissSnapshot(context.faiss);
+  }
 
   return removed;
 }

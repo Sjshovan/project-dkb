@@ -136,6 +136,23 @@ export function invalidateQueryContext(root?: string): number {
   return removed;
 }
 
+export async function closeQueryContext(root?: string): Promise<number> {
+  const resolvedRoot = root ? path.resolve(root) : undefined;
+  const contexts = [...residentContexts.entries()]
+    .filter(([, context]) => !resolvedRoot || context.root === resolvedRoot);
+
+  for (const [key] of contexts) {
+    residentContexts.delete(key);
+  }
+
+  await Promise.all(contexts.map(async ([, context]) => {
+    context.lexical?.close();
+    await closeFaissSnapshot(context.faiss);
+  }));
+
+  return contexts.length;
+}
+
 export async function queryArtifactHash(root: string): Promise<string> {
   const lockPath = manifestPath(root, 'dkb-lock.json');
   const lock = await maybeReadFile(lockPath);

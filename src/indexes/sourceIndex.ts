@@ -400,33 +400,38 @@ export function sourceUnitId(input: {
 }
 
 export function sourceAssetsFromChunks(units: IndexedSourceUnit[]): IndexedSourceAsset[] {
-  const assets = new Map<string, IndexedSourceAsset>();
+  const grouped = new Map<string, { anchor: IndexedSourceUnit; hashes: string[] }>();
 
   for (const unit of units) {
     const key = `${unit.dkbId}/${unit.assetId}`;
-    const current = assets.get(key);
+    const current = grouped.get(key);
 
-    if (!current || unit.chunkOrdinal < (units.find((candidate) => candidate.assetId === current.id)?.chunkOrdinal ?? Number.MAX_SAFE_INTEGER)) {
-      assets.set(key, {
-        id: unit.assetId,
-        dkbId: unit.dkbId,
-        storeId: unit.storeId,
-        type: unit.type,
-        locator: unit.assetLocator,
-        title: unit.heading ? unit.title.replace(` - ${unit.heading}`, '') : unit.title,
-        hash: stableHash({
-          assetId: unit.assetId,
-          chunks: units
-            .filter((candidate) => candidate.dkbId === unit.dkbId && candidate.assetId === unit.assetId)
-            .map((candidate) => candidate.hash)
-            .sort(),
-        }),
-        updatedAt: unit.updatedAt,
-      });
+    if (!current) {
+      grouped.set(key, { anchor: unit, hashes: [unit.hash] });
+      continue;
+    }
+
+    current.hashes.push(unit.hash);
+    if (unit.chunkOrdinal < current.anchor.chunkOrdinal) {
+      current.anchor = unit;
     }
   }
 
-  return [...assets.values()].sort((left, right) => left.dkbId.localeCompare(right.dkbId) || left.id.localeCompare(right.id));
+  return [...grouped.values()]
+    .map(({ anchor, hashes }) => ({
+      id: anchor.assetId,
+      dkbId: anchor.dkbId,
+      storeId: anchor.storeId,
+      type: anchor.type,
+      locator: anchor.assetLocator,
+      title: anchor.heading ? anchor.title.replace(` - ${anchor.heading}`, '') : anchor.title,
+      hash: stableHash({
+        assetId: anchor.assetId,
+        chunks: hashes.sort(),
+      }),
+      updatedAt: anchor.updatedAt,
+    }))
+    .sort((left, right) => left.dkbId.localeCompare(right.dkbId) || left.id.localeCompare(right.id));
 }
 
 export function capabilitiesForSourceType(type: DkbStoreType): KnowledgeCapabilityProfile {

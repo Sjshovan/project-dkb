@@ -107,11 +107,13 @@ Operational commands:
 The CLI presentation layer is intentionally outside the compiler/runtime
 contract. Interactive terminals receive a single indeterminate spinner plus a
 durable summary for compiler, package, and artifact phases. Package download,
-archive extraction, artifact file verification, activation, and local uninstall
-show determinate bars only when the code has real byte/file/step totals.
-`--json`, `--no-progress`, and non-TTY output remain plain JSON with no
-ANSI/spinner/progress-bar output. DKB does not display percentages for Docker,
-compiler, registry, or artifact phases unless that phase exposes a real total.
+archive verification, single-pass extraction, artifact file verification,
+retrieval validation, activation, and local uninstall expose distinct phases.
+Determinate bars appear only when the code has a real byte/file/step total.
+`--no-progress` and non-TTY output keep concise human-readable results without
+ANSI animation. Only explicit `--json` selects machine-readable output. DKB does
+not display invented percentages for Docker, compiler, registry, or artifact
+phases that do not expose a real total.
 
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to use the one-shot compiler container path.
 If the pinned image is missing or lacks the current service label, DKB rebuilds
