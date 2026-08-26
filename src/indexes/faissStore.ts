@@ -314,8 +314,13 @@ export async function searchFaissSnapshot(
   snapshot: FaissRuntimeSnapshot,
   query: string,
   limit: number,
+  embedQuery: (query: string) => Promise<number[]>,
 ): Promise<FaissSearchResult> {
-  const vector = await embedFastEmbedQuery(query, snapshot.embedding);
+  const vector = await embedQuery(query);
+
+  if (vector.length !== snapshot.embedding.dimensions) {
+    throw new DkbError(`Query embedding dimension mismatch: expected ${snapshot.embedding.dimensions}, got ${vector.length}`);
+  }
   const helperResult = await snapshot.helper.search(vector, limit);
 
   return {
@@ -603,37 +608,6 @@ function faissNumericIdFor(packageId: string, version: string, chunkId: string):
   }
 
   return value.toString(10);
-}
-
-async function embedFastEmbedQuery(query: string, profile: FaissEmbeddingProfile): Promise<number[]> {
-  const url = process.env.DKB_QUERY_EMBEDDER_URL;
-
-  if (!url) {
-    throw new DkbError('DKB_QUERY_EMBEDDER_URL is required for FAISS retrieval so queries use the same FastEmbed model as compiled packages.');
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ texts: [query] }),
-    signal: AbortSignal.timeout(FAISS_HELPER_TIMEOUT_MS),
-  });
-  const body = await response.json() as { model?: unknown; vectors?: unknown };
-  const vector = Array.isArray(body.vectors) && Array.isArray(body.vectors[0])
-    ? body.vectors[0]
-    : null;
-
-  if (!response.ok || !vector || !vector.every((value) => typeof value === 'number')) {
-    throw new DkbError(`FastEmbed query sidecar failed for FAISS retrieval (${response.status})`);
-  }
-  if (vector.length !== profile.dimensions) {
-    throw new DkbError(`FastEmbed query vector dimension mismatch: expected ${profile.dimensions}, got ${vector.length}`);
-  }
-  if (typeof body.model === 'string' && body.model !== profile.model) {
-    throw new DkbError(`FastEmbed query model mismatch: expected ${profile.model}, got ${body.model}`);
-  }
-
-  return vector;
 }
 
 class FaissHelperClient {

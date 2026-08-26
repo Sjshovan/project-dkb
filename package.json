@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
+    "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
     "dkb": "node dist/src/cli/index.js",
     "mcp": "node dist/src/cli/index.js mcp serve"
   },

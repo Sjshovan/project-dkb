@@ -265,8 +265,7 @@ export async function importDkbIntoRuntime(options: ImportDkbOptions, stateRoot?
     ? undefined
     : await compileComposeProject(paths.stateRoot, {
       force: true,
-      compiler: 'llamaindex',
-      model: (await maybeReadRetrievalProfileLock(paths.stateRoot))?.profile.embedding.model,
+      mode: 'library',
     });
   // A precompiled package still needs its chunks and vectors activated in the
   // shared runtime catalog. Skipping compilation must never mean skipping
@@ -570,11 +569,9 @@ export async function compileRuntimeDkb(id?: string, stateRoot?: string) {
     throw new DkbError(`Runtime DKB is not installed: ${id}`);
   }
 
-  const profile = await maybeReadRetrievalProfileLock(paths.stateRoot);
   const compiled = await compileComposeProject(paths.stateRoot, {
     force: true,
-    compiler: 'llamaindex',
-    model: profile?.profile.embedding.model,
+    mode: 'library',
   });
   invalidateRuntimeQuerySnapshot(paths.stateRoot);
 
@@ -658,6 +655,7 @@ async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
   if (context && residentClosed === 0) {
     context.lexical?.close();
     await closeFaissSnapshot(context.faiss);
+    await context.providerHost.dispose();
   }
 
   return removed;

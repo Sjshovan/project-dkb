@@ -1553,142 +1553,215 @@ program
     });
   });
 
+const plugin = program
+  .command('plugin')
+  .description('Manage trusted filesystem plugins for this Library or the current user');
+
+plugin
+  .command('add')
+  .description('Copy a plugin directory into DKB plugin storage')
+  .argument('<source>', 'Plugin directory, or its plugin.mjs entrypoint')
+  .option('--root <path>', 'Library or Runtime root', '.')
+  .option('--global', 'Install for the current user instead of this Library')
+  .action(async (source: string, options: { root: string; global?: boolean }) => {
+    const { addPlugin } = await import('../providers/management.js');
+    await presenter().run('Adding plugin', async () => addPlugin({
+      root: path.resolve(options.root),
+      source,
+      scope: options.global ? 'global' : 'local',
+    }), summarizePluginMutation);
+  });
+
+plugin
+  .command('link')
+  .description('Link a development plugin into DKB plugin storage')
+  .argument('<source>', 'Plugin directory, or its plugin.mjs entrypoint')
+  .option('--root <path>', 'Library or Runtime root', '.')
+  .option('--global', 'Link for the current user instead of this Library')
+  .action(async (source: string, options: { root: string; global?: boolean }) => {
+    const { linkPlugin } = await import('../providers/management.js');
+    await presenter().run('Linking plugin', async () => linkPlugin({
+      root: path.resolve(options.root),
+      source,
+      scope: options.global ? 'global' : 'local',
+    }), summarizePluginMutation);
+  });
+
+plugin
+  .command('remove')
+  .description('Remove an unselected plugin from DKB plugin storage')
+  .argument('<id>', 'Namespaced plugin id, such as @team/provider')
+  .option('--root <path>', 'Library or Runtime root', '.')
+  .option('--global', 'Remove from current-user storage instead of this Library')
+  .action(async (id: string, options: { root: string; global?: boolean }) => {
+    const { removePlugin } = await import('../providers/management.js');
+    await presenter().run('Removing plugin', async () => removePlugin({
+      root: path.resolve(options.root),
+      id,
+      scope: options.global ? 'global' : 'local',
+    }), summarizePluginMutation);
+  });
+
+plugin
+  .command('list')
+  .description('List local, current-user, and bundled plugins')
+  .argument('[path]', 'Library or Runtime root', '.')
+  .action(async (target: string) => {
+    const { listPlugins } = await import('../providers/management.js');
+    presenter().print(await listPlugins({ root: path.resolve(target) }), summarizePluginList);
+  });
+
+const pipeline = program
+  .command('pipeline')
+  .description('Inspect, select, and verify the provider pipeline');
+
+pipeline
+  .command('show')
+  .description('Show the resolved target, providers, precedence, and build digest')
+  .argument('[path]', 'Library or Runtime root', '.')
+  .option('--target <name>', 'Show a configured target other than the active target')
+  .action(async (target: string, options: { target?: string }) => {
+    const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
+      import('../providers/host.js'),
+      import('../providers/bundled.js'),
+    ]);
+    const host = await DkbProviderHost.create({ root: path.resolve(target), target: options.target, bundled: BUNDLED_PROVIDER_PLUGINS });
+
+    try {
+      presenter().print(host.describe(), summarizePipeline);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+pipeline
+  .command('set')
+  .description('Validate and atomically save a complete pipeline target')
+  .argument('<name>', 'Target name')
+  .option('--root <path>', 'Library or Runtime root', '.')
+  .option('--ingestion <id>', 'Fused ingestion provider')
+  .option('--parser <id>', 'Parser provider; requires --chunker')
+  .option('--chunker <id>', 'Chunker provider; requires --parser')
+  .requiredOption('--embedding <id>', 'Document and query embedding provider')
+  .requiredOption('--index <id>', 'Packaged or managed index provider')
+  .requiredOption('--retrieval <id>', 'Retrieval and ranking provider')
+  .option('--processor <ids...>', 'Ordered processor plugin ids')
+  .option('--provider-options <json>', 'Provider options object keyed by plugin id')
+  .option('--no-activate', 'Save the target without making it active')
+  .action(async (name: string, options: {
+    root: string;
+    ingestion?: string;
+    parser?: string;
+    chunker?: string;
+    embedding: string;
+    index: string;
+    retrieval: string;
+    processor?: string[];
+    providerOptions?: string;
+    activate: boolean;
+  }) => {
+    if (Boolean(options.ingestion) === Boolean(options.parser || options.chunker)) {
+      throw new DkbError('Select either --ingestion or both --parser and --chunker.');
+    }
+    if (!options.ingestion && (!options.parser || !options.chunker)) {
+      throw new DkbError('--parser and --chunker must be selected together.');
+    }
+    const providerOptions = options.providerOptions
+      ? parseJsonObject(options.providerOptions, '--provider-options') as Record<string, Record<string, unknown>>
+      : {};
+    const { setPipelineTarget } = await import('../providers/management.js');
+    await presenter().run('Updating pipeline', async () => setPipelineTarget({
+      root: path.resolve(options.root),
+      name,
+      activate: options.activate,
+      patch: {
+        ...(options.ingestion ? { ingestion: options.ingestion } : { parser: options.parser, chunker: options.chunker }),
+        embedding: options.embedding,
+        index: options.index,
+        retrieval: options.retrieval,
+        processors: options.processor ?? [],
+        options: providerOptions,
+      },
+    }), summarizePipeline);
+  });
+
+pipeline
+  .command('verify')
+  .description('Load the selected providers and report their health')
+  .argument('[path]', 'Library or Runtime root', '.')
+  .option('--target <name>', 'Verify a configured target other than the active target')
+  .action(async (target: string, options: { target?: string }) => {
+    const { verifyPipeline } = await import('../providers/management.js');
+    const result = await presenter().check('Pipeline verification', async () => verifyPipeline({
+      root: path.resolve(target),
+      ...(options.target ? { target: options.target } : {}),
+    }), (value) => value.ok, summarizePipelineVerification);
+
+    if (!result.ok) {
+      process.exitCode = 1;
+    }
+  });
+
 program
   .command('compile')
-  .description('Compile a DKB or Library')
+  .description('Compile a DKB or Library with its selected pipeline target')
   .argument('<path>', 'Directory containing dkb.json')
   .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
-  .option('--compiler <name>', 'Compiler profile: native or llamaindex', 'native')
-  .option('--artifact-profile <name>', 'Artifact profile: full or faiss-package', 'full')
-  .option('--model <name>', 'FastEmbed model for the Library retrieval profile')
-  .action(async (target: string, options: { force?: boolean; compiler: string; artifactProfile: string; model?: string }) => {
+  .option('--target <name>', 'Configured pipeline target')
+  .action(async (target: string, options: { force?: boolean; target?: string }) => {
     const { compileComposeProject } = await import('../compiler/compile.js');
-    if (options.compiler !== 'native' && options.compiler !== 'llamaindex') {
-      throw new DkbError(`Unknown compiler profile ${options.compiler}. Expected native or llamaindex.`);
-    }
-    if (options.artifactProfile !== 'full' && options.artifactProfile !== 'faiss-package') {
-      throw new DkbError(`Unknown artifact profile ${options.artifactProfile}. Expected full or faiss-package.`);
-    }
-    const compiler = options.compiler;
-    const artifactProfile = options.artifactProfile;
+    const manifest = await loadManifest(path.resolve(target));
 
     await presenter().run(`Compiling ${path.resolve(target)}`, async () => compileComposeProject(target, {
       force: Boolean(options.force),
-      compiler,
-      artifactProfile,
-      model: options.model,
+      mode: manifest.type === 'dkb' ? 'package' : 'library',
+      ...(options.target ? { target: options.target } : {}),
     }), summarizeCompileResult);
-  });
-
-const profile = program
-  .command('profile')
-  .description('Inspect or atomically migrate the Library retrieval profile');
-
-profile
-  .command('show')
-  .description('Show configured and compiled retrieval profile details')
-  .argument('[path]', 'Library, Collection, or DKB root', '.')
-  .action(async (target: string) => {
-    const root = path.resolve(target);
-    const [{ loadCompose }, profileModule] = await Promise.all([
-      import('../protocol/manifest.js'),
-      import('../profiles/retrievalProfile.js'),
-    ]);
-    const registry = await loadCompose(root);
-    const configured = profileModule.resolveLibraryRetrievalProfile(registry);
-    const lock = await profileModule.maybeReadRetrievalProfileLock(root);
-
-    printJson({
-      root,
-      configured,
-      compiled: lock,
-      supportedModels: profileModule.supportedRetrievalModels(),
-    });
-  });
-
-profile
-  .command('plan')
-  .description('Plan a whole-Library profile recompile without changing files')
-  .argument('[path]', 'Library root', '.')
-  .requiredOption('--model <name>', 'Target FastEmbed model')
-  .action(async (target: string, options: { model: string }) => {
-    const { planRetrievalProfileMigration } = await import('../profiles/migration.js');
-
-    printJson(await planRetrievalProfileMigration(target, options.model));
-  });
-
-profile
-  .command('migrate')
-  .description('Compile every package in staging and atomically activate the target profile')
-  .argument('[path]', 'Library root', '.')
-  .requiredOption('--model <name>', 'Target FastEmbed model')
-  .option('--yes', 'Confirm the whole-Library recompile')
-  .action(async (target: string, options: { model: string; yes?: boolean }) => {
-    const { migrateRetrievalProfile } = await import('../profiles/migration.js');
-
-    await presenter().run('Migrating retrieval profile', async () => migrateRetrievalProfile(target, options.model, { confirmed: Boolean(options.yes) }));
   });
 
 program
   .command('compiler')
-  .description('Use the standalone LlamaIndex/FastEmbed/Docling local compiler without starting a DKB runtime')
+  .description('Manage the selected ingestion provider service')
   .addCommand(new Command('inspect')
-    .description('Report whether the standalone LlamaIndex compiler image and local service are available')
-    .action(async () => {
-      const { inspectLlamaIndexCompiler } = await import('../compiler/llamaindex.js');
-      presenter().print(await inspectLlamaIndexCompiler(), summarizeCompilerStatus);
+    .description('Inspect the selected ingestion provider')
+    .option('--root <path>', 'Library or Runtime root', '.')
+    .option('--target <name>', 'Configured pipeline target')
+    .action(async (options: { root: string; target?: string }) => {
+      presenter().print(await runIngestionLifecycle(options.root, options.target, 'inspect'), summarizeCompilerStatus);
     }))
   .addCommand(new Command('start')
-    .description('Start or reuse the warm local LlamaIndex compiler service')
-    .option('--restart', 'Replace any existing compiler service container')
-    .action(async (options: { restart?: boolean }) => {
-      const { startLlamaIndexCompilerService } = await import('../compiler/llamaindex.js');
-      await presenter().run('Starting compiler service', async () => startLlamaIndexCompilerService({ forceRestart: Boolean(options.restart) }), summarizeCompilerStatus);
+    .description('Start or reuse the selected ingestion provider service')
+    .option('--root <path>', 'Library or Runtime root', '.')
+    .option('--target <name>', 'Configured pipeline target')
+    .option('--restart', 'Replace any existing provider service')
+    .action(async (options: { root: string; target?: string; restart?: boolean }) => {
+      await presenter().run('Starting ingestion service', async () => runIngestionLifecycle(options.root, options.target, 'start', { restart: Boolean(options.restart) }), summarizeCompilerStatus);
     }))
   .addCommand(new Command('status')
-    .description('Show warm local LlamaIndex compiler service status')
-    .action(async () => {
-      const { compilerServiceStatus } = await import('../compiler/llamaindex.js');
-      presenter().print(await compilerServiceStatus(), summarizeCompilerStatus);
+    .description('Show selected ingestion provider service status')
+    .option('--root <path>', 'Library or Runtime root', '.')
+    .option('--target <name>', 'Configured pipeline target')
+    .action(async (options: { root: string; target?: string }) => {
+      presenter().print(await runIngestionLifecycle(options.root, options.target, 'status'), summarizeCompilerStatus);
     }))
   .addCommand(new Command('stop')
-    .description('Stop the warm local LlamaIndex compiler service')
-    .action(async () => {
-      const { stopLlamaIndexCompilerService } = await import('../compiler/llamaindex.js');
-      await presenter().run('Stopping compiler service', async () => stopLlamaIndexCompilerService(), summarizeCompilerStatus);
+    .description('Stop the selected ingestion provider service')
+    .option('--root <path>', 'Library or Runtime root', '.')
+    .option('--target <name>', 'Configured pipeline target')
+    .action(async (options: { root: string; target?: string }) => {
+      await presenter().run('Stopping ingestion service', async () => runIngestionLifecycle(options.root, options.target, 'stop'), summarizeCompilerStatus);
     }))
   .addCommand(new Command('doctor')
-    .description('Diagnose Docker/image/service readiness for the warm compiler')
-    .action(async () => {
-      const { doctorLlamaIndexCompilerService } = await import('../compiler/llamaindex.js');
-      const result = await doctorLlamaIndexCompilerService();
+    .description('Diagnose selected ingestion provider readiness')
+    .option('--root <path>', 'Library or Runtime root', '.')
+    .option('--target <name>', 'Configured pipeline target')
+    .action(async (options: { root: string; target?: string }) => {
+      const result = await runIngestionLifecycle(options.root, options.target, 'doctor') as { ok?: unknown };
       presenter().print(result, summarizeCompilerStatus);
 
       if (!result.ok) {
         process.exitCode = 1;
       }
-    }))
-  .addCommand(new Command('compile')
-    .description('Compile one DKB folder with LlamaIndex, Docling rich-file routing, and FastEmbed/ONNX')
-    .argument('<path>', 'Directory containing one DKB dkb.json manifest')
-    .option('--model <name>', 'FastEmbed model name')
-    .action(async (target: string, options: { model?: string }) => {
-      const root = path.resolve(target);
-      const dkb = await loadDkb(root);
-      const { compileDkbWithLlamaIndex } = await import('../compiler/llamaindex.js');
-      const outputPath = path.join(root, DKB_ARTIFACTS_DIR, 'llamaindex.compiler.json');
-
-      await presenter().run('Compiling package', async () => {
-        const result = await compileDkbWithLlamaIndex(dkb, { model: options.model });
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
-
-        return {
-          compiler: result.compiler,
-          recordCount: result.records.length,
-          outputPath,
-        };
-      }, summarizeCompilerCompileResult);
     }));
 
 program
@@ -2116,6 +2189,59 @@ function summarizeCompileResult(value: unknown): string[] {
     total ? `total: ${total}` : '',
     aggregate ? `artifact work: ${aggregate}` : '',
     typeof result.artifactManifestPath === 'string' ? `artifact: ${result.artifactManifestPath}` : '',
+  ];
+}
+
+function summarizePluginMutation(value: unknown): string[] {
+  const result = value as { id?: unknown; version?: unknown; scope?: unknown; path?: unknown; removed?: unknown };
+  return [
+    `plugin: ${String(result.id ?? '-')}`,
+    result.version ? `version: ${String(result.version)}` : '',
+    `scope: ${String(result.scope ?? 'local')}`,
+    typeof result.removed === 'boolean' ? `removed: ${result.removed ? 'yes' : 'not installed'}` : '',
+    typeof result.path === 'string' ? `path: ${result.path}` : '',
+  ];
+}
+
+function summarizePluginList(value: unknown): string[] {
+  const entries = Array.isArray(value) ? value : [];
+
+  return humanSummary({
+    plugins: entries.map((item) => {
+      const entry = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      return {
+        id: entry.id ?? '-',
+        version: entry.version ?? '-',
+        scope: entry.scope ?? '-',
+        selected: entry.selected ? 'yes' : '',
+        status: entry.valid ? 'ready' : 'invalid',
+      };
+    }),
+  });
+}
+
+function summarizePipeline(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const providers = Array.isArray(result.providers) ? result.providers : [];
+  const processors = Array.isArray(result.processors) ? result.processors : [];
+
+  return [
+    `target: ${String(result.target ?? '-')}`,
+    typeof result.root === 'string' ? `context: ${result.root}` : '',
+    typeof result.configDigest === 'string' ? `configuration: ${result.configDigest}` : '',
+    typeof result.buildDigest === 'string' ? `build: ${result.buildDigest}` : '',
+    ...humanSummary({ providers: [...providers, ...processors] }),
+  ];
+}
+
+function summarizePipelineVerification(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const health = Array.isArray(result.health) ? result.health : [];
+  const pipeline = result.pipeline && typeof result.pipeline === 'object' ? result.pipeline as Record<string, unknown> : {};
+
+  return [
+    `target: ${String(pipeline.target ?? '-')}`,
+    ...humanSummary({ providers: health }),
   ];
 }
 
@@ -2565,6 +2691,48 @@ function parseLimit(value: string): number {
   }
 
   return limit;
+}
+
+async function runIngestionLifecycle(
+  root: string,
+  target: string | undefined,
+  operation: 'inspect' | 'start' | 'status' | 'stop' | 'doctor',
+  options?: { restart?: boolean },
+): Promise<unknown> {
+  const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
+    import('../providers/host.js'),
+    import('../providers/bundled.js'),
+  ]);
+  const host = await DkbProviderHost.create({ root: path.resolve(root), ...(target ? { target } : {}), bundled: BUNDLED_PROVIDER_PLUGINS });
+
+  try {
+    const provider = host.provider<import('../providers/types.js').DkbIngestionProvider>('ingestion');
+    const action = provider.lifecycle?.[operation];
+
+    if (!action) {
+      throw new DkbError(`Selected ingestion provider ${host.config.target.ingestion} does not support compiler ${operation}`);
+    }
+    return operation === 'start'
+      ? await (action as NonNullable<import('../providers/types.js').DkbProviderLifecycle['start']>)(options)
+      : await (action as () => Promise<unknown>)();
+  } finally {
+    await host.dispose();
+  }
+}
+
+function parseJsonObject(value: string, label: string): Record<string, unknown> {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch (error) {
+    throw new DkbError(`${label} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new DkbError(`${label} must be a JSON object`);
+  }
+
+  return parsed as Record<string, unknown>;
 }
 
 function humanStatus(value: unknown): string {

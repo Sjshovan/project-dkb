@@ -16,6 +16,7 @@ app = FastAPI()
 
 class EmbedRequest(BaseModel):
     texts: list[str]
+    mode: str = "document"
 
 @app.get("/health")
 def health():
@@ -23,4 +24,12 @@ def health():
 
 @app.post("/embed")
 def embed(request: EmbedRequest):
-    return {"model": MODEL, "vectors": Settings.embed_model.get_text_embedding_batch(request.texts)}
+    if request.mode == "query":
+        vectors = [Settings.embed_model.get_query_embedding(text) for text in request.texts]
+    elif request.mode == "document":
+        vectors = Settings.embed_model.get_text_embedding_batch(request.texts)
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="mode must be document or query")
+
+    return {"model": MODEL, "mode": request.mode, "vectors": vectors}

@@ -402,7 +402,6 @@ function normalizeLibraryManifest(root: string, manifest: DkbSourceManifest): Dk
     roots: manifest.roots ?? {},
     collectionOverrides: manifest.collectionOverrides,
     registry: manifest.registry,
-    retrievalProfile: manifest.retrievalProfile,
     meta: manifest.meta,
     extensions: manifest.extensions,
   };

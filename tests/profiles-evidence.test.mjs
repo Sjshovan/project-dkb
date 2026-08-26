@@ -125,7 +125,7 @@ test('generated retrieval profile locks do not invalidate package source hashes'
   }, null, 2)}\n`, 'utf8');
   await fs.writeFile(path.join(root, 'knowledge.md'), '# Proof\n\nStable source text.\n', 'utf8');
 
-  await compileComposeProject(root, { compiler: 'native', force: true });
+  await compileComposeProject(root, { mode: 'package', force: true });
   await fs.writeFile(path.join(root, 'dkb-profile.lock.json'), '{"generated":"derived"}\n', 'utf8');
 
   const verification = await verifyComposeProject(root);

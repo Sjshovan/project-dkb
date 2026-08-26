@@ -14,32 +14,27 @@ import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, Load
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
 import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
-import { compileDkbWithLlamaIndex } from './llamaindex.js';
+import type { LlamaIndexCompilerResult } from './llamaindex.js';
 import {
-  LLAMAINDEX_COMPILER_AGGREGATE_PATH,
-  LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
-  LLAMAINDEX_COMPILER_RECORDS_DIR,
-  readLlamaIndexCompilerBundleManifest,
   readLlamaIndexCompilerRecords,
   sourceUnitFromLlamaIndexRecord,
   writeLlamaIndexCompilerBundle,
   type LlamaIndexCompilerBundleManifest,
 } from './llamaindexArtifacts.js';
 import {
-  FAISS_CATALOG_PATH,
-  FAISS_MANIFEST_PATH,
-  FAISS_SEGMENT_PATH,
-  writeFaissPackageArtifacts,
-} from '../indexes/faissStore.js';
-import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
-  resolveLibraryRetrievalProfile,
+  resolveProviderRetrievalProfile,
   retrievalProfileLockForCompilerResults,
   writeRetrievalProfileLock,
   type DkbResolvedRetrievalProfile,
   type DkbRetrievalProfileLock,
 } from '../profiles/retrievalProfile.js';
 import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '../evidence/ir.js';
+import { BUNDLED_PROVIDER_PLUGINS, assertLlamaIndexNativeResult } from '../providers/bundled.js';
+import { DkbProviderHost } from '../providers/host.js';
+import { compileDkbWithProviderHost } from '../providers/runner.js';
+import type { DkbCompiledPipeline, DkbIndexProvider } from '../providers/types.js';
+import { loadFaissPackageArtifact } from '../indexes/faissStore.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
 export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;
@@ -94,9 +89,9 @@ export interface CompileComposeProfile {
 
 export interface CompileComposeProjectOptions {
   force?: boolean;
-  compiler?: 'native' | 'llamaindex';
-  artifactProfile?: 'full' | 'faiss-package';
-  model?: string;
+  mode?: 'library' | 'package';
+  target?: string;
+  contextRoot?: string;
 }
 
 export interface VerifyComposeProjectResult {
@@ -142,7 +137,8 @@ interface AtomicCompileArtifactTimings {
 interface CompilerArtifactState {
   dkb: LoadedDkb;
   dkbRoot: string;
-  result: Awaited<ReturnType<typeof compileDkbWithLlamaIndex>>;
+  result: LlamaIndexCompilerResult;
+  compiled: DkbCompiledPipeline;
 }
 
 interface RegistryCompileState {
@@ -152,6 +148,7 @@ interface RegistryCompileState {
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
   compilerArtifacts: CompilerArtifactState[];
   retrievalProfileLock?: DkbRetrievalProfileLock;
+  providerHost?: DkbProviderHost;
 }
 
 interface QuickSourceSnapshot {
@@ -222,9 +219,8 @@ export async function compileComposeProject(root: string, options: CompileCompos
   return withCompileLock(resolvedRoot, async () => {
     const totalStart = performance.now();
     const registry = await loadCompose(resolvedRoot);
-    const desiredProfile = options.compiler === 'llamaindex'
-      ? resolveLibraryRetrievalProfile(registry, options.model)
-      : undefined;
+    const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
+    const desiredProfile = await resolvedProviderProfile(contextRoot, options.target);
     const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
     const lockPath = artifactLockPath(resolvedRoot);
     const sourceSnapshotStart = performance.now();
@@ -235,8 +231,11 @@ export async function compileComposeProject(root: string, options: CompileCompos
       ...registry.collections.flatMap((collection) => collection.dkbs),
       ...registry.dkbs,
     ]);
-    const packageProfileNeedsInitialBundle = await needsInitialFaissPackageBundle(resolvedRoot, options, allDkbs);
-    const cached = options.force || options.model || packageProfileNeedsInitialBundle
+    const existingProfile = await import('../profiles/retrievalProfile.js').then((module) => module.maybeReadRetrievalProfileLock(resolvedRoot));
+    const profileDrift = !existingProfile
+      || existingProfile.profile.configDigest !== desiredProfile.configDigest
+      || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;
+    const cached = options.force || profileDrift
       ? null
       : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, chunkIndexPath, lockPath);
     const cacheLookupMs = elapsedMs(cacheLookupStart);
@@ -258,40 +257,42 @@ export async function compileComposeProject(root: string, options: CompileCompos
     }
 
     const collectStateStart = performance.now();
-    const state = await collectRegistryState(registry, options.compiler ?? 'native', desiredProfile);
+    const state = await collectRegistryState(registry, desiredProfile, contextRoot);
     const collectStateMs = elapsedMs(collectStateStart);
 
-    const aggregateStart = performance.now();
-    const written = await shouldUseFaissPackageUpdate(resolvedRoot, options, allDkbs)
-      ? await writeAtomicFaissPackageUpdateArtifacts(resolvedRoot, registry, state)
-      : await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs, options.artifactProfile ?? 'full');
-    const aggregateArtifactsMs = elapsedMs(aggregateStart);
-    const cacheWriteStart = performance.now();
-    const lock = written.lock;
-    await writeCompileCache(resolvedRoot, registry, sourceSnapshot, lockPath);
-    const compileCacheWriteMs = elapsedMs(cacheWriteStart);
+    try {
+      const aggregateStart = performance.now();
+      const written = await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs, options.mode === 'package' ? 'faiss-package' : 'full');
+      const aggregateArtifactsMs = elapsedMs(aggregateStart);
+      const cacheWriteStart = performance.now();
+      const lock = written.lock;
+      await writeCompileCache(resolvedRoot, registry, sourceSnapshot, lockPath);
+      const compileCacheWriteMs = elapsedMs(cacheWriteStart);
 
-    return {
-      registryId: registry.manifest.id,
-      recordCount: state.sourceUnits.length,
-      databasePath: chunkIndexPath,
-      chunkIndexPath,
-      artifactManifestPath: resolveFrom(resolvedRoot, DKB_ARTIFACT_MANIFEST_PATH),
-      lockPath,
-      lock,
-      cacheHit: false,
-      profile: {
-        timingsMs: {
-          sourceSnapshot: sourceSnapshotMs,
-          cacheLookup: cacheLookupMs,
-          collectState: collectStateMs,
-          aggregateArtifacts: aggregateArtifactsMs,
-          compileCacheWrite: compileCacheWriteMs,
-          total: elapsedMs(totalStart),
+      return {
+        registryId: registry.manifest.id,
+        recordCount: state.sourceUnits.length,
+        databasePath: chunkIndexPath,
+        chunkIndexPath,
+        artifactManifestPath: resolveFrom(resolvedRoot, DKB_ARTIFACT_MANIFEST_PATH),
+        lockPath,
+        lock,
+        cacheHit: false,
+        profile: {
+          timingsMs: {
+            sourceSnapshot: sourceSnapshotMs,
+            cacheLookup: cacheLookupMs,
+            collectState: collectStateMs,
+            aggregateArtifacts: aggregateArtifactsMs,
+            compileCacheWrite: compileCacheWriteMs,
+            total: elapsedMs(totalStart),
+          },
+          aggregateTimingsMs: written.timings,
         },
-        aggregateTimingsMs: written.timings,
-      },
-    };
+      };
+    } finally {
+      await state.providerHost?.dispose();
+    }
   });
 }
 
@@ -330,12 +331,16 @@ async function writeAtomicCompileArtifacts(
   timings.stagePrepare = elapsedMs(totalStart);
 
   try {
+    if (!state.providerHost) {
+      throw new DkbError('Compilation provider host is unavailable');
+    }
+
     const sourceAnalysisStart = performance.now();
     await writeSourceAnalysisArtifacts(stageRoot, registry.manifest.id, state.sourceAnalysis);
     timings.sourceAnalysis = elapsedMs(sourceAnalysisStart);
     timings.chunkIndex = timings.sourceAnalysis;
     const compilerArtifactStart = performance.now();
-    await writeCompilerBundles(stageRoot, state.compilerArtifacts, {
+    await writeCompilerBundles(stageRoot, state.compilerArtifacts, state.providerHost, {
       writeAggregate: false,
       writeRecordBundles: artifactProfile === 'full',
     });
@@ -402,224 +407,10 @@ async function writeAtomicCompileArtifacts(
   }
 }
 
-async function writeAtomicFaissPackageUpdateArtifacts(
-  root: string,
-  registry: LoadedLibrary,
-  state: Awaited<ReturnType<typeof collectRegistryState>>,
-): Promise<{ lock: DkbLockManifest; timings: AtomicCompileArtifactTimings }> {
-  const totalStart = performance.now();
-  const timings: AtomicCompileArtifactTimings = {
-    stagePrepare: 0,
-    sourceAnalysis: 0,
-    chunkIndex: 0,
-    vector: 0,
-    graph: 0,
-    compilerArtifacts: 0,
-    lock: 0,
-    artifactManifest: 0,
-    validation: 0,
-    promotion: 0,
-    cleanup: 0,
-    total: 0,
-  };
-  const compilerArtifact = state.compilerArtifacts[0];
-
-  if (!compilerArtifact) {
-    throw new DkbError('FAISS package profile requires a LlamaIndex compiler artifact');
-  }
-
-  const stageParent = resolveFrom(root, `${DKB_CACHE_DIR}/compile-stage-${process.pid}-${Date.now().toString(36)}`);
-  const stageRoot = path.join(stageParent, 'root');
-  const stageStart = performance.now();
-
-  await fs.rm(stageParent, { recursive: true, force: true });
-  await fs.mkdir(stageRoot, { recursive: true });
-  await copyExistingArtifactPayload(root, stageRoot);
-  timings.stagePrepare = elapsedMs(stageStart);
-
-  try {
-    const compilerArtifactStart = performance.now();
-    const bundle = await writeLlamaIndexCompilerBundle(stageRoot, compilerArtifact.result, {
-      changedSourceKeys: compilerArtifact.result.cache?.changedSourceKeys,
-      writeAggregate: false,
-    });
-    await writeProfileArtifacts(stageRoot, state);
-    timings.compilerArtifacts = elapsedMs(compilerArtifactStart);
-
-    const lockStart = performance.now();
-    const lock = await lockForState(stageRoot, registry, state, new Date().toISOString());
-    const stageLockPath = artifactLockPath(stageRoot);
-
-    await fs.mkdir(path.dirname(stageLockPath), { recursive: true });
-    await fs.writeFile(stageLockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
-    timings.lock = elapsedMs(lockStart);
-
-    const artifactManifestStart = performance.now();
-    await writeDkbArtifactManifest(stageRoot, lock, { compiler: artifactCompilerForState(state) });
-    timings.artifactManifest = elapsedMs(artifactManifestStart);
-
-    const validationStart = performance.now();
-    const validation = await validateDkbArtifactManifest(stageRoot);
-    timings.validation = elapsedMs(validationStart);
-
-    if (!validation.ok) {
-      throw new DkbError(`Staged compiled artifact validation failed at ${stageRoot}`);
-    }
-
-    if (process.env.DKB_TEST_ABORT_COMPILE_AFTER_STAGE_VALIDATION === '1') {
-      throw new DkbError(`Aborted compile after staged artifact validation at ${stageRoot}`);
-    }
-
-    const promotionStart = performance.now();
-    await promoteFaissPackageUpdate(root, stageRoot, bundle);
-    timings.promotion = elapsedMs(promotionStart);
-    timings.total = elapsedMs(totalStart);
-
-    return { lock, timings };
-  } finally {
-    const cleanupStart = performance.now();
-    await fs.rm(stageParent, { recursive: true, force: true });
-    timings.cleanup = elapsedMs(cleanupStart);
-  }
-}
-
-async function shouldUseFaissPackageUpdate(
-  root: string,
-  options: CompileComposeProjectOptions,
-  allDkbs: LoadedDkb[],
-): Promise<boolean> {
-  if (options.force || options.compiler !== 'llamaindex' || options.artifactProfile !== 'faiss-package' || allDkbs.length !== 1) {
-    return false;
-  }
-
-  try {
-    await readLlamaIndexCompilerBundleManifest(root);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function needsInitialFaissPackageBundle(
-  root: string,
-  options: CompileComposeProjectOptions,
-  allDkbs: LoadedDkb[],
-): Promise<boolean> {
-  if (options.force || options.compiler !== 'llamaindex' || options.artifactProfile !== 'faiss-package' || allDkbs.length !== 1) {
-    return false;
-  }
-
-  try {
-    await readLlamaIndexCompilerBundleManifest(root);
-
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-async function copyExistingArtifactPayload(sourceRoot: string, stageRoot: string): Promise<void> {
-  await fs.mkdir(stageRoot, { recursive: true });
-  await fs.copyFile(manifestPath(sourceRoot, 'dkb.json'), manifestPath(stageRoot, 'dkb.json'));
-
-  const paths = new Set<string>([
-    DKB_ARTIFACT_LOCK_PATH,
-    SOURCE_INDEX_PATH,
-    SOURCE_GRAPH_PATH,
-    SOURCE_VECTOR_PATH,
-    FAISS_CATALOG_PATH,
-    FAISS_SEGMENT_PATH,
-    FAISS_MANIFEST_PATH,
-    LLAMAINDEX_COMPILER_AGGREGATE_PATH,
-    LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
-    DKB_RETRIEVAL_PROFILE_LOCK_PATH,
-    DKB_EVIDENCE_IR_PATH,
-    ...await listRelativeFiles(resolveFrom(sourceRoot, LLAMAINDEX_COMPILER_RECORDS_DIR), LLAMAINDEX_COMPILER_RECORDS_DIR),
-  ]);
-
-  for (const relativePath of paths) {
-    const source = resolveFrom(sourceRoot, relativePath);
-    const target = resolveFrom(stageRoot, relativePath);
-
-    try {
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.copyFile(source, target);
-    } catch (error) {
-      const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : '';
-
-      if (code !== 'ENOENT') {
-        throw error;
-      }
-    }
-  }
-}
-
-async function promoteFaissPackageUpdate(
-  root: string,
-  stageRoot: string,
-  bundle: Awaited<ReturnType<typeof writeLlamaIndexCompilerBundle>>,
-): Promise<void> {
-  const paths = [
-    DKB_ARTIFACT_LOCK_PATH,
-    DKB_ARTIFACT_MANIFEST_PATH,
-    FAISS_CATALOG_PATH,
-    FAISS_SEGMENT_PATH,
-    FAISS_MANIFEST_PATH,
-    LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH,
-    DKB_RETRIEVAL_PROFILE_LOCK_PATH,
-    DKB_EVIDENCE_IR_PATH,
-    ...bundle.changedRecordPaths,
-  ];
-
-  for (const relativePath of paths) {
-    await replaceFileWithBackup(resolveFrom(stageRoot, relativePath), resolveFrom(root, relativePath));
-  }
-
-  for (const relativePath of bundle.removedRecordPaths) {
-    await fs.rm(resolveFrom(root, relativePath), { force: true });
-  }
-}
-
-async function replaceFileWithBackup(source: string, target: string): Promise<void> {
-  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
-
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await moveIfExists(target, backup);
-
-  try {
-    await fs.copyFile(source, target);
-    await fs.rm(backup, { force: true });
-  } catch (error) {
-    await fs.rm(target, { force: true });
-    await moveIfExists(backup, target);
-    throw error;
-  }
-}
-
-async function listRelativeFiles(root: string, relativeRoot: string): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    const nested = await Promise.all(entries.flatMap(async (entry) => {
-      const target = path.join(root, entry.name);
-      const relative = `${relativeRoot}/${entry.name}`.replace(/\\/g, '/');
-
-      if (entry.isDirectory()) {
-        return listRelativeFiles(target, relative);
-      }
-
-      return entry.isFile() ? [relative] : [];
-    }));
-
-    return nested.flat().sort((left, right) => left.localeCompare(right));
-  } catch {
-    return [];
-  }
-}
-
 async function writeCompilerBundles(
   stageRoot: string,
   compilerArtifacts: CompilerArtifactState[],
+  providerHost: DkbProviderHost,
   options: { writeAggregate: boolean; writeRecordBundles: boolean },
 ): Promise<void> {
   if (compilerArtifacts.length === 0) {
@@ -649,7 +440,18 @@ async function writeCompilerBundles(
   // its aggregate source/vector indexes here and each installed package keeps
   // its independently replaceable FAISS artifact.
   if (compilerArtifacts.length === 1) {
-    await writeFaissPackageArtifacts(stageRoot, primary.dkb, primary.result);
+    const target = providerHost.config.target;
+    const indexProvider = providerHost.provider<DkbIndexProvider>('index');
+
+    if (!indexProvider.compilePackage) {
+      throw new DkbError(`Selected index provider ${target.index} does not support package compilation`);
+    }
+    await indexProvider.compilePackage({
+      root: stageRoot,
+      dkb: primary.dkb,
+      compiled: primary.compiled,
+      options: providerHost.optionsFor(target.index),
+    });
   }
 }
 
@@ -831,6 +633,12 @@ async function cachedCompileResultFor(
   const artifactSnapshot = await quickArtifactSnapshotFor(root);
 
   if (!artifactSnapshot.requiredArtifactsReady || cache.artifactSnapshotHash !== artifactSnapshot.hash) {
+    return null;
+  }
+
+  const validation = await validateDkbArtifactManifest(root);
+
+  if (!validation.ok) {
     return null;
   }
 
@@ -1107,14 +915,22 @@ function hashString(value: string): string {
 
 async function collectRegistryState(
   registry: LoadedLibrary,
-  compiler: 'native' | 'llamaindex' = 'native',
-  desiredProfile?: DkbResolvedRetrievalProfile,
+  desiredProfile: DkbResolvedRetrievalProfile,
+  contextRoot = registry.root,
 ): Promise<RegistryCompileState> {
   const allDkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, compiler, desiredProfile, registry.root)));
+  const providerHost = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS, target: desiredProfile.target });
+  let packageEntries: Awaited<ReturnType<typeof collectDkbState>>[];
+
+  try {
+    packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost)));
+  } catch (error) {
+    await providerHost.dispose();
+    throw error;
+  }
   const sourceUnits = packageEntries.flatMap((entry) => entry.sourceAnalysis.sourceUnits);
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const sourceAnalysis = {
@@ -1134,7 +950,18 @@ async function collectRegistryState(
     sourceAnalysis,
     compilerArtifacts,
     retrievalProfileLock,
+    providerHost,
   };
+}
+
+async function resolvedProviderProfile(root: string, target?: string): Promise<DkbResolvedRetrievalProfile> {
+  const host = await DkbProviderHost.create({ root, bundled: BUNDLED_PROVIDER_PLUGINS, ...(target ? { target } : {}) });
+
+  try {
+    return await resolveProviderRetrievalProfile(host);
+  } finally {
+    await host.dispose();
+  }
 }
 
 async function collectRegistryStateForVerification(registry: LoadedLibrary): Promise<RegistryCompileState> {
@@ -1185,7 +1012,22 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
     // Packages without a compiler bundle verify against direct source adapters.
   }
 
-  const state = await collectDkbState(dkb, 'native', undefined, artifactRoot);
+  try {
+    const artifact = await loadFaissPackageArtifact(dkb);
+
+    if (artifact.units.length > 0) {
+      const sourceAnalysis = analyzeSourceUnits(artifact.units);
+
+      return {
+        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
+        sourceAnalysis,
+      };
+    }
+  } catch {
+    // Packages without a FAISS catalog verify against direct source adapters.
+  }
+
+  const state = await collectDkbState(dkb, undefined, artifactRoot);
 
   return {
     package: state.package,
@@ -1195,15 +1037,15 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
 
 async function collectDkbState(
   dkb: LoadedDkb,
-  compiler: 'native' | 'llamaindex' = 'native',
   desiredProfile?: DkbResolvedRetrievalProfile,
   artifactRoot = dkb.root,
+  providerHost?: DkbProviderHost,
 ): Promise<{
   package: DkbLockManifest['packages'][string];
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
   compilerArtifact?: CompilerArtifactState;
 }> {
-  const built = await buildSourceUnitsForDkb(dkb, compiler, desiredProfile);
+  const built = await buildSourceUnitsForDkb(dkb, desiredProfile, providerHost);
   const rawSourceUnits = built.units;
   const sourceAnalysis = analyzeSourceUnits(rawSourceUnits);
 
@@ -1214,6 +1056,7 @@ async function collectDkbState(
       dkb,
       dkbRoot: dkb.root,
       result: built.compilerResult,
+      compiled: built.compiled!,
     } : undefined,
   };
 }
@@ -1252,14 +1095,20 @@ async function lockPackageForDkb(
 
 async function buildSourceUnitsForDkb(
   dkb: LoadedDkb,
-  compiler: 'native' | 'llamaindex' = 'native',
   desiredProfile?: DkbResolvedRetrievalProfile,
+  providerHost?: DkbProviderHost,
 ): Promise<{
   units: IndexedSourceUnit[];
-  compilerResult?: Awaited<ReturnType<typeof compileDkbWithLlamaIndex>>;
+  compilerResult?: LlamaIndexCompilerResult;
+  compiled?: DkbCompiledPipeline;
 }> {
-  if (compiler === 'llamaindex') {
-    const result = await compileDkbWithLlamaIndex(dkb, { model: desiredProfile?.embedding.model });
+  if (providerHost) {
+    const compiled = await compileDkbWithProviderHost(providerHost, dkb);
+    const result = assertLlamaIndexNativeResult(compiled.nativeResult);
+
+    if (desiredProfile && result.compiler.model !== desiredProfile.embedding.model) {
+      throw new DkbError(`Pipeline embedding model mismatch: configured ${desiredProfile.embedding.model}, provider produced ${result.compiler.model}`);
+    }
     const unique = new Map<string, IndexedSourceUnit>();
 
     for (const record of result.records) {
@@ -1270,6 +1119,7 @@ async function buildSourceUnitsForDkb(
     return {
       units: [...unique.values()].sort((a, b) => a.id.localeCompare(b.id)),
       compilerResult: result,
+      compiled,
     };
   }
   const batches = await Promise.all(storesForDkb(dkb).map((store) => buildSourceUnitsForStore(dkb, store)));

@@ -143,7 +143,6 @@ export interface DkbSourceManifest extends DkbSpaceFields {
     url?: string;
   };
   localSources?: DkbLocalSourcesPolicy;
-  retrievalProfile?: DkbRetrievalProfileConfig;
   permissions?: DkbPermissions;
   domains?: string[];
   roles?: string[];
@@ -176,7 +175,6 @@ export interface DkrManifest extends DkbSpaceFields {
   registry?: {
     url?: string;
   };
-  retrievalProfile?: DkbRetrievalProfileConfig;
   meta?: Record<string, unknown>;
   extensions?: Record<string, unknown>;
 }

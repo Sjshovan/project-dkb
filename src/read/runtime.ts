@@ -161,7 +161,7 @@ export async function retrieveKnowledge(
   const lexicalQueryMs = performance.now() - lexicalStart;
   const vectorStart = performance.now();
   const vectorResult = queryContext?.faiss
-    ? await searchFaissSnapshot(queryContext.faiss, query, candidateLimit)
+    ? await searchFaissSnapshot(queryContext.faiss, query, candidateLimit, queryContext.embedQuery)
     : await querySearchDocuments(
       queryContext?.searchRegistryId ?? 'compose-index',
       queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(sourceUnits),
@@ -442,7 +442,7 @@ function satisfiesExactCompiledMatch(
   queryEvidence: SourceUnitQueryEvidence,
 ): boolean {
   const explicitPhrases = (request.phrases ?? [])
-    .map((phrase) => tokenize(phrase).join(' '))
+    .map((phrase) => phrase.toLowerCase().replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
   if (explicitPhrases.length > 0) {

@@ -6,6 +6,9 @@ import { vectorDocumentsForSourceUnits, type VectorDocument } from './vectorStor
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import { buildFaissRuntimeSnapshot, closeFaissSnapshot, type FaissRuntimeSnapshot } from './faissStore.js';
 import { buildLexicalRuntimeSnapshot, type LexicalRuntimeSnapshot } from './lexicalStore.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
+import { DkbProviderHost } from '../providers/host.js';
+import type { DkbEmbeddingProvider } from '../providers/types.js';
 
 export interface QueryContext {
   root: string;
@@ -22,6 +25,8 @@ export interface QueryContext {
   searchRegistryId: string;
   faiss?: FaissRuntimeSnapshot;
   lexical?: LexicalRuntimeSnapshot;
+  providerHost: DkbProviderHost;
+  embedQuery(query: string): Promise<number[]>;
   createdAt: string;
   lastUsedAt: string;
 }
@@ -33,36 +38,57 @@ export async function createQueryContext(root: string, collectionId: string): Pr
   const artifactHash = await queryArtifactHash(resolvedRoot);
   const sourceIndex = await maybeReadSourceIndex(resolvedRoot);
   const searchRegistryId = await searchRegistryIdFor(resolvedRoot, collectionId);
-  const faiss = await buildFaissRuntimeSnapshot(resolvedRoot, searchRegistryId);
-  const activeAssets = faiss?.assets ?? sourceIndex.assets;
-  const activeUnits = faiss?.units ?? sourceIndex.units;
-  const lexical = faiss
-    ? buildLexicalRuntimeSnapshot({
-      packages: faiss.packages,
-      numericIdToUnitId: faiss.numericIdToUnitId,
-      unitsById: new Map(activeUnits.map((unit) => [unit.id, unit])),
-    }) ?? undefined
-    : undefined;
-  const context: QueryContext = {
-    root: resolvedRoot,
-    collectionId,
-    cacheKey: queryContextCacheKey(resolvedRoot, collectionId, artifactHash),
-    artifactHash,
-    sourceAssets: activeAssets,
-    sourceUnits: activeUnits,
-    sourceUnitsById: new Map(activeUnits.map((unit) => [unit.id, unit])),
-    sourceAssetsByKey: new Map(activeAssets.map((asset) => [`${asset.dkbId}/${asset.id}`, asset])),
-    sourceUnitsByIdentifier: sourceUnitIdentifierIndex(activeUnits),
-    vectorDocuments: vectorDocumentsForSourceUnits(activeUnits),
-    vectorArtifactRoot: path.dirname(resolveFrom(resolvedRoot, SOURCE_VECTOR_PATH)),
-    searchRegistryId,
-    ...(faiss ? { faiss } : {}),
-    ...(lexical ? { lexical } : {}),
-    createdAt: new Date().toISOString(),
-    lastUsedAt: new Date().toISOString(),
-  };
+  const providerHost = await DkbProviderHost.create({ root: resolvedRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+  let faiss: FaissRuntimeSnapshot | null = null;
+  let lexical: LexicalRuntimeSnapshot | undefined;
 
-  return context;
+  try {
+    faiss = await buildFaissRuntimeSnapshot(resolvedRoot, searchRegistryId);
+    const activeAssets = faiss?.assets ?? sourceIndex.assets;
+    const activeUnits = faiss?.units ?? sourceIndex.units;
+    lexical = faiss
+      ? buildLexicalRuntimeSnapshot({
+        packages: faiss.packages,
+        numericIdToUnitId: faiss.numericIdToUnitId,
+        unitsById: new Map(activeUnits.map((unit) => [unit.id, unit])),
+      }) ?? undefined
+      : undefined;
+    const embeddingProvider = providerHost.provider<DkbEmbeddingProvider>('embedding');
+    const embeddingOptions = providerHost.optionsFor(providerHost.config.target.embedding);
+
+    if (faiss) {
+      const compatibility = await embeddingProvider.compatibility(embeddingOptions);
+      if (compatibility.embeddingSpace !== faiss.embedding.model || compatibility.dimensions !== faiss.embedding.dimensions) {
+        throw new Error(`Selected embedding provider is incompatible with installed FAISS packages: expected ${faiss.embedding.model}/${faiss.embedding.dimensions}, got ${String(compatibility.embeddingSpace)}/${String(compatibility.dimensions)}`);
+      }
+    }
+
+    return {
+      root: resolvedRoot,
+      collectionId,
+      cacheKey: queryContextCacheKey(resolvedRoot, collectionId, artifactHash),
+      artifactHash,
+      sourceAssets: activeAssets,
+      sourceUnits: activeUnits,
+      sourceUnitsById: new Map(activeUnits.map((unit) => [unit.id, unit])),
+      sourceAssetsByKey: new Map(activeAssets.map((asset) => [`${asset.dkbId}/${asset.id}`, asset])),
+      sourceUnitsByIdentifier: sourceUnitIdentifierIndex(activeUnits),
+      vectorDocuments: vectorDocumentsForSourceUnits(activeUnits),
+      vectorArtifactRoot: path.dirname(resolveFrom(resolvedRoot, SOURCE_VECTOR_PATH)),
+      searchRegistryId,
+      providerHost,
+      embedQuery: (query) => embeddingProvider.embedQuery({ text: query, options: embeddingOptions }),
+      ...(faiss ? { faiss } : {}),
+      ...(lexical ? { lexical } : {}),
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    lexical?.close();
+    await closeFaissSnapshot(faiss ?? undefined);
+    await providerHost.dispose();
+    throw error;
+  }
 }
 
 function sourceUnitIdentifierIndex(units: IndexedSourceUnit[]): Map<string, IndexedSourceUnit[]> {
@@ -115,6 +141,7 @@ export function invalidateQueryContext(root?: string): number {
     for (const context of residentContexts.values()) {
       void closeFaissSnapshot(context.faiss);
       context.lexical?.close();
+      void context.providerHost.dispose();
     }
     residentContexts.clear();
 
@@ -128,6 +155,7 @@ export function invalidateQueryContext(root?: string): number {
     if (context.root === resolvedRoot) {
       void closeFaissSnapshot(context.faiss);
       context.lexical?.close();
+      void context.providerHost.dispose();
       residentContexts.delete(key);
       removed += 1;
     }
@@ -148,6 +176,7 @@ export async function closeQueryContext(root?: string): Promise<number> {
   await Promise.all(contexts.map(async ([, context]) => {
     context.lexical?.close();
     await closeFaissSnapshot(context.faiss);
+    await context.providerHost.dispose();
   }));
 
   return contexts.length;

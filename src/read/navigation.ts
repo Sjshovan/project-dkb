@@ -99,7 +99,7 @@ export async function semanticSearch(
       .filter((reference): reference is DkbNavigationReference => Boolean(reference))
     : memoryLexicalSearch(scopedUnits, query, searchLimit);
   const result = queryContext?.faiss
-    ? await searchFaissSnapshot(queryContext.faiss, query, searchLimit)
+    ? await searchFaissSnapshot(queryContext.faiss, query, searchLimit, queryContext.embedQuery)
     : await querySearchDocuments(
       queryContext?.searchRegistryId ?? 'compose-index',
       queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(scopedUnits),

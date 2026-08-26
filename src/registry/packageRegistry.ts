@@ -296,8 +296,7 @@ export async function publishDkbToMockRegistry(options: MockRegistryPublishOptio
     await writeRegistryPackageManifest(buildRoot, dkb, account.account.id);
     const compiled = await compileComposeProject(buildRoot, {
       force: true,
-      compiler: 'llamaindex',
-      artifactProfile: 'faiss-package',
+      mode: 'package',
     });
     const database = openRegistryDatabase(paths.databasePath);
 

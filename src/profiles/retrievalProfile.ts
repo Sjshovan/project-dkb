@@ -4,6 +4,9 @@ import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../protocol/errors.js';
 import { resolveFrom } from '../protocol/paths.js';
 import type { DkbRetrievalProfileConfig, LoadedLibrary } from '../protocol/types.js';
+import type { DkbProviderHost, DkbProviderHostDescription } from '../providers/host.js';
+import type { DkbEmbeddingProvider } from '../providers/types.js';
+import { DKB_FAISS_PLUGIN_ID, DKB_FASTEMBED_PLUGIN_ID, DKB_HYBRID_RETRIEVAL_PLUGIN_ID, DKB_LLAMA_INDEX_PLUGIN_ID } from '../providers/bundled.js';
 import {
   LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
@@ -11,7 +14,7 @@ import {
 } from '../compiler/llamaindex.js';
 
 export const DKB_RETRIEVAL_PROFILE_LOCK_PATH = 'dkb-profile.lock.json';
-export const DKB_RETRIEVAL_PROFILE_FORMAT = 'dkb.retrieval-profile.v1';
+export const DKB_RETRIEVAL_PROFILE_FORMAT = 'dkb.retrieval-profile.v2';
 export const DEFAULT_EMBEDDING_MODEL = 'BAAI/bge-small-en-v1.5';
 
 const SUPPORTED_FASTEMBED_MODELS: Record<string, number> = {
@@ -20,11 +23,24 @@ const SUPPORTED_FASTEMBED_MODELS: Record<string, number> = {
 };
 
 export interface DkbResolvedRetrievalProfile {
-  compiler: 'llamaindex';
+  target: string;
+  configDigest: string;
+  providerBuildDigest: string;
+  providers: DkbProviderHostDescription['providers'];
+  processors: DkbProviderHostDescription['processors'];
+  compiler: string;
   embedding: {
-    adapter: 'fastembed';
+    adapter: string;
     model: string;
     dimensions: number;
+  };
+  compatibility: {
+    embeddingSpace: string;
+    dimensions: number;
+    metric: string;
+    normalized: boolean;
+    indexFormat: string;
+    protocol: string;
   };
 }
 
@@ -32,13 +48,13 @@ export interface DkbRetrievalProfileLock {
   format: typeof DKB_RETRIEVAL_PROFILE_FORMAT;
   profile: {
     compiler: {
-      adapter: 'llamaindex';
-      id: typeof LLAMAINDEX_COMPILER_ID;
+      adapter: string;
+      id: string;
       image: string;
       imageDigest: string | null;
     };
     embedding: {
-      adapter: 'fastembed';
+      adapter: string;
       model: string;
       modelRevision: string | null;
       modelDigest: string | null;
@@ -49,18 +65,36 @@ export interface DkbRetrievalProfileLock {
       documentMode: 'passage';
     };
     extraction: {
-      richParser: 'docling';
-      richChunker: 'docling.hybrid';
-      fallbackParser: 'llamaindex';
-      fallbackChunker: 'llamaindex.sentence';
+      richParser: string;
+      richChunker: string;
+      fallbackParser: string;
+      fallbackChunker: string;
+    };
+    target: string;
+    configDigest: string;
+    providerBuildDigest: string;
+    providers: DkbProviderHostDescription['providers'];
+    processors: DkbProviderHostDescription['processors'];
+    index: {
+      provider: string;
+      mode: 'packaged' | 'managed';
+      format: string;
+    };
+    retrieval: {
+      provider: string;
+      protocol: string;
     };
   };
+  buildDigest: string;
+  compatibility: DkbResolvedRetrievalProfile['compatibility'];
+  compatibilityDigest: string;
   profileDigest: string;
   generatedAt: string;
 }
 
 export function resolveLibraryRetrievalProfile(library: LoadedLibrary, overrideModel?: string): DkbResolvedRetrievalProfile {
-  return resolveRetrievalProfile(library.manifest.retrievalProfile, overrideModel);
+  void library;
+  return resolveRetrievalProfile(undefined, overrideModel);
 }
 
 export function resolveRetrievalProfile(config?: DkbRetrievalProfileConfig, overrideModel?: string): DkbResolvedRetrievalProfile {
@@ -84,19 +118,61 @@ export function resolveRetrievalProfile(config?: DkbRetrievalProfileConfig, over
   const dimensions = configuredDimensions ?? knownDimensions;
 
   if (!dimensions || dimensions <= 0) {
-    throw new DkbError(`Embedding model ${model} is not registered. Add its positive dimensions to retrievalProfile.embedding.dimensions before compiling.`);
+    throw new DkbError(`Embedding model ${model} is not registered. Set positive dimensions in the selected embedding provider options.`);
   }
   if (knownDimensions && configuredDimensions && configuredDimensions !== knownDimensions) {
     throw new DkbError(`Embedding model ${model} requires ${knownDimensions} dimensions, not ${configuredDimensions}`);
   }
 
   return {
+    target: 'default',
+    configDigest: stableHash({ model, dimensions }),
+    providerBuildDigest: stableHash({
+      ingestion: DKB_LLAMA_INDEX_PLUGIN_ID,
+      embedding: DKB_FASTEMBED_PLUGIN_ID,
+      index: DKB_FAISS_PLUGIN_ID,
+      retrieval: DKB_HYBRID_RETRIEVAL_PLUGIN_ID,
+    }),
+    providers: [],
+    processors: [],
     compiler,
     embedding: {
       adapter,
       model,
       dimensions,
     },
+    compatibility: {
+      embeddingSpace: model,
+      dimensions,
+      metric: 'cosine',
+      normalized: true,
+      indexFormat: 'IndexIDMap2(IndexFlatIP)',
+      protocol: 'dkb.evidence.v1',
+    },
+  };
+}
+
+export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Promise<DkbResolvedRetrievalProfile> {
+  const description = host.describe();
+  const target = host.config.target;
+  const embedding = host.provider<DkbEmbeddingProvider>('embedding');
+  const rawCompatibility = await embedding.compatibility(host.optionsFor(target.embedding));
+  const model = stringValue(rawCompatibility.embeddingSpace, `${target.embedding} compatibility embeddingSpace`);
+  const dimensions = positiveIntegerValue(rawCompatibility.dimensions, `${target.embedding} compatibility dimensions`);
+  const metric = stringValue(rawCompatibility.metric, `${target.embedding} compatibility metric`);
+  const normalized = booleanValue(rawCompatibility.normalized, `${target.embedding} compatibility normalized`);
+  const indexFormat = target.index === DKB_FAISS_PLUGIN_ID ? 'IndexIDMap2(IndexFlatIP)' : stringValue(rawCompatibility.indexFormat, `${target.index} compatibility indexFormat`);
+  const protocol = typeof rawCompatibility.protocol === 'string' ? rawCompatibility.protocol : 'dkb.evidence.v1';
+
+  return {
+    target: description.target,
+    configDigest: description.configDigest,
+    providerBuildDigest: description.buildDigest,
+    providers: description.providers,
+    processors: description.processors,
+    compiler: target.ingestion ?? `${target.parser}+${target.chunker}`,
+    embedding: { adapter: target.embedding, model, dimensions },
+    compatibility: { embeddingSpace: model, dimensions, metric, normalized, indexFormat, protocol },
   };
 }
 
@@ -136,13 +212,13 @@ export function retrievalProfileLockForCompilerResults(
 
   const profile: DkbRetrievalProfileLock['profile'] = {
     compiler: {
-      adapter: 'llamaindex',
+      adapter: desired.compiler,
       id: LLAMAINDEX_COMPILER_ID,
       image: compilerImages[0] ?? LLAMAINDEX_COMPILER_IMAGE,
       imageDigest: options.compilerImageDigest ?? null,
     },
     embedding: {
-      adapter: 'fastembed',
+      adapter: desired.embedding.adapter,
       model: desired.embedding.model,
       modelRevision: options.modelRevision ?? null,
       modelDigest: options.modelDigest ?? null,
@@ -158,12 +234,33 @@ export function retrievalProfileLockForCompilerResults(
       fallbackParser: 'llamaindex',
       fallbackChunker: 'llamaindex.sentence',
     },
+    target: desired.target,
+    configDigest: desired.configDigest,
+    providerBuildDigest: desired.providerBuildDigest,
+    providers: desired.providers,
+    processors: desired.processors,
+    index: {
+      provider: desired.providers.find((provider) => provider.kind === 'index')?.id ?? DKB_FAISS_PLUGIN_ID,
+      mode: desired.providers.find((provider) => provider.kind === 'index')?.id === '@dkb/meilisearch' ? 'managed' : 'packaged',
+      format: desired.compatibility.indexFormat,
+    },
+    retrieval: {
+      provider: desired.providers.find((provider) => provider.kind === 'retrieval')?.id ?? DKB_HYBRID_RETRIEVAL_PLUGIN_ID,
+      protocol: desired.compatibility.protocol,
+    },
   };
+
+  const buildDigest = stableHash(profile);
+  const compatibility = desired.compatibility;
+  const compatibilityDigest = stableHash(compatibility);
 
   return {
     format: DKB_RETRIEVAL_PROFILE_FORMAT,
     profile,
-    profileDigest: stableHash(profile),
+    buildDigest,
+    compatibility,
+    compatibilityDigest,
+    profileDigest: compatibilityDigest,
     generatedAt: options.generatedAt ?? new Date().toISOString(),
   };
 }
@@ -217,21 +314,52 @@ export function validateRetrievalProfileLock(value: unknown, source = DKB_RETRIE
     throw new DkbError(`Invalid retrieval profile lock at ${source}: dimensions must be a positive integer`);
   }
 
-  const actualDigest = stableHash(profile);
+  if (!candidate.compatibility || typeof candidate.buildDigest !== 'string' || typeof candidate.compatibilityDigest !== 'string') {
+    throw new DkbError(`Invalid retrieval profile lock at ${source}: missing build or compatibility receipt`);
+  }
+  const actualBuildDigest = stableHash(profile);
+  const compatibilityDigest = stableHash(candidate.compatibility);
 
-  if (candidate.profileDigest !== actualDigest) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected digest ${actualDigest}, got ${candidate.profileDigest}`);
+  if (candidate.compatibilityDigest !== compatibilityDigest) {
+    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected digest ${compatibilityDigest}, got ${candidate.compatibilityDigest}`);
+  }
+  if (candidate.profileDigest !== compatibilityDigest) {
+    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected digest ${compatibilityDigest}, got ${candidate.profileDigest}`);
+  }
+  if (candidate.buildDigest !== actualBuildDigest) {
+    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected build digest ${actualBuildDigest}, got ${candidate.buildDigest}`);
   }
 
   return candidate as DkbRetrievalProfileLock;
 }
 
 export function assertMatchingRetrievalProfiles(expected: DkbRetrievalProfileLock, actual: DkbRetrievalProfileLock, label = 'package'): void {
-  if (expected.profileDigest !== actual.profileDigest) {
+  if (expected.compatibilityDigest !== actual.compatibilityDigest) {
     throw new DkbError(
       `Retrieval profile mismatch for ${label}: registry uses ${expected.profile.embedding.model}/${expected.profile.embedding.dimensions} (${expected.profileDigest}), package uses ${actual.profile.embedding.model}/${actual.profile.embedding.dimensions} (${actual.profileDigest})`,
     );
   }
+}
+
+function stringValue(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new DkbError(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function positiveIntegerValue(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || Number(value) <= 0) {
+    throw new DkbError(`${label} must be a positive integer`);
+  }
+  return Number(value);
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new DkbError(`${label} must be a boolean`);
+  }
+  return value;
 }
 
 export function supportedRetrievalModels(): Array<{ model: string; dimensions: number }> {

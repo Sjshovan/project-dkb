@@ -15,6 +15,10 @@ import { DKB_ARTIFACT_MANIFEST_PATH } from '../artifacts/manifest.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '../signing/index.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
 import { readRetrievalProfileLock } from '../profiles/retrievalProfile.js';
+import { resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
+import { resolveContextConfig } from '../providers/config.js';
+import { DkbProviderHost } from '../providers/host.js';
 
 const DKB_COMPILER_RESULT_MEDIA_TYPE = 'application/vnd.dkb.compiler-result+gzip';
 const DKB_COMPILER_RESULT_HEADER = 'x-dkb-compiler-result';
@@ -34,11 +38,7 @@ interface CompileRequest {
       publisherId?: string;
       registryId?: string;
     };
-    compiler?: {
-      image?: string;
-      model?: string;
-      profile?: string;
-    };
+    target?: string;
   };
   sourceArchive: {
     fileName?: string;
@@ -82,11 +82,18 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse):
     const url = new URL(request.url ?? '/', 'http://dkb-registry-compiler.local');
 
     if (request.method === 'GET' && url.pathname === '/health') {
+      const capabilities = await registryCompilerCapabilities();
       return sendJson(response, 200, {
         ok: true,
         service: 'dkb.registry.compiler',
-        compilerId: 'dkb.registry.package',
+        target: capabilities.activeTarget,
+        buildDigest: capabilities.buildDigest,
+        compatibilityDigest: capabilities.compatibilityDigest,
       });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/capabilities') {
+      return sendJson(response, 200, await registryCompilerCapabilities());
     }
 
     if (request.method === 'POST' && url.pathname === '/compile') {
@@ -153,19 +160,16 @@ async function compileRegistryPackage(
   const requestedPackageId = input.request.package?.id;
   const buildRoot = path.join(scratch, safeId(requestedPackageId ?? 'build'));
   const archivePath = path.join(scratch, 'compiled.dkbpkg');
-  const compilerImage = input.request.compiler?.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? 'dkb-compiler-llamaindex:0.3.6';
-  const compilerModel = input.request.compiler?.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5';
-  const previousFaissDockerImage = process.env.DKB_FAISS_DOCKER_IMAGE;
-  const previousLlamaCompilerService = process.env.DKB_LLAMA_COMPILER_SERVICE;
+  const contextRoot = registryCompilerContextRoot();
+  const contextConfig = await resolveContextConfig(contextRoot);
+  const target = input.request.target ?? contextConfig.activeTarget;
+
+  if (target !== contextConfig.activeTarget) {
+    throw new DkbError(`Registry compiler accepts only its active target "${contextConfig.activeTarget}", not "${target}"`);
+  }
+  const compilerImage = process.env.DKB_LLAMA_COMPILER_IMAGE ?? 'dkb-compiler-llamaindex:0.3.6';
 
   try {
-    process.env.DKB_FAISS_DOCKER_IMAGE = previousFaissDockerImage ?? compilerImage;
-    // This HTTP process is already the registry compiler service. Running the
-    // persistent LlamaIndex service from inside it duplicates the source tree
-    // and returns large compiler payloads over a second HTTP boundary. Use the
-    // one-shot Docker path, which streams JSONL directly from its mounted job.
-    process.env.DKB_LLAMA_COMPILER_SERVICE = '0';
-
     await fs.writeFile(uploadPath, sourceArchive);
     await extractDkbPackageArchive(uploadPath, extractedRoot);
     await copyDkbSourceOnly(extractedRoot, buildRoot);
@@ -179,9 +183,9 @@ async function compileRegistryPackage(
 
     const compiled = await compileComposeProject(buildRoot, {
       force: true,
-      compiler: 'llamaindex',
-      artifactProfile: 'faiss-package',
-      model: compilerModel,
+      mode: 'package',
+      target,
+      contextRoot,
     });
     const retrievalProfile = await readRetrievalProfileLock(buildRoot);
 
@@ -200,8 +204,12 @@ async function compileRegistryPackage(
         id: 'dkb.registry.package',
         image: compilerImage,
         model: retrievalProfile.profile.embedding.model,
-        profile: input.request.compiler?.profile ?? 'faiss-package',
+        target,
+        profile: target,
+        buildDigest: retrievalProfile.buildDigest,
+        compatibilityDigest: retrievalProfile.compatibilityDigest,
         profileDigest: retrievalProfile.profileDigest,
+        providers: retrievalProfile.profile.providers,
       },
       lock: compiled.lock,
       packageTreeHash,
@@ -245,19 +253,44 @@ async function compileRegistryPackage(
       },
     };
   } finally {
-    if (previousFaissDockerImage === undefined) {
-      delete process.env.DKB_FAISS_DOCKER_IMAGE;
-    } else {
-      process.env.DKB_FAISS_DOCKER_IMAGE = previousFaissDockerImage;
-    }
-    if (previousLlamaCompilerService === undefined) {
-      delete process.env.DKB_LLAMA_COMPILER_SERVICE;
-    } else {
-      process.env.DKB_LLAMA_COMPILER_SERVICE = previousLlamaCompilerService;
-    }
-
     await fs.rm(scratch, { recursive: true, force: true });
   }
+}
+
+export async function registryCompilerCapabilities(): Promise<{
+  service: 'dkb.registry.compiler';
+  contextRoot: string;
+  activeTarget: string;
+  providers: ReturnType<DkbProviderHost['describe']>['providers'];
+  processors: ReturnType<DkbProviderHost['describe']>['processors'];
+  buildDigest: string;
+  compatibility: Awaited<ReturnType<typeof resolveProviderRetrievalProfile>>['compatibility'];
+  compatibilityDigest: string;
+}> {
+  const contextRoot = registryCompilerContextRoot();
+  const host = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+
+  try {
+    const description = host.describe();
+    const profile = await resolveProviderRetrievalProfile(host);
+
+    return {
+      service: 'dkb.registry.compiler',
+      contextRoot,
+      activeTarget: description.target,
+      providers: description.providers,
+      processors: description.processors,
+      buildDigest: description.buildDigest,
+      compatibility: profile.compatibility,
+      compatibilityDigest: stableHash(profile.compatibility),
+    };
+  } finally {
+    await host.dispose();
+  }
+}
+
+function registryCompilerContextRoot(): string {
+  return path.resolve(process.env.DKB_CONTEXT_ROOT ?? process.cwd());
 }
 
 async function sendCompiledArchive(response: ServerResponse, compiled: CompiledRegistryPackageDelivery): Promise<void> {
