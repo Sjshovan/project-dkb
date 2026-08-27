@@ -25,6 +25,12 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const cliPath = path.join(repositoryRoot, 'dist', 'src', 'cli', 'index.js');
 let cliInvocation = 0;
 
+test('spawned CLI inventories are removed after each invocation', async () => {
+  const result = await runCli(['--help']);
+
+  await assert.rejects(fs.access(result.inventoryPath));
+});
+
 test('human summaries render collections as aligned tables', () => {
   assert.deepEqual(humanSummary({
     packages: [
@@ -1104,13 +1110,18 @@ function restoreEnvironment(name, value) {
 
 function runCli(args, extraEnv = {}, cwd = repositoryRoot) {
   cliInvocation += 1;
+  const ownsInventory = !Object.hasOwn(extraEnv, 'DKB_HOST_INVENTORY');
+  const inventoryPath = ownsInventory
+    ? path.join(os.tmpdir(), `dkb-cli-ux-${process.pid}-${cliInvocation}.json`)
+    : extraEnv.DKB_HOST_INVENTORY;
+
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd,
       env: {
         ...process.env,
         DKB_FORCE_TTY: '0',
-        DKB_HOST_INVENTORY: path.join(os.tmpdir(), `dkb-cli-ux-${process.pid}-${cliInvocation}.json`),
+        DKB_HOST_INVENTORY: inventoryPath,
         ...extraEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1123,7 +1134,11 @@ function runCli(args, extraEnv = {}, cwd = repositoryRoot) {
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.once('error', reject);
-    child.once('close', (code) => resolve({ code, stdout, stderr }));
+    child.once('close', (code) => resolve({ code, stdout, stderr, inventoryPath }));
+  }).finally(async () => {
+    if (ownsInventory) {
+      await fs.rm(inventoryPath, { force: true });
+    }
   });
 }
 

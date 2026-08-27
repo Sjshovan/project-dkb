@@ -25,6 +25,8 @@
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
     "proof:meilisearch": "npm run build && node scripts/prove-meilisearch-lifecycle.mjs",
+    "temp:audit": "node scripts/clean-dkb-temp.mjs",
+    "temp:clean": "node scripts/clean-dkb-temp.mjs --apply",
     "dkb": "node dist/src/cli/index.js",
     "mcp": "node dist/src/cli/index.js mcp serve"
   },
