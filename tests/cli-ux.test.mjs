@@ -1006,6 +1006,33 @@ test('root help separates common, management, and advanced commands', async () =
   }
 });
 
+test('nested help uses the same color system for command groups and leaves', async () => {
+  const group = await runCli(['library', '--help'], { FORCE_COLOR: '1' });
+  const leaf = await runCli(['library', 'register', '--help'], { FORCE_COLOR: '1' });
+
+  assert.equal(group.code, 0);
+  assert.equal(leaf.code, 0);
+  assert.ok(group.stdout.includes('\u001b[1m\u001b[36mCommands:\u001b[39m\u001b[22m'));
+  assert.ok(group.stdout.includes('\u001b[36madd [options] <identity>\u001b[39m'));
+  assert.ok(group.stdout.includes('\u001b[36mregister [options] <path>\u001b[39m'));
+  assert.ok(leaf.stdout.includes('\u001b[1m\u001b[36mArguments:\u001b[39m\u001b[22m'));
+  assert.ok(leaf.stdout.includes('\u001b[36mpath\u001b[39m'));
+  assert.ok(leaf.stdout.includes('\u001b[1m\u001b[36mOptions:\u001b[39m\u001b[22m'));
+  assert.ok(leaf.stdout.includes('\u001b[36m--name <name>\u001b[39m'));
+});
+
+test('nested help remains plain when color is disabled', async () => {
+  const result = await runCli(['library', '--help'], {
+    FORCE_COLOR: undefined,
+    NO_COLOR: '1',
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Commands:/);
+  assert.match(result.stdout, /register \[options\] <path>/);
+  assert.doesNotMatch(result.stdout, /\u001b\[/);
+});
+
 test('runtime connection failures name the target service', async () => {
   const result = await runCli(['--json', 'runtime', 'status', '--url', 'http://127.0.0.1:1']);
 

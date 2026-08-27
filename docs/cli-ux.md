@@ -32,6 +32,9 @@ event records for their lifetime.
   phase, print a compact result, and finish with `Done.`
 - Human tables use stable columns without ornamental separator rows. Empty
   collections print `(none)`.
+- Root, command-group, and leaf-command help use the same semantic color system:
+  cyan section headings and signatures, white descriptions, and a bold usage
+  label. `NO_COLOR` keeps every help level plain.
 - Health and verification tables render `STATUS` as `OK` or `FAILED`, boolean
   requirement fields as `YES` or `NO`, and transport response codes as `HTTP`.
   Raw booleans remain unchanged in `--json` output.

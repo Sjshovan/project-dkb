@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { Command, CommanderError, Help } from 'commander';
+import { Command, CommanderError } from 'commander';
 import { DkbError } from '../protocol/errors.js';
 import { identityDisplayName, parseDkbIdentity } from '../protocol/identity.js';
 import { loadCollection, loadDkb, loadManifest } from '../protocol/manifest.js';
@@ -17,10 +17,10 @@ import {
   humanSummary,
   milliseconds,
   printJson as printJsonValue,
-  styleHelpText,
   terminalText,
   type CliPresenter,
 } from './presentation.js';
+import { configureDkbHelp } from './help.js';
 
 installWarningFilter();
 
@@ -35,10 +35,6 @@ program
   .option('--no-progress', 'Keep human output but disable spinners and progress bars')
   .showSuggestionAfterError(true)
   .showHelpAfterError("Run 'dkb --help' for usage.")
-  .configureHelp({
-    sortOptions: true,
-    sortSubcommands: true,
-  })
   .configureOutput({
     writeErr: (message) => {
       if (!jsonRequested) {
@@ -2200,10 +2196,6 @@ mcp
   });
 
 configureCommandTree(program);
-program.configureHelp({
-  ...program.configureHelp(),
-  formatHelp: formatCliHelp,
-});
 
 try {
   await program.parseAsync();
@@ -2286,14 +2278,12 @@ function installWarningFilter(): void {
 function configureCommandTree(command: Command): void {
   const usagePath = commandPath(command);
 
+  configureDkbHelp(command);
+
   command
     .exitOverride()
     .showSuggestionAfterError(true)
     .showHelpAfterError(`\nRun '${usagePath} --help' for usage.`)
-    .configureHelp({
-      sortOptions: true,
-      sortSubcommands: true,
-    })
     .configureOutput({
       writeErr: (message) => {
         if (!jsonRequested) {
@@ -2317,62 +2307,6 @@ function commandPath(command: Command): string {
   }
 
   return names.join(' ');
-}
-
-function formatCliHelp(command: Command, helper: Help): string {
-  const standard = new Help();
-  standard.sortOptions = helper.sortOptions;
-  standard.sortSubcommands = helper.sortSubcommands;
-  standard.showGlobalOptions = helper.showGlobalOptions;
-  standard.helpWidth = helper.helpWidth;
-  const output = standard.formatHelp(command, standard);
-
-  if (command.name() !== 'dkb') {
-    return styleHelpText(output);
-  }
-
-  const groups = [
-    {
-      title: 'Common Commands',
-      names: ['init', 'install', 'list', 'uninstall', 'publish', 'retrieve', 'serve', 'inspect', 'validate', 'health', 'help'],
-    },
-    {
-      title: 'Management Commands',
-      names: ['artifact', 'collection', 'compiler', 'library', 'mcp', 'pipeline', 'plugin', 'registry', 'remote', 'runtime', 'trace'],
-    },
-    {
-      title: 'Advanced Commands',
-      names: [
-        'audit-alignment',
-        'compile',
-        'query',
-        'read',
-        'read-targets',
-        'restore',
-        'verify',
-        'watch',
-      ],
-    },
-  ];
-  const commands = standard.visibleCommands(command);
-  const termWidth = standard.padWidth(command, standard);
-  const helpWidth = standard.helpWidth || 80;
-  const grouped = groups.flatMap((group) => {
-    const items = group.names
-      .map((name) => commands.find((candidate) => candidate.name() === name))
-      .filter((candidate): candidate is Command => Boolean(candidate))
-      .map((candidate) => {
-        const term = standard.subcommandTerm(candidate);
-        const description = standard.subcommandDescription(candidate);
-        const line = description ? `${term.padEnd(termWidth + 2)}${description}` : term;
-
-        return `  ${standard.wrap(line, helpWidth - 2, termWidth + 2)}`;
-      });
-
-    return items.length > 0 ? [`${group.title}:`, ...items, ''] : [];
-  });
-
-  return styleHelpText(output.replace(/Commands:\n[\s\S]*$/u, grouped.join('\n')));
 }
 
 function summarizeCompileResult(value: unknown): string[] {
