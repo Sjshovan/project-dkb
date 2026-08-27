@@ -4,7 +4,7 @@ import { watch } from 'chokidar';
 import { loadCompose } from '@dkb/protocol/manifest.js';
 import { resolveFrom } from '@dkb/protocol/paths.js';
 import { compileComposeProject } from '@dkb/compiler/compile.js';
-import { invalidateQueryContext } from '../indexes/queryContext.js';
+import { invalidateQueryContext } from '@dkb/runtime/indexes/queryContext.js';
 
 export interface WatchComposeOptions {
   once?: boolean;

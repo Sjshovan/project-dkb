@@ -2,7 +2,7 @@
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest } from '@dkb/protocol/manifest.js';
 import type { LoadedCollection, LoadedDkb, QueryResponse, QueryTrace } from '@dkb/protocol/types.js';
-import { queryCollection, type QueryOptions } from '../router/search.js';
+import { queryCollection, type QueryOptions } from '@dkb/runtime/router/search.js';
 
 export type KnowledgeTargetType = 'dkb' | 'collection' | 'library';
 

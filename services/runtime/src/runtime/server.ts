@@ -1,12 +1,9 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import { watchComposeProject } from '../watch/index.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import {
-  compileRuntimeDkb,
   defaultRuntimeStateRoot,
   ensureRuntimeState,
   importCompiledDkbArtifactIntoRuntime,
-  importDkbIntoRuntime,
   runtimeLibrary,
   removeDkbFromRuntime,
   retrieveFromRuntime,
@@ -18,18 +15,13 @@ import { discoverRemoteDkb } from '../remote/discovery.js';
 import { getTrace, latestTrace, listTraces } from './trace.js';
 import { closeQueryAuditQueue } from './queryAudit.js';
 import { resolveRegistryContext } from '@dkb/registry-client/config.js';
+import { DKB_RUNTIME_VERSION } from '../version.js';
 
 export interface ServeRuntimeOptions {
   host?: string;
   port?: number;
   stateRoot?: string;
 }
-
-interface RuntimeWatch {
-  close(): Promise<void>;
-}
-
-const watchers = new Map<string, RuntimeWatch>();
 
 export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promise<http.Server> {
   const stateRoot = options.stateRoot ?? defaultRuntimeStateRoot();
@@ -49,6 +41,7 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
 
   console.error(JSON.stringify({
     event: 'dkb.runtime.started',
+    version: DKB_RUNTIME_VERSION,
     host,
     port,
     stateRoot,
@@ -87,18 +80,6 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
       return sendJson(response, 200, await runtimeLibrary(stateRoot));
     }
 
-    if (request.method === 'POST' && pathName === '/api/dkbs/import') {
-      const body = await readJsonBody<{
-        sourcePath: string;
-        id?: string;
-        name?: string;
-        force?: boolean;
-        compile?: boolean;
-      }>(request);
-
-      return sendJson(response, 201, await importDkbIntoRuntime(body, stateRoot));
-    }
-
     if (request.method === 'POST' && pathName === '/api/dkbs/import-artifact') {
       const body = await readJsonBody<{
         sourcePath: string;
@@ -109,26 +90,10 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
       return sendJson(response, 201, await importCompiledDkbArtifactIntoRuntime(body, stateRoot));
     }
 
-    const dkbMatch = pathName.match(/^\/api\/dkbs\/([^/]+)(?:\/(compile))?$/);
+    const dkbMatch = pathName.match(/^\/api\/dkbs\/([^/]+)$/);
 
-    if (dkbMatch && request.method === 'DELETE' && !dkbMatch[2]) {
+    if (dkbMatch && request.method === 'DELETE') {
       return sendJson(response, 200, await removeDkbFromRuntime(decodeURIComponent(dkbMatch[1]!), stateRoot));
-    }
-
-    if (dkbMatch && request.method === 'POST' && dkbMatch[2] === 'compile') {
-      return sendJson(response, 200, await compileRuntimeDkb(decodeURIComponent(dkbMatch[1]!), stateRoot));
-    }
-
-    if (request.method === 'POST' && pathName === '/api/compile') {
-      return sendJson(response, 200, await compileRuntimeDkb(undefined, stateRoot));
-    }
-
-    if (request.method === 'POST' && pathName === '/api/watch/start') {
-      return sendJson(response, 200, await startRuntimeWatch(stateRoot));
-    }
-
-    if (request.method === 'POST' && pathName === '/api/watch/stop') {
-      return sendJson(response, 200, await stopRuntimeWatch(stateRoot));
     }
 
     if (request.method === 'POST' && pathName === '/api/retrieve') {
@@ -255,48 +220,6 @@ function parseLimit(value: string | null, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
 
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 100) : fallback;
-}
-
-async function startRuntimeWatch(stateRoot: string) {
-  if (watchers.has(stateRoot)) {
-    return {
-      status: 'already_running',
-      stateRoot,
-    };
-  }
-
-  const watcher = await watchComposeProject(stateRoot, {
-    onEvent: (event) => console.error(JSON.stringify({
-      event: 'dkb.runtime.watch',
-      detail: event,
-    })),
-  });
-
-  watchers.set(stateRoot, watcher);
-
-  return {
-    status: 'started',
-    stateRoot,
-  };
-}
-
-async function stopRuntimeWatch(stateRoot: string) {
-  const watcher = watchers.get(stateRoot);
-
-  if (!watcher) {
-    return {
-      status: 'not_running',
-      stateRoot,
-    };
-  }
-
-  await watcher.close();
-  watchers.delete(stateRoot);
-
-  return {
-    status: 'stopped',
-    stateRoot,
-  };
 }
 
 async function readJsonBody<T>(request: IncomingMessage): Promise<T> {

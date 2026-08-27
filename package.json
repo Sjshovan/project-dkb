@@ -24,8 +24,8 @@
     "providers/bundled/python/llamaindex/Dockerfile.gpu"
   ],
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && npm run build --workspace @dkb/providers-bundled && npm run build --workspace @dkb/library && npm run build --workspace @dkb/registry-client && npm run build --workspace @dkb/compiler && tsc -p tsconfig.build.json",
-    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && npm run check --workspace @dkb/providers-bundled && npm run check --workspace @dkb/library && npm run check --workspace @dkb/registry-client && npm run check --workspace @dkb/compiler && tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && npm run build --workspace @dkb/providers-bundled && npm run build --workspace @dkb/library && npm run build --workspace @dkb/registry-client && npm run build --workspace @dkb/compiler && npm run build --workspace @dkb/runtime && tsc -p tsconfig.build.json",
+    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && npm run check --workspace @dkb/providers-bundled && npm run check --workspace @dkb/library && npm run check --workspace @dkb/registry-client && npm run check --workspace @dkb/compiler && npm run check --workspace @dkb/runtime && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
@@ -41,6 +41,7 @@
     "@dkb/pipeline": "0.1.0",
     "@dkb/protocol": "1.0.0",
     "@dkb/registry-client": "0.1.0",
+    "@dkb/runtime": "0.1.0",
     "@dkb/providers-bundled": "0.1.0",
     "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/client": "^2.0.0",

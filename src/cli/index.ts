@@ -451,7 +451,7 @@ program
   .option('--name <name>', 'Host-local Runtime name', 'codename-dkb')
   .action(async (options: { root?: string; registryUrl?: string; verify?: boolean; yes?: boolean; host: string; port: number; name: string }) => {
     const { prepareServeLibrary } = await import('./serve.js');
-    const { serveDkbRuntime } = await import('../runtime/server.js');
+    const { serveDkbRuntime } = await import('@dkb/runtime/runtime/server.js');
     const { registerHostLibrary, registerHostRuntime } = await import('../host/inventory.js');
     const prepared = await prepareServeLibrary({
       root: options.root,
@@ -538,7 +538,7 @@ runtime
     await presenter().run('Registering Runtime', async () => {
       let warning: string | undefined;
       if (options.verify !== false) {
-        const { DkbRuntimeClient } = await import('../runtime/client.js');
+        const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
         try {
           await new DkbRuntimeClient({ baseUrl: url, timeoutMs: 5_000 }).status();
         } catch {
@@ -598,8 +598,8 @@ runtime
   .option('--state-root <path>', 'Runtime state root', process.env.DKB_RUNTIME_STATE_ROOT)
   .option('--name <name>', 'Host-local Runtime name', 'codename-dkb')
   .action(async (options: { host: string; port: number; stateRoot?: string; name: string }) => {
-    const { serveDkbRuntime } = await import('../runtime/server.js');
-    const { defaultRuntimeStateRoot } = await import('../runtime/state.js');
+    const { serveDkbRuntime } = await import('@dkb/runtime/runtime/server.js');
+    const { defaultRuntimeStateRoot } = await import('@dkb/runtime/runtime/state.js');
     const { registerHostLibrary, registerHostRuntime } = await import('../host/inventory.js');
     const stateRoot = path.resolve(options.stateRoot ?? defaultRuntimeStateRoot());
 
@@ -659,7 +659,7 @@ runtime
   .description('Show DKB Runtime status')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).status());
   });
@@ -669,7 +669,7 @@ runtime
   .description('Show the single Library served by the DKB Runtime')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).library());
   });
@@ -1297,7 +1297,7 @@ program
   .description('List DKBs and Collections in the current Library')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { listRuntimePackages } = await import('../runtime/state.js');
+    const { listRuntimePackages } = await import('@dkb/runtime/runtime/state.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const libraryRoot = await currentLibraryRoot(options.library);
     const [listing, upstream] = await Promise.all([
@@ -1395,7 +1395,7 @@ remote
   .argument('<url>', 'Site URL or direct /.well-known/dkb.json URL')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (targetUrl: string, options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteDiscover(targetUrl));
   });
@@ -1407,7 +1407,7 @@ remote
   .option('--ttl <seconds>', 'Session lifetime in seconds', parsePositiveInteger)
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (targetUrl: string, options: { ttl?: number; url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     await presenter().run('Attaching remote', async () => new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteAttach({
       url: targetUrl,
@@ -1420,7 +1420,7 @@ remote
   .description('List temporary remote DKB sessions held by the runtime process')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteSessions());
   });
@@ -1431,7 +1431,7 @@ remote
   .argument('<session-id>', 'Remote session id returned by dkb remote attach')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (sessionId: string, options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     await presenter().run('Detaching remote', async () => new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteDetach(sessionId));
   });
@@ -1467,7 +1467,7 @@ remote
       return;
     }
 
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     presenter().print(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteRetrieve(sessionId, {
       need,
@@ -1477,49 +1477,13 @@ remote
     }), summarizeRetrievalResult);
   });
 
-runtime
-  .command('compile')
-  .description('Compile the runtime Library or one installed DKB')
-  .argument('[id]', 'Installed DKB id')
-  .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
-  .action(async (id: string | undefined, options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
-
-    await presenter().run(id ? `Compiling installed DKB ${id}` : 'Compiling runtime Library', async () => new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).compile(id), summarizeCompileResult);
-  });
-
-runtime
-  .command('watch')
-  .description('Start or stop runtime source watching')
-  .argument('<action>', 'start or stop')
-  .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
-  .action(async (action: string, options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
-    const client = new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) });
-
-    if (action === 'start') {
-      await presenter().run('Starting runtime watcher', async () => client.startWatch());
-
-      return;
-    }
-
-    if (action === 'stop') {
-      await presenter().run('Stopping runtime watcher', async () => client.stopWatch());
-
-      return;
-    }
-
-    throw new DkbError('Runtime watch action must be start or stop');
-  });
-
 program
   .command('add')
-  .description('Import a DKB folder/package into the runtime Library')
-  .argument('<path>', 'Local DKB package, Library folder, or raw folder')
+  .description('Compile a local DKB and activate its verified artifact in the Runtime')
+  .argument('<path>', 'Local DKB folder or raw knowledge folder')
   .option('--id <id>', 'Installed DKB id override')
   .option('--name <name>', 'Generated manifest display name for raw folders')
   .option('--force', 'Replace an existing installed DKB with the same id')
-  .option('--no-compile', 'Import without compiling afterward')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .option('--host-import-root <path>', 'Host staging directory mounted into the runtime', process.env.DKB_RUNTIME_HOST_IMPORT_ROOT || '.dkb/runtime/imports')
   .option('--container-import-root <path>', 'Runtime-visible import mount path', process.env.DKB_RUNTIME_CONTAINER_IMPORT_ROOT || '/imports')
@@ -1528,27 +1492,32 @@ program
     id?: string;
     name?: string;
     force?: boolean;
-    compile?: boolean;
     url?: string;
     hostImportRoot: string;
     containerImportRoot: string;
     stage?: boolean;
   }) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
-    const stagedImport = options.stage === false
-      ? undefined
-      : await stageRuntimeImport(target, options.hostImportRoot, options.containerImportRoot, options.id);
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
+    const compiledImport = await prepareCompiledRuntimeImport(target, options.id, options.name);
+    let stagedImport: Awaited<ReturnType<typeof stageRuntimeImport>> | undefined;
 
-    await presenter().run('Importing package into runtime', async () => {
+    try {
+      stagedImport = options.stage === false
+        ? undefined
+        : await stageRuntimeImport(compiledImport.path, options.hostImportRoot, options.containerImportRoot, compiledImport.id);
+    } catch (error) {
+      await compiledImport.cleanup().catch(() => undefined);
+      throw error;
+    }
+
+    await presenter().run('Activating compiled package in Runtime', async () => {
       let result: unknown;
 
       try {
-        result = await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).importDkb({
-          sourcePath: stagedImport?.containerPath ?? target,
-          id: options.id,
-          name: options.name,
+        result = await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).importArtifact({
+          sourcePath: stagedImport?.containerPath ?? compiledImport.path,
+          id: compiledImport.id,
           force: Boolean(options.force),
-          compile: options.compile,
         });
       } catch (error) {
         if (stagedImport) {
@@ -1564,6 +1533,8 @@ program
         }
 
         throw error;
+      } finally {
+        await compiledImport.cleanup().catch(() => undefined);
       }
 
       if (!stagedImport) {
@@ -1615,7 +1586,7 @@ program
       return;
     }
 
-    const { removeDkbFromRuntime } = await import('../runtime/state.js');
+    const { removeDkbFromRuntime } = await import('@dkb/runtime/runtime/state.js');
 
     await presenter().run(`Uninstalling ${identity}`, async (progress) => removeDkbFromRuntime(identity, libraryRoot, { progress }), summarizeRemoveResult);
   });
@@ -1632,7 +1603,7 @@ program
     need: string,
     options: { intent: 'evidence' | 'records' | 'count' | 'summary' | 'compare'; limit: number; profile?: boolean; url?: string },
   ) => {
-    const { DkbRuntimeClient } = await import('../runtime/client.js');
+    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
 
     presenter().print(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).retrieve({
       need,
@@ -1680,7 +1651,7 @@ program
     .option('--id <id>', 'Installed DKB id override')
     .option('--force', 'Replace an existing installed DKB with the same id')
     .action(async (target: string, options: { library?: string; id?: string; force?: boolean }) => {
-      const { importCompiledDkbArtifactIntoRuntime } = await import('../runtime/state.js');
+      const { importCompiledDkbArtifactIntoRuntime } = await import('@dkb/runtime/runtime/state.js');
       const libraryRoot = await currentLibraryRoot(options.library);
 
       await presenter().run('Installing compiled artifact', async (progress) => importCompiledDkbArtifactIntoRuntime({
@@ -1695,7 +1666,7 @@ program
     .argument('<id>', 'Installed DKB id')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .action(async (id: string, options: { library?: string }) => {
-      const { removeDkbFromRuntime } = await import('../runtime/state.js');
+      const { removeDkbFromRuntime } = await import('@dkb/runtime/runtime/state.js');
       const libraryRoot = await currentLibraryRoot(options.library);
 
       await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, libraryRoot, { progress }), summarizeRemoveResult);
@@ -2087,7 +2058,7 @@ program
   .argument('<query>', 'Natural-language lookup intent for ranking chunk targets')
   .option('-l, --limit <number>', 'Maximum target count', parseLimit, 10)
   .action(async (target: string, query: string, options: { limit: number }) => {
-    const { describeQueryTargets } = await import('../read/runtime.js');
+    const { describeQueryTargets } = await import('@dkb/runtime/read/runtime.js');
 
     printJson(await describeQueryTargets(target, query, options.limit));
   });
@@ -2099,7 +2070,7 @@ program
   .argument('<request-path>', 'Path to a DKB Read API request JSON file')
   .action(async (target: string, requestPath: string) => {
     const fs = await import('node:fs/promises');
-    const { readDkb } = await import('../read/runtime.js');
+    const { readDkb } = await import('@dkb/runtime/read/runtime.js');
 
     printJson(await readDkb(target, JSON.parse(await fs.readFile(requestPath, 'utf8'))));
   });
@@ -2143,7 +2114,7 @@ trace
   .description('Show the latest retrieval trace')
   .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .action(async (options: { root: string }) => {
-    const { latestTrace } = await import('../runtime/trace.js');
+    const { latestTrace } = await import('@dkb/runtime/runtime/trace.js');
 
     printJson(await latestTrace(options.root));
   });
@@ -2154,7 +2125,7 @@ trace
   .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .option('--limit <number>', 'Maximum trace summaries to return', parseLimit, 20)
   .action(async (options: { root: string; limit: number }) => {
-    const { listTraces } = await import('../runtime/trace.js');
+    const { listTraces } = await import('@dkb/runtime/runtime/trace.js');
 
     printJson(await listTraces(options.root, options.limit));
   });
@@ -2165,7 +2136,7 @@ trace
   .argument('<trace-id>', 'Trace id from trace list/latest')
   .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .action(async (traceId: string, options: { root: string }) => {
-    const { getTrace } = await import('../runtime/trace.js');
+    const { getTrace } = await import('@dkb/runtime/runtime/trace.js');
 
     printJson(await getTrace(options.root, traceId));
   });
@@ -2190,7 +2161,7 @@ mcp
   .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_MCP_HTTP_PORT || '7332', 10))
   .option('--path <path>', 'MCP endpoint path', process.env.DKB_MCP_HTTP_PATH || '/mcp')
   .action(async (options: { host: string; port: number; path: string }) => {
-    const { serveDkbMcpHttp } = await import('../mcp/http.js');
+    const { serveDkbMcpHttp } = await import('@dkb/runtime/mcp/http.js');
 
     await serveDkbMcpHttp(options);
   });
@@ -3053,7 +3024,7 @@ async function stageRuntimeImport(source: string, hostRoot: string, containerRoo
   await fs.mkdir(path.dirname(hostTarget), { recursive: true });
   await fs.cp(resolvedSource, hostTarget, {
     recursive: true,
-    filter: (candidate) => !isDkbStatePath(resolvedSource, candidate),
+    filter: (candidate) => !isEphemeralDkbStatePath(resolvedSource, candidate),
   });
 
   return {
@@ -3062,10 +3033,85 @@ async function stageRuntimeImport(source: string, hostRoot: string, containerRoo
   };
 }
 
+async function prepareCompiledRuntimeImport(source: string, id?: string, name?: string): Promise<{
+  id: string;
+  path: string;
+  cleanup(): Promise<void>;
+}> {
+  const resolvedSource = path.resolve(source);
+  const stat = await fs.stat(resolvedSource);
+
+  if (!stat.isDirectory()) {
+    throw new DkbError(`Runtime import source must be a directory: ${resolvedSource}`);
+  }
+
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-add-'));
+  const packageRoot = path.join(temporaryRoot, 'package');
+
+  try {
+    await fs.cp(resolvedSource, packageRoot, {
+      recursive: true,
+      filter: (candidate) => !isDkbStatePath(resolvedSource, candidate),
+    });
+    const sourceManifestPath = path.join(resolvedSource, 'dkb.json');
+    let manifest: Awaited<ReturnType<typeof loadManifest>>;
+
+    if (await exists(sourceManifestPath)) {
+      manifest = await loadManifest(packageRoot);
+    } else {
+      const identity = id
+        ? parseDkbIdentity(id, 'Imported DKB identity').identity
+        : `@local/${safeCliId(path.basename(resolvedSource) || 'dkb')}`;
+      await fs.writeFile(path.join(packageRoot, 'dkb.json'), `${JSON.stringify({
+        manifestVersion: 1,
+        type: 'dkb',
+        name: identity,
+        displayName: name ?? identityDisplayName(identity),
+        version: '0.1.0',
+        permissions: { read: true, write: false },
+        meta: { generatedBy: '@dkb/cli' },
+      }, null, 2)}\n`, 'utf8');
+      manifest = await loadManifest(packageRoot);
+    }
+
+    if (manifest.type !== 'dkb') {
+      throw new DkbError(`dkb add accepts one DKB at a time; received ${manifest.type}. Install Collections through the Registry or add their DKBs individually.`);
+    }
+    const identity = parseDkbIdentity(manifest.name, 'Imported DKB identity').identity;
+    if (id && parseDkbIdentity(id, 'Imported DKB identity').identity !== identity) {
+      throw new DkbError(`Imported DKB identity override ${id} does not match its manifest ${identity}.`);
+    }
+    const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+    await compileComposeProject(packageRoot, { force: true, mode: 'package' });
+
+    return {
+      id: identity,
+      path: packageRoot,
+      cleanup: () => fs.rm(temporaryRoot, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 function isDkbStatePath(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
 
   return relative === '.dkb' || relative.startsWith(`.dkb${path.sep}`);
+}
+
+function isEphemeralDkbStatePath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  const excluded = [
+    path.join('.dkb', 'cache'),
+    path.join('.dkb', 'locks'),
+    path.join('.dkb', 'runs'),
+    path.join('.dkb', 'plugins'),
+    path.join('.dkb', 'config.json'),
+  ];
+
+  return excluded.some((entry) => relative === entry || relative.startsWith(`${entry}${path.sep}`));
 }
 
 async function resolveInitName(name: string | undefined): Promise<string> {

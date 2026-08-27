@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { describeQueryTargets, readDkb, retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
-import { renderModelEvidence } from '../read/modelEvidence.js';
-import { getQueryContext } from '../indexes/queryContext.js';
-import { getTrace, latestTrace, listTraces, recordRetrievalTrace, retrievalTraceEnabled } from '../runtime/trace.js';
-import { enqueueQueryAudit } from '../runtime/queryAudit.js';
+import { describeQueryTargets, readDkb, retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '@dkb/runtime/read/runtime.js';
+import { renderModelEvidence } from '@dkb/runtime/read/modelEvidence.js';
+import { getQueryContext } from '@dkb/runtime/indexes/queryContext.js';
+import { getTrace, latestTrace, listTraces, recordRetrievalTrace, retrievalTraceEnabled } from '@dkb/runtime/runtime/trace.js';
+import { enqueueQueryAudit } from '@dkb/runtime/runtime/queryAudit.js';
 import { auditKnowledgeAlignment } from '../knowledge/alignment.js';
 import { queryKnowledgeTarget } from '../knowledge/target.js';
 import { DkbError } from '@dkb/protocol/errors.js';
@@ -20,15 +20,15 @@ import type { ProcessWriteQueueInput, QueuedWriteStatus, WriteTarget } from '../
 import { describeCollection } from './catalog.js';
 import { configuredLibraryPath, debugMcp } from './config.js';
 import { modelSafeToolResult } from '@dkb/protocol/security/sourceContent.js';
-import { describeSources, lexicalSearch, semanticSearch, type DkbNavigationScope } from '../read/navigation.js';
-import { discoverRemoteDkb } from '../remote/discovery.js';
+import { describeSources, lexicalSearch, semanticSearch, type DkbNavigationScope } from '@dkb/runtime/read/navigation.js';
+import { discoverRemoteDkb } from '@dkb/runtime/remote/discovery.js';
 import {
   attachRemoteSession,
   detachRemoteSession,
   listRemoteSessions,
   retrieveFromRemoteSession,
-} from '../remote/sessions.js';
-import type { DkbRemoteAttachInput } from '../remote/types.js';
+} from '@dkb/runtime/remote/sessions.js';
+import type { DkbRemoteAttachInput } from '@dkb/runtime/remote/types.js';
 import {
   addDirectRemote,
   addRegisteredRemote,

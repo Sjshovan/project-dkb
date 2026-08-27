@@ -24,24 +24,12 @@ export class DkbRuntimeClient {
     return this.get('/api/library');
   }
 
-  importDkb(input: { sourcePath: string; id?: string; name?: string; force?: boolean; compile?: boolean }) {
-    return this.post('/api/dkbs/import', input);
+  importArtifact(input: { sourcePath: string; id?: string; force?: boolean }) {
+    return this.post('/api/dkbs/import-artifact', input);
   }
 
   removeDkb(id: string) {
     return this.delete(`/api/dkbs/${encodeURIComponent(id)}`);
-  }
-
-  compile(id?: string) {
-    return id ? this.post(`/api/dkbs/${encodeURIComponent(id)}/compile`, {}) : this.post('/api/compile', {});
-  }
-
-  startWatch() {
-    return this.post('/api/watch/start', {});
-  }
-
-  stopWatch() {
-    return this.post('/api/watch/stop', {});
   }
 
   retrieve(request: DkbRetrieveKnowledgeRequest) {

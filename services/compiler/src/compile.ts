@@ -13,7 +13,7 @@ import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
-import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
+import { DKB_ARTIFACT_MANIFEST_PATH, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
 import type { LlamaIndexCompilerResult } from '@dkb/providers-bundled/llamaindex.js';
 import {
   readLlamaIndexCompilerRecords,
@@ -537,46 +537,6 @@ export async function verifyComposeProject(root: string): Promise<VerifyComposeP
     lockPath,
     checks,
   };
-}
-
-/**
- * Refresh aggregate Library integrity metadata after activating or removing
- * already-compiled packages. This hashes installed package artifacts and never
- * re-parses, re-chunks, or re-embeds their source documents.
- */
-export async function refreshLibraryArtifactMetadata(root: string): Promise<DkbLockManifest> {
-  const resolvedRoot = path.resolve(root);
-
-  return withCompileLock(resolvedRoot, async () => {
-    const library = await loadCompose(resolvedRoot);
-    const state = await collectRegistryStateForVerification(library);
-    const previousManifest = await inspectDkbArtifactManifest(resolvedRoot).catch(() => null);
-    const lock = await lockForState(resolvedRoot, library, state, new Date().toISOString());
-    const lockPath = artifactLockPath(resolvedRoot);
-    const tempPath = `${lockPath}.tmp-${process.pid}-${Date.now().toString(36)}`;
-    const backupPath = `${lockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
-    const hadLock = Boolean(await maybeReadFile(lockPath));
-
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    await fs.writeFile(tempPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
-    if (hadLock) await fs.rename(lockPath, backupPath);
-
-    try {
-      await fs.rename(tempPath, lockPath);
-      await writeDkbArtifactManifest(resolvedRoot, lock, {
-        compiler: previousManifest?.compiler,
-      });
-      await fs.rm(backupPath, { force: true });
-      await fs.rm(resolveFrom(resolvedRoot, COMPILE_CACHE_PATH), { force: true });
-
-      return lock;
-    } catch (error) {
-      await fs.rm(tempPath, { force: true });
-      await fs.rm(lockPath, { force: true });
-      if (hadLock) await fs.rename(backupPath, lockPath);
-      throw error;
-    }
-  });
 }
 
 function packageVerificationDetail(

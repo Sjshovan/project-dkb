@@ -1,4 +1,5 @@
 export * from './artifactSnapshot.js';
+export * from './artifactMetadata.js';
 export * from './adapters/adapter.js';
 export * from './adapters/compose.js';
 export * from './adapters/index.js';

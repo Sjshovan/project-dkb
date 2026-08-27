@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { renderModelEvidence } from '../dist/src/read/modelEvidence.js';
-import { closeQueryContext } from '../dist/src/indexes/queryContext.js';
+import { renderModelEvidence } from '../services/runtime/dist/read/modelEvidence.js';
+import { closeQueryContext } from '../services/runtime/dist/indexes/queryContext.js';
 import {
   installDkbFromMockRegistry,
   publishDkbToMockRegistry,
@@ -12,7 +12,7 @@ import {
   listRuntimePackages,
   removeDkbFromRuntime,
   retrieveFromRuntime,
-} from '../dist/src/runtime/state.js';
+} from '../services/runtime/dist/runtime/state.js';
 
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-lifecycle-proof-'));
 const registryRoot = path.join(proofRoot, 'registry');

@@ -3,7 +3,7 @@ import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '@dkb/
 import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '@dkb/providers-bundled/llamaindexArtifacts.js';
-import { refreshLibraryArtifactMetadata } from '@dkb/compiler/compile.js';
+import { refreshInstalledLibraryArtifactMetadata } from '@dkb/library/artifactMetadata.js';
 
 export interface RuntimeCatalogRefreshResult {
   recordCount: number;
@@ -20,7 +20,7 @@ export async function refreshRuntimeCatalogFromInstalledArtifacts(
   const sourceEdges = sourceIndexes.flatMap((index) => index.edges);
 
   await writeSourceIndex(resolvedRoot, sourceUnits, sourceEdges);
-  await refreshLibraryArtifactMetadata(resolvedRoot);
+  await refreshInstalledLibraryArtifactMetadata(resolvedRoot);
 
   return {
     recordCount: sourceUnits.length,

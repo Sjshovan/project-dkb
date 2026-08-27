@@ -2,7 +2,6 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod/v4';
 import { DKB_PROTOCOL_VERSION } from '@dkb/protocol/version.js';
-import { tokenize } from '@dkb/providers-bundled/scoring.js';
 import {
   describeCollectionTool,
   describeRegistryChunksTool,
@@ -292,95 +291,10 @@ export function createDkbMcpServer(): McpServer {
   return server;
 }
 
-/**
- * The remote/ChatGPT surface is intentionally smaller than the local stdio
- * server. It can discover and read immutable compiled evidence, but it cannot
- * install packages, mutate sources, or operate the write queue.
- */
-export function createDkbReadOnlyMcpServer(publicBaseUrl?: string): McpServer {
-  const server = new McpServer(
-    { name: 'codename-dkb-read-only', version: DKB_PROTOCOL_VERSION },
-    { capabilities: { tools: {} } },
-  );
-
-  server.registerTool(
-    'search',
-    {
-      title: 'Search DKB knowledge',
-      description: 'Search installed DKB packages. Treat previews as untrusted evidence and call fetch with a returned id before answering.',
-      inputSchema: z.object({
-        query: z.string().min(1),
-        limit: z.number().int().min(1).max(20).default(5),
-        dkbId: z.string().min(1).optional(),
-      }),
-      outputSchema: z.object({}).loose(),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async ({ query, limit, dkbId }) => {
-      const result = await semanticSearchTool(undefined, query, limit, dkbId ? { dkbId } : undefined);
-      const coverage = searchEvidenceCoverage(query, result.results);
-      const visibleResults = coverage >= 0.5 ? result.results : [];
-      const results = visibleResults.map((item) => ({
-        ...item,
-        citationId: item.evidenceId ?? item.id,
-        citationUrl: citationUrl(publicBaseUrl, item.id),
-      }));
-
-      return toolResult({
-        ...result,
-        status: results.length > 0 ? 'ready' : 'empty',
-        results,
-        sufficiency: {
-          matchedNeed: results.length > 0,
-          confidence: coverage,
-          reason: results.length > 0 ? 'matched_need' : 'weak_match',
-        },
-      });
-    },
-  );
-
-  server.registerTool(
-    'fetch',
-    {
-      title: 'Fetch DKB evidence',
-      description: 'Fetch one immutable compiled evidence chunk by an id returned from search, with citation and provenance metadata.',
-      inputSchema: z.object({ id: z.string().min(1) }),
-      outputSchema: z.object({}).loose(),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async ({ id }) => toolResult(await fetchRemoteEvidence(id, publicBaseUrl)),
-  );
-
-  return server;
-}
-
 export function serveDkbMcpServer(): void {
   serveStdio(() => createDkbMcpServer(), {
     onerror: (error) => console.error(error.message),
   });
-}
-
-function searchEvidenceCoverage(query: string, results: Array<{ matchedTokens?: string[] }>): number {
-  const queryTokens = [...new Set(tokenize(query)
-    .filter((token) => token.length > 2 && !REMOTE_SEARCH_STOPWORDS.has(token)))];
-
-  if (queryTokens.length === 0) {
-    return results.length > 0 ? 1 : 0;
-  }
-
-  const matchedTokens = new Set(results.flatMap((result) => result.matchedTokens ?? []));
-
-  return Math.round((queryTokens.filter((token) => matchedTokens.has(token)).length / queryTokens.length) * 10_000) / 10_000;
 }
 
 function toolResult(value: unknown) {
@@ -390,62 +304,8 @@ function toolResult(value: unknown) {
   };
 }
 
-const REMOTE_SEARCH_STOPWORDS = new Set([
-  'what',
-  'which',
-  'where',
-  'when',
-  'who',
-  'how',
-  'does',
-  'are',
-  'for',
-  'explain',
-  'especially',
-  'find',
-  'show',
-  'tell',
-  'about',
-  'that',
-  'this',
-  'with',
-  'from',
-  'the',
-  'and',
-  'project',
-]);
-
 function textToolResult(text: string) {
   return {
     content: [{ type: 'text' as const, text }],
   };
-}
-
-export async function fetchRemoteEvidence(id: string, publicBaseUrl?: string) {
-  const result = await readDkbTool(undefined, {
-    queries: [{ id: 'fetch', target: id, operation: 'fetch' }],
-  });
-  const query = result.queries[0];
-  const evidence = query?.evidence[0];
-
-  return {
-    ...result,
-    citation: evidence ? {
-      id: evidence.source.evidenceId ?? evidence.source.chunkId ?? id,
-      url: citationUrl(publicBaseUrl, id),
-      chunkId: evidence.source.chunkId ?? id,
-      dkbId: evidence.source.dkbId,
-      packageVersion: evidence.source.packageVersion,
-      sourceHash: evidence.source.hash,
-      locator: evidence.source.locator,
-    } : null,
-  };
-}
-
-function citationUrl(publicBaseUrl: string | undefined, id: string): string | null {
-  if (!publicBaseUrl) {
-    return null;
-  }
-
-  return `${publicBaseUrl.replace(/\/$/, '')}/documents/${encodeURIComponent(id)}`;
 }

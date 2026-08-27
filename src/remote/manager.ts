@@ -5,8 +5,8 @@ import { DkbError } from '@dkb/protocol/errors.js';
 import { installDkbArchiveIntoRuntime } from '../registry/packageRegistry.js';
 import { DkbRegistryClient } from '@dkb/registry-client/client.js';
 import { resolveRegistryContext } from '@dkb/registry-client/config.js';
-import { defaultRuntimeStateRoot } from '../runtime/state.js';
-import { discoverRemoteDkb } from './discovery.js';
+import { defaultRuntimeStateRoot } from '@dkb/runtime/runtime/state.js';
+import { discoverRemoteDkb } from '@dkb/runtime/remote/discovery.js';
 import {
   loadRemoteCatalog,
   markRemoteOfferPresented,
@@ -16,14 +16,14 @@ import {
   updateRemoteOfferState,
   type DkbPersistentRemote,
 } from './catalog.js';
-import { retrieveFromRemoteEndpoint } from './sessions.js';
-import { assertVerifiedDiscovery, verifyRegistryEndpointAttestation } from './verification.js';
+import { retrieveFromRemoteEndpoint } from '@dkb/runtime/remote/sessions.js';
+import { assertVerifiedDiscovery, verifyRegistryEndpointAttestation } from '@dkb/runtime/remote/verification.js';
 import type {
   DkbDiscoveryDocument,
   DkbDiscoveryEndpoint,
   DkbRemoteEndpointAttestation,
-} from './types.js';
-import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
+} from '@dkb/runtime/remote/types.js';
+import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '@dkb/runtime/read/runtime.js';
 import type { DkbSigningKeyRecord } from '@dkb/protocol/types.js';
 
 export async function addDirectRemote(input: {

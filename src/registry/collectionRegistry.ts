@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.js';
-import { ensureRuntimeState, invalidateRuntimeQuerySnapshot } from '../runtime/state.js';
+import { refreshRuntimeCatalogFromInstalledArtifacts } from '@dkb/runtime/runtime/catalog.js';
+import { ensureRuntimeState, invalidateRuntimeQuerySnapshot } from '@dkb/runtime/runtime/state.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
 import { discoverLibraryEntries, loadManifest } from '@dkb/protocol/manifest.js';

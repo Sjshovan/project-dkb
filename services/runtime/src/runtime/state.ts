@@ -2,18 +2,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@dkb/library/signing.js';
 import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '@dkb/library/artifacts.js';
-import { compileComposeProject } from '@dkb/compiler/compile.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { closeQueryContext, getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { renderModelEvidence } from '../read/modelEvidence.js';
 import { recordRetrievalTrace, retrievalTraceEnabled } from './trace.js';
 import { enqueueQueryAudit } from './queryAudit.js';
-import { loadDkb, loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
+import { loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
-import type { DkbSourceManifest, LoadedDkb } from '@dkb/protocol/types.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
 import { syncLibrary } from '@dkb/library/resolver.js';
@@ -27,6 +26,7 @@ import {
 } from '@dkb/pipeline/profile.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
 import type { DkbIndexMutationResult } from '@dkb/pipeline/types.js';
+import { DKB_RUNTIME_VERSION } from '../version.js';
 
 // Runtime snapshots are invalidated by managed mutations, not revalidated on
 // every request. This keeps the hot MCP path independent of artifact I/O.
@@ -41,6 +41,7 @@ export interface DkbRuntimePaths {
 
 export interface DkbRuntimeStatus {
   ok: true;
+  version: string;
   stateRoot: string;
   libraryPath: string;
   packageCount: number;
@@ -63,23 +64,6 @@ export interface DkbRuntimePackageListing {
     recordCount?: number;
     path: string;
   }>;
-}
-
-export interface ImportDkbOptions {
-  sourcePath: string;
-  id?: string;
-  name?: string;
-  force?: boolean;
-  compile?: boolean;
-}
-
-export interface ImportDkbResult {
-  status: 'imported';
-  id: string;
-  libraryPath: string;
-  packagePath: string;
-  generatedManifest: boolean;
-  compiled?: Awaited<ReturnType<typeof compileComposeProject>>;
 }
 
 export interface ImportCompiledDkbArtifactOptions {
@@ -160,6 +144,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
 
   return {
     ok: true,
+    version: DKB_RUNTIME_VERSION,
     stateRoot: paths.stateRoot,
     libraryPath: paths.stateRoot,
     packageCount: dkbIds.length,
@@ -250,40 +235,6 @@ export async function runtimeLibrary(stateRoot?: string) {
       dkbIds: status.dkbIds,
       packageCount: status.packageCount,
     },
-  };
-}
-
-export async function importDkbIntoRuntime(options: ImportDkbOptions, stateRoot?: string): Promise<ImportDkbResult> {
-  const paths = await ensureRuntimeState(stateRoot);
-  const sourceRoot = path.resolve(options.sourcePath);
-
-  if (!(await exists(sourceRoot))) {
-    throw new DkbError(`Import source does not exist: ${sourceRoot}`);
-  }
-
-  const imported = await importSource(sourceRoot, paths, options);
-  await activateLocalImports(paths.stateRoot, imported.ids);
-  const compileResult = options.compile === false
-    ? undefined
-    : await compileComposeProject(paths.stateRoot, {
-      force: true,
-      mode: 'library',
-    });
-  // A precompiled package still needs its compiled chunks activated in the
-  // shared runtime catalog. Provider-specific index activation is handled by
-  // the selected index provider during compiled-package installation.
-  if (options.compile === false) {
-    await refreshRuntimeCatalogFromInstalledArtifacts(paths.stateRoot);
-  }
-  invalidateRuntimeQuerySnapshot(paths.stateRoot);
-
-  return {
-    status: 'imported',
-    id: imported.ids[0] ?? imported.id,
-    libraryPath: paths.stateRoot,
-    packagePath: imported.packagePath,
-    generatedManifest: imported.generatedManifest,
-    compiled: compileResult,
   };
 }
 
@@ -596,22 +547,6 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
   }
 }
 
-export async function compileRuntimeDkb(id?: string, stateRoot?: string) {
-  const paths = await ensureRuntimeState(stateRoot);
-
-  if (id && (await installedDkbRoots(paths, id)).length === 0) {
-    throw new DkbError(`Runtime DKB is not installed: ${id}`);
-  }
-
-  const compiled = await compileComposeProject(paths.stateRoot, {
-    force: true,
-    mode: 'library',
-  });
-  invalidateRuntimeQuerySnapshot(paths.stateRoot);
-
-  return compiled;
-}
-
 export async function retrieveFromRuntime(request: DkbRetrieveKnowledgeRequest, stateRoot?: string) {
   const paths = await ensureRuntimeState(stateRoot);
   const registry = await loadLibrary(paths.stateRoot);
@@ -690,92 +625,6 @@ async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
   return removed;
 }
 
-async function importSource(sourceRoot: string, paths: DkbRuntimePaths, options: ImportDkbOptions) {
-  const discovered = await discoverSourceDkbs(sourceRoot);
-
-  if (discovered.length === 0) {
-    const id = options.id
-      ? parseDkbIdentity(options.id, 'Imported DKB identity').identity
-      : `@local/${safeId(path.basename(sourceRoot) || 'dkb')}`;
-    const packagePath = localEntryPath(paths.stateRoot, id);
-
-    await replacePackagePath(packagePath, options.force);
-    await fs.mkdir(packagePath, { recursive: true });
-    await fs.cp(sourceRoot, packagePath, {
-      recursive: true,
-      filter: (source) => !isRuntimeArtifactPath(sourceRoot, source),
-    });
-    await writeGeneratedDkbManifest(packagePath, {
-      type: 'dkb',
-      name: id,
-      displayName: options.name ?? titleFromId(parseDkbIdentity(id).name),
-      version: '0.1.0',
-      permissions: {
-        read: true,
-        write: false,
-      },
-      meta: {
-        generatedBy: 'dkb-runtime',
-      },
-    });
-
-    return {
-      id,
-      ids: [id],
-      packagePath,
-      generatedManifest: true,
-    };
-  }
-
-  const importedIds: string[] = [];
-  let firstPackagePath = '';
-
-  for (const dkb of discovered) {
-    const id = dkb.root === sourceRoot && options.id
-      ? parseDkbIdentity(options.id, 'Imported DKB identity').identity
-      : dkb.manifest.id;
-    if (id !== dkb.manifest.id) {
-      throw new DkbError(`Imported DKB identity override ${id} does not match its manifest ${dkb.manifest.id}.`);
-    }
-    const packagePath = localEntryPath(paths.stateRoot, id);
-
-    await replacePackagePath(packagePath, options.force);
-    await fs.cp(dkb.root, packagePath, {
-      recursive: true,
-      filter: (source) => !isRuntimeArtifactPath(dkb.root, source),
-    });
-
-    importedIds.push(id);
-    firstPackagePath = firstPackagePath || packagePath;
-  }
-
-  return {
-    id: importedIds[0] ?? safeId(options.id ?? path.basename(sourceRoot) ?? 'dkb'),
-    ids: importedIds,
-    packagePath: firstPackagePath,
-    generatedManifest: false,
-  };
-}
-
-async function discoverSourceDkbs(sourceRoot: string): Promise<LoadedDkb[]> {
-  try {
-    return [await loadDkb(sourceRoot)];
-  } catch {
-    // Try a Library below.
-  }
-
-  try {
-    const registry = await loadLibrary(sourceRoot);
-
-    return uniqueLoadedDkbs([
-      ...registry.collections.flatMap((collection) => collection.dkbs),
-      ...registry.dkbs,
-    ]);
-  } catch {
-    return [];
-  }
-}
-
 async function activateLocalImports(libraryRoot: string, identities: string[]): Promise<void> {
   const manifestPath = path.join(libraryRoot, 'dkb.json');
   const manifest = await maybeReadJsonObject(manifestPath);
@@ -809,12 +658,6 @@ async function installedDkbs(paths: DkbRuntimePaths): Promise<LoadedDkb[]> {
   }
 }
 
-async function installedDkbRoots(paths: DkbRuntimePaths, id: string): Promise<string[]> {
-  return (await installedDkbs(paths))
-    .filter((dkb) => dkb.manifest.id === id)
-    .map((dkb) => dkb.root);
-}
-
 async function maybeInstalledPackage(packagePath: string, id: string): Promise<{
   dkb: LoadedDkb;
   validation: ValidateDkbArtifactManifestResult | null;
@@ -831,18 +674,6 @@ async function maybeInstalledPackage(packagePath: string, id: string): Promise<{
 
 async function runtimeRegistryId(paths: DkbRuntimePaths): Promise<string> {
   return (await loadLibrary(paths.stateRoot)).manifest.id;
-}
-
-async function replacePackagePath(packagePath: string, force?: boolean): Promise<void> {
-  if (!(await exists(packagePath))) {
-    return;
-  }
-
-  if (!force) {
-    throw new DkbError(`Runtime DKB already exists: ${path.basename(packagePath)}. Use force to replace it.`);
-  }
-
-  await fs.rm(packagePath, { recursive: true, force: true });
 }
 
 async function copyCompiledArtifactToInstallTemp(sourceRoot: string, paths: DkbRuntimePaths, id: string): Promise<string> {
@@ -891,10 +722,6 @@ async function promotePackagePath<T>(
     throw error;
   }
 
-}
-
-async function writeGeneratedDkbManifest(root: string, manifest: DkbSourceManifest): Promise<void> {
-  await fs.writeFile(path.join(root, 'dkb.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
 async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
@@ -988,12 +815,6 @@ async function maybeReadJsonObject(source: string): Promise<Record<string, unkno
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isRuntimeArtifactPath(sourceRoot: string, source: string): boolean {
-  const relative = path.relative(sourceRoot, source);
-
-  return relative === '.dkb' || relative.startsWith(`.dkb${path.sep}`);
 }
 
 function isEphemeralDkbStatePath(sourceRoot: string, source: string): boolean {

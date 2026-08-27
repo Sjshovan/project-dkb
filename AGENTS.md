@@ -17,8 +17,9 @@ Before changing behavior:
    - `packages/pipeline/`
    - `packages/registry-client/`
    - `providers/bundled/`
+   - `services/compiler/`
+   - `services/runtime/`
    - `src/registry/`
-   - `src/runtime/`
    - `src/mcp/`
 4. Check `docs/decisions/` for accepted directions that are not implemented yet.
 
@@ -39,15 +40,11 @@ python -m graphify update src
 | `packages/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and transactional snapshots |
 | `packages/registry-client/` | Laravel Registry transport, archive safety, publication, download, and endpoint verification |
 | `providers/bundled/` | LlamaIndex/Docling, FastEmbed, FAISS, Meilisearch, and hybrid retrieval implementations |
+| `services/compiler/` | Shared compilation runner and Registry-facing compiler HTTP service |
+| `services/runtime/` | Installed state, retrieval, evidence, Runtime HTTP, tracing, and read-only remote MCP |
 | `src/host/` | Disposable machine-local Library, Registry, and Runtime inventory and health inspection |
-| `src/adapters/` | Source discovery and reads; no retrieval orchestration |
-| `src/compiler/` | Transitional shared compilation runner pending extraction to `services/compiler/` |
-| `src/providers/` | Transitional compiler/runtime composition pending ownership extraction |
-| `src/artifacts/`, `src/signing/`, `src/oci/` | Compiled artifact identity, verification, signing, and transport |
 | `src/registry/` | Package publication, immutable releases, registry client/server, installation transport |
-| `src/runtime/` | Installed package state, aggregate catalog, HTTP runtime, snapshots, and traces |
-| `src/indexes/`, `src/read/`, `src/router/` | Transitional Runtime query composition and evidence navigation |
-| `src/mcp/` | Local and remote agent-facing tool boundaries |
+| `src/mcp/` | Transitional local stdio MCP and CLI compatibility shims |
 | `src/cli/` | Command registration, context resolution, presentation, and orchestration |
 | `tests/` | Cross-boundary behavior and release-regression tests |
 

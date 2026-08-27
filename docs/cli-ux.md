@@ -183,9 +183,10 @@ exact `dkb registry remote claim <package>@<version> --url <url>` retry command.
 An HTTP 422 during package reservation is accepted only after the client
 confirms that the requested package actually exists.
 
-`dkb add` removes its host-side staging copy after both successful and failed
-runtime imports. If cleanup itself fails after a successful import, the import
-remains successful and the retained path is reported as a warning.
+`dkb add` compiles a disposable copy locally, stages only the verified compiled
+artifact, and removes both temporary copies after successful and failed Runtime
+activation. If staging cleanup fails after activation, activation remains
+successful and the retained path is reported as a warning.
 
 ## Examples
 

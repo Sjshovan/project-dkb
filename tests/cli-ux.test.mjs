@@ -905,7 +905,9 @@ test('runtime add removes its staged copy after a successful import', async () =
   const packageRoot = path.join(tempRoot, 'source');
   const importRoot = path.join(tempRoot, 'imports');
   let requestBody;
+  let requestPath;
   const server = http.createServer((request, response) => {
+    requestPath = request.url;
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
@@ -934,7 +936,8 @@ test('runtime add removes its staged copy after a successful import', async () =
     ]);
 
     assert.equal(result.code, 0, result.stderr);
-    assert.match(requestBody.sourcePath, /^\/imports\/source-/);
+    assert.equal(requestPath, '/api/dkbs/import-artifact');
+    assert.match(requestBody.sourcePath, /^\/imports\/test-staged-demo-/);
     assert.deepEqual(await fs.readdir(importRoot), []);
   } finally {
     await close(server);

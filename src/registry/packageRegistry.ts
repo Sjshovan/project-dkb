@@ -5,8 +5,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { compileComposeProject } from '@dkb/compiler/compile.js';
-import { invalidateRuntimeQuerySnapshot, ensureRuntimeState } from '../runtime/state.js';
-import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.js';
+import { invalidateRuntimeQuerySnapshot, ensureRuntimeState } from '@dkb/runtime/runtime/state.js';
+import { refreshRuntimeCatalogFromInstalledArtifacts } from '@dkb/runtime/runtime/catalog.js';
 import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
@@ -25,7 +25,7 @@ import {
   verifyPackageReceipt,
 } from '@dkb/library/signing.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
-import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
+import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '@dkb/runtime/providers/runtimeIndex.js';
 import { assertMatchingRetrievalProfiles, maybeReadRetrievalProfileLock, writeRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 
 export const MOCK_REGISTRY_DB = 'registry.sqlite';

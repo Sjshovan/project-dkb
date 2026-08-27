@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DkbError } from '@dkb/protocol/errors.js';
-import type { DkbDiscoveryDocument, DkbDiscoveryPackage, DkbRemoteEndpointAttestation, DkbRemoteEndpointType } from './types.js';
+import type { DkbDiscoveryDocument, DkbDiscoveryPackage, DkbRemoteEndpointAttestation, DkbRemoteEndpointType } from '@dkb/runtime/remote/types.js';
 
 export type DkbRemoteCatalogStatus = 'verified' | 'behind' | 'mismatch' | 'unavailable' | 'unregistered';
 export type DkbRemoteOfferState = 'presented' | 'accepted' | 'declined' | 'installed';

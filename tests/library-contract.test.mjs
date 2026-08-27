@@ -16,8 +16,8 @@ import {
 import { inspectTarget } from '../dist/src/inspect/index.js';
 import { resolveKnowledgeTarget } from '../dist/src/knowledge/target.js';
 import { healthReport } from '../dist/src/lifecycle/health.js';
-import { refreshRuntimeCatalogFromInstalledArtifacts } from '../dist/src/runtime/catalog.js';
-import { verifyComposeProject } from '@dkb/compiler/compile.js';
+import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
+import { compileComposeProject, verifyComposeProject } from '@dkb/compiler/compile.js';
 import { inspectDkbArtifactManifest } from '@dkb/library/artifacts.js';
 import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
 
@@ -154,10 +154,13 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   const dkbRoot = path.join(root, 'core');
   await writeLibrary(root, { '@test/core': { path: 'core' } });
   await writeDkb(dkbRoot, '@test/core', '1.0.0');
-  await writeCompilerRecord(dkbRoot, '@test/core', 'CORE-MARKER-19');
+  await compileComposeProject(dkbRoot, { force: true, mode: 'package' });
+  const packageLockPath = path.join(dkbRoot, '.dkb', 'artifacts', 'dkb-artifact.lock.json');
+  const packageLock = await fs.readFile(packageLockPath, 'utf8');
 
   const activated = await refreshRuntimeCatalogFromInstalledArtifacts(root);
   assert.equal(activated.recordCount, 1);
+  assert.equal(await fs.readFile(packageLockPath, 'utf8'), packageLock);
   assert.equal((await verifyComposeProject(root)).ok, true);
   assert.equal((await inspectDkbArtifactManifest(root)).counts.packages, 1);
 
@@ -216,33 +219,6 @@ async function writeCollection(root, name, members) {
     type: 'collection',
     name,
     members,
-  });
-}
-
-async function writeCompilerRecord(root, dkbId, marker) {
-  const target = path.join(root, '.dkb', 'artifacts', 'llamaindex.compiler.json');
-  await writeJson(target, {
-    records: [{
-      id: `${dkbId}:chunk:1`,
-      assetId: `${dkbId}:asset:1`,
-      storeId: 'root',
-      type: 'filesystem',
-      locator: { path: 'knowledge.md', lineStart: 1, lineEnd: 1 },
-      assetLocator: { path: 'knowledge.md' },
-      title: 'Core evidence',
-      text: marker,
-      hash: `sha256:${'b'.repeat(64)}`,
-      sourceHash: `sha256:${'c'.repeat(64)}`,
-      updatedAt: '2026-08-26T12:00:00.000Z',
-      chunkOrdinal: 0,
-      chunkStart: 0,
-      chunkEnd: marker.length,
-      metadata: {
-        dkb_package_id: dkbId,
-        dkb_package_version: '1.0.0',
-        dkb_path: 'knowledge.md',
-      },
-    }],
   });
 }
 

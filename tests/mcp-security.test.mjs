@@ -2,18 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
-import { createDkbReadOnlyMcpServer } from '../dist/src/mcp/server.js';
+import { createDkbReadOnlyMcpServer } from '../services/runtime/dist/mcp/readOnly.js';
 import {
   renderModelEvidence,
   TRUSTED_FORMAT_EPILOG,
   TRUSTED_SECURITY_PREAMBLE,
-} from '../dist/src/read/modelEvidence.js';
+} from '../services/runtime/dist/read/modelEvidence.js';
 import { renderUntrustedSourceBlock, renderUntrustedSourceInline } from '@dkb/protocol/security/sourceContent.js';
-import { serveDkbMcpHttp } from '../dist/src/mcp/http.js';
+import { serveDkbMcpHttp } from '../services/runtime/dist/mcp/http.js';
 
 test('remote MCP exposes only read-only search and fetch tools', async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createDkbReadOnlyMcpServer('https://knowledge.example');
+  const server = createDkbReadOnlyMcpServer({
+    libraryPath: '.',
+    publicBaseUrl: 'https://knowledge.example',
+  });
   const client = new Client({ name: 'dkb-proof-client', version: '1.0.0' });
 
   await server.connect(serverTransport);

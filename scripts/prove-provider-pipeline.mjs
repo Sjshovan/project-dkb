@@ -7,12 +7,12 @@ import { compileComposeProject } from '@dkb/compiler/compile.js';
 import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
 import { validateMeilisearchPackageArtifact } from '@dkb/providers-bundled/meilisearchProvider.js';
-import { getQueryContext, closeQueryContext } from '../dist/src/indexes/queryContext.js';
+import { getQueryContext, closeQueryContext } from '../services/runtime/dist/indexes/queryContext.js';
 import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
-import { semanticSearch } from '../dist/src/read/navigation.js';
+import { semanticSearch } from '../services/runtime/dist/read/navigation.js';
 import { loadDkb, loadLibrary } from '@dkb/protocol/manifest.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
-import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../dist/src/providers/runtimeIndex.js';
+import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
 
 const compilerUrl = (process.env.DKB_PROOF_COMPILER_URL ?? 'http://127.0.0.1:7333').replace(/\/+$/, '');
 const target = process.env.DKB_PROOF_TARGET ?? 'default';
