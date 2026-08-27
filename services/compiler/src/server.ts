@@ -169,7 +169,7 @@ async function compileRegistryPackage(
   if (target !== contextConfig.activeTarget) {
     throw new DkbError(`Registry compiler accepts only its active target "${contextConfig.activeTarget}", not "${target}"`);
   }
-  const compilerImage = process.env.DKB_LLAMA_COMPILER_IMAGE ?? 'dkb-compiler-llamaindex:0.3.6';
+  const compilerImage = process.env.DKB_LLAMA_COMPILER_IMAGE ?? 'dkb-compiler-llamaindex:0.3.7';
 
   try {
     await fs.writeFile(uploadPath, sourceArchive);

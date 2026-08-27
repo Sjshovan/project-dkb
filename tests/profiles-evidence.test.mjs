@@ -16,7 +16,7 @@ import {
 } from '@dkb/providers-bundled/llamaindexArtifacts.js';
 import { analyzeSourceUnits } from '@dkb/compiler/sourceAnalysis.js';
 
-const image = 'dkb-compiler-llamaindex:0.3.6';
+const image = 'dkb-compiler-llamaindex:0.3.7';
 
 function compilerResult(model, dimensions) {
   return {
@@ -116,6 +116,15 @@ test('generated retrieval profile locks do not invalidate package source hashes'
 
   const verification = await verifyComposeProject(root);
   assert.equal(verification.ok, true, JSON.stringify(verification.checks));
+
+  // Published packages may omit provider-specific compiler shards. Verification
+  // must use the normalized portable index before raw provider/index records.
+  await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.compiler.manifest.json'), { force: true });
+  await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.compiler.json'), { force: true });
+  await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.records'), { force: true, recursive: true });
+
+  const packagedVerification = await verifyComposeProject(root);
+  assert.equal(packagedVerification.ok, true, JSON.stringify(packagedVerification.checks));
 });
 
 test('compiler bundles serialize compact Float32 embeddings as portable JSON arrays', async (t) => {

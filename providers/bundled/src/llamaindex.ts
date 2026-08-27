@@ -16,9 +16,12 @@ import type { LoadedDkb } from '@dkb/protocol/types.js';
 
 const execFile = promisify(execFileCallback);
 
-export const LLAMAINDEX_COMPILER_IMAGE = 'dkb-compiler-llamaindex:0.3.6';
+export const LLAMAINDEX_COMPILER_IMAGE = 'dkb-compiler-llamaindex:0.3.7';
 export const LLAMAINDEX_COMPILER_ID = 'llamaindex.fastembed.onnx';
-export const LLAMAINDEX_COMPILER_SERVICE_VERSION = '1';
+export const LLAMAINDEX_COMPILER_SERVICE_VERSION = '2';
+export const LLAMAINDEX_DOCUMENT_BATCH_SIZE = 32;
+export const LLAMAINDEX_EMBED_BATCH_SIZE = 96;
+export const LLAMAINDEX_INFERENCE_BATCH_SIZE = 10;
 const LLAMAINDEX_COMPILER_SERVICE_CONTAINER = 'dkb-llamaindex-compiler-service';
 const LLAMAINDEX_COMPILER_SERVICE_PORT = 8091;
 
@@ -480,11 +483,11 @@ export async function startLlamaIndexCompilerService(options: {
       '-e',
       `DKB_COMPILER_MODEL=${options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5'}`,
       '-e',
-      `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? '32'}`,
+      `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? String(LLAMAINDEX_DOCUMENT_BATCH_SIZE)}`,
       '-e',
-      `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? '32'}`,
+      `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? String(LLAMAINDEX_EMBED_BATCH_SIZE)}`,
       '-e',
-      `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? '10'}`,
+      `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? String(LLAMAINDEX_INFERENCE_BATCH_SIZE)}`,
       '-e',
       `DKB_FASTEMBED_PROVIDER=${process.env.DKB_FASTEMBED_PROVIDER ?? ''}`,
       '-e',
@@ -1282,9 +1285,9 @@ async function runCompiler(
   const env = [
     options.model ? `DKB_COMPILER_MODEL=${options.model}` : null,
     `DKB_LLAMA_ASYNC_WORKERS=${boundedWorkerCount(options.workers ?? Number(process.env.DKB_LLAMA_ASYNC_WORKERS ?? 1))}`,
-    `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? '32'}`,
-    `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? '32'}`,
-    `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? '10'}`,
+    `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? String(LLAMAINDEX_DOCUMENT_BATCH_SIZE)}`,
+    `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? String(LLAMAINDEX_EMBED_BATCH_SIZE)}`,
+    `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? String(LLAMAINDEX_INFERENCE_BATCH_SIZE)}`,
     `DKB_FASTEMBED_PROVIDER=${process.env.DKB_FASTEMBED_PROVIDER ?? ''}`,
   ].filter((value): value is string => Boolean(value));
 

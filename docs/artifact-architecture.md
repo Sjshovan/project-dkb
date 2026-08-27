@@ -100,6 +100,35 @@ checkpoint/resume state, atomic artifact promotion, and final artifact
 validation. The service only reuses initialized Docling, LlamaIndex tokenizer,
 and FastEmbed state while compiling the staged job request.
 
+For CPU compilation, the bundled provider defaults to 32 documents per
+chunking batch, a 96-record embedding scheduling window, and 10 texts per ONNX
+inference batch. The scheduling window lets LlamaIndex keep the shared
+FastEmbed session busy without creating additional model processes. These are
+execution settings, not retrieval-compatibility fields; every completed job
+records the resolved values and stage timings in its compiler receipt.
+
+Operators can override `DKB_LLAMA_DOCUMENT_BATCH_SIZE`,
+`DKB_LLAMA_EMBED_BATCH_SIZE`, and `DKB_LLAMA_INFERENCE_BATCH_SIZE` for measured
+hardware-specific tuning. Changes should be evaluated against a fresh compile
+with the record cache disabled, using the receipt's `load`, `chunk`, `embed`,
+and `total` timings. Larger batches are not assumed to be faster and should not
+be promoted without representative-corpus evidence.
+
+The default was selected from a fresh CPU-only Docker benchmark on a 104-file,
+approximately 1 MB code/configuration corpus that produced 758 records. Moving
+only the embedding scheduling window from 32 to 96 reduced compiler time from
+418.9 seconds to 285.4 seconds (31.9%) and the embedding stage from 385.5
+seconds to 256.4 seconds (33.5%). Peak container memory increased from about
+2.10 GiB to 2.47 GiB. Record identity, text, provenance, dimensions, and the
+Float32 vector digest remained identical. A 128-record window and FastEmbed's
+two-process parallel mode were both slower on the same input, so neither is a
+default. These figures justify the bundled default; they are not a universal
+hardware claim.
+
+The tuning controls follow the existing FastEmbed and ONNX Runtime execution
+model; see the official [FastEmbed performance guide](https://qdrant.tech/documentation/fastembed/fastembed-optimize/)
+and [ONNX Runtime threading guide](https://onnxruntime.ai/docs/performance/tune-performance/threading.html).
+
 Operational commands:
 
 - `dkb compiler start` starts or reuses the warm compiler service.

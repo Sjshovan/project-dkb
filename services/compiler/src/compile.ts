@@ -954,6 +954,24 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
 }> {
   try {
+    const sourceIndex = await readSourceIndex(dkb.root);
+
+    if (sourceIndex.units.length > 0) {
+      const sourceAnalysis = {
+        sourceUnits: sourceIndex.units,
+        sourceEdges: sourceIndex.edges,
+      };
+
+      return {
+        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
+        sourceAnalysis,
+      };
+    }
+  } catch {
+    // Packages without a portable source index verify against another compiled artifact.
+  }
+
+  try {
     const compilerRecords = await readLlamaIndexCompilerRecords(dkb.root);
 
     if (compilerRecords.length > 0) {
@@ -988,21 +1006,6 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
     }
   } catch {
     // Packages without a FAISS catalog verify against direct source adapters.
-  }
-
-  try {
-    const sourceIndex = await readSourceIndex(dkb.root);
-
-    if (sourceIndex.units.length > 0) {
-      const sourceAnalysis = analyzeSourceUnits(sourceIndex.units);
-
-      return {
-        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
-        sourceAnalysis,
-      };
-    }
-  } catch {
-    // Packages without a portable source index verify against direct adapters.
   }
 
   const state = await collectDkbState(dkb, undefined, artifactRoot);
