@@ -12,7 +12,9 @@
       "@dkb/protocol": ["packages/protocol/src/index.ts"],
       "@dkb/protocol/*": ["packages/protocol/src/*"],
       "@dkb/registry-client": ["packages/registry-client/src/index.ts"],
-      "@dkb/registry-client/*": ["packages/registry-client/src/*"]
+      "@dkb/registry-client/*": ["packages/registry-client/src/*"],
+      "@dkb/providers-bundled": ["providers/bundled/src/index.ts"],
+      "@dkb/providers-bundled/*": ["providers/bundled/src/*"]
     }
   },
   "include": ["src/**/*.ts"],

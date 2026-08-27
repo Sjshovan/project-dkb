@@ -6,10 +6,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, artifactLockPath, resolveFrom } from '@dkb/protocol/paths.js';
 import { DkbError } from '@dkb/protocol/errors.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '@dkb/providers-bundled/sourceIndex.js';
 import { describeCompilerAdapter } from '../compiler/adapters.js';
-import { LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH, LLAMAINDEX_COMPILER_RECORDS_DIR } from '../compiler/llamaindexArtifacts.js';
-import { FAISS_CATALOG_PATH, FAISS_MANIFEST_PATH, FAISS_SEGMENT_PATH } from '../indexes/faissStore.js';
+import { LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH, LLAMAINDEX_COMPILER_RECORDS_DIR } from '@dkb/providers-bundled/llamaindexArtifacts.js';
+import { FAISS_CATALOG_PATH, FAISS_MANIFEST_PATH, FAISS_SEGMENT_PATH } from '@dkb/providers-bundled/faissStore.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
 import { DKB_EVIDENCE_IR_PATH, readEvidenceIr, type DkbEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import {

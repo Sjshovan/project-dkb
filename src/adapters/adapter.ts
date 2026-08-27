@@ -1,4 +1,4 @@
-import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import type { IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import type { DkbReadQuery, DkbReadResult, DkbStore, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
 
 export interface DkbReader {

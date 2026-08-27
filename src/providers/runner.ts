@@ -1,7 +1,7 @@
 import { DkbError } from '@dkb/protocol/errors.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
-import { pipelineRecordMetadata, refreshMutatedRecordHashes } from './records.js';
+import { pipelineRecordMetadata, refreshMutatedRecordHashes } from '@dkb/providers-bundled/records.js';
 import type {
   DkbChunkerProvider,
   DkbCompiledPipeline,

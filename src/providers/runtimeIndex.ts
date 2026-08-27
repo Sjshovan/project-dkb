@@ -2,7 +2,7 @@ import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
-import { BUNDLED_PROVIDER_PLUGINS } from './bundled.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import type { DkbIndexMutationResult, DkbIndexProvider } from '@dkb/pipeline/types.js';
 

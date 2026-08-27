@@ -16,7 +16,7 @@ import { DKB_PACKAGE_RECEIPT_PATH } from '../signing/index.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { resolveContextConfig } from '@dkb/pipeline/config.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 

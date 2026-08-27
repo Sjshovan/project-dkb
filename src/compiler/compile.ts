@@ -11,16 +11,16 @@ import { loadCompose } from '@dkb/protocol/manifest.js';
 import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, artifactLockPath, manifestPath, resolveFrom } from '@dkb/protocol/paths.js';
 import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
 import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
-import type { LlamaIndexCompilerResult } from './llamaindex.js';
+import type { LlamaIndexCompilerResult } from '@dkb/providers-bundled/llamaindex.js';
 import {
   readLlamaIndexCompilerRecords,
   sourceUnitFromLlamaIndexRecord,
   writeLlamaIndexCompilerBundle,
   type LlamaIndexCompilerBundleManifest,
-} from './llamaindexArtifacts.js';
+} from '@dkb/providers-bundled/llamaindexArtifacts.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   resolveProviderRetrievalProfile,
@@ -30,12 +30,12 @@ import {
   type DkbRetrievalProfileLock,
 } from '@dkb/pipeline/profile.js';
 import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
-import { sourceUnitFromPipelineRecord } from '../providers/records.js';
+import { sourceUnitFromPipelineRecord } from '@dkb/providers-bundled/records.js';
 import { compileDkbWithProviderHost } from '../providers/runner.js';
 import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@dkb/pipeline/types.js';
-import { loadFaissPackageArtifact } from '../indexes/faissStore.js';
+import { loadFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
 export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;

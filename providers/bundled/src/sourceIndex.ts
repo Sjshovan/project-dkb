@@ -5,7 +5,7 @@ import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
 import type { DkbReadOperation, DkbReadQuery, DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable } from '@dkb/protocol/types.js';
 import type { IndexedSourceAsset, IndexedSourceUnit } from '@dkb/pipeline/types.js';
-import { tokenize } from '../router/scoring.js';
+import { tokenize } from './scoring.js';
 
 export type { IndexedSourceAsset, IndexedSourceUnit } from '@dkb/pipeline/types.js';
 

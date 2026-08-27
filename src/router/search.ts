@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { readSourceIndex } from '../indexes/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
+import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
+import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@dkb/providers-bundled/vectorStore.js';
 import type { QueryContext } from '../indexes/queryContext.js';
 import type { LoadedCollection, QueryHit, QueryResponse } from '@dkb/protocol/types.js';
 

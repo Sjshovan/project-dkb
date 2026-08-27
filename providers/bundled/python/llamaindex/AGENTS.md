@@ -1,7 +1,7 @@
 # LlamaIndex Compiler Guidance
 
 These rules extend the repository-level `AGENTS.md` for the Python/Docker
-compiler implementation in `compiler/llamaindex/`.
+provider-side compiler implementation in `providers/bundled/python/llamaindex/`.
 
 ## Compiler Contract
 

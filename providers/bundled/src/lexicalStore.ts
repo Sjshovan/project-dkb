@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { IndexedSourceUnit } from './sourceIndex.js';
-import { tokenize } from '../router/scoring.js';
+import { tokenize } from './scoring.js';
 
 export interface LexicalPackageDescriptor {
   id: string;

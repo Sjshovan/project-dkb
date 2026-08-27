@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { tokenize } from '../router/scoring.js';
+import { tokenize } from './scoring.js';
 
 export const DEFAULT_EMBEDDING_MODEL = 'dkb-local-hash-v1';
 export const DEFAULT_VECTOR_DIMENSIONS = 384;

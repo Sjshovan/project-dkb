@@ -14,7 +14,7 @@ import {
   type DkbContextConfig,
   type DkbPipelineTargetConfig,
 } from '@dkb/pipeline/config.js';
-import { BUNDLED_PROVIDER_PLUGINS } from './bundled.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
 import type { DkbPluginModule } from '@dkb/pipeline/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';

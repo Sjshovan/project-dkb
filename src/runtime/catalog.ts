@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '../indexes/sourceIndex.js';
+import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
-import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '../compiler/llamaindexArtifacts.js';
+import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '@dkb/providers-bundled/llamaindexArtifacts.js';
 import { refreshLibraryArtifactMetadata } from '../compiler/compile.js';
 
 export interface RuntimeCatalogRefreshResult {

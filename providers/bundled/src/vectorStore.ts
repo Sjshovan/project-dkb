@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
-import { tokenize } from '../router/scoring.js';
+import { tokenize } from './scoring.js';
 import type { IndexedSourceUnit } from './sourceIndex.js';
 import {
   DEFAULT_EMBEDDING_MODEL,

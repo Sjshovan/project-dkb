@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import type { IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import { sourceIndexForInstalledDkb } from '../runtime/catalog.js';
 import { resolveDkbCapabilities, type DkbCapabilities } from '@dkb/protocol/capabilities.js';
 import { loadLibrary } from '@dkb/protocol/manifest.js';

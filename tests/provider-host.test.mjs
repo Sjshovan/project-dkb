@@ -10,7 +10,7 @@ import { compileDkbWithProviderHost } from '../dist/src/providers/runner.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { compileComposeProject } from '../dist/src/compiler/compile.js';
 import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { readSourceIndex } from '../dist/src/indexes/sourceIndex.js';
+import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
 import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 
 const allPlugin = {

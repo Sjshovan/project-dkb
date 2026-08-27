@@ -19,7 +19,7 @@ import {
 } from '../dist/src/cli/registryConfig.js';
 import { preflightDkbInstall } from '../dist/src/registry/packageRegistry.js';
 import { applyLibraryLock } from '@dkb/library/state.js';
-import { sourceAssetsFromChunks } from '../dist/src/indexes/sourceIndex.js';
+import { sourceAssetsFromChunks } from '@dkb/providers-bundled/sourceIndex.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'dist', 'src', 'cli', 'index.js');

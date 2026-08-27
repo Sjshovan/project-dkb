@@ -1,10 +1,12 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '@dkb/protocol/errors.js';
 
 export const DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v1';
+
+const processMutationTails = new Map<string, Promise<void>>();
 
 export type DkbHostRuntimeKind = 'process' | 'docker' | 'remote';
 
@@ -461,46 +463,77 @@ async function mutateHostInventory<T>(
   mutation: (inventory: DkbHostInventory) => Promise<{ value: T; inventory: DkbHostInventory }>,
 ): Promise<T> {
   const target = hostInventoryPath();
-  const release = await acquireInventoryLock(target);
 
-  try {
-    const current = await readHostInventory(target);
-    const { value, inventory } = await mutation(current);
-    await writeHostInventory(target, validateHostInventory(inventory, target));
+  return withProcessMutationLock(target, async () => {
+    const release = await acquireInventoryLock(target);
 
-    return value;
-  } finally {
-    await release();
-  }
+    try {
+      const current = await readHostInventory(target);
+      const { value, inventory } = await mutation(current);
+      await writeHostInventory(target, validateHostInventory(inventory, target));
+
+      return value;
+    } finally {
+      await release();
+    }
+  });
 }
 
 async function acquireInventoryLock(target: string): Promise<() => Promise<void>> {
   const lockPath = `${target}.lock`;
   const startedAt = Date.now();
+  const token = randomUUID();
   await fs.mkdir(path.dirname(target), { recursive: true });
 
   while (true) {
     try {
       const handle = await fs.open(lockPath, 'wx', 0o600);
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`, 'utf8');
+      await handle.writeFile(`${JSON.stringify({ token, pid: process.pid, createdAt: new Date().toISOString() })}\n`, 'utf8');
       await handle.close();
 
       return async () => {
-        await fs.rm(lockPath, { force: true });
+        const currentToken = await inventoryLockToken(lockPath);
+        if (currentToken === token) {
+          await fs.rm(lockPath, { force: true });
+        }
       };
     } catch (error) {
       if (!isAlreadyExists(error)) {
         throw error;
       }
-      const stale = await lockIsStale(lockPath);
-      if (stale) {
+      const state = await inventoryLockState(lockPath);
+      if (state === 'stale') {
         await fs.rm(lockPath, { force: true });
+        continue;
+      }
+      if (state === 'missing') {
         continue;
       }
       if (Date.now() - startedAt >= 5_000) {
         throw new DkbError(`Timed out waiting for DKB host inventory lock: ${lockPath}`);
       }
       await delay(25);
+    }
+  }
+}
+
+async function withProcessMutationLock<T>(target: string, action: () => Promise<T>): Promise<T> {
+  const key = comparablePath(target);
+  const previous = processMutationTails.get(key) ?? Promise.resolve();
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  processMutationTails.set(key, tail);
+
+  await previous.catch(() => undefined);
+  try {
+    return await action();
+  } finally {
+    releaseGate();
+    if (processMutationTails.get(key) === tail) {
+      processMutationTails.delete(key);
     }
   }
 }
@@ -766,12 +799,27 @@ async function canonicalExistingPath(value: string, label: string): Promise<stri
   }
 }
 
-async function lockIsStale(lockPath: string): Promise<boolean> {
+async function inventoryLockState(lockPath: string): Promise<'active' | 'stale' | 'missing'> {
   try {
     const stat = await fs.stat(lockPath);
-    return Date.now() - stat.mtimeMs > 30_000;
+    return Date.now() - stat.mtimeMs > 30_000 ? 'stale' : 'active';
   } catch (error) {
-    return isMissing(error);
+    if (isMissing(error)) {
+      return 'missing';
+    }
+    throw error;
+  }
+}
+
+async function inventoryLockToken(lockPath: string): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(lockPath, 'utf8')) as unknown;
+    return isRecord(parsed) && typeof parsed.token === 'string' ? parsed.token : null;
+  } catch (error) {
+    if (isMissing(error) || error instanceof SyntaxError) {
+      return null;
+    }
+    throw error;
   }
 }
 

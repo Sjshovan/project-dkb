@@ -9,8 +9,8 @@ import {
   type IndexedSourceUnit,
   type SourceUnitMatch,
   type SourceUnitQueryEvidence,
-} from '../indexes/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
+} from '@dkb/providers-bundled/sourceIndex.js';
+import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@dkb/providers-bundled/vectorStore.js';
 import { validateDkbReadRequest } from '@dkb/protocol/validation.js';
 import type {
   DkbEvidence,
@@ -20,7 +20,7 @@ import type {
   DkbReadResult,
   DkbReadStatus,
 } from '@dkb/protocol/types.js';
-import { tokenize } from '../router/scoring.js';
+import { tokenize } from '@dkb/providers-bundled/scoring.js';
 import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '@dkb/protocol/security/sourceContent.js';
 import { readNavigationChunks, semanticSearch } from './navigation.js';
 

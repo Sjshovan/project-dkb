@@ -8,7 +8,7 @@ import {
   inspectLlamaIndexCompiler,
   startLlamaIndexCompilerService,
   stopLlamaIndexCompilerService,
-} from '../compiler/llamaindex.js';
+} from './llamaindex.js';
 import type { DkbBundledPlugin } from '@dkb/pipeline/host.js';
 import type { DkbEmbeddingProvider, DkbIndexRuntime, DkbIngestionProvider } from '@dkb/pipeline/types.js';
 import {
@@ -19,7 +19,7 @@ import {
   validateFaissPackageQueryability,
   validateFaissRuntimeReady,
   writeFaissPackageArtifacts,
-} from '../indexes/faissStore.js';
+} from './faissStore.js';
 import {
   MEILISEARCH_INDEX_FORMAT,
   MEILISEARCH_PROVIDER_ID,
@@ -30,15 +30,15 @@ import {
   validateMeilisearchPackageArtifact,
   verifyMeilisearchRuntime,
   writeMeilisearchPackageArtifacts,
-} from '../indexes/meilisearchProvider.js';
-import { buildLexicalRuntimeSnapshot } from '../indexes/lexicalStore.js';
+} from './meilisearchProvider.js';
+import { buildLexicalRuntimeSnapshot } from './lexicalStore.js';
 
 export const DKB_LLAMA_INDEX_PLUGIN_ID = '@dkb/llamaindex';
 export const DKB_FASTEMBED_PLUGIN_ID = '@dkb/fastembed';
 export const DKB_FAISS_PLUGIN_ID = '@dkb/faiss';
 export const DKB_MEILISEARCH_PLUGIN_ID = MEILISEARCH_PROVIDER_ID;
 export const DKB_HYBRID_RETRIEVAL_PLUGIN_ID = '@dkb/hybrid';
-export const DKB_BUNDLED_PROVIDER_VERSION = '1.0.0';
+export const DKB_BUNDLED_PROVIDER_VERSION = '0.1.0';
 const DEFAULT_FASTEMBED_MODEL = 'BAAI/bge-small-en-v1.5';
 const DEFAULT_FASTEMBED_DIMENSIONS = 384;
 const DEFAULT_EMBED_TIMEOUT_MS = 30_000;

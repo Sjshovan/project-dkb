@@ -1864,7 +1864,7 @@ pipeline
   .action(async (target: string, options: { target?: string }) => {
     const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
       import('@dkb/pipeline/host.js'),
-      import('../providers/bundled.js'),
+      import('@dkb/providers-bundled/bundled.js'),
     ]);
     const host = await DkbProviderHost.create({ root: path.resolve(target), target: options.target, bundled: BUNDLED_PROVIDER_PLUGINS });
 
@@ -2970,7 +2970,7 @@ async function runIngestionLifecycle(
 ): Promise<unknown> {
   const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
     import('@dkb/pipeline/host.js'),
-    import('../providers/bundled.js'),
+    import('@dkb/providers-bundled/bundled.js'),
   ]);
   const host = await DkbProviderHost.create({ root: path.resolve(root), ...(target ? { target } : {}), bundled: BUNDLED_PROVIDER_PLUGINS });
 

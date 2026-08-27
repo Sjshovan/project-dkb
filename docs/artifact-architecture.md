@@ -120,7 +120,7 @@ phases that do not expose a real total.
 
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to use the one-shot compiler container path.
 If the pinned image is missing or lacks the current service label, DKB rebuilds
-it from `compiler/llamaindex` before starting the service.
+it from `providers/bundled/python/llamaindex` before starting the service.
 
 ## First Vertical Slice
 

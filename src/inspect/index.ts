@@ -1,6 +1,6 @@
-﻿import fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readSourceIndex } from '../indexes/sourceIndex.js';
+import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import { artifactLockPath } from '@dkb/protocol/paths.js';
 import { deriveKnowledgeSpace } from '@dkb/protocol/space.js';

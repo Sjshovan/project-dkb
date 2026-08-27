@@ -2,14 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { resolveFrom } from '@dkb/protocol/paths.js';
-import { tokenize } from '../router/scoring.js';
+import { tokenize } from '@dkb/providers-bundled/scoring.js';
 import {
   SOURCE_GRAPH_PATH,
   SOURCE_VECTOR_PATH,
   writeSourceIndex,
   type IndexedSourceEdge,
   type IndexedSourceUnit,
-} from '../indexes/sourceIndex.js';
+} from '@dkb/providers-bundled/sourceIndex.js';
 
 const MAX_KEYWORDS_PER_SOURCE = 24;
 const MAX_EDGE_KEYWORDS = 8;

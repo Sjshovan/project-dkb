@@ -13,7 +13,7 @@ import { compileComposeProject, verifyComposeProject } from '../dist/src/compile
 import {
   readLlamaIndexCompilerBundleManifest,
   writeLlamaIndexCompilerBundle,
-} from '../dist/src/compiler/llamaindexArtifacts.js';
+} from '@dkb/providers-bundled/llamaindexArtifacts.js';
 import { analyzeSourceUnits } from '../dist/src/compiler/sourceAnalysis.js';
 
 const image = 'dkb-compiler-llamaindex:0.3.6';

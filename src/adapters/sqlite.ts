@@ -4,8 +4,8 @@ import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { resolveFrom } from '@dkb/protocol/paths.js';
 import type { DkbEvidence, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
-import { chunkSourceUnit } from '../indexes/chunking.js';
-import { capabilitiesForSourceType, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import { chunkSourceUnit } from '@dkb/providers-bundled/chunking.js';
+import { capabilitiesForSourceType, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';
 import { blocked, boundedLimit, complete, fieldsForColumns, quoteIdentifier, returnFields, sqliteType, sqlParam, validateDkbReadQuery, whereClause } from './sqlShared.js';
 

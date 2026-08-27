@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { MeiliSearch } from 'meilisearch';
 import { closeQueryContext } from '../dist/src/indexes/queryContext.js';
-import { meilisearchIndexId } from '../dist/src/indexes/meilisearchProvider.js';
+import { meilisearchIndexId } from '@dkb/providers-bundled/meilisearchProvider.js';
 import { cleanupRuntimeIndexPackage } from '../dist/src/providers/runtimeIndex.js';
 import { renderModelEvidence } from '../dist/src/read/modelEvidence.js';
 import { installDkbFromMockRegistry, publishDkbToMockRegistry } from '../dist/src/registry/packageRegistry.js';

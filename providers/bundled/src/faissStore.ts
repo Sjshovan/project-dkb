@@ -14,10 +14,10 @@ import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import { capabilitiesForSourceType, sourceAssetsFromChunks, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
-import { tokenize } from '../router/scoring.js';
-import { sourceUnitFromPipelineRecord } from '../providers/records.js';
+import { tokenize } from './scoring.js';
+import { sourceUnitFromPipelineRecord } from './records.js';
 import type { DkbCompiledPipeline } from '@dkb/pipeline/types.js';
-import { LLAMAINDEX_COMPILER_IMAGE } from '../compiler/llamaindex.js';
+import { LLAMAINDEX_COMPILER_IMAGE } from './llamaindex.js';
 
 const execFile = promisify(execFileCallback);
 

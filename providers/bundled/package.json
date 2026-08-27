@@ -1,0 +1,41 @@
+{
+  "name": "@dkb/providers-bundled",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*",
+      "import": "./dist/*"
+    }
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo",
+    "python/llamaindex/compile.py",
+    "python/llamaindex/embedder.py",
+    "python/llamaindex/service.py",
+    "python/llamaindex/requirements.txt",
+    "python/llamaindex/Dockerfile",
+    "python/llamaindex/Dockerfile.gpu"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@dkb/pipeline": "0.1.0",
+    "@dkb/protocol": "1.0.0",
+    "@lancedb/lancedb": "^0.30.0",
+    "meilisearch": "^0.53.0"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  }
+}

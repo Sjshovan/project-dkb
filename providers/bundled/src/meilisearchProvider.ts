@@ -15,7 +15,7 @@ import type {
   DkbIndexRuntime,
   DkbProviderBuildReceipt,
 } from '@dkb/pipeline/types.js';
-import { sourceUnitFromPipelineRecord } from '../providers/records.js';
+import { sourceUnitFromPipelineRecord } from './records.js';
 import { sourceAssetsFromChunks, type IndexedSourceUnit } from './sourceIndex.js';
 
 export const MEILISEARCH_PROVIDER_ID = '@dkb/meilisearch';

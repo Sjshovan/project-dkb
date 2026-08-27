@@ -13,10 +13,13 @@ Before changing behavior:
    `src/graphify-out/GRAPH_REPORT.md` before inferring module boundaries.
 3. Read the nearest subsystem `AGENTS.md` before changing files under:
    - `src/cli/`
+   - `packages/library/`
+   - `packages/pipeline/`
+   - `packages/registry-client/`
+   - `providers/bundled/`
    - `src/registry/`
    - `src/runtime/`
    - `src/mcp/`
-   - `compiler/llamaindex/`
 4. Check `docs/decisions/` for accepted directions that are not implemented yet.
 
 The Graphify report contains both extracted and inferred edges. Verify inferred
@@ -32,15 +35,18 @@ python -m graphify update src
 | Area | Responsibility |
 | --- | --- |
 | `packages/protocol/` | Stable manifests, contracts, schemas, evidence identities, capabilities, and validation |
+| `packages/pipeline/` | Provider contracts, configuration, plugin discovery, compatibility, and context-local lifecycle |
+| `packages/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and transactional snapshots |
+| `packages/registry-client/` | Laravel Registry transport, archive safety, publication, download, and endpoint verification |
+| `providers/bundled/` | LlamaIndex/Docling, FastEmbed, FAISS, Meilisearch, and hybrid retrieval implementations |
 | `src/host/` | Disposable machine-local Library, Registry, and Runtime inventory and health inspection |
-| `src/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and status |
 | `src/adapters/` | Source discovery and reads; no retrieval orchestration |
-| `src/compiler/`, `compiler/llamaindex/` | Source and Evidence IR compilation, Docling/LlamaIndex routing, embeddings |
-| `src/providers/` | Per-context plugin discovery, pipeline contracts, shared compiler runner, and runtime index lifecycle |
+| `src/compiler/` | Transitional shared compilation runner pending extraction to `services/compiler/` |
+| `src/providers/` | Transitional compiler/runtime composition pending ownership extraction |
 | `src/artifacts/`, `src/signing/`, `src/oci/` | Compiled artifact identity, verification, signing, and transport |
 | `src/registry/` | Package publication, immutable releases, registry client/server, installation transport |
 | `src/runtime/` | Installed package state, aggregate catalog, HTTP runtime, snapshots, and traces |
-| `src/indexes/`, `src/read/`, `src/router/` | Retrieval indexes, evidence resolution, navigation, and scoring |
+| `src/indexes/`, `src/read/`, `src/router/` | Transitional Runtime query composition and evidence navigation |
 | `src/mcp/` | Local and remote agent-facing tool boundaries |
 | `src/cli/` | Command registration, context resolution, presentation, and orchestration |
 | `tests/` | Cross-boundary behavior and release-regression tests |
