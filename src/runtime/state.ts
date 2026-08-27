@@ -9,12 +9,12 @@ import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/run
 import { renderModelEvidence } from '../read/modelEvidence.js';
 import { recordRetrievalTrace, retrievalTraceEnabled } from './trace.js';
 import { enqueueQueryAudit } from './queryAudit.js';
-import { loadDkb, loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '../protocol/manifest.js';
-import { DkbError } from '../protocol/errors.js';
-import { parseDkbIdentity, registryPackagePath } from '../protocol/identity.js';
+import { loadDkb, loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
-import type { DkbSourceManifest, LoadedDkb } from '../protocol/types.js';
-import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
+import type { DkbSourceManifest, LoadedDkb } from '@dkb/protocol/types.js';
+import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '../library/state.js';
 import { syncLibrary } from '../library/resolver.js';
 import { snapshotLibraryArtifacts } from '../library/artifactSnapshot.js';

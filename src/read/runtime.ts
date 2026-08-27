@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import type { QueryContext } from '../indexes/queryContext.js';
 import {
   queryEvidenceForSourceUnits,
@@ -11,7 +11,7 @@ import {
   type SourceUnitQueryEvidence,
 } from '../indexes/sourceIndex.js';
 import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
-import { validateDkbReadRequest } from '../protocol/validation.js';
+import { validateDkbReadRequest } from '@dkb/protocol/validation.js';
 import type {
   DkbEvidence,
   DkbEvidenceSufficiency,
@@ -19,9 +19,9 @@ import type {
   DkbReadRequest,
   DkbReadResult,
   DkbReadStatus,
-} from '../protocol/types.js';
+} from '@dkb/protocol/types.js';
 import { tokenize } from '../router/scoring.js';
-import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '../security/sourceContent.js';
+import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '@dkb/protocol/security/sourceContent.js';
 import { readNavigationChunks, semanticSearch } from './navigation.js';
 
 export interface DkbRetrieveKnowledgeRequest {

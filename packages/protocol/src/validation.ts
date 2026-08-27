@@ -1,9 +1,9 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { ErrorObject } from 'ajv';
-import dkbSchema from '../../schemas/dkb.schema.json' with { type: 'json' };
-import dkbReadRequestSchema from '../../schemas/dkb-read-request.schema.json' with { type: 'json' };
-import lockSchema from '../../schemas/dkb-lock.schema.json' with { type: 'json' };
-import libraryLockSchema from '../../schemas/dkb-library-lock.schema.json' with { type: 'json' };
+import dkbSchema from '../schemas/dkb.schema.json' with { type: 'json' };
+import dkbReadRequestSchema from '../schemas/dkb-read-request.schema.json' with { type: 'json' };
+import lockSchema from '../schemas/dkb-lock.schema.json' with { type: 'json' };
+import libraryLockSchema from '../schemas/dkb-library-lock.schema.json' with { type: 'json' };
 import { DkbError } from './errors.js';
 import type { DkbLibraryLockManifest, DkbLockManifest, DkbReadRequest, DkbSourceManifest } from './types.js';
 

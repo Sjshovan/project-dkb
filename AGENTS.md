@@ -31,7 +31,7 @@ python -m graphify update src
 
 | Area | Responsibility |
 | --- | --- |
-| `src/protocol/`, `schemas/` | Stable manifests, contracts, paths, capabilities, and validation |
+| `packages/protocol/` | Stable manifests, contracts, schemas, evidence identities, capabilities, and validation |
 | `src/host/` | Disposable machine-local Library, Registry, and Runtime inventory and health inspection |
 | `src/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and status |
 | `src/adapters/` | Source discovery and reads; no retrieval orchestration |

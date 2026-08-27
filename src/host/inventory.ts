@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 
 export const DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v1';
 

@@ -8,9 +8,9 @@ import { performance } from 'node:perf_hooks';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
-import { DkbError } from '../protocol/errors.js';
-import { DKB_CACHE_DIR, resolveFrom } from '../protocol/paths.js';
-import type { LoadedDkb } from '../protocol/types.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { DKB_CACHE_DIR, resolveFrom } from '@dkb/protocol/paths.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 
 const execFile = promisify(execFileCallback);
 

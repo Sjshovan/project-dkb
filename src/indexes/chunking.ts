@@ -1,5 +1,5 @@
-import { stableHash } from '../contracts/hash.js';
-import type { DkbStoreType, KnowledgeSourceUnit } from '../protocol/types.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import type { DkbStoreType, KnowledgeSourceUnit } from '@dkb/protocol/types.js';
 
 export interface ChunkSourceInput {
   dkbId: string;

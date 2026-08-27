@@ -7,19 +7,19 @@ import { getTrace, latestTrace, listTraces, recordRetrievalTrace, retrievalTrace
 import { enqueueQueryAudit } from '../runtime/queryAudit.js';
 import { auditKnowledgeAlignment } from '../knowledge/alignment.js';
 import { queryKnowledgeTarget } from '../knowledge/target.js';
-import { DkbError } from '../protocol/errors.js';
-import { loadCollection, loadDkb, loadLibrary, loadManifest } from '../protocol/manifest.js';
-import { resolveDkbCapabilities } from '../protocol/capabilities.js';
-import { evaluateDkbWrite, evaluateDkbWriteIntent, type DkbWriteIntent } from '../protocol/writeGate.js';
-import type { DkbWriteOperation, DkbReadRequest } from '../protocol/types.js';
-import { manifestPath } from '../protocol/paths.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest } from '@dkb/protocol/manifest.js';
+import { resolveDkbCapabilities } from '@dkb/protocol/capabilities.js';
+import { evaluateDkbWrite, evaluateDkbWriteIntent, type DkbWriteIntent } from '@dkb/protocol/writeGate.js';
+import type { DkbWriteOperation, DkbReadRequest } from '@dkb/protocol/types.js';
+import { manifestPath } from '@dkb/protocol/paths.js';
 import { buildRegistryChunks, describeRegistry } from '../registry/index.js';
 import { enqueueWrite, listQueuedWrites, loadQueuedWrite } from '../writes/queue.js';
 import { processWriteQueue } from '../writes/processor.js';
 import type { ProcessWriteQueueInput, QueuedWriteStatus, WriteTarget } from '../writes/types.js';
 import { describeCollection } from './catalog.js';
 import { configuredLibraryPath, debugMcp } from './config.js';
-import { modelSafeToolResult } from '../security/sourceContent.js';
+import { modelSafeToolResult } from '@dkb/protocol/security/sourceContent.js';
 import { describeSources, lexicalSearch, semanticSearch, type DkbNavigationScope } from '../read/navigation.js';
 import { discoverRemoteDkb } from '../remote/discovery.js';
 import {

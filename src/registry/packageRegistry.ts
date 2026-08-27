@@ -7,12 +7,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { compileComposeProject } from '../compiler/compile.js';
 import { invalidateRuntimeQuerySnapshot, ensureRuntimeState } from '../runtime/state.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.js';
-import { canonicalJson, stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { parseDkbIdentity, registryPackagePath } from '../protocol/identity.js';
+import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
-import { loadDkb, loadDkbPackage, loadLibrary } from '../protocol/manifest.js';
-import { manifestPath } from '../protocol/paths.js';
+import { loadDkb, loadDkbPackage, loadLibrary } from '@dkb/protocol/manifest.js';
+import { manifestPath } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '../library/state.js';
 import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '../library/artifactSnapshot.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
@@ -24,7 +24,7 @@ import {
   parsePackageReceipt,
   verifyPackageReceipt,
 } from '../signing/index.js';
-import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '../protocol/types.js';
+import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
 import { assertMatchingRetrievalProfiles, maybeReadRetrievalProfileLock, writeRetrievalProfileLock } from '../profiles/retrievalProfile.js';
 

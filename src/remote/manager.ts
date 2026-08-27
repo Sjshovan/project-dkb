@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import { installDkbArchiveIntoRuntime } from '../registry/packageRegistry.js';
 import { DkbRegistryClient } from '../registry/client.js';
 import { configuredRegistry } from '../registry/config.js';
@@ -24,7 +24,7 @@ import type {
   DkbRemoteEndpointAttestation,
 } from './types.js';
 import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
-import type { DkbSigningKeyRecord } from '../protocol/types.js';
+import type { DkbSigningKeyRecord } from '@dkb/protocol/types.js';
 
 export async function addDirectRemote(input: {
   url: string;

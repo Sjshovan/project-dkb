@@ -1,13 +1,27 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
-import type { LlamaIndexCompilerRecord, LlamaIndexCompilerResult } from '../compiler/llamaindex.js';
-import type { DkbRetrievalProfileLock } from '../profiles/retrievalProfile.js';
+import { DkbError } from '../errors.js';
+import { DKB_ARTIFACTS_DIR, resolveFrom } from '../paths.js';
 
 export const DKB_EVIDENCE_IR_PATH = `${DKB_ARTIFACTS_DIR}/evidence.ir.json`;
 export const DKB_EVIDENCE_IR_FORMAT = 'dkb.evidence.ir.v1';
+
+export interface DkbEvidenceSourceRecord {
+  id: string;
+  assetId: string;
+  storeId: string;
+  type: 'filesystem' | 'sqlite' | 'database';
+  locator: Record<string, unknown>;
+  assetLocator: Record<string, unknown>;
+  title: string;
+  text: string;
+  hash: string;
+  chunkOrdinal: number;
+  chunkStart: number;
+  chunkEnd: number;
+  metadata: Record<string, unknown>;
+}
 
 export interface DkbEvidenceIrRecord {
   evidenceId: string;
@@ -15,7 +29,7 @@ export interface DkbEvidenceIrRecord {
   packageId: string;
   packageVersion: string;
   storeId: string;
-  sourceType: LlamaIndexCompilerRecord['type'];
+  sourceType: DkbEvidenceSourceRecord['type'];
   sourceHash: string;
   assetId: string;
   assetLocator: Record<string, unknown>;
@@ -51,7 +65,7 @@ export interface DkbEvidenceIdentity {
   sourceHash: string;
 }
 
-export function evidenceIdentityForRecord(record: LlamaIndexCompilerRecord): DkbEvidenceIdentity {
+export function evidenceIdentityForRecord(record: DkbEvidenceSourceRecord): DkbEvidenceIdentity {
   const packageId = stringMetadata(record, 'dkb_package_id');
   const packageVersion = stringMetadata(record, 'dkb_package_version');
   const sourceHash = stringMetadata(record, 'dkb_source_hash') || record.hash;
@@ -77,7 +91,11 @@ export function evidenceIdentityForRecord(record: LlamaIndexCompilerRecord): Dkb
   };
 }
 
-export function buildEvidenceIr(results: LlamaIndexCompilerResult[], profile: DkbRetrievalProfileLock, generatedAt = new Date().toISOString()): DkbEvidenceIr {
+export function buildEvidenceIr(
+  results: ReadonlyArray<{ records: readonly DkbEvidenceSourceRecord[] }>,
+  profile: { profileDigest: string },
+  generatedAt = new Date().toISOString(),
+): DkbEvidenceIr {
   const evidence = new Map<string, DkbEvidenceIrRecord>();
   const chunks: DkbEvidenceIrChunk[] = [];
 
@@ -164,7 +182,7 @@ export function validateEvidenceIr(value: unknown, source = DKB_EVIDENCE_IR_PATH
   return candidate as DkbEvidenceIr;
 }
 
-function stringMetadata(record: LlamaIndexCompilerRecord, key: string): string {
+function stringMetadata(record: DkbEvidenceSourceRecord, key: string): string {
   const value = record.metadata[key];
 
   return typeof value === 'string' ? value : '';

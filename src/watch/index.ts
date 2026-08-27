@@ -1,8 +1,8 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { watch } from 'chokidar';
-import { loadCompose } from '../protocol/manifest.js';
-import { resolveFrom } from '../protocol/paths.js';
+import { loadCompose } from '@dkb/protocol/manifest.js';
+import { resolveFrom } from '@dkb/protocol/paths.js';
 import { compileComposeProject } from '../compiler/compile.js';
 import { invalidateQueryContext } from '../indexes/queryContext.js';
 

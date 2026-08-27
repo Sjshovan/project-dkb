@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import {
   DKB_CONFIG_FORMAT,
   DKB_CONFIG_PATH,
@@ -18,7 +18,7 @@ import { BUNDLED_PROVIDER_PLUGINS } from './bundled.js';
 import { DkbProviderHost, pluginPath } from './host.js';
 import type { DkbPluginModule } from './types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 
 export type DkbPluginScope = 'local' | 'global';
 

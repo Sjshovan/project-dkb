@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from './contracts/hash.js';
 import { DkbError } from './errors.js';
 import { identityDisplayName, parseDkbIdentity, registryPackagePath } from './identity.js';
 import { manifestPath, resolveContainedPath } from './paths.js';

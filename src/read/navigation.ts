@@ -7,7 +7,7 @@ import {
 import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
 import type { LexicalSearchScope } from '../indexes/lexicalStore.js';
 import { tokenize } from '../router/scoring.js';
-import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '../security/sourceContent.js';
+import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '@dkb/protocol/security/sourceContent.js';
 
 export interface DkbNavigationScope extends LexicalSearchScope {}
 

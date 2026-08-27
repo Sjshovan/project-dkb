@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, resolveFrom } from '../protocol/paths.js';
+import { DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, resolveFrom } from '@dkb/protocol/paths.js';
 import { DKB_RETRIEVAL_PROFILE_LOCK_PATH } from '../profiles/retrievalProfile.js';
 
 const SNAPSHOT_PATHS = [

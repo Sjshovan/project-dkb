@@ -1,5 +1,5 @@
-import { DkbError } from '../protocol/errors.js';
-import type { LoadedDkb } from '../protocol/types.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { DkbProviderHost } from './host.js';
 import { pipelineRecordMetadata, refreshMutatedRecordHashes } from './records.js';
 import type {

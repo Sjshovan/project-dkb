@@ -1,4 +1,4 @@
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 
 export interface KnowledgeNeedFilters {
   targetIds?: string[];

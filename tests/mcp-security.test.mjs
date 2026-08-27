@@ -8,7 +8,7 @@ import {
   TRUSTED_FORMAT_EPILOG,
   TRUSTED_SECURITY_PREAMBLE,
 } from '../dist/src/read/modelEvidence.js';
-import { renderUntrustedSourceBlock, renderUntrustedSourceInline } from '../dist/src/security/sourceContent.js';
+import { renderUntrustedSourceBlock, renderUntrustedSourceInline } from '@dkb/protocol/security/sourceContent.js';
 import { serveDkbMcpHttp } from '../dist/src/mcp/http.js';
 
 test('remote MCP exposes only read-only search and fetch tools', async () => {

@@ -1,4 +1,4 @@
-import type { LoadedDkb } from '../protocol/types.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 import type { IndexedSourceAsset, IndexedSourceUnit } from '../indexes/sourceIndex.js';
 
 export type DkbProviderKind = 'ingestion' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';

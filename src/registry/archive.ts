@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import * as tar from 'tar';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 
 export const DKB_PACKAGE_EXTENSION = '.dkbpkg';

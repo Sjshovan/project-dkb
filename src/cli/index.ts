@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Command, CommanderError } from 'commander';
-import { DkbError } from '../protocol/errors.js';
-import { identityDisplayName, parseDkbIdentity } from '../protocol/identity.js';
-import { loadCollection, loadDkb, loadManifest } from '../protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR } from '../protocol/paths.js';
-import { DKB_PROTOCOL_VERSION } from '../protocol/version.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { identityDisplayName, parseDkbIdentity } from '@dkb/protocol/identity.js';
+import { loadCollection, loadDkb, loadManifest } from '@dkb/protocol/manifest.js';
+import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
+import { DKB_PROTOCOL_VERSION } from '@dkb/protocol/version.js';
 import {
   countLabel,
   createCliPresenter,
@@ -1781,7 +1781,7 @@ program
             version: collection.manifest.version,
             type: 'collection',
           }))
-        : await import('../protocol/manifest.js').then((module) => module.loadLibrary(resolved)).then((library) => ({
+        : await import('@dkb/protocol/manifest.js').then((module) => module.loadLibrary(resolved)).then((library) => ({
             id: library.manifest.id,
             name: library.manifest.name,
             version: library.manifest.version,

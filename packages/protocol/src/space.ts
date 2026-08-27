@@ -1,4 +1,4 @@
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from './contracts/hash.js';
 import type { DkbOwner, DkbSpaceFields } from './types.js';
 
 export interface KnowledgeSpaceInput extends DkbSpaceFields {

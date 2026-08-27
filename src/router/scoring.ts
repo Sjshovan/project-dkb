@@ -1,4 +1,4 @@
-import type { DkbRecord } from '../protocol/types.js';
+import type { DkbRecord } from '@dkb/protocol/types.js';
 
 export const defaultMinimumScore = 2;
 export const defaultResultProbabilityCutoff = 0.035;

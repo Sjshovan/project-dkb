@@ -8,10 +8,10 @@ import {
   sign,
   verify,
 } from 'node:crypto';
-import { canonicalJson, stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { artifactLockPath, manifestPath } from '../protocol/paths.js';
-import { validateDkbLockManifest } from '../protocol/validation.js';
+import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { artifactLockPath, manifestPath } from '@dkb/protocol/paths.js';
+import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type {
   DkbLockManifest,
   DkbPackageReceipt,
@@ -25,7 +25,7 @@ import type {
   DkbReleasePayload,
   DkbReleaseSignature,
   DkbReleaseSigningContent,
-} from '../protocol/types.js';
+} from '@dkb/protocol/types.js';
 
 export const DKB_RELEASE_PATH = 'dkb-release.json';
 export const DKB_PACKAGE_RECEIPT_PATH = '.dkb-package.json';

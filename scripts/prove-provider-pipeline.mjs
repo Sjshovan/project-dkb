@@ -4,13 +4,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { compileComposeProject } from '../dist/src/compiler/compile.js';
-import { readEvidenceIr } from '../dist/src/evidence/ir.js';
+import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '../dist/src/indexes/faissStore.js';
 import { validateMeilisearchPackageArtifact } from '../dist/src/indexes/meilisearchProvider.js';
 import { getQueryContext, closeQueryContext } from '../dist/src/indexes/queryContext.js';
 import { readRetrievalProfileLock } from '../dist/src/profiles/retrievalProfile.js';
 import { semanticSearch } from '../dist/src/read/navigation.js';
-import { loadDkb, loadLibrary } from '../dist/src/protocol/manifest.js';
+import { loadDkb, loadLibrary } from '@dkb/protocol/manifest.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '../dist/src/registry/archive.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../dist/src/providers/runtimeIndex.js';
 

@@ -1,5 +1,5 @@
-import { DkbError } from '../protocol/errors.js';
-import type { DkbEvidence, DkbRecord, LoadedDkb } from '../protocol/types.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import type { DkbEvidence, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult } from './adapter.js';
 import { blocked, complete } from './sqlShared.js';

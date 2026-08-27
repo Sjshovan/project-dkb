@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '../contracts/hash.js';
-import { artifactLockPath, resolveFrom } from '../protocol/paths.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { artifactLockPath, resolveFrom } from '@dkb/protocol/paths.js';
 import { vectorDocumentsForSourceUnits, type VectorDocument } from './vectorStore.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LexicalRuntimeSnapshot } from './lexicalStore.js';

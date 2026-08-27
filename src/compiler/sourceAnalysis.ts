@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '../contracts/hash.js';
-import { resolveFrom } from '../protocol/paths.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { resolveFrom } from '@dkb/protocol/paths.js';
 import { tokenize } from '../router/scoring.js';
 import {
   SOURCE_GRAPH_PATH,

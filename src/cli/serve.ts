@@ -3,8 +3,8 @@ import path from 'node:path';
 import { createInterface, type Interface } from 'node:readline/promises';
 import { compileComposeProject } from '../compiler/compile.js';
 import { registerHostLibrary } from '../host/inventory.js';
-import { DkbError } from '../protocol/errors.js';
-import { loadLibrary } from '../protocol/manifest.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { loadLibrary } from '@dkb/protocol/manifest.js';
 import {
   configuredRegistry,
   normalizeRegistryUrl,

@@ -1,4 +1,4 @@
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 
 export function defaultLibraryPath(): string | null {
   return process.env.DKB_LIBRARY_PATH || process.env.DKB_RUNTIME_STATE_ROOT || null;

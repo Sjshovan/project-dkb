@@ -1,6 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { watchComposeProject } from '../watch/index.js';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import {
   compileRuntimeDkb,
   defaultRuntimeStateRoot,

@@ -4,10 +4,10 @@ import { performance } from 'node:perf_hooks';
 import { COMPILE_CACHE_PATH, compileComposeProject, verifyComposeProject } from '../compiler/compile.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../indexes/sourceIndex.js';
 import { invalidateQueryContext } from '../indexes/queryContext.js';
-import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '../protocol/manifest.js';
-import { DKB_ARTIFACT_LOCK_PATH, resolveFrom } from '../protocol/paths.js';
-import { deriveKnowledgeSpace } from '../protocol/space.js';
-import type { DkbManifest, DkbSourceManifest, DkbStore, DkcManifest, DkrManifest, LoadedDkb } from '../protocol/types.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
+import { DKB_ARTIFACT_LOCK_PATH, resolveFrom } from '@dkb/protocol/paths.js';
+import { deriveKnowledgeSpace } from '@dkb/protocol/space.js';
+import type { DkbManifest, DkbSourceManifest, DkbStore, DkcManifest, DkrManifest, LoadedDkb } from '@dkb/protocol/types.js';
 import { defaultWriteQueueRoot, listQueuedWrites } from '../writes/queue.js';
 
 export interface DkbHealthReport {

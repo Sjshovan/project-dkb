@@ -7,9 +7,9 @@ import { DKB_CONFIG_FORMAT, resolveContextConfig } from '../dist/src/providers/c
 import { DkbProviderHost, pluginPath } from '../dist/src/providers/host.js';
 import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../dist/src/providers/management.js';
 import { compileDkbWithProviderHost } from '../dist/src/providers/runner.js';
-import { stableHash } from '../dist/src/contracts/hash.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { compileComposeProject } from '../dist/src/compiler/compile.js';
-import { readEvidenceIr } from '../dist/src/evidence/ir.js';
+import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { readSourceIndex } from '../dist/src/indexes/sourceIndex.js';
 import { readRetrievalProfileLock } from '../dist/src/profiles/retrievalProfile.js';
 

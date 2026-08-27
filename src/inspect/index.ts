@@ -1,10 +1,10 @@
 ﻿import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readSourceIndex } from '../indexes/sourceIndex.js';
-import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '../protocol/manifest.js';
-import { artifactLockPath } from '../protocol/paths.js';
-import { deriveKnowledgeSpace } from '../protocol/space.js';
-import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '../protocol/types.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
+import { artifactLockPath } from '@dkb/protocol/paths.js';
+import { deriveKnowledgeSpace } from '@dkb/protocol/space.js';
+import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '@dkb/protocol/types.js';
 import { verifyComposeProject } from '../compiler/compile.js';
 
 export async function inspectTarget(root: string) {

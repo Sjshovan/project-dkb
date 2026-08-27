@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { hostInventoryPath, selectedHostRegistry } from '../host/inventory.js';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 
 export const DEFAULT_REGISTRY_URL = 'http://127.0.0.1:8000';
 export const DKB_FOLDER_CONFIG_PATH = '.dkb/config.json';

@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { DkbError } from '../protocol/errors.js';
-import { resolveFrom } from '../protocol/paths.js';
-import type { DkbEvidence, DkbRecord, LoadedDkb } from '../protocol/types.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { resolveFrom } from '@dkb/protocol/paths.js';
+import type { DkbEvidence, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { chunkSourceUnit } from '../indexes/chunking.js';
 import { capabilitiesForSourceType, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
-import { assertNoSymlinkPath, readInertTextFile, renderUntrustedSourceBlock } from '../security/sourceContent.js';
+import { assertNoSymlinkPath, readInertTextFile, renderUntrustedSourceBlock } from '@dkb/protocol/security/sourceContent.js';
 import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';
 import { blocked, complete } from './sqlShared.js';
 

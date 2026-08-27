@@ -1,9 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import { stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { resolveFrom } from '../protocol/paths.js';
-import type { DkbEvidence, DkbRecord, LoadedDkb } from '../protocol/types.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { resolveFrom } from '@dkb/protocol/paths.js';
+import type { DkbEvidence, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { chunkSourceUnit } from '../indexes/chunking.js';
 import { capabilitiesForSourceType, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';

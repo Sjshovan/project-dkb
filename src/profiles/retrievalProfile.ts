@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { resolveFrom } from '../protocol/paths.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { resolveFrom } from '@dkb/protocol/paths.js';
 import type { DkbProviderHost, DkbProviderHostDescription } from '../providers/host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from '../providers/types.js';
 import { DKB_FAISS_PLUGIN_ID, DKB_HYBRID_RETRIEVAL_PLUGIN_ID } from '../providers/bundled.js';

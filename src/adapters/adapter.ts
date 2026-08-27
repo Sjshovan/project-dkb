@@ -1,5 +1,5 @@
 import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
-import type { DkbReadQuery, DkbReadResult, DkbStore, DkbRecord, LoadedDkb } from '../protocol/types.js';
+import type { DkbReadQuery, DkbReadResult, DkbStore, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
 
 export interface DkbReader {
   readRecords(dkb: LoadedDkb): Promise<DkbRecord[]>;

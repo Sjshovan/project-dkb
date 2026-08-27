@@ -4,11 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { loadLibrary, uniqueLoadedDkbs } from '../protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
-import type { LoadedDkb } from '../protocol/types.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
+import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 import type {
   DkbCompiledPipeline,
   DkbIndexMutationResult,

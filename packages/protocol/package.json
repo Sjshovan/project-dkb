@@ -1,0 +1,31 @@
+{
+  "name": "@dkb/protocol",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*",
+      "import": "./dist/*"
+    },
+    "./schemas/*": "./schemas/*"
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo",
+    "schemas/"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  }
+}

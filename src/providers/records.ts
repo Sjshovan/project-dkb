@@ -1,7 +1,7 @@
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { capabilitiesForSourceType, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
-import { DkbError } from '../protocol/errors.js';
-import type { LoadedDkb } from '../protocol/types.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { tokenize } from '../router/scoring.js';
 import type { DkbPipelineChunk, DkbPipelineDocument, DkbPipelineRecord } from './types.js';
 

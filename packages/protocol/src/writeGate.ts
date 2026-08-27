@@ -1,5 +1,5 @@
 import { resolveDkbCapabilities, type DkbCapabilities } from './capabilities.js';
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from './contracts/hash.js';
 import type { DkbWriteOperation, LoadedDkb } from './types.js';
 
 export type DkbWriteGateStatus = 'accepted' | 'queued' | 'blocked';

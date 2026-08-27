@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { discoverLibraryEntries, loadManifest } from '../protocol/manifest.js';
+import { discoverLibraryEntries, loadManifest } from '@dkb/protocol/manifest.js';
 import { readLibraryState } from './state.js';
 
 export interface LibraryOverviewEntry {

@@ -5,7 +5,7 @@ import {
   NodeStreamableHTTPServerTransport,
   originValidation,
 } from '@modelcontextprotocol/node';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import { createDkbReadOnlyMcpServer, fetchRemoteEvidence } from './server.js';
 
 export interface ServeDkbMcpHttpOptions {

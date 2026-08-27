@@ -8,7 +8,7 @@ import {
   retrievalProfileLockForCompilerResults,
   validateRetrievalProfileLock,
 } from '../dist/src/profiles/retrievalProfile.js';
-import { buildEvidenceIr, validateEvidenceIr } from '../dist/src/evidence/ir.js';
+import { buildEvidenceIr, validateEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { compileComposeProject, verifyComposeProject } from '../dist/src/compiler/compile.js';
 import {
   readLlamaIndexCompilerBundleManifest,

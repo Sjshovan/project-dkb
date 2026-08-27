@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { stableHash } from '../contracts/hash.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '../protocol/paths.js';
-import type { DkbReadOperation, DkbReadQuery, DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable } from '../protocol/types.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
+import type { DkbReadOperation, DkbReadQuery, DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable } from '@dkb/protocol/types.js';
 import { tokenize } from '../router/scoring.js';
 
 export const SOURCE_INDEX_PATH = `${DKB_ARTIFACTS_DIR}/source.index`;

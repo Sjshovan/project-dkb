@@ -1,11 +1,11 @@
 import path from 'node:path';
-import { stableHash } from '../contracts/hash.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import type { IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { sourceIndexForInstalledDkb } from '../runtime/catalog.js';
-import { resolveDkbCapabilities, type DkbCapabilities } from '../protocol/capabilities.js';
-import { loadLibrary } from '../protocol/manifest.js';
-import { deriveKnowledgeSpace, type KnowledgeSpaceIdentity } from '../protocol/space.js';
-import type { LoadedCollection, LoadedDkb, LoadedLibrary } from '../protocol/types.js';
+import { resolveDkbCapabilities, type DkbCapabilities } from '@dkb/protocol/capabilities.js';
+import { loadLibrary } from '@dkb/protocol/manifest.js';
+import { deriveKnowledgeSpace, type KnowledgeSpaceIdentity } from '@dkb/protocol/space.js';
+import type { LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
 
 export interface DkrOrigin {
   registryId: string;

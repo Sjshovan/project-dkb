@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DkbError } from '../protocol/errors.js';
-import { resolveContainedPath } from '../protocol/paths.js';
-import { validateDkbLibraryLockManifest } from '../protocol/validation.js';
-import type { DkbEntryStatus, DkbLibraryLockEntry, DkbLibraryLockManifest } from '../protocol/types.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { resolveContainedPath } from '@dkb/protocol/paths.js';
+import { validateDkbLibraryLockManifest } from '@dkb/protocol/validation.js';
+import type { DkbEntryStatus, DkbLibraryLockEntry, DkbLibraryLockManifest } from '@dkb/protocol/types.js';
 
 export const DKB_LIBRARY_LOCK_FILENAME = 'dkb-lock.json';
 export const DKB_LIBRARY_STATE_PATH = '.dkb/state.sqlite';

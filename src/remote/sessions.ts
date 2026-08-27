@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import type { DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
 import { discoverRemoteDkb } from './discovery.js';
 import type {

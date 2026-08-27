@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod/v4';
-import { DKB_PROTOCOL_VERSION } from '../protocol/version.js';
+import { DKB_PROTOCOL_VERSION } from '@dkb/protocol/version.js';
 import { tokenize } from '../router/scoring.js';
 import {
   describeCollectionTool,

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { DkbError } from '../protocol/errors.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 import type { DkbDiscoveryDocument, DkbDiscoveryPackage, DkbRemoteEndpointAttestation, DkbRemoteEndpointType } from './types.js';
 
 export type DkbRemoteCatalogStatus = 'verified' | 'behind' | 'mismatch' | 'unavailable' | 'unregistered';

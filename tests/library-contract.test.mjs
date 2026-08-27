@@ -8,7 +8,7 @@ import {
   loadLibrary,
   loadManifest,
   uniqueLoadedDkbs,
-} from '../dist/src/protocol/manifest.js';
+} from '@dkb/protocol/manifest.js';
 import {
   applyLibraryLock,
   readLibraryState,

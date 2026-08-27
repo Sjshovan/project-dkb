@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readSourceIndex } from '../indexes/sourceIndex.js';
 import { querySearchDocuments, vectorDocumentsForSourceUnits } from '../indexes/vectorStore.js';
 import type { QueryContext } from '../indexes/queryContext.js';
-import type { LoadedCollection, QueryHit, QueryResponse } from '../protocol/types.js';
+import type { LoadedCollection, QueryHit, QueryResponse } from '@dkb/protocol/types.js';
 
 export interface QueryOptions {
   limit?: number;

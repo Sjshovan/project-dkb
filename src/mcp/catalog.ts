@@ -1,4 +1,4 @@
-import { loadCollection } from '../protocol/manifest.js';
+import { loadCollection } from '@dkb/protocol/manifest.js';
 import { sourceIndexForInstalledDkb } from '../runtime/catalog.js';
 
 export interface CollectionCatalog {

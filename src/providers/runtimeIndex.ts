@@ -1,6 +1,6 @@
-import { stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import type { LoadedDkb } from '../protocol/types.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
 import { BUNDLED_PROVIDER_PLUGINS } from './bundled.js';
 import { DkbProviderHost } from './host.js';

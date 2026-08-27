@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { stableHash } from '../contracts/hash.js';
-import { DkbError } from '../protocol/errors.js';
-import { loadCompose } from '../protocol/manifest.js';
-import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, artifactLockPath, manifestPath, resolveFrom } from '../protocol/paths.js';
-import { validateDkbLockManifest } from '../protocol/validation.js';
-import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '../protocol/types.js';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@dkb/protocol/errors.js';
+import { loadCompose } from '@dkb/protocol/manifest.js';
+import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, artifactLockPath, manifestPath, resolveFrom } from '@dkb/protocol/paths.js';
+import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
+import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '../indexes/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
 import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
@@ -29,7 +29,7 @@ import {
   type DkbResolvedRetrievalProfile,
   type DkbRetrievalProfileLock,
 } from '../profiles/retrievalProfile.js';
-import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '../evidence/ir.js';
+import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
 import { DkbProviderHost } from '../providers/host.js';
 import { sourceUnitFromPipelineRecord } from '../providers/records.js';
