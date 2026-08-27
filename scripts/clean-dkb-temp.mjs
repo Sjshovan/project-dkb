@@ -8,14 +8,26 @@ const entries = await fs.readdir(tempRoot, { withFileTypes: true });
 const ownedInventoryFiles = entries
   .filter((entry) => entry.isFile() && /^dkb-cli-ux-\d+-\d+\.json$/u.test(entry.name))
   .map((entry) => path.join(tempRoot, entry.name));
-const emptyFakeCompilerDirectories = [];
+const removableDirectories = [];
+const ownedDirectoryPatterns = [
+  /^dkb-cli-distribution-[A-Za-z\d_-]+$/u,
+  /^dkb-cli-global-windows-proof$/u,
+  /^dkb-publish-upload-[A-Za-z\d_-]+$/u,
+  /^dkb-real-corpus-[A-Za-z\d_-]+$/u,
+];
 
 for (const entry of entries) {
-  if (!entry.isDirectory() || !/^dkb-fake-compiler-[a-f\d]{16}$/u.test(entry.name)) continue;
+  if (!entry.isDirectory()) continue;
   const target = path.join(tempRoot, entry.name);
-  if ((await fs.readdir(target)).length === 0) emptyFakeCompilerDirectories.push(target);
+  if (/^dkb-fake-compiler-[a-f\d]{16}$/u.test(entry.name)) {
+    if ((await fs.readdir(target)).length === 0) removableDirectories.push(target);
+    continue;
+  }
+  if (ownedDirectoryPatterns.some((pattern) => pattern.test(entry.name))) {
+    removableDirectories.push(target);
+  }
 }
-const removableTargets = [...ownedInventoryFiles, ...emptyFakeCompilerDirectories];
+const removableTargets = [...ownedInventoryFiles, ...removableDirectories];
 
 if (apply) {
   for (const target of removableTargets) {
@@ -24,7 +36,7 @@ if (apply) {
     }
     await fs.rm(target, {
       force: true,
-      recursive: emptyFakeCompilerDirectories.includes(target),
+      recursive: removableDirectories.includes(target),
     });
   }
 }

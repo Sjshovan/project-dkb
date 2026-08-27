@@ -165,6 +165,16 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
     });
     assert.equal(reloaded.status, 401);
 
+    const install = await fetch(`${origin}/api/dkbs/install-registry`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        registryUrl: 'http://127.0.0.1:1',
+        packageId: '@test/example',
+      }),
+    });
+    assert.equal(install.status, 401);
+
     const authorizedReload = await fetch(`${origin}/api/runtime/reload`, {
       method: 'POST',
       headers: {

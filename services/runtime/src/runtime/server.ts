@@ -19,6 +19,7 @@ import { closeQueryAuditQueue } from './queryAudit.js';
 import { resolveRegistryContext } from '@dkb/registry-client/config.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js';
+import { installDkbFromRegistry } from './registryInstall.js';
 
 export interface ServeRuntimeOptions {
   host?: string;
@@ -133,6 +134,25 @@ async function routeRequest(
       }>(request);
 
       return sendJson(response, 201, await importCompiledDkbArtifactIntoRuntime(body, stateRoot));
+    }
+
+    if (request.method === 'POST' && pathName === '/api/dkbs/install-registry') {
+      const body = await readJsonBody<{
+        registryUrl: string;
+        registryToken?: string;
+        packageId: string;
+        version?: string;
+        force?: boolean;
+      }>(request);
+
+      return sendJson(response, 201, await installDkbFromRegistry({
+        registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
+        registryToken: body.registryToken,
+        packageId: requiredString(body.packageId, 'packageId'),
+        version: body.version,
+        force: body.force,
+        runtimeRoot: stateRoot,
+      }));
     }
 
     const dkbMatch = pathName.match(/^\/api\/dkbs\/([^/]+)$/);
@@ -295,7 +315,7 @@ function setCommonHeaders(response: ServerResponse): void {
 }
 
 function isManagementRoute(method: string | undefined, pathName: string): boolean {
-  if (pathName === '/api/runtime/reload' || pathName === '/api/dkbs/import-artifact') return true;
+  if (pathName === '/api/runtime/reload' || pathName === '/api/dkbs/import-artifact' || pathName === '/api/dkbs/install-registry') return true;
   if (method === 'DELETE' && pathName.startsWith('/api/dkbs/')) return true;
   if (pathName.startsWith('/api/traces')) return true;
   if (pathName.startsWith('/api/remote/')) return true;

@@ -1145,9 +1145,6 @@ program
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (packageId: string, options: { version?: string; revision?: number; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
     const libraryRoot = await currentLibraryRoot(options.library);
-    if (options.runtimeUrl) {
-      await (await currentRuntimeAdminClient(options.runtimeUrl)).reload();
-    }
     const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
     const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
     const { installDkbArchiveIntoRuntime, preflightDkbInstall } = await import('@dkb/runtime/runtime/registryInstall.js');
@@ -1169,6 +1166,18 @@ program
       return;
     }
     if (options.revision) throw new DkbError('--revision applies to Collections; use --version for a DKB.');
+
+    if (options.runtimeUrl) {
+      const runtime = await currentRuntimeAdminClient(options.runtimeUrl);
+      await presenter().run('Installing DKB', async () => runtime.installRegistryDkb({
+        registryUrl: registryConfig.url,
+        registryToken: options.token,
+        packageId,
+        version: options.version,
+        force: Boolean(options.force),
+      }), summarizeInstallResult);
+      return;
+    }
 
     await presenter().run('Installing DKB', async (progress) => {
       const release = await client.packageRelease(packageId, options.version);

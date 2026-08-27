@@ -16,6 +16,7 @@
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:stack": "npm run build && node scripts/prove-stack-lifecycle.mjs",
     "proof:cli": "npm run build && node scripts/prove-cli-distribution.mjs",
+    "proof:real-corpus": "npm run build && node scripts/prove-real-corpus.mjs",
     "temp:audit": "node scripts/clean-dkb-temp.mjs",
     "temp:clean": "node scripts/clean-dkb-temp.mjs --apply",
     "changeset": "changeset",

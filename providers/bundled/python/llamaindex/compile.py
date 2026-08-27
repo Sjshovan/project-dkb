@@ -13,8 +13,7 @@ from typing import Any
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
-from llama_index.core import Settings, SimpleDirectoryReader
-from llama_index.core.ingestion import IngestionPipeline
+from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 from llama_index.readers.database import DatabaseReader
@@ -46,6 +45,10 @@ _DOCLING_FILES = 0
 _DOCLING_FALLBACKS = 0
 
 
+def emit_event(event: str, **values: Any) -> None:
+    print(json.dumps({"event": event, **values}, sort_keys=True, separators=(",", ":")), flush=True)
+
+
 def digest_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
@@ -55,7 +58,17 @@ def digest_text(value: str) -> str:
 
 
 def relative_path(value: Path) -> str:
-    return value.resolve().relative_to(INPUT_ROOT.resolve()).as_posix()
+    return value.absolute().relative_to(INPUT_ROOT.absolute()).as_posix()
+
+
+def resolved_input_path(value: str) -> Path:
+    input_root = INPUT_ROOT.resolve()
+    candidate = (input_root / value.replace("\\", "/")).resolve()
+    try:
+        candidate.relative_to(input_root)
+    except ValueError as exc:
+        raise RuntimeError(f"source path resolves outside compiler input root: {value}") from exc
+    return candidate
 
 
 def quoted_identifier(value: str) -> str:
@@ -80,14 +93,14 @@ def is_docling_rich_file(path_value: Path) -> bool:
 
 def source_files_for_store(root: Path, include: list[Any] | None, exclude: list[Any] | None) -> list[Path]:
     excluded = {
-        (INPUT_ROOT / str(item).replace("\\", "/")).resolve()
+        resolved_input_path(str(item))
         for item in (exclude or [])
     }
 
     if include:
         return sorted(
             path
-            for path in ((INPUT_ROOT / str(item).replace("\\", "/")).resolve() for item in include)
+            for path in (resolved_input_path(str(item)) for item in include)
             if path not in excluded
         )
 
@@ -95,19 +108,28 @@ def source_files_for_store(root: Path, include: list[Any] | None, exclude: list[
     for candidate in root.rglob("*"):
         if not candidate.is_file():
             continue
-        if candidate.resolve() in excluded:
+        if candidate.is_symlink():
+            raise RuntimeError(f"symbolic links are not allowed in compiler input: {candidate}")
+        if candidate in excluded:
             continue
-        relative_parts = candidate.resolve().relative_to(root.resolve()).parts
+        relative_parts = candidate.relative_to(root).parts
         if any(part.startswith(".") for part in relative_parts):
             continue
         if candidate.name in EXCLUDED_FILES:
             continue
-        files.append(candidate.resolve())
+        files.append(candidate)
 
     return sorted(files)
 
 
-def source_metadata(request: dict[str, Any], store_id: str, source_id: str, source_type: str, target: Path) -> dict[str, Any]:
+def source_metadata(
+    request: dict[str, Any],
+    store_id: str,
+    source_id: str,
+    source_type: str,
+    target: Path,
+    contents: bytes | None = None,
+) -> dict[str, Any]:
     return {
         "dkb_package_id": request["dkbId"],
         "dkb_package_version": request["version"],
@@ -115,18 +137,20 @@ def source_metadata(request: dict[str, Any], store_id: str, source_id: str, sour
         "dkb_store_id": store_id,
         "dkb_source_type": source_type,
         "dkb_path": relative_path(target),
-        "dkb_source_hash": digest_bytes(target.read_bytes()),
+        "dkb_source_hash": digest_bytes(contents if contents is not None else target.read_bytes()),
     }
 
 
 def file_documents(request: dict[str, Any], store: dict[str, Any]) -> dict[str, Any]:
-    root = INPUT_ROOT / store["path"]
+    started = time.perf_counter()
+    root = resolved_input_path(str(store["path"]))
     include = store.get("includePaths")
     exclude = store.get("excludePaths")
     if not root.exists():
         raise RuntimeError(f"filesystem store path does not exist: {store['path']}")
 
     input_files = source_files_for_store(root, include, exclude)
+    emit_event("dkb.compiler.sources.discovered", files=len(input_files), storeId=store["id"])
     fallback_reasons: dict[str, str] = {}
     rich_chunks: list[dict[str, Any]] = []
     fallback_files: list[Path] = []
@@ -146,9 +170,9 @@ def file_documents(request: dict[str, Any], store: dict[str, Any]) -> dict[str, 
 
     normal_files.extend(fallback_files)
 
-    def metadata(path_value: str) -> dict[str, Any]:
+    def metadata(path_value: str, contents: bytes | None = None) -> dict[str, Any]:
         target = Path(path_value)
-        values = source_metadata(request, store["id"], f"file:{relative_path(target)}", "filesystem", target)
+        values = source_metadata(request, store["id"], f"file:{relative_path(target)}", "filesystem", target, contents)
         reason = fallback_reasons.get(values["dkb_path"])
         if reason:
             values["dkb_rich_parser"] = "llamaindex-fallback"
@@ -161,11 +185,40 @@ def file_documents(request: dict[str, Any], store: dict[str, Any]) -> dict[str, 
         "raise_on_error": True,
     }
     docs: list[Any] = []
-    if normal_files:
-        reader = SimpleDirectoryReader(input_files=[str(item) for item in normal_files], **reader_options)
-        docs = reader.load_data()
-    for doc in docs:
-        doc.id_ = f"{request['dkbId']}:{request['version']}:{doc.metadata['dkb_source_id']}"
+    reader_files: list[Path] = []
+    for target in normal_files:
+        try:
+            contents = target.read_bytes()
+            if b"\x00" in contents:
+                reader_files.append(target)
+                continue
+            text = contents.decode("utf-8")
+        except UnicodeDecodeError:
+            reader_files.append(target)
+            continue
+
+        values = metadata(str(target), contents)
+        docs.append(Document(
+            text=text,
+            metadata=values,
+            id_=f"{request['dkbId']}:{request['version']}:{values['dkb_source_id']}",
+        ))
+
+    if reader_files:
+        reader = SimpleDirectoryReader(input_files=[str(item) for item in reader_files], **reader_options)
+        reader_documents = reader.load_data()
+        for doc in reader_documents:
+            doc.id_ = f"{request['dkbId']}:{request['version']}:{doc.metadata['dkb_source_id']}"
+        docs.extend(reader_documents)
+    emit_event(
+        "dkb.compiler.sources.loaded",
+        directTextFiles=len(normal_files) - len(reader_files),
+        documents=len(docs),
+        durationMs=round((time.perf_counter() - started) * 1000, 3),
+        fallbackReaderFiles=len(reader_files),
+        richFiles=len(rich_chunks_by_source(rich_chunks)),
+        storeId=store["id"],
+    )
     return {
         "documents": docs,
         "richChunks": rich_chunks,
@@ -554,7 +607,13 @@ async def main_async() -> None:
         else:
             docs.extend(batch)
     loaded_done_at = time.perf_counter()
-    pipeline = IngestionPipeline(transformations=[SentenceSplitter(chunk_size=512, chunk_overlap=64)])
+    emit_event(
+        "dkb.compiler.documents.ready",
+        documents=len(docs),
+        durationMs=round((loaded_done_at - loaded_at) * 1000, 3),
+        richChunks=len(rich_chunks),
+    )
+    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
     ordinals: dict[str, int] = {}
     chunk_seconds = 0.0
     embed_seconds = 0.0
@@ -574,12 +633,9 @@ async def main_async() -> None:
             for offset in range(0, len(docs), DOCUMENT_BATCH_SIZE):
                 document_batch = docs[offset:offset + DOCUMENT_BATCH_SIZE]
                 chunk_started = time.perf_counter()
-                nodes = list(await pipeline.arun(
-                    documents=document_batch,
-                    show_progress=False,
-                    num_workers=ASYNC_WORKERS,
-                ))
-                chunk_seconds += time.perf_counter() - chunk_started
+                nodes = list(splitter.get_nodes_from_documents(document_batch, show_progress=False))
+                batch_chunk_seconds = time.perf_counter() - chunk_started
+                chunk_seconds += batch_chunk_seconds
                 for node in nodes:
                     asset_key = node_asset_key(node)
                     node.metadata["dkb_chunk_ordinal"] = ordinals.get(asset_key, 0)
@@ -592,6 +648,17 @@ async def main_async() -> None:
                 )
                 embed_seconds += batch_embed_seconds
                 record_count += batch_record_count
+                completed_documents = min(offset + len(document_batch), len(docs))
+                batch_number = (offset // DOCUMENT_BATCH_SIZE) + 1
+                if batch_number == 1 or completed_documents == len(docs) or batch_number % 5 == 0:
+                    emit_event(
+                        "dkb.compiler.documents.processed",
+                        chunkMs=round(batch_chunk_seconds * 1000, 3),
+                        completed=completed_documents,
+                        embedMs=round(batch_embed_seconds * 1000, 3),
+                        records=record_count,
+                        total=len(docs),
+                    )
             first_record, rich_embed_seconds, rich_record_count = await write_rich_record_batches(
                 output,
                 records,

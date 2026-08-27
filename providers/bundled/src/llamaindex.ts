@@ -8,6 +8,8 @@ import { performance } from 'node:perf_hooks';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { DKB_CACHE_DIR, resolveFrom } from '@dkb/protocol/paths.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
@@ -1306,27 +1308,24 @@ async function runCompilerService(
   options: { jobId: string; model?: string; timeoutMs?: number; workers?: number },
 ): Promise<LlamaIndexCompilerOutput> {
   const endpoint = compilerServiceEndpoint(serviceUrl);
-  let response: Response;
+  const timeoutMs = boundedCompilerTimeout(options.timeoutMs);
+  let response: { ok: boolean; status: number; text: string };
 
   try {
-    response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
+    response = await postCompilerRequest(endpoint, JSON.stringify({
         jobId: options.jobId,
         request,
         model: options.model,
         workers: boundedWorkerCount(options.workers ?? Number(process.env.DKB_LLAMA_ASYNC_WORKERS ?? 1)),
-      }),
-      signal: AbortSignal.timeout(boundedCompilerTimeout(options.timeoutMs)),
-    });
+      }), timeoutMs);
   } catch (error) {
-    throw new DkbError(`LlamaIndex compiler service request failed: ${commandDetail(error)}`);
+    const cause = error instanceof Error && error.cause
+      ? ` (${commandDetail(error.cause)})`
+      : '';
+    throw new DkbError(`LlamaIndex compiler service request failed after at most ${timeoutMs}ms: ${commandDetail(error)}${cause}`);
   }
 
-  const text = await response.text();
+  const text = response.text;
 
   if (!response.ok) {
     throw new DkbError(`LlamaIndex compiler service failed (${response.status}): ${text}`);
@@ -1339,6 +1338,66 @@ async function runCompilerService(
       ? error
       : new DkbError(`Invalid LlamaIndex compiler service response at ${endpoint}: ${commandDetail(error)}`);
   }
+}
+
+async function postCompilerRequest(
+  endpoint: string,
+  body: string,
+  timeoutMs: number,
+): Promise<{ ok: boolean; status: number; text: string }> {
+  const target = new URL(endpoint);
+  const send = target.protocol === 'http:'
+    ? httpRequest
+    : target.protocol === 'https:'
+      ? httpsRequest
+      : null;
+
+  if (!send) {
+    throw new DkbError(`Unsupported LlamaIndex compiler service protocol: ${target.protocol}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = send(target, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body)),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+
+      response.on('data', (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      response.once('aborted', () => {
+        clearTimeout(timer);
+        reject(new Error('Compiler service response was aborted'));
+      });
+      response.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      response.once('end', () => {
+        clearTimeout(timer);
+        const status = response.statusCode ?? 0;
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          text: Buffer.concat(chunks).toString('utf8'),
+        });
+      });
+    });
+    const timer = setTimeout(() => {
+      request.destroy(new Error(`Compiler service request exceeded ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    timer.unref();
+    request.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    request.end(body);
+  });
 }
 
 function compilerServiceEndpoint(serviceUrl: string): string {

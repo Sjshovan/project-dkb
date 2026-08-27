@@ -901,6 +901,77 @@ test('publish continues after a 422 only when the requested package is confirmed
   }
 });
 
+test('publish survives a transient connection failure while polling compilation status', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-publish-poll-retry-'));
+  const packageRoot = path.join(tempRoot, 'poll-retry-demo');
+  const previousPollInterval = process.env.DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS;
+  const previousTimeout = process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS;
+  let statusPolls = 0;
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.setHeader('content-type', 'application/json');
+
+    if (request.method === 'POST' && request.url === '/api/registry/packages') {
+      response.statusCode = 201;
+      response.end(JSON.stringify({ data: { id: '@test/poll-retry-demo' } }));
+      return;
+    }
+
+    if (request.method === 'POST' && request.url === '/api/registry/packages/test/poll-retry-demo/versions') {
+      response.statusCode = 202;
+      response.end(JSON.stringify({
+        data: {
+          packageId: '@test/poll-retry-demo',
+          version: '0.1.0',
+          status: 'compiling',
+        },
+      }));
+      return;
+    }
+
+    if (request.method === 'GET' && request.url === '/api/registry/packages/test/poll-retry-demo/versions/0.1.0') {
+      statusPolls += 1;
+
+      if (statusPolls === 1) {
+        request.socket.destroy();
+        return;
+      }
+
+      response.end(JSON.stringify({
+        data: {
+          packageId: '@test/poll-retry-demo',
+          version: '0.1.0',
+          status: 'published',
+          recordCount: 1,
+        },
+      }));
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end(JSON.stringify({ message: 'Not found' }));
+  });
+
+  try {
+    process.env.DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS = '10';
+    process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS = '2000';
+    await writePackageManifest(packageRoot, 'Poll Retry Demo', '0.1.0');
+    await listen(server);
+    const address = server.address();
+    assert.notEqual(typeof address, 'string');
+    const client = new DkbRegistryClient({ baseUrl: `http://127.0.0.1:${address.port}` });
+    const result = await client.publish({ sourcePath: packageRoot });
+
+    assert.equal(result.status, 'published');
+    assert.equal(statusPolls, 2);
+  } finally {
+    restoreEnvironment('DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS', previousPollInterval);
+    restoreEnvironment('DKB_REGISTRY_PUBLISH_TIMEOUT_MS', previousTimeout);
+    await close(server);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('runtime add removes its staged copy after a successful import', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-add-staging-'));
   const packageRoot = path.join(tempRoot, 'source');

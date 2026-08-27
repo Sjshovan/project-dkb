@@ -19,6 +19,7 @@ import {
 } from '@dkb/library/signing.js';
 import { readLibraryState } from '@dkb/library/state.js';
 import { extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
+import { DkbRegistryClient } from '@dkb/registry-client/client.js';
 import { ensureRuntimeState, importCompiledDkbArtifactIntoRuntime } from './state.js';
 
 export interface DkbInstallCandidate {
@@ -52,6 +53,44 @@ export interface DkbRegistryInstallResult {
   verification: DkbPackageVerification;
   catalog: { recordCount: number; packageCount: number };
   warning?: string;
+}
+
+export async function installDkbFromRegistry(options: {
+  registryUrl: string;
+  registryToken?: string;
+  packageId: string;
+  version?: string;
+  runtimeRoot?: string;
+  force?: boolean;
+  progress?: DkbProgressReporter;
+}): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
+  const runtime = await ensureRuntimeState(options.runtimeRoot);
+  const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: options.registryToken });
+  const release = await client.packageRelease(options.packageId, options.version);
+  const existing = await preflightDkbInstall({
+    runtimeRoot: runtime.stateRoot,
+    candidate: release,
+    force: options.force,
+  });
+  if (existing) return existing;
+
+  const downloadRoot = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-registry-download-'));
+  const archivePath = path.join(downloadRoot, `${encodeURIComponent(options.packageId)}.dkbpkg`);
+
+  try {
+    await client.writePackageArchive(options.packageId, archivePath, release.version, { progress: options.progress });
+    const publicKeys = await client.publicKeys() as { keys: DkbSigningKeyRecord[] };
+    return await installDkbArchiveIntoRuntime({
+      archivePath,
+      trustedKeys: publicKeys.keys,
+      runtimeRoot: runtime.stateRoot,
+      expectedArchiveHash: release.archiveHash,
+      force: options.force,
+      progress: options.progress,
+    });
+  } finally {
+    await fs.rm(downloadRoot, { recursive: true, force: true });
+  }
 }
 
 export async function preflightDkbInstall(options: {

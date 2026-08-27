@@ -577,9 +577,11 @@ export class DkbRegistryClient {
   }
 
   private async waitForPublishedVersion(packageId: string, version: string, initial: unknown) {
-    const timeoutMs = Number.parseInt(process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS ?? String(30 * 60_000), 10);
+    const timeoutMs = positiveDuration(process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS, 30 * 60_000);
+    const pollIntervalMs = positiveDuration(process.env.DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS, 2_000);
     const started = Date.now();
     let latest = initial;
+    let lastTransientError: string | undefined;
 
     while (Date.now() - started < timeoutMs) {
       const status = versionStatus(latest);
@@ -592,11 +594,22 @@ export class DkbRegistryClient {
         throw new DkbError(`Registry publish failed for ${packageId}@${version}: ${versionFailure(latest) ?? status}`);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-      latest = await this.download(packageId, version);
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+
+      try {
+        latest = await this.download(packageId, version);
+        lastTransientError = undefined;
+      } catch (error) {
+        if (!isTransientRegistryConnectionError(error)) {
+          throw error;
+        }
+
+        lastTransientError = error.message;
+      }
     }
 
-    throw new DkbError(`Timed out waiting for registry publish: ${packageId}@${version}`);
+    const detail = lastTransientError ? ` Last connection error: ${lastTransientError}` : '';
+    throw new DkbError(`Timed out waiting for registry publish: ${packageId}@${version}.${detail}`);
   }
 
   private async latestVersion(packageId: string): Promise<string> {
@@ -614,6 +627,16 @@ export class DkbRegistryClient {
   private authorizationHeader(): Record<string, string> {
     return this.token ? { authorization: `Bearer ${this.token}` } : {};
   }
+}
+
+function positiveDuration(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isTransientRegistryConnectionError(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith('Unable to reach registry ');
 }
 
 function identityRoute(identity: string): string {

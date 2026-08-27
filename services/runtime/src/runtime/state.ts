@@ -280,6 +280,7 @@ export async function importCompiledDkbArtifactIntoRuntime(
     ? registryPackagePath(paths.stateRoot, id)
     : localEntryPath(paths.stateRoot, id);
   const existing = await maybeInstalledPackage(packagePath, id);
+  await closeRuntimeQuerySnapshot(paths.stateRoot);
   const tempPath = await copyCompiledArtifactToInstallTemp(sourceRoot, paths, id);
   const libraryManifestPath = path.join(paths.stateRoot, 'dkb.json');
   const previousLibraryManifest = await fs.readFile(libraryManifestPath, 'utf8');
@@ -734,6 +735,7 @@ async function promotePackagePath<T>(
   validatePromotion: () => Promise<T>,
 ): Promise<T> {
   const backupPath = `${packagePath}.replace-${process.pid}-${Date.now().toString(36)}`;
+  await fs.mkdir(path.dirname(packagePath), { recursive: true });
 
   if (await exists(packagePath)) {
     if (!force) {

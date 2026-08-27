@@ -35,6 +35,16 @@ export class DkbRuntimeClient {
     return this.post('/api/dkbs/import-artifact', input, true);
   }
 
+  installRegistryDkb(input: {
+    registryUrl: string;
+    registryToken?: string;
+    packageId: string;
+    version?: string;
+    force?: boolean;
+  }) {
+    return this.post('/api/dkbs/install-registry', input, true);
+  }
+
   removeDkb(id: string) {
     return this.delete(`/api/dkbs/${encodeURIComponent(id)}`, true);
   }

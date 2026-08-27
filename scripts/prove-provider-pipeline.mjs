@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { compileComposeProject } from '@dkb/compiler/compile.js';
 import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
@@ -13,8 +15,11 @@ import { semanticSearch } from '../services/runtime/dist/read/navigation.js';
 import { loadDkb, loadLibrary } from '@dkb/protocol/manifest.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
+import { serveDkbRegistryCompiler } from '@dkb/compiler/server.js';
 
-const compilerUrl = (process.env.DKB_PROOF_COMPILER_URL ?? 'http://127.0.0.1:7333').replace(/\/+$/, '');
+const executeFile = promisify(execFile);
+
+const configuredCompilerUrl = process.env.DKB_PROOF_COMPILER_URL?.replace(/\/+$/, '');
 const target = process.env.DKB_PROOF_TARGET ?? 'default';
 const embeddingModel = process.env.DKB_PROOF_MODEL ?? 'BAAI/bge-small-en-v1.5';
 const embeddingDimensions = Number.parseInt(process.env.DKB_PROOF_DIMENSIONS ?? '384', 10);
@@ -29,8 +34,28 @@ const remoteRoot = path.join(proofRoot, 'remote');
 const queryRoot = path.join(proofRoot, 'query-library');
 const sourceArchive = path.join(proofRoot, 'source.dkbpkg');
 const remoteArchive = path.join(proofRoot, 'remote.dkbpkg');
+const compilerContextRoot = path.join(proofRoot, 'compiler-context');
+const previousContextRoot = process.env.DKB_CONTEXT_ROOT;
+const previousQueryEmbedderUrl = process.env.DKB_QUERY_EMBEDDER_URL;
+let compilerServer;
+let compilerUrl = configuredCompilerUrl;
+let embedderContainer;
 
 try {
+  await fs.mkdir(compilerContextRoot, { recursive: true });
+  await writePipelineConfig(compilerContextRoot);
+  if (!process.env.DKB_QUERY_EMBEDDER_URL) {
+    const embedder = await startQueryEmbedder();
+    embedderContainer = embedder.container;
+    process.env.DKB_QUERY_EMBEDDER_URL = embedder.url;
+  }
+  if (!compilerUrl) {
+    process.env.DKB_CONTEXT_ROOT = compilerContextRoot;
+    compilerServer = await serveDkbRegistryCompiler({ host: '127.0.0.1', port: 0 });
+    const address = compilerServer.address();
+    assert.notEqual(typeof address, 'string');
+    compilerUrl = `http://127.0.0.1:${address.port}`;
+  }
   await writeCorpus(sourceRoot);
   await fs.cp(sourceRoot, localRoot, { recursive: true });
 
@@ -155,6 +180,64 @@ try {
     ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
   }, null, 2));
   process.exitCode = 1;
+} finally {
+  if (compilerServer) {
+    await new Promise((resolve, reject) => compilerServer.close((error) => error ? reject(error) : resolve()));
+  }
+  if (previousContextRoot === undefined) delete process.env.DKB_CONTEXT_ROOT;
+  else process.env.DKB_CONTEXT_ROOT = previousContextRoot;
+  if (previousQueryEmbedderUrl === undefined) delete process.env.DKB_QUERY_EMBEDDER_URL;
+  else process.env.DKB_QUERY_EMBEDDER_URL = previousQueryEmbedderUrl;
+  if (embedderContainer) {
+    await executeFile('docker', ['rm', '-f', embedderContainer], { windowsHide: true }).catch(() => undefined);
+  }
+  await fs.rm(proofRoot, { recursive: true, force: true });
+}
+
+async function startQueryEmbedder() {
+  const container = `dkb-provider-proof-embedder-${process.pid}-${Date.now().toString(36)}`;
+  const port = await availablePort();
+  const image = process.env.DKB_PROVIDER_SIDECAR_IMAGE ?? 'dkb-provider-sidecar:0.1.0';
+  await executeFile('docker', [
+    'run', '--detach', '--rm', '--name', container,
+    '--publish', `127.0.0.1:${port}:8090`,
+    '--env', `DKB_FASTEMBED_MODEL=${embeddingModel}`,
+    image,
+    'python', '-m', 'uvicorn', 'embedder:app', '--host', '0.0.0.0', '--port', '8090',
+  ], { windowsHide: true });
+  embedderContainer = container;
+  const url = `http://127.0.0.1:${port}/embed`;
+  const deadline = Date.now() + 180_000;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(3_000) });
+      const body = await response.json();
+      if (response.ok && body.ok === true && body.model === embeddingModel) return { container, url };
+    } catch {
+      // Importing FastEmbed and warming its model can take a moment on a clean host.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+
+  const { stdout = '', stderr = '' } = await executeFile('docker', ['logs', container], {
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+  }).catch((error) => ({ stdout: error.stdout, stderr: error.stderr }));
+  throw new Error(`Query embedder did not become healthy from ${image}. ${stdout}${stderr}`.trim());
+}
+
+async function availablePort() {
+  const { createServer } = await import('node:net');
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.notEqual(typeof address, 'string');
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return address.port;
 }
 
 function normalizeEvidence(ir) {

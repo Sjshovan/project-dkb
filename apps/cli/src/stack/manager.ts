@@ -287,18 +287,30 @@ async function probeStack(context: DkbStackContext): Promise<Array<{ component: 
   return Promise.all([
     probe('registry-web', `${context.registryUrl}/health`),
     probe('dkb-runtime', `${context.runtimeUrl}/health`),
-    ...(context.target === 'meilisearch' ? [probe('meilisearch', `http://127.0.0.1:${context.meilisearchPort}/health`)] : []),
+    ...(context.target === 'meilisearch'
+      ? [probe(
+          'meilisearch',
+          `http://127.0.0.1:${context.meilisearchPort}/health`,
+          (body) => body.status === 'available',
+          'status=available',
+        )]
+      : []),
   ]);
 }
 
-async function probe(component: string, url: string): Promise<{ component: string; status: 'ok' | 'failed'; message: string }> {
+async function probe(
+  component: string,
+  url: string,
+  isHealthy: (body: Record<string, unknown>) => boolean = (body) => body.ok === true,
+  expectation = 'ok=true',
+): Promise<{ component: string; status: 'ok' | 'failed'; message: string }> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) return { component, status: 'failed', message: `HTTP ${response.status} from ${url}` };
-    const body = await response.json() as { ok?: unknown };
-    return body.ok === true
+    const body = await response.json() as Record<string, unknown>;
+    return isHealthy(body)
       ? { component, status: 'ok', message: url }
-      : { component, status: 'failed', message: `Health response did not report ok=true at ${url}` };
+      : { component, status: 'failed', message: `Health response did not report ${expectation} at ${url}` };
   } catch (error) {
     return { component, status: 'failed', message: `${url}: ${errorMessage(error)}` };
   }
