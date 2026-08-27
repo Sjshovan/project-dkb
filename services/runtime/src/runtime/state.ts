@@ -625,6 +625,20 @@ async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
   return removed;
 }
 
+export async function reloadRuntimeState(stateRoot?: string): Promise<{
+  status: 'reloaded';
+  libraryPath: string;
+  closedContexts: number;
+}> {
+  const paths = await ensureRuntimeState(stateRoot);
+
+  return {
+    status: 'reloaded',
+    libraryPath: paths.stateRoot,
+    closedContexts: await closeRuntimeQuerySnapshot(paths.stateRoot),
+  };
+}
+
 async function activateLocalImports(libraryRoot: string, identities: string[]): Promise<void> {
   const manifestPath = path.join(libraryRoot, 'dkb.json');
   const manifest = await maybeReadJsonObject(manifestPath);

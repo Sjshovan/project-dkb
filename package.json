@@ -15,6 +15,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
+    "proof:stack": "npm run build && node scripts/prove-stack-lifecycle.mjs",
     "proof:meilisearch": "npm run build && node scripts/prove-meilisearch-lifecycle.mjs",
     "temp:audit": "node scripts/clean-dkb-temp.mjs",
     "temp:clean": "node scripts/clean-dkb-temp.mjs --apply",

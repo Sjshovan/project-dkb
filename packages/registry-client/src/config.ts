@@ -108,8 +108,9 @@ async function jsonCheck(
   validate: (body: unknown) => string | null,
 ): Promise<RegistryVerificationCheck> {
   try {
+    const timeoutMs = positiveTimeout(process.env.DKB_REGISTRY_VERIFY_TIMEOUT_MS, 5_000);
     const response = await fetch(`${baseUrl}${endpoint}`, {
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await response.text();
 
@@ -141,6 +142,11 @@ async function jsonCheck(
       message: registryFetchFailureMessage(error),
     };
   }
+}
+
+function positiveTimeout(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function registryFetchFailureMessage(error: unknown): string {

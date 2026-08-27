@@ -1,0 +1,187 @@
+name: dkb-${DKB_STACK_NAME:-local}
+
+x-registry-environment: &registry-environment
+  APP_ENV: local
+  APP_DEBUG: "false"
+  APP_KEY: ${DKB_REGISTRY_APP_KEY:?Run dkb stack up to generate stack secrets}
+  APP_URL: http://127.0.0.1:${DKB_REGISTRY_PORT:-8018}
+  DB_CONNECTION: sqlite
+  DB_DATABASE: /data/registry.sqlite
+  CACHE_STORE: file
+  SESSION_DRIVER: file
+  QUEUE_CONNECTION: database
+  FILESYSTEM_DISK: local
+  DKB_REGISTRY_ID: ${DKB_STACK_NAME:-local}
+  DKB_REGISTRY_STORAGE_DISK: registry
+  DKB_COMPILER_URL: http://dkb-compiler:7341
+  DKB_COMPILER_TARGET: ${DKB_PIPELINE_TARGET:-default}
+  DB_QUEUE_RETRY_AFTER: "1920"
+  DKB_REGISTRY_BOOTSTRAP_EMAIL: dkb@local.invalid
+  DKB_REGISTRY_BOOTSTRAP_NAME: Local DKB Operator
+  DKB_REGISTRY_BOOTSTRAP_NAMESPACE: ${DKB_REGISTRY_BOOTSTRAP_NAMESPACE:-local}
+  DKB_REGISTRY_BOOTSTRAP_TOKEN: ${DKB_REGISTRY_BOOTSTRAP_TOKEN:?Run dkb stack up to generate stack secrets}
+
+x-registry-volumes: &registry-volumes
+  - dkb-registry-data:/data
+  - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/registry/storage:/var/www/html/storage/app/registry
+
+services:
+  registry-migrate:
+    image: ${DKB_REGISTRY_IMAGE:-dkb-registry:0.1.0}
+    command: ["php", "artisan", "migrate", "--force", "--no-interaction"]
+    environment: *registry-environment
+    volumes: *registry-volumes
+    restart: "no"
+
+  registry-bootstrap:
+    image: ${DKB_REGISTRY_IMAGE:-dkb-registry:0.1.0}
+    command: ["php", "artisan", "registry:bootstrap", "--no-interaction"]
+    environment: *registry-environment
+    volumes: *registry-volumes
+    depends_on:
+      registry-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  registry-web:
+    image: ${DKB_REGISTRY_IMAGE:-dkb-registry:0.1.0}
+    command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000", "--no-reload"]
+    environment: *registry-environment
+    volumes: *registry-volumes
+    ports:
+      - "${DKB_REGISTRY_PORT:-8018}:8000"
+    depends_on:
+      registry-bootstrap:
+        condition: service_completed_successfully
+      dkb-compiler:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(json_decode(file_get_contents('http://127.0.0.1:8000/health'), true)['ok'] === true ? 0 : 1);"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  registry-worker:
+    image: ${DKB_REGISTRY_IMAGE:-dkb-registry:0.1.0}
+    command: ["php", "artisan", "queue:work", "--sleep=1", "--tries=1", "--timeout=1900", "--no-interaction"]
+    environment: *registry-environment
+    volumes: *registry-volumes
+    depends_on:
+      registry-bootstrap:
+        condition: service_completed_successfully
+      dkb-compiler:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(str_contains(file_get_contents('/proc/1/cmdline'), 'queue:work') ? 0 : 1);"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  dkb-compiler:
+    image: ${DKB_COMPILER_IMAGE:-dkb-compiler:0.1.0}
+    environment:
+      DKB_COMPILER_HOST: 0.0.0.0
+      DKB_COMPILER_PORT: 7341
+      DKB_CONTEXT_ROOT: /context
+      DKB_LLAMA_COMPILER_SERVICE_URL: http://dkb-compiler-worker:8091
+      DKB_LLAMA_COMPILER_SERVICE_ROOT: /
+      DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
+    volumes:
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-context:/context
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-jobs:/jobs
+    depends_on:
+      dkb-compiler-worker:
+        condition: service_healthy
+      dkb-embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7341/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  dkb-compiler-worker:
+    image: ${DKB_PROVIDER_IMAGE:-dkb-provider-sidecar:0.1.0}
+    environment:
+      DKB_COMPILER_JOBS_ROOT: /jobs
+      DKB_COMPILER_MODEL: BAAI/bge-small-en-v1.5
+    volumes:
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-jobs:/jobs
+      - dkb-fastembed-cache:/cache/fastembed
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,json; assert json.load(urllib.request.urlopen('http://127.0.0.1:8091/health'))['ok']"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
+  dkb-embedder:
+    image: ${DKB_PROVIDER_IMAGE:-dkb-provider-sidecar:0.1.0}
+    command: ["python", "-m", "uvicorn", "embedder:app", "--host", "0.0.0.0", "--port", "8090"]
+    environment:
+      DKB_FASTEMBED_MODEL: BAAI/bge-small-en-v1.5
+    volumes:
+      - dkb-fastembed-cache:/cache/fastembed
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,json; assert json.load(urllib.request.urlopen('http://127.0.0.1:8090/health'))['ok']"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
+  dkb-runtime:
+    image: ${DKB_RUNTIME_IMAGE:-dkb-runtime:0.1.0}
+    environment:
+      DKB_RUNTIME_HOST: 0.0.0.0
+      DKB_RUNTIME_PORT: 7331
+      DKB_RUNTIME_STATE_ROOT: /state
+      DKB_PUBLIC_URL: http://127.0.0.1:${DKB_RUNTIME_PORT:-7331}
+      DKB_MCP_PUBLIC_BASE_URL: http://127.0.0.1:${DKB_RUNTIME_PORT:-7331}
+      DKB_MCP_PUBLIC_DOCUMENTS: "true"
+      DKB_REGISTRY_URL: http://registry-web:8000
+      DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
+      DKB_MCP_HTTP_ENABLED: "true"
+      DKB_MCP_BEARER_TOKEN: ${DKB_MCP_BEARER_TOKEN:?Run dkb stack up to generate stack secrets}
+      DKB_RUNTIME_ADMIN_TOKEN: ${DKB_RUNTIME_ADMIN_TOKEN:?Run dkb stack up to generate stack secrets}
+      DKB_MCP_ALLOWED_HOSTS: 127.0.0.1,localhost
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
+    volumes:
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
+    ports:
+      - "${DKB_RUNTIME_PORT:-7331}:7331"
+    depends_on:
+      dkb-embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7331/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.29
+    profiles: ["meilisearch"]
+    environment:
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
+    ports:
+      - "${DKB_MEILI_PORT:-7700}:7700"
+    volumes:
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/meilisearch:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+volumes:
+  dkb-fastembed-cache:
+  dkb-registry-data:

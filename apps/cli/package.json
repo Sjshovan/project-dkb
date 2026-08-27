@@ -17,11 +17,12 @@
     "dist/providers/",
     "dist/registry/",
     "dist/remote/",
+    "dist/stack/",
     "dist/watch/",
     "dist/writes/"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node ../../scripts/copy-cli-assets.mjs",
     "check": "tsc -b --pretty false"
   },
   "dependencies": {

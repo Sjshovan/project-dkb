@@ -18,9 +18,14 @@ export interface ServeDkbMcpHttpOptions {
   allowInsecureNoAuth?: boolean;
 }
 
-export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
-  const host = options.host ?? process.env.DKB_MCP_HTTP_HOST ?? '127.0.0.1';
-  const port = options.port ?? parsePort(process.env.DKB_MCP_HTTP_PORT, 7332);
+export interface DkbMcpHttpHandler {
+  endpointPath: string;
+  handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
+  close(): Promise<void>;
+}
+
+export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = {}): Promise<DkbMcpHttpHandler> {
+  const host = options.host ?? process.env.DKB_MCP_HTTP_HOST ?? process.env.DKB_RUNTIME_HOST ?? '127.0.0.1';
   const endpointPath = normalizePath(options.path ?? process.env.DKB_MCP_HTTP_PATH ?? '/mcp');
   const libraryPath = options.libraryPath ?? process.env.DKB_LIBRARY_PATH ?? defaultRuntimeStateRoot();
   const bearerToken = options.bearerToken ?? process.env.DKB_MCP_BEARER_TOKEN;
@@ -47,24 +52,47 @@ export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
   });
 
   await mcp.connect(transport);
+
+  return {
+    endpointPath,
+    async handle(request, response) {
+      const requestUrl = new URL(request.url ?? '/', 'http://dkb.local');
+      const documentId = requestUrl.pathname.match(/^\/documents\/([^/]+)$/)?.[1];
+
+      if (documentId && request.method === 'GET' && publicDocuments) {
+        sendJson(response, 200, await fetchRemoteEvidence(libraryPath, decodeURIComponent(documentId), publicBaseUrl));
+        return true;
+      }
+      if (requestUrl.pathname !== endpointPath) return false;
+      if (!validateHost(request, response) || !validateOrigin(request, response)) return true;
+      if (!allowInsecureNoAuth && !validBearer(request, bearerToken!)) {
+        response.setHeader('www-authenticate', 'Bearer realm="DKB MCP"');
+        sendJson(response, 401, { error: 'unauthorized' });
+        return true;
+      }
+      await transport.handleRequest(request, response);
+      return true;
+    },
+    async close() {
+      await transport.close();
+      await mcp.close();
+    },
+  };
+}
+
+export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
+  const host = options.host ?? process.env.DKB_MCP_HTTP_HOST ?? '127.0.0.1';
+  const port = options.port ?? parsePort(process.env.DKB_MCP_HTTP_PORT, 7332);
+  const handler = await createDkbMcpHttpHandler({ ...options, host });
   const httpServer = createServer(async (request, response) => {
     try {
       const requestUrl = new URL(request.url ?? '/', 'http://dkb.local');
 
       if (requestUrl.pathname === '/health' && request.method === 'GET') {
-        return sendJson(response, 200, { ok: true, mode: 'read-only', endpoint: endpointPath });
+        return sendJson(response, 200, { ok: true, mode: 'read-only', endpoint: handler.endpointPath });
       }
-      const documentId = requestUrl.pathname.match(/^\/documents\/([^/]+)$/)?.[1];
-      if (documentId && request.method === 'GET' && publicDocuments) {
-        return sendJson(response, 200, await fetchRemoteEvidence(libraryPath, decodeURIComponent(documentId), publicBaseUrl));
-      }
-      if (requestUrl.pathname !== endpointPath) return sendJson(response, 404, { error: 'not_found' });
-      if (!validateHost(request, response) || !validateOrigin(request, response)) return;
-      if (!allowInsecureNoAuth && !validBearer(request, bearerToken!)) {
-        response.setHeader('www-authenticate', 'Bearer realm="DKB MCP"');
-        return sendJson(response, 401, { error: 'unauthorized' });
-      }
-      await transport.handleRequest(request, response);
+      if (await handler.handle(request, response)) return;
+      return sendJson(response, 404, { error: 'not_found' });
     } catch (error) {
       sendJson(response, 500, {
         error: 'mcp_http_error',
@@ -72,6 +100,7 @@ export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
       });
     }
   });
+  httpServer.on('close', () => void handler.close());
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

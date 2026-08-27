@@ -22,10 +22,10 @@ for (const workspace of workspaceRoots) {
         if (relative.startsWith('..') || path.isAbsolute(relative)) {
           errors.push(`${relativePath(file)} crosses its workspace with ${specifier}`);
         }
-      } else if (specifier.startsWith('@dkb/')) {
-        const packageName = specifier.split('/').slice(0, 2).join('/');
+      } else if (!specifier.startsWith('node:')) {
+        const packageName = dependencyName(specifier);
         if (packageName !== workspace.manifest.name && !dependencies.has(packageName)) {
-          errors.push(`${relativePath(file)} imports undeclared workspace ${packageName}`);
+          errors.push(`${relativePath(file)} imports undeclared dependency ${packageName}`);
         }
       }
     }
@@ -69,4 +69,9 @@ function importSpecifiers(source) {
 
 function relativePath(target) {
   return path.relative(root, target).replace(/\\/g, '/');
+}
+
+function dependencyName(specifier) {
+  const segments = specifier.split('/');
+  return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
 }

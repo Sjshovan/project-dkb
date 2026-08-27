@@ -919,8 +919,8 @@ function optionValue(args: string[], option: string): string | null {
 function faissHelperPath(): string {
   const current = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.resolve(process.cwd(), 'compiler/faiss/faiss_helper.py'),
-    path.resolve(current, '../../../compiler/faiss/faiss_helper.py'),
+    path.resolve(process.cwd(), 'providers/bundled/python/faiss/faiss_helper.py'),
+    path.resolve(current, '../python/faiss/faiss_helper.py'),
   ];
   const found = candidates.find((candidate) => existsSync(candidate));
 

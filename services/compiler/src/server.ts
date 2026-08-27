@@ -19,6 +19,7 @@ import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { resolveContextConfig } from '@dkb/pipeline/config.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
+import { DKB_COMPILER_VERSION } from './version.js';
 
 const DKB_COMPILER_RESULT_MEDIA_TYPE = 'application/vnd.dkb.compiler-result+gzip';
 const DKB_COMPILER_RESULT_HEADER = 'x-dkb-compiler-result';
@@ -86,6 +87,7 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse):
       return sendJson(response, 200, {
         ok: true,
         service: 'dkb.registry.compiler',
+        version: DKB_COMPILER_VERSION,
         target: capabilities.activeTarget,
         buildDigest: capabilities.buildDigest,
         compatibilityDigest: capabilities.compatibilityDigest,
@@ -259,6 +261,7 @@ async function compileRegistryPackage(
 
 export async function registryCompilerCapabilities(): Promise<{
   service: 'dkb.registry.compiler';
+  version: string;
   contextRoot: string;
   activeTarget: string;
   providers: ReturnType<DkbProviderHost['describe']>['providers'];
@@ -276,6 +279,7 @@ export async function registryCompilerCapabilities(): Promise<{
 
     return {
       service: 'dkb.registry.compiler',
+      version: DKB_COMPILER_VERSION,
       contextRoot,
       activeTarget: description.target,
       providers: description.providers,

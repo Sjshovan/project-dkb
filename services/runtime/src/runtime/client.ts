@@ -5,15 +5,18 @@ import type { DkbRemoteAttachInput } from '../remote/types.js';
 export interface DkbRuntimeClientOptions {
   baseUrl?: string;
   timeoutMs?: number;
+  adminToken?: string;
 }
 
 export class DkbRuntimeClient {
   readonly baseUrl: string;
   readonly timeoutMs: number;
+  readonly adminToken?: string;
 
   constructor(options: DkbRuntimeClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? process.env.DKB_RUNTIME_URL ?? 'http://127.0.0.1:7331');
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.adminToken = options.adminToken ?? process.env.DKB_RUNTIME_ADMIN_TOKEN;
   }
 
   status() {
@@ -24,12 +27,16 @@ export class DkbRuntimeClient {
     return this.get('/api/library');
   }
 
+  reload() {
+    return this.post('/api/runtime/reload', {}, true);
+  }
+
   importArtifact(input: { sourcePath: string; id?: string; force?: boolean }) {
-    return this.post('/api/dkbs/import-artifact', input);
+    return this.post('/api/dkbs/import-artifact', input, true);
   }
 
   removeDkb(id: string) {
-    return this.delete(`/api/dkbs/${encodeURIComponent(id)}`);
+    return this.delete(`/api/dkbs/${encodeURIComponent(id)}`, true);
   }
 
   retrieve(request: DkbRetrieveKnowledgeRequest) {
@@ -37,44 +44,47 @@ export class DkbRuntimeClient {
   }
 
   remoteDiscover(url: string) {
-    return this.post('/api/remote/discover', { url });
+    return this.post('/api/remote/discover', { url }, true);
   }
 
   remoteAttach(input: DkbRemoteAttachInput) {
-    return this.post('/api/remote/session/attach', input);
+    return this.post('/api/remote/session/attach', input, true);
   }
 
   remoteSessions() {
-    return this.get('/api/remote/sessions');
+    return this.get('/api/remote/sessions', true);
   }
 
   remoteDetach(sessionId: string) {
-    return this.delete(`/api/remote/session/${encodeURIComponent(sessionId)}`);
+    return this.delete(`/api/remote/session/${encodeURIComponent(sessionId)}`, true);
   }
 
   remoteRetrieve(sessionId: string, request: DkbRetrieveKnowledgeRequest) {
-    return this.post(`/api/remote/session/${encodeURIComponent(sessionId)}/retrieve`, request);
+    return this.post(`/api/remote/session/${encodeURIComponent(sessionId)}/retrieve`, request, true);
   }
 
-  private get(path: string) {
-    return this.request('GET', path);
+  private get(path: string, admin = false) {
+    return this.request('GET', path, undefined, admin);
   }
 
-  private post(path: string, body: unknown) {
-    return this.request('POST', path, body);
+  private post(path: string, body: unknown, admin = false) {
+    return this.request('POST', path, body, admin);
   }
 
-  private delete(path: string) {
-    return this.request('DELETE', path);
+  private delete(path: string, admin = false) {
+    return this.request('DELETE', path, undefined, admin);
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
+  private async request(method: string, path: string, body?: unknown, admin = false): Promise<unknown> {
     let response: Response;
 
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method,
-        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        headers: {
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          ...(admin && this.adminToken ? { authorization: `Bearer ${this.adminToken}` } : {}),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
       });

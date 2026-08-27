@@ -51,7 +51,7 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
             console.error(successLine(`${label} complete`));
           }
           printSummary(summary?.(value) ?? defaultSummary(value));
-          console.error(terminalText(['bold', 'green'], 'Done.', process.stderr));
+          console.log(terminalText(['bold', 'green'], 'Done.', process.stdout));
         } else {
           printJson(value);
         }
@@ -95,7 +95,7 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
           }
           printSummary(summary?.(value) ?? defaultSummary(value));
           if (ok) {
-            console.error(terminalText(['bold', 'green'], 'Done.', process.stderr));
+            console.log(terminalText(['bold', 'green'], 'Done.', process.stdout));
           }
         } else {
           printJson(value);

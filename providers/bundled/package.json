@@ -18,6 +18,7 @@
   "files": [
     "dist/",
     "!dist/.tsbuildinfo",
+    "python/faiss/faiss_helper.py",
     "python/llamaindex/compile.py",
     "python/llamaindex/embedder.py",
     "python/llamaindex/service.py",

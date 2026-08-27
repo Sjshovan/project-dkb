@@ -708,6 +708,61 @@ runtime
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).library());
   });
 
+const stack = program
+  .command('stack')
+  .description('Operate a complete local DKB developer-preview stack');
+
+stack
+  .command('up')
+  .description('Start or update a named local DKB stack')
+  .argument('[name]', 'Stack name', 'local')
+  .option('--target <target>', 'Pipeline target: default or meilisearch', parseStackTarget, 'default')
+  .action(async (name: string, options: { target: 'default' | 'meilisearch' }) => {
+    const { upDkbStack } = await import('../stack/manager.js');
+    await presenter().run('Starting DKB stack', async () => upDkbStack(name, options.target), summarizeStackStatus);
+  });
+
+stack
+  .command('down')
+  .description('Stop a named stack while preserving its state')
+  .argument('[name]', 'Stack name', 'local')
+  .action(async (name: string) => {
+    const { downDkbStack } = await import('../stack/manager.js');
+    await presenter().run('Stopping DKB stack', async () => downDkbStack(name));
+  });
+
+stack
+  .command('status')
+  .description('Show services in a named local stack')
+  .argument('[name]', 'Stack name', 'local')
+  .option('--check', 'Probe Registry, Runtime, and selected managed-index endpoints')
+  .action(async (name: string, options: { check?: boolean }) => {
+    const { statusDkbStack } = await import('../stack/manager.js');
+    presenter().print(await statusDkbStack(name, Boolean(options.check)), summarizeStackStatus);
+  });
+
+stack
+  .command('logs')
+  .description('Show logs for a named stack or one service')
+  .argument('[name]', 'Stack name', 'local')
+  .argument('[service]', 'Compose service name')
+  .option('--follow', 'Continue streaming new log output')
+  .action(async (name: string, service: string | undefined, options: { follow?: boolean }) => {
+    if (jsonRequested) throw new DkbError('dkb stack logs is a streaming command and does not support --json.');
+    const { logsDkbStack } = await import('../stack/manager.js');
+    await logsDkbStack(name, service, Boolean(options.follow));
+  });
+
+stack
+  .command('doctor')
+  .description('Diagnose local stack configuration and service health')
+  .argument('[name]', 'Stack name', 'local')
+  .action(async (name: string) => {
+    const { doctorDkbStack } = await import('../stack/manager.js');
+    const result = await presenter().check('Stack diagnostics', async () => doctorDkbStack(name), (value) => value.ok, summarizeStackStatus);
+    if (!result.ok) process.exitCode = 1;
+  });
+
 const registry = program
   .command('registry')
   .description('Manage the DKB package registry');
@@ -1245,11 +1300,15 @@ program
   .option('--revision <revision>', 'Collection revision', parsePositiveInteger)
   .option('--registry <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
+  .option('--runtime-url <url>', 'Owning Runtime URL; closes live retrieval handles before installation')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .option('--force', 'Repair an incomplete install or replace an installed DKB')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; revision?: number; registry?: string; url?: string; library?: string; force?: boolean; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; revision?: number; registry?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
     const libraryRoot = await currentLibraryRoot(options.library);
+    if (options.runtimeUrl) {
+      await (await currentRuntimeAdminClient(options.runtimeUrl)).reload();
+    }
     if (!options.registry) {
       const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
       const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
@@ -1429,9 +1488,7 @@ remote
   .argument('<url>', 'Site URL or direct /.well-known/dkb.json URL')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (targetUrl: string, options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
-
-    printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteDiscover(targetUrl));
+    printJson(await (await currentRuntimeAdminClient(options.url)).remoteDiscover(targetUrl));
   });
 
 remote
@@ -1441,9 +1498,8 @@ remote
   .option('--ttl <seconds>', 'Session lifetime in seconds', parsePositiveInteger)
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (targetUrl: string, options: { ttl?: number; url?: string }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
-
-    await presenter().run('Attaching remote', async () => new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteAttach({
+    const runtime = await currentRuntimeAdminClient(options.url);
+    await presenter().run('Attaching remote', async () => runtime.remoteAttach({
       url: targetUrl,
       ttlSeconds: options.ttl,
     }));
@@ -1454,9 +1510,7 @@ remote
   .description('List temporary remote DKB sessions held by the runtime process')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
-
-    printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteSessions());
+    printJson(await (await currentRuntimeAdminClient(options.url)).remoteSessions());
   });
 
 remote
@@ -1465,9 +1519,8 @@ remote
   .argument('<session-id>', 'Remote session id returned by dkb remote attach')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (sessionId: string, options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
-
-    await presenter().run('Detaching remote', async () => new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteDetach(sessionId));
+    const runtime = await currentRuntimeAdminClient(options.url);
+    await presenter().run('Detaching remote', async () => runtime.remoteDetach(sessionId));
   });
 
 remote
@@ -1501,9 +1554,7 @@ remote
       return;
     }
 
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
-
-    presenter().print(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).remoteRetrieve(sessionId, {
+    presenter().print(await (await currentRuntimeAdminClient(options.url)).remoteRetrieve(sessionId, {
       need,
       intent: options.intent,
       limit: options.limit,
@@ -1531,7 +1582,6 @@ program
     containerImportRoot: string;
     stage?: boolean;
   }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
     const compiledImport = await prepareCompiledRuntimeImport(target, options.id, options.name);
     let stagedImport: Awaited<ReturnType<typeof stageRuntimeImport>> | undefined;
 
@@ -1548,7 +1598,7 @@ program
       let result: unknown;
 
       try {
-        result = await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).importArtifact({
+        result = await (await currentRuntimeAdminClient(options.url)).importArtifact({
           sourcePath: stagedImport?.containerPath ?? compiledImport.path,
           id: compiledImport.id,
           force: Boolean(options.force),
@@ -1598,7 +1648,8 @@ program
   .description('Uninstall a DKB or Collection from the current Library')
   .argument('<identity>', 'Scoped @namespace/name identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
-  .action(async (identity: string, options: { library?: string }) => {
+  .option('--url <url>', 'Owning Runtime URL; use when the Library is served by a running Runtime')
+  .action(async (identity: string, options: { library?: string; url?: string }) => {
     const { readLibraryState } = await import('@dkb/library/state.js');
     const libraryRoot = await currentLibraryRoot(options.library);
     const entry = (await readLibraryState(libraryRoot)).entries[identity];
@@ -1617,6 +1668,12 @@ program
       const { removeLibraryRoot } = await import('@dkb/library/resolver.js');
 
       await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(libraryRoot, identity), summarizeLibrarySync);
+      return;
+    }
+
+    if (options.url) {
+      const runtime = await currentRuntimeAdminClient(options.url);
+      await presenter().run(`Uninstalling ${identity}`, async () => runtime.removeDkb(identity), summarizeRemoveResult);
       return;
     }
 
@@ -2251,12 +2308,30 @@ async function currentRuntimeUrl(explicit?: string): Promise<string> {
   return resolveCliRuntimeUrl(explicit);
 }
 
+async function currentRuntimeAdminClient(explicit?: string) {
+  const [{ DkbRuntimeClient }, { runtimeAdminTokenForUrl }] = await Promise.all([
+    import('@dkb/runtime/runtime/client.js'),
+    import('../stack/manager.js'),
+  ]);
+  const baseUrl = await currentRuntimeUrl(explicit);
+
+  return new DkbRuntimeClient({
+    baseUrl,
+    adminToken: await runtimeAdminTokenForUrl(baseUrl),
+  });
+}
+
 function parseRuntimeKind(value: string): 'process' | 'docker' | 'remote' {
   if (value === 'process' || value === 'docker' || value === 'remote') {
     return value;
   }
 
   throw new DkbError('Runtime kind must be process, docker, or remote.');
+}
+
+function parseStackTarget(value: string): 'default' | 'meilisearch' {
+  if (value === 'default' || value === 'meilisearch') return value;
+  throw new DkbError('Stack target must be default or meilisearch.');
 }
 
 function runtimeCatalogUrl(host: string, port: number): string {
@@ -2814,6 +2889,53 @@ function clipText(value: string, maximum: number): string {
   const compact = value.trim();
 
   return compact.length <= maximum ? compact : `${compact.slice(0, maximum - 1).trimEnd()}…`;
+}
+
+function summarizeStackStatus(value: unknown): string[] {
+  const stack = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const services = Array.isArray(stack.services)
+    ? stack.services.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  const checks = Array.isArray(stack.checks)
+    ? stack.checks.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+
+  return [
+    `stack: ${String(stack.name ?? 'local')}`,
+    stack.status ? `status: ${humanStatus(stack.status)}` : '',
+    stack.target ? `target: ${String(stack.target)}` : '',
+    stack.registryUrl ? `registry: ${String(stack.registryUrl)}` : '',
+    stack.runtimeUrl ? `runtime: ${String(stack.runtimeUrl)}` : '',
+    stack.stateRoot ? `state: ${String(stack.stateRoot)}` : '',
+    ...(services.length > 0 ? [
+      '',
+      ...humanSummary({ results: services.map((service) => ({
+        service: service.name ?? '-',
+        status: humanStatus(service.status ?? '-').toUpperCase(),
+        health: humanStatus(service.health ?? '-').toUpperCase(),
+      })) }),
+    ] : []),
+    ...(checks.length > 0 ? [
+      '',
+      ...humanSummary({ results: checks.map((check) => ({
+        component: stackComponentLabel(check.component),
+        status: humanStatus(check.status ?? '-').toUpperCase(),
+        message: check.message ?? '-',
+      })) }),
+    ] : []),
+  ];
+}
+
+function stackComponentLabel(value: unknown): string {
+  switch (String(value)) {
+    case 'registry-web': return 'Registry';
+    case 'dkb-runtime': return 'Runtime';
+    case 'meilisearch': return 'Meilisearch';
+    case 'docker': return 'Docker';
+    case 'compose': return 'Compose';
+    case 'secrets': return 'Secrets';
+    default: return String(value ?? '-');
+  }
 }
 
 function summarizeCompilerStatus(value: unknown): string[] {

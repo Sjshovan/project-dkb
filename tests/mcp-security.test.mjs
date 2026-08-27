@@ -10,6 +10,10 @@ import {
 } from '../services/runtime/dist/read/modelEvidence.js';
 import { renderUntrustedSourceBlock, renderUntrustedSourceInline } from '@dkb/protocol/security/sourceContent.js';
 import { serveDkbMcpHttp } from '../services/runtime/dist/mcp/http.js';
+import { serveDkbRuntime } from '../services/runtime/dist/runtime/server.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 test('remote MCP exposes only read-only search and fetch tools', async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -120,6 +124,65 @@ test('HTTP MCP permits explicit no-auth mode only for a disposable proof', async
   }
 });
 
+test('Runtime serves health and read-only MCP from the same origin', async () => {
+  const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-mcp-origin-'));
+  const previousEnabled = process.env.DKB_MCP_HTTP_ENABLED;
+  const previousToken = process.env.DKB_MCP_BEARER_TOKEN;
+  process.env.DKB_MCP_HTTP_ENABLED = 'true';
+  process.env.DKB_MCP_BEARER_TOKEN = 'same-origin-test-token';
+  const runtime = await serveDkbRuntime({
+    host: '127.0.0.1',
+    port: 0,
+    stateRoot,
+    adminToken: 'same-origin-admin-token',
+  });
+  const address = runtime.address();
+
+  assert.equal(typeof address, 'object');
+  const origin = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const health = await fetch(`${origin}/health`);
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).runtime.version, '0.1.0');
+
+    const listed = await fetch(`${origin}/mcp`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/event-stream',
+        authorization: 'Bearer same-origin-test-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    });
+    assert.equal(listed.status, 200);
+    assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name).sort(), ['fetch', 'search']);
+
+    const reloaded = await fetch(`${origin}/api/runtime/reload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(reloaded.status, 401);
+
+    const authorizedReload = await fetch(`${origin}/api/runtime/reload`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer same-origin-admin-token',
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(authorizedReload.status, 200);
+    assert.equal((await authorizedReload.json()).status, 'reloaded');
+  } finally {
+    await new Promise((resolve, reject) => runtime.close((error) => error ? reject(error) : resolve()));
+    await fs.rm(stateRoot, { recursive: true, force: true });
+    restoreEnvironment('DKB_MCP_HTTP_ENABLED', previousEnabled);
+    restoreEnvironment('DKB_MCP_BEARER_TOKEN', previousToken);
+  }
+});
+
 test('trusted policy surrounds evidence and hostile source instructions are removed', () => {
   const hostile = [
     'The safe fact is WHALE-BUBBLE-73.',
@@ -200,3 +263,8 @@ test('low-confidence weak matches are not presented as supporting evidence', () 
   assert.match(rendered, /No DKB evidence found/);
   assert.doesNotMatch(rendered, /whale fact/);
 });
+
+function restoreEnvironment(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}

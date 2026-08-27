@@ -137,6 +137,7 @@ test('bare init creates an idempotent Library and stores its verified upstream R
       DKB_CLI_CONFIG: userConfigPath,
       DKB_HOST_INVENTORY: path.join(tempRoot, 'host.json'),
       DKB_REGISTRY_URL: '',
+      DKB_REGISTRY_VERIFY_TIMEOUT_MS: '20000',
     };
     const initialized = await runCli([
       '--json',
@@ -219,7 +220,7 @@ test('bare init without a URL argument still creates the Library when Registry v
     assert.match(result.stdout, /Warning: Upstream Registry .* could not be verified/);
     assert.match(result.stdout, new RegExp(`Retry: dkb registry use ${escapeRegExp(registryUrl)}`));
     assert.match(result.stderr, /Initializing Library complete/);
-    assert.match(result.stderr, /Done\./);
+    assert.match(result.stdout, /Done\./);
     assert.equal(JSON.parse(await fs.readFile(path.join(tempRoot, 'dkb.json'), 'utf8')).type, 'library');
     assert.equal(JSON.parse(await fs.readFile(libraryRegistryConfigPath(tempRoot), 'utf8')).registry.url, registryUrl);
   } finally {
@@ -393,7 +394,7 @@ test('--no-progress keeps human output and --json is the explicit machine-output
     assert.match(human.stdout, /Manifest:/);
     assert.doesNotMatch(human.stdout, /^\s*\{/);
     assert.match(human.stderr, /Initializing DKB complete/);
-    assert.match(human.stderr, /Done\./);
+    assert.match(human.stdout, /Done\./);
 
     const machine = await runCli(['--json', 'init', '@test/json-demo', '--dir', tempRoot, '--yes']);
     assert.equal(machine.code, 0);
@@ -509,7 +510,7 @@ test('install detects an identical package before requesting its archive', async
     assert.match(result.stdout, /Status: already installed/);
     assert.match(result.stdout, /Package: @acct-test\/already-here@1\.0\.0/);
     assert.match(result.stderr, /Installing DKB complete/);
-    assert.match(result.stderr, /Done\./);
+    assert.match(result.stdout, /Done\./);
     assert.doesNotMatch(result.stderr, /ExperimentalWarning/);
     assert.deepEqual(requests, [
       '/api/registry/packages/acct-test/already-here',
