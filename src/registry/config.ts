@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { hostInventoryPath, selectedHostRegistry } from '../host/inventory.js';
 import { DkbError } from '../protocol/errors.js';
 
 export const DEFAULT_REGISTRY_URL = 'http://127.0.0.1:8000';
 export const DKB_FOLDER_CONFIG_PATH = '.dkb/config.json';
 
-export type RegistryUrlSource = 'argument' | 'environment' | 'project' | 'user' | 'default';
+export type RegistryUrlSource = 'argument' | 'environment' | 'project' | 'host' | 'user' | 'default';
 
 export interface ConfiguredRegistry {
   url: string;
@@ -111,6 +112,11 @@ export async function configuredRegistry(options: RegistryConfigurationOptions =
     if (projectUrl) {
       return configuredResult(normalizeRegistryUrl(projectUrl), 'project', projectConfigPath, projectRoot);
     }
+  }
+
+  const selected = await selectedHostRegistry();
+  if (selected) {
+    return configuredResult(selected.registry.url, 'host', hostInventoryPath(), projectRoot);
   }
 
   const userConfig = await readCliConfig(userConfigPath);

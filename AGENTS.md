@@ -32,6 +32,7 @@ python -m graphify update src
 | Area | Responsibility |
 | --- | --- |
 | `src/protocol/`, `schemas/` | Stable manifests, contracts, paths, capabilities, and validation |
+| `src/host/` | Disposable machine-local Library, Registry, and Runtime inventory and health inspection |
 | `src/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and status |
 | `src/adapters/` | Source discovery and reads; no retrieval orchestration |
 | `src/compiler/`, `compiler/llamaindex/` | Source and Evidence IR compilation, Docling/LlamaIndex routing, embeddings |
@@ -79,12 +80,17 @@ handles, or an attention subsystem without an explicit architecture decision.
 
 `docs/decisions/0001-cli-control-plane-and-release-gate.md` records the remaining
 public-release gate. `docs/decisions/0002-library-and-collections-hard-cutover.md`
-records the implemented Library and Collection model. Verify actual behavior in
-source and tests rather than treating either record as runtime evidence.
+records the implemented Library and Collection model.
+`docs/decisions/0003-host-inventory-and-context-selection.md` records the
+implemented host-local inventory, selections, and resolution precedence. Verify
+actual behavior in source and tests rather than treating these records as
+runtime evidence.
 
 Do not add another command-specific root or connection resolver. Top-level
-package operations use the nearest Library; explicitly remote Runtime
-administration stays under `dkb runtime`.
+package operations use the shared explicit, environment, nearest, then selected
+Library resolver. Runtime clients use the shared explicit, environment,
+selected, then localhost URL resolver. Explicitly remote Runtime administration
+stays under `dkb runtime`.
 
 ## Change Rules
 

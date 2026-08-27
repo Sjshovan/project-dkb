@@ -22,6 +22,7 @@ import { sourceAssetsFromChunks } from '../dist/src/indexes/sourceIndex.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'dist', 'src', 'cli', 'index.js');
+let cliInvocation = 0;
 
 test('human summaries render collections as aligned tables', () => {
   assert.deepEqual(humanSummary({
@@ -50,9 +51,11 @@ test('Library folders keep an upstream Registry URL that overrides the user fall
   const userConfigPath = path.join(tempRoot, 'user-config.json');
   const previousCliConfig = process.env.DKB_CLI_CONFIG;
   const previousRegistryUrl = process.env.DKB_REGISTRY_URL;
+  const previousHostInventory = process.env.DKB_HOST_INVENTORY;
 
   try {
     process.env.DKB_CLI_CONFIG = userConfigPath;
+    process.env.DKB_HOST_INVENTORY = path.join(tempRoot, 'host.json');
     delete process.env.DKB_REGISTRY_URL;
     await fs.mkdir(nestedRoot, { recursive: true });
     await writeLibraryManifest(registryRoot);
@@ -71,6 +74,7 @@ test('Library folders keep an upstream Registry URL that overrides the user fall
   } finally {
     restoreEnvironment('DKB_CLI_CONFIG', previousCliConfig);
     restoreEnvironment('DKB_REGISTRY_URL', previousRegistryUrl);
+    restoreEnvironment('DKB_HOST_INVENTORY', previousHostInventory);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
@@ -111,6 +115,7 @@ test('bare init creates an idempotent Library and stores its verified upstream R
     const registryUrl = `http://127.0.0.1:${address.port}`;
     const environment = {
       DKB_CLI_CONFIG: userConfigPath,
+      DKB_HOST_INVENTORY: path.join(tempRoot, 'host.json'),
       DKB_REGISTRY_URL: '',
     };
     const initialized = await runCli([
@@ -132,6 +137,10 @@ test('bare init creates an idempotent Library and stores its verified upstream R
         source: 'project',
         configPath: libraryRegistryConfigPath(registryRoot),
         root: registryRoot,
+      },
+      host: {
+        library: 'knowledge',
+        inventoryPath: path.join(tempRoot, 'host.json'),
       },
       verification: {
         ok: true,
@@ -240,8 +249,10 @@ test('registry use saves an unreachable URL and reports how to retry verificatio
 test('serve initialization uses the same offline-safe registry configuration path', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-serve-init-'));
   const registryUrl = 'http://127.0.0.1:1';
+  const previousHostInventory = process.env.DKB_HOST_INVENTORY;
 
   try {
+    process.env.DKB_HOST_INVENTORY = path.join(tempRoot, 'host.json');
     const result = await prepareServeLibrary({
       root: tempRoot,
       yes: true,
@@ -257,6 +268,7 @@ test('serve initialization uses the same offline-safe registry configuration pat
     assert.equal(JSON.parse(await fs.readFile(path.join(tempRoot, 'dkb.json'), 'utf8')).type, 'library');
     assert.equal(JSON.parse(await fs.readFile(libraryRegistryConfigPath(tempRoot), 'utf8')).registry.url, registryUrl);
   } finally {
+    restoreEnvironment('DKB_HOST_INVENTORY', previousHostInventory);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
@@ -910,15 +922,27 @@ test('usage failures point to exact subcommand help', async () => {
 });
 
 test('root help separates common, management, and advanced commands', async () => {
-  const result = await runCli(['--help']);
+  const result = await runCli(['--help'], { FORCE_COLOR: '1' });
+  const plain = stripAnsi(result.stdout);
 
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /Common Commands:/);
-  assert.match(result.stdout, /Management Commands:/);
-  assert.match(result.stdout, /pipeline\s+Inspect, select, and verify the provider pipeline/);
-  assert.match(result.stdout, /plugin\s+Manage trusted filesystem plugins/);
-  assert.match(result.stdout, /Advanced Commands:/);
-  assert.match(result.stdout, /Run 'dkb <command> --help'/);
+  assert.match(plain, /Common Commands:/);
+  assert.match(plain, /Management Commands:/);
+  assert.match(plain, /pipeline\s+Inspect, select, and verify the provider pipeline/);
+  assert.match(plain, /plugin\s+Manage trusted filesystem plugins/);
+  assert.match(plain, /Advanced Commands:/);
+  assert.match(plain, /Run 'dkb <command> --help'/);
+
+  for (const signature of [
+    'init [options] [identity]',
+    'list [options]',
+    'query [options] <library-path> <query>',
+  ]) {
+    assert.ok(
+      result.stdout.includes(`\u001b[36m${signature}\u001b[39m`),
+      `expected the complete command signature to be cyan: ${signature}`,
+    );
+  }
 });
 
 test('runtime connection failures name the target service', async () => {
@@ -990,12 +1014,14 @@ function restoreEnvironment(name, value) {
 }
 
 function runCli(args, extraEnv = {}, cwd = repositoryRoot) {
+  cliInvocation += 1;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd,
       env: {
         ...process.env,
         DKB_FORCE_TTY: '0',
+        DKB_HOST_INVENTORY: path.join(os.tmpdir(), `dkb-cli-ux-${process.pid}-${cliInvocation}.json`),
         ...extraEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

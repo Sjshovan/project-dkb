@@ -8,6 +8,30 @@
 - Registry downloads live only at `vendor/@namespace/name`.
 - A Collection is a namespaced dependency bundle. A published revision is an immutable Registry snapshot of exact DKB versions and digests.
 - `dkb.json` declares desired roots, `dkb-lock.json` records exact resolution, and `.dkb/state.sqlite` records applied state. A folder existing on disk does not make it installed.
+- `~/.dkb/host.json` remembers Library, Registry, and Runtime shortcuts for one machine; it is disposable and never authoritative.
+
+## Host-local context
+
+A host may know many Libraries, Registry endpoints, and Runtime endpoints. The
+CLI catalogs only resources that an operator initialized, registered, or used;
+it never scans disks or networks. Use `dkb library list`, `dkb registry list`,
+and `dkb runtime list` from any directory. `--check` is required before Registry
+or Runtime list commands make network requests.
+
+One Runtime still serves one Library. Naming multiple items in the host
+inventory does not combine Libraries or make a Runtime serve multiple roots.
+The inventory simply lets an operator select defaults:
+
+```text
+dkb library use personal
+dkb runtime use home
+dkb registry use team
+```
+
+Library-bound commands prefer an explicit Library, environment override, and
+nearest Library before the selected default. Removing a host entry forgets the
+shortcut only; it never deletes knowledge or stops a service. See
+[`decisions/0003-host-inventory-and-context-selection.md`](decisions/0003-host-inventory-and-context-selection.md).
 
 ## Layout
 

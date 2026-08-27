@@ -7,6 +7,8 @@ These rules extend the repository-level `AGENTS.md` for `src/cli/`.
 - `docs/cli-ux.md` describes the implemented presentation contract.
 - `docs/decisions/0001-cli-control-plane-and-release-gate.md` describes the
   accepted next command model and unresolved release blockers.
+- `docs/decisions/0003-host-inventory-and-context-selection.md` describes the
+  implemented host catalog and selection precedence.
 - Actual command behavior remains authoritative until that decision is fully
   implemented and its acceptance gate passes.
 
@@ -18,6 +20,9 @@ These rules extend the repository-level `AGENTS.md` for `src/cli/`.
 - Resolve the current Library, upstream Registry URL, credentials,
   and explicit overrides through shared context helpers. Do not duplicate
   precedence logic inside action callbacks.
+- Library-bound commands use `resolveCliLibraryRoot`; Runtime clients use
+  `resolveCliRuntimeUrl`. Inventory list commands are the only exception because
+  they must work without resolving a selected resource first.
 - Top-level package commands should form one coherent lifecycle from the current
   Library. Explicit HTTP Runtime administration should remain visibly
   distinct under `dkb runtime` or an equally clear boundary.
@@ -51,6 +56,9 @@ These rules extend the repository-level `AGENTS.md` for `src/cli/`.
   actionable path, not a false operation failure.
 - Test Library discovery and explicit overrides independently; a test that
   passes only with `--library` does not prove the nearest-Library workflow.
+- Every CLI test that can initialize, register, or opportunistically discover a
+  Library must set an isolated `DKB_HOST_INVENTORY`. Tests must never write the
+  developer's real `~/.dkb/host.json`.
 - Any common-command change needs coverage for human output, `--json`, exit
   status, and the complete `init -> install -> list -> retrieve -> uninstall`
   lifecycle where applicable.

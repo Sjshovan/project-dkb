@@ -191,7 +191,7 @@ export function styleHelpText(output: string): string {
       return terminalText(['bold', 'cyan'], line);
     }
     if (/^\s{2}\S/u.test(line)) {
-      const match = /^(\s+)(\S+(?: [^ ]+)?)(\s{2,}|$)(.*)$/u.exec(line);
+      const match = /^(\s+)(\S(?:.*?\S)?)(\s{2,}|$)(.*)$/u.exec(line);
 
       if (match) {
         return `${match[1]}${terminalText('cyan', match[2]!)}${match[3]}${match[4]}`;
@@ -220,9 +220,9 @@ function successLine(value: string): string {
 
 function styleStatusWords(value: string): string {
   return value
-    .replace(/\b(installed|published|ready|healthy|passed|complete|completed|ok|active)\b/giu, (match) => terminalText('green', match))
-    .replace(/\b(incomplete|pending|warning|degraded|skipped)\b/giu, (match) => terminalText('yellow', match))
-    .replace(/\b(failed|error|invalid|unhealthy|missing)\b/giu, (match) => terminalText('red', match));
+    .replace(/\b(installed|published|ready|healthy|passed|complete|completed|ok|active|online|selected)\b/giu, (match) => terminalText('green', match))
+    .replace(/\b(incomplete|pending|warning|degraded|skipped|known)\b/giu, (match) => terminalText('yellow', match))
+    .replace(/\b(failed|error|invalid|unhealthy|missing|offline|unavailable|incompatible)\b/giu, (match) => terminalText('red', match));
 }
 
 function capitalizeLabel(line: string): string {

@@ -4,13 +4,16 @@ import type { DkbRemoteAttachInput } from '../remote/types.js';
 
 export interface DkbRuntimeClientOptions {
   baseUrl?: string;
+  timeoutMs?: number;
 }
 
 export class DkbRuntimeClient {
   readonly baseUrl: string;
+  readonly timeoutMs: number;
 
   constructor(options: DkbRuntimeClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? process.env.DKB_RUNTIME_URL ?? 'http://127.0.0.1:7331');
+    this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
   status() {
@@ -85,6 +88,7 @@ export class DkbRuntimeClient {
         method,
         headers: body === undefined ? undefined : { 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);

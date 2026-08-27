@@ -80,6 +80,46 @@ digest are reused. Conflicting versions fail before download. Uninstall removes
 the Collection ownership edge and prunes only Registry DKBs with no remaining
 root or Collection owner.
 
+## Host inventory and selection
+
+`~/.dkb/host.json` is a disposable catalog of known resources on one machine.
+Set `DKB_HOST_INVENTORY` to isolate automation or tests. The catalog stores only
+names, canonical Library paths, endpoint URLs, selections, and optional local
+Runtime launch metadata. It never stores credentials, knowledge, installed
+package state, or pipeline configuration.
+
+```text
+dkb library list
+dkb library register <path> [--name <name>]
+dkb library unregister <name-or-path>
+dkb library use <name-or-path>
+
+dkb registry list [--check]
+dkb registry register <name> <url> [--no-verify]
+dkb registry unregister <name>
+
+dkb runtime list [--check]
+dkb runtime register <name> <url> [--library <name-or-path>] [--no-verify]
+dkb runtime unregister <name>
+dkb runtime use <name>
+```
+
+Library lists validate local manifests immediately. Registry and Runtime lists
+make no network calls unless `--check` is present. Offline results are table
+statuses, not command failures. Missing and offline records remain until
+explicitly unregistered. Unregistering is non-destructive, and stopping a local
+Runtime never unregisters it.
+
+`dkb init` registers its Library and configured Registry. Commands that use a
+valid older Library register it opportunistically. DKB never scans disks or
+networks looking for resources.
+
+Library resolution is explicit `--library`, `DKB_LIBRARY_PATH`, nearest parent
+Library, then selected host Library. Runtime URL resolution is explicit
+`--url`, `DKB_RUNTIME_URL`, selected host Runtime, then localhost. Lists work
+from every directory. If a selected Library is missing, the error points to
+`dkb library list`; DKB does not silently select another one.
+
 ## Registry selection
 
 Each DKB Library can keep its own upstream Registry URL
@@ -91,12 +131,14 @@ Registry selection uses this precedence:
 1. command `--url`;
 2. `DKB_REGISTRY_URL`;
 3. the target Library's `.dkb/config.json`;
-4. the user fallback at `~/.dkb/config.json` (or `DKB_CLI_CONFIG`);
-5. `http://127.0.0.1:8000`.
+4. the selected Registry in the host inventory;
+5. the user fallback at `~/.dkb/config.json` (or `DKB_CLI_CONFIG`);
+6. `http://127.0.0.1:8000`.
 
-From inside a DKB Library, `dkb registry use <url>` updates that Library.
-`--root <path>` selects another Library and `--global` updates only the user
-fallback. `dkb install --library <path>` resolves the URL for that Library
+From inside a DKB Library, `dkb registry use <name-or-url>` updates that Library
+and selects the known Registry. `--root <name-or-path>` selects another Library
+and `--global` updates only the user
+fallback. `dkb install --library <name-or-path>` resolves the URL for that Library
 automatically. `dkb list` displays the
 resolved URL and its source.
 

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface, type Interface } from 'node:readline/promises';
 import { compileComposeProject } from '../compiler/compile.js';
+import { registerHostLibrary } from '../host/inventory.js';
 import { DkbError } from '../protocol/errors.js';
 import { loadLibrary } from '../protocol/manifest.js';
 import {
@@ -55,6 +56,7 @@ export async function prepareServeLibrary(options: PrepareServeOptions = {}): Pr
   if (targetRoot) {
     const registry = await configuredRegistry({ root: targetRoot });
     const compileResult = await compileLibraryForServe(targetRoot);
+    await registerHostLibrary(targetRoot, { registryUrl: registry.url, select: 'if-empty' });
 
     return {
       root: targetRoot,
@@ -79,6 +81,7 @@ export async function prepareServeLibrary(options: PrepareServeOptions = {}): Pr
   await initializeLibraryManifest(root);
   const registry = selectedRegistry.configured ?? await writeConfiguredRegistryUrl(selectedRegistry.url, { root });
   const compileResult = await compileLibraryForServe(root);
+  await registerHostLibrary(root, { registryUrl: registry.url, select: 'if-empty' });
 
   return {
     root,

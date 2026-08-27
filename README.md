@@ -31,7 +31,11 @@ The project provides:
 ```bash
 npm install
 npm run build
+npm link
 ```
+
+The final command makes `dkb` available on this host. After later source
+changes, rebuild in this checkout; the global link continues to use it.
 
 ## Basic Usage
 
@@ -69,6 +73,41 @@ config is now a fallback. `dkb list` shows the resolved registry and source.
 
 See [`docs/cli-ux.md`](docs/cli-ux.md) for the complete output and exit-code
 contract.
+
+## Host Inventory
+
+DKB remembers resources used on this machine in `~/.dkb/host.json`. It is a
+catalog of names, paths, URLs, selections, and optional local launch metadata;
+it never stores credentials, package data, or pipeline configuration. The
+catalog is not authoritative and can be rebuilt by registering resources again.
+
+```bash
+dkb library list
+dkb library register ~/SecondBrain --name personal
+dkb library use personal
+
+dkb registry register team https://registry.example.com
+dkb registry list --check
+dkb registry use team
+
+dkb runtime register home http://127.0.0.1:7331 --library personal --no-verify
+dkb runtime list --check
+dkb runtime use home
+```
+
+Once a Library is selected, `dkb list`, `dkb install`, and other Library-bound
+commands work from any directory. They still prefer an explicit `--library`,
+then `DKB_LIBRARY_PATH`, then the nearest Library, before the selected Library.
+Runtime client commands similarly prefer explicit `--url`, then
+`DKB_RUNTIME_URL`, then the selected Runtime, with localhost as the final
+default. Lists never scan disks or networks; Registry and Runtime probes happen
+only with `--check`.
+
+`dkb init` automatically registers a Library. Using a valid older Library
+through the CLI registers it opportunistically. Unregistering only forgets the
+shortcut—it never deletes knowledge, stops a Runtime, or removes a Registry.
+See [Decision 0003](docs/decisions/0003-host-inventory-and-context-selection.md)
+for the authority and recovery boundaries.
 
 Serve a Library through one local runtime:
 
@@ -122,13 +161,13 @@ say what is active. Filesystem presence alone never means installed. See
 Compile and inspect a package:
 
 ```bash
-node dist/src/cli/index.js validate ./my-dkb
-node dist/src/cli/index.js compile ./my-dkb
-node dist/src/cli/index.js verify ./my-dkb
-node dist/src/cli/index.js inspect ./my-dkb
-node dist/src/cli/index.js artifact inspect ./my-dkb
-node dist/src/cli/index.js artifact validate ./my-dkb
-node dist/src/cli/index.js artifact pack ./my-dkb --out ./my-dkb.dkbpkg
+dkb validate ./my-dkb
+dkb compile ./my-dkb
+dkb verify ./my-dkb
+dkb inspect ./my-dkb
+dkb artifact inspect ./my-dkb
+dkb artifact validate ./my-dkb
+dkb artifact pack ./my-dkb --out ./my-dkb.dkbpkg
 ```
 
 The bundled LlamaIndex/Docling ingestion provider runs through a local Docker
@@ -137,10 +176,10 @@ same provider pipeline is invoked directly by the local CLI and through HTTP by
 the Registry compiler:
 
 ```bash
-node dist/src/cli/index.js compiler start
-node dist/src/cli/index.js compiler status
-node dist/src/cli/index.js compiler doctor
-node dist/src/cli/index.js compiler stop
+dkb compiler start
+dkb compiler status
+dkb compiler doctor
+dkb compiler stop
 ```
 
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to force the older one-shot compiler
@@ -153,9 +192,9 @@ providers and a separate compatibility digest for the embedding and retrieval
 space used by every installed package.
 
 ```bash
-node dist/src/cli/index.js pipeline show .
-node dist/src/cli/index.js pipeline verify .
-node dist/src/cli/index.js plugin list .
+dkb pipeline show .
+dkb pipeline verify .
+dkb plugin list .
 ```
 
 The bundled default target selects Docling/LlamaIndex, FastEmbed with
@@ -169,13 +208,13 @@ future target without changing the working Library. See
 Move a compiled package through a local OCI registry:
 
 ```bash
-node dist/src/cli/index.js artifact tools
-node dist/src/cli/index.js artifact oci-push ./my-dkb.dkbpkg localhost:5000/dkb/my-dkb:0.1.0
-node dist/src/cli/index.js artifact cosign-keypair --out ./cosign --password "$COSIGN_PASSWORD"
-node dist/src/cli/index.js artifact cosign-sign localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.key --password "$COSIGN_PASSWORD"
-node dist/src/cli/index.js artifact cosign-verify localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.pub
-node dist/src/cli/index.js artifact oci-pull localhost:5000/dkb/my-dkb:0.1.0 --out ./pulled
-node dist/src/cli/index.js artifact install ./pulled --library ~/SecondBrain
+dkb artifact tools
+dkb artifact oci-push ./my-dkb.dkbpkg localhost:5000/dkb/my-dkb:0.1.0
+dkb artifact cosign-keypair --out ./cosign --password "$COSIGN_PASSWORD"
+dkb artifact cosign-sign localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.key --password "$COSIGN_PASSWORD"
+dkb artifact cosign-verify localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.pub
+dkb artifact oci-pull localhost:5000/dkb/my-dkb:0.1.0 --out ./pulled
+dkb artifact install ./pulled --library ~/SecondBrain
 ```
 
 Use the configured remote Registry. By default the CLI targets the development
@@ -183,41 +222,41 @@ Registry at `http://127.0.0.1:8000`; it can instead point at a hosted Registry
 or one you operate yourself:
 
 ```bash
-node dist/src/cli/index.js registry status
-node dist/src/cli/index.js registry use http://127.0.0.1:8000
-node dist/src/cli/index.js registry packages
-node dist/src/cli/index.js publish ./my-dkb
-node dist/src/cli/index.js install @my-team/my-dkb --version 0.1.0
-node dist/src/cli/index.js list
-node dist/src/cli/index.js uninstall @my-team/my-dkb
+dkb registry status
+dkb registry use http://127.0.0.1:8000
+dkb registry packages
+dkb publish ./my-dkb
+dkb install @my-team/my-dkb --version 0.1.0
+dkb list
+dkb uninstall @my-team/my-dkb
 ```
 
 For local CLI fixture work, the in-process development registry is still
 available explicitly:
 
 ```bash
-node dist/src/cli/index.js registry serve --root .dkb/mock-registry
-node dist/src/cli/index.js publish ./my-dkb --registry .dkb/mock-registry
-node dist/src/cli/index.js install @my-team/my-dkb --version 0.1.0 --registry .dkb/mock-registry --library ~/SecondBrain
+dkb registry serve --root .dkb/mock-registry
+dkb publish ./my-dkb --registry .dkb/mock-registry
+dkb install @my-team/my-dkb --version 0.1.0 --registry .dkb/mock-registry --library ~/SecondBrain
 ```
 
 Retrieve knowledge:
 
 ```bash
-node dist/src/cli/index.js retrieve "what does this knowledgebase say?"
+dkb retrieve "what does this knowledgebase say?"
 ```
 
 Library knowledge becomes queryable after compilation or verified install:
 
 ```bash
-node dist/src/cli/index.js compile .
-node dist/src/cli/index.js retrieve "what changed in my local notes?"
+dkb compile .
+dkb retrieve "what changed in my local notes?"
 ```
 
 Run the MCP server:
 
 ```bash
-node dist/src/cli/index.js mcp serve
+dkb mcp serve
 ```
 
 The local stdio server keeps the full DKB tool surface. Remote agents receive a
@@ -227,7 +266,7 @@ separate read-only HTTP surface with only `search` and `fetch`:
 DKB_LIBRARY_PATH=/knowledge/library \
 DKB_QUERY_EMBEDDER_URL=http://127.0.0.1:8090/embed \
 DKB_MCP_BEARER_TOKEN=replace-with-a-secret \
-node dist/src/cli/index.js mcp serve-http --host 127.0.0.1 --port 7332
+dkb mcp serve-http --host 127.0.0.1 --port 7332
 ```
 
 HTTP MCP requires a bearer token and validates Host and Origin headers. Set
@@ -239,10 +278,10 @@ temporary proof workflow.
 
 Discover and query registry-verified hosted runtimes:
 
-    node dist/src/cli/index.js remote search docs
-    node dist/src/cli/index.js remote add publisher/docs --version 1.4.0
-    node dist/src/cli/index.js remote list
-    node dist/src/cli/index.js remote query <remote-id> "How are retries configured?"
+    dkb remote search docs
+    dkb remote add publisher/docs --version 1.4.0
+    dkb remote list
+    dkb remote query <remote-id> "How are retries configured?"
 
 The runtime exposes /.well-known/dkb.json for package discovery. A registry
 must verify the endpoint and sign its package/version/tree-hash relationship
@@ -253,7 +292,7 @@ and downloads the verified .dkbpkg from the registry.
 Run the lower-level runtime server directly:
 
 ```bash
-node dist/src/cli/index.js runtime serve --state-root ~/SecondBrain
+dkb runtime serve --state-root ~/SecondBrain
 ```
 
 Docker-backed runtime commands remain available for local process management,
