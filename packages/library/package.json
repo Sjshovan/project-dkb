@@ -1,0 +1,33 @@
+{
+  "name": "@dkb/library",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*",
+      "import": "./dist/*"
+    }
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dkb/pipeline": "0.1.0",
+    "@dkb/protocol": "1.0.0"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  }
+}

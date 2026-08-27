@@ -12,14 +12,14 @@ import {
 import {
   applyLibraryLock,
   readLibraryState,
-} from '../dist/src/library/state.js';
+} from '@dkb/library/state.js';
 import { inspectTarget } from '../dist/src/inspect/index.js';
 import { resolveKnowledgeTarget } from '../dist/src/knowledge/target.js';
 import { healthReport } from '../dist/src/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../dist/src/runtime/catalog.js';
 import { verifyComposeProject } from '../dist/src/compiler/compile.js';
 import { inspectDkbArtifactManifest } from '../dist/src/artifacts/manifest.js';
-import { snapshotLibraryArtifacts } from '../dist/src/library/artifactSnapshot.js';
+import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
   const root = await tempDirectory(t, 'dkb-manifest-cutover-');

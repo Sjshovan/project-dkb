@@ -13,8 +13,8 @@ import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 import { loadDkb, loadDkbPackage, loadLibrary } from '@dkb/protocol/manifest.js';
 import { manifestPath } from '@dkb/protocol/paths.js';
-import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '../library/state.js';
-import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '../library/artifactSnapshot.js';
+import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
+import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@dkb/library/artifactSnapshot.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
 import {
   createSignedPackageReceipt,

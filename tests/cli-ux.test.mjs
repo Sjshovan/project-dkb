@@ -18,7 +18,7 @@ import {
   writeConfiguredRegistryUrl,
 } from '../dist/src/registry/config.js';
 import { preflightDkbInstall } from '../dist/src/registry/packageRegistry.js';
-import { applyLibraryLock } from '../dist/src/library/state.js';
+import { applyLibraryLock } from '@dkb/library/state.js';
 import { sourceAssetsFromChunks } from '../dist/src/indexes/sourceIndex.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

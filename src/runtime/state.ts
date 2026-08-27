@@ -15,9 +15,9 @@ import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
 import type { DkbSourceManifest, LoadedDkb } from '@dkb/protocol/types.js';
 import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
-import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '../library/state.js';
-import { syncLibrary } from '../library/resolver.js';
-import { snapshotLibraryArtifacts } from '../library/artifactSnapshot.js';
+import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
+import { syncLibrary } from '@dkb/library/resolver.js';
+import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   assertMatchingRetrievalProfiles,

@@ -247,7 +247,7 @@ library
   .description('Show active, inactive, broken, and untracked Library entries')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { inspectLibraryOverview } = await import('../library/overview.js');
+    const { inspectLibraryOverview } = await import('@dkb/library/overview.js');
     const root = await currentLibraryRoot(options.library);
     presenter().print(await inspectLibraryOverview(root), summarizeLibraryOverview);
   });
@@ -257,7 +257,7 @@ library
   .description('Resolve the Library manifest into its exact lock and applied-state ledger')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { syncLibrary } = await import('../library/resolver.js');
+    const { syncLibrary } = await import('@dkb/library/resolver.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run('Synchronizing Library', async () => syncLibrary(root), summarizeLibrarySync);
   });
@@ -268,7 +268,7 @@ library
   .argument('<identity>', 'Scoped @namespace/name identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { addLibraryRoot } = await import('../library/resolver.js');
+    const { addLibraryRoot } = await import('@dkb/library/resolver.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Activating ${identity}`, async () => addLibraryRoot(root, identity), summarizeLibrarySync);
   });
@@ -279,7 +279,7 @@ library
   .argument('<identity>', 'Scoped @namespace/name identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { removeLibraryRoot } = await import('../library/resolver.js');
+    const { removeLibraryRoot } = await import('@dkb/library/resolver.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(root, identity), summarizeLibrarySync);
   });
@@ -296,7 +296,7 @@ collection
   .option('--dir-name <name>', 'Local folder label; defaults to the identity name')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { displayName?: string; dirName?: string; library?: string }) => {
-    const { createLocalCollection } = await import('../library/collections.js');
+    const { createLocalCollection } = await import('@dkb/library/collections.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Creating Collection ${identity}`, async () => createLocalCollection({
       libraryRoot: root,
@@ -314,7 +314,7 @@ collection
   .option('--version <version>', 'latest or an exact DKB version', 'latest')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (collectionIdentity: string, dkbIdentity: string, options: { version: string; library?: string }) => {
-    const { setCollectionMember } = await import('../library/collections.js');
+    const { setCollectionMember } = await import('@dkb/library/collections.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Adding ${dkbIdentity}`, async () => setCollectionMember({
       libraryRoot: root,
@@ -331,7 +331,7 @@ collection
   .argument('<dkb>', 'Scoped DKB identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (collectionIdentity: string, dkbIdentity: string, options: { library?: string }) => {
-    const { removeCollectionMember } = await import('../library/collections.js');
+    const { removeCollectionMember } = await import('@dkb/library/collections.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Removing ${dkbIdentity}`, async () => removeCollectionMember({
       libraryRoot: root,
@@ -346,7 +346,7 @@ collection
   .argument('<identity>', 'Scoped Collection identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { collectionOverview } = await import('../library/collections.js');
+    const { collectionOverview } = await import('@dkb/library/collections.js');
     const root = await currentLibraryRoot(options.library);
     presenter().print(await collectionOverview(root, identity), summarizeCollectionOverview);
   });
@@ -1594,7 +1594,7 @@ program
   .argument('<identity>', 'Scoped @namespace/name identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { readLibraryState } = await import('../library/state.js');
+    const { readLibraryState } = await import('@dkb/library/state.js');
     const libraryRoot = await currentLibraryRoot(options.library);
     const entry = (await readLibraryState(libraryRoot)).entries[identity];
 
@@ -1609,7 +1609,7 @@ program
     }
 
     if (entry?.kind === 'collection') {
-      const { removeLibraryRoot } = await import('../library/resolver.js');
+      const { removeLibraryRoot } = await import('@dkb/library/resolver.js');
 
       await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(libraryRoot, identity), summarizeLibrarySync);
       return;
