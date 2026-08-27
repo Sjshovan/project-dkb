@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check": "tsc -b --pretty false"
   },
   "engines": {
     "node": ">=22.15.0"

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity } from '@dkb/protocol/identity.js';
 import { loadDkb } from '@dkb/protocol/manifest.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE } from './archive.js';
 import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from './config.js';
 

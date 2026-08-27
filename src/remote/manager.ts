@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { installDkbArchiveIntoRuntime } from '../registry/packageRegistry.js';
-import { DkbRegistryClient } from '../registry/client.js';
-import { configuredRegistry } from '../registry/config.js';
+import { DkbRegistryClient } from '@dkb/registry-client/client.js';
+import { resolveRegistryContext } from '@dkb/registry-client/config.js';
 import { defaultRuntimeStateRoot } from '../runtime/state.js';
 import { discoverRemoteDkb } from './discovery.js';
 import {
@@ -55,7 +55,7 @@ export async function addRegisteredRemote(input: {
   discovery: DkbDiscoveryDocument;
   attestation: DkbRemoteEndpointAttestation;
 }> {
-  const registry = await configuredRegistry({
+  const registry = await resolveRegistryContext({
     url: input.registryUrl,
     root: input.stateRoot ?? defaultRuntimeStateRoot(),
   });

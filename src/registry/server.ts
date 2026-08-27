@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '@dkb/protocol/errors.js';
-import { DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE, extractDkbPackageArchive } from './archive.js';
+import { DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import {
   downloadDkbFromMockRegistry,
   ensureMockRegistry,

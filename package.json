@@ -24,8 +24,8 @@
     "compiler/llamaindex/Dockerfile.gpu"
   ],
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && npm run build --workspace @dkb/library && tsc -p tsconfig.build.json",
-    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && npm run check --workspace @dkb/library && tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && npm run build --workspace @dkb/library && npm run build --workspace @dkb/registry-client && tsc -p tsconfig.build.json",
+    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && npm run check --workspace @dkb/library && npm run check --workspace @dkb/registry-client && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
@@ -39,6 +39,7 @@
     "@dkb/library": "0.1.0",
     "@dkb/pipeline": "0.1.0",
     "@dkb/protocol": "1.0.0",
+    "@dkb/registry-client": "0.1.0",
     "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",

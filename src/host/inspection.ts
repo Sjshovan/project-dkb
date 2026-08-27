@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { verifyRegistryEndpoint } from '../registry/config.js';
+import { verifyRegistryEndpoint } from '@dkb/registry-client/config.js';
 import { DkbRuntimeClient } from '../runtime/client.js';
 import { hostInventoryPath, readHostInventory } from './inventory.js';
 

@@ -17,7 +17,7 @@ import { attachRemoteSession, detachRemoteSession, listRemoteSessions, retrieveF
 import { discoverRemoteDkb } from '../remote/discovery.js';
 import { getTrace, latestTrace, listTraces } from './trace.js';
 import { closeQueryAuditQueue } from './queryAudit.js';
-import { configuredRegistry } from '../registry/config.js';
+import { resolveRegistryContext } from '@dkb/registry-client/config.js';
 
 export interface ServeRuntimeOptions {
   host?: string;
@@ -204,7 +204,7 @@ function requiredString(value: unknown, label: string): string {
 
 async function runtimeDiscoveryDocument(stateRoot: string, requestHost?: string) {
   const runtime = await runtimeStatus(stateRoot);
-  const registry = await configuredRegistry({ root: stateRoot });
+  const registry = await resolveRegistryContext({ root: stateRoot });
   const registryUrl = registry.source === 'default' ? undefined : registry.url;
   const site = process.env.DKB_PUBLIC_URL
     ?? (requestHost ? 'http://' + requestHost : 'http://127.0.0.1:' + (process.env.DKB_RUNTIME_PORT ?? '7331'));

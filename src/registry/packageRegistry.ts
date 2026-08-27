@@ -10,12 +10,12 @@ import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.
 import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
 import { loadDkb, loadDkbPackage, loadLibrary } from '@dkb/protocol/manifest.js';
 import { manifestPath } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
 import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@dkb/library/artifactSnapshot.js';
-import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
+import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import {
   createSignedPackageReceipt,
   DKB_PACKAGE_RECEIPT_PATH,

@@ -10,10 +10,10 @@ import type { DkbLibraryLockManifest, DkbSourceManifest } from '@dkb/protocol/ty
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
 import { syncLibrary } from '@dkb/library/resolver.js';
 import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@dkb/library/artifactSnapshot.js';
-import { DKB_PACKAGE_EXTENSION } from './archive.js';
-import { DkbRegistryClient, type DkbRegistryCollectionRevision, type DkbRegistryRelease } from './client.js';
+import { DKB_PACKAGE_EXTENSION } from '@dkb/registry-client/archive.js';
+import { DkbRegistryClient, type DkbRegistryCollectionRevision, type DkbRegistryRelease } from '@dkb/registry-client/client.js';
 import { installDkbArchiveIntoRuntime, preflightDkbInstall } from './packageRegistry.js';
-import type { DkbProgressReporter } from '../progress.js';
+import type { DkbProgressReporter } from '@dkb/protocol/progress.js';
 
 export interface CollectionInstallResult {
   status: 'installed' | 'updated' | 'already_installed';

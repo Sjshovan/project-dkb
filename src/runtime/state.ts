@@ -12,7 +12,7 @@ import { enqueueQueryAudit } from './queryAudit.js';
 import { loadDkb, loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
 import type { DkbSourceManifest, LoadedDkb } from '@dkb/protocol/types.js';
 import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';

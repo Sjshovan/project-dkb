@@ -10,7 +10,7 @@ import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '../ind
 import { describeCompilerAdapter } from '../compiler/adapters.js';
 import { LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH, LLAMAINDEX_COMPILER_RECORDS_DIR } from '../compiler/llamaindexArtifacts.js';
 import { FAISS_CATALOG_PATH, FAISS_MANIFEST_PATH, FAISS_SEGMENT_PATH } from '../indexes/faissStore.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '../progress.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
 import { DKB_EVIDENCE_IR_PATH, readEvidenceIr, type DkbEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,

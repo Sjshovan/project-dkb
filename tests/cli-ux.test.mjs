@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { humanSummary } from '../dist/src/cli/presentation.js';
-import { createDkbPackageArchive, extractDkbPackageArchive } from '../dist/src/registry/archive.js';
-import { DkbRegistryClient, writeArchiveFileFromPath } from '../dist/src/registry/client.js';
+import { createDkbPackageArchive, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
+import { DkbRegistryClient, writeArchiveFileFromPath } from '@dkb/registry-client/client.js';
 import { prepareServeLibrary } from '../dist/src/cli/serve.js';
 import {
   configuredRegistry,
@@ -16,7 +16,7 @@ import {
   libraryRegistryConfigPath,
   verifyRegistryEndpoint,
   writeConfiguredRegistryUrl,
-} from '../dist/src/registry/config.js';
+} from '../dist/src/cli/registryConfig.js';
 import { preflightDkbInstall } from '../dist/src/registry/packageRegistry.js';
 import { applyLibraryLock } from '@dkb/library/state.js';
 import { sourceAssetsFromChunks } from '../dist/src/indexes/sourceIndex.js';

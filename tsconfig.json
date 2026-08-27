@@ -10,7 +10,9 @@
       "@dkb/pipeline": ["packages/pipeline/src/index.ts"],
       "@dkb/pipeline/*": ["packages/pipeline/src/*"],
       "@dkb/protocol": ["packages/protocol/src/index.ts"],
-      "@dkb/protocol/*": ["packages/protocol/src/*"]
+      "@dkb/protocol/*": ["packages/protocol/src/*"],
+      "@dkb/registry-client": ["packages/registry-client/src/index.ts"],
+      "@dkb/registry-client/*": ["packages/registry-client/src/*"]
     }
   },
   "include": ["src/**/*.ts"],

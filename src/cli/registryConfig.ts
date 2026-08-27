@@ -3,8 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { hostInventoryPath, selectedHostRegistry } from '../host/inventory.js';
 import { DkbError } from '@dkb/protocol/errors.js';
+import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from '@dkb/registry-client/config.js';
 
-export const DEFAULT_REGISTRY_URL = 'http://127.0.0.1:8000';
+export { DEFAULT_REGISTRY_URL, normalizeRegistryUrl, verifyRegistryEndpoint } from '@dkb/registry-client/config.js';
+export type { RegistryVerification, RegistryVerificationCheck } from '@dkb/registry-client/config.js';
+
 export const DKB_FOLDER_CONFIG_PATH = '.dkb/config.json';
 
 export type RegistryUrlSource = 'argument' | 'environment' | 'project' | 'host' | 'user' | 'default';
@@ -14,20 +17,6 @@ export interface ConfiguredRegistry {
   source: RegistryUrlSource;
   configPath: string;
   root?: string;
-}
-
-export interface RegistryVerificationCheck {
-  name: string;
-  ok: boolean;
-  required: boolean;
-  status?: number;
-  message?: string;
-}
-
-export interface RegistryVerification {
-  ok: boolean;
-  url: string;
-  checks: RegistryVerificationCheck[];
 }
 
 interface DkbCliConfig {
@@ -50,39 +39,6 @@ export function cliConfigPath(): string {
 
 export function libraryRegistryConfigPath(root: string): string {
   return path.join(path.resolve(root), ...DKB_FOLDER_CONFIG_PATH.split('/'));
-}
-
-export function normalizeRegistryUrl(value: string): string {
-  const raw = value.trim();
-
-  if (!raw) {
-    throw new DkbError('Registry URL cannot be empty.');
-  }
-
-  const markdownLink = raw.match(/^\[([^\]]+)]\([^)]+\)$/);
-
-  if (markdownLink) {
-    throw new DkbError(`Registry URL was pasted as a Markdown link. Use the plain URL instead: ${markdownLink[1]}`);
-  }
-
-  const withProtocol = /^[a-z][a-z\d+\-.]*:\/\//i.test(raw) ? raw : `https://${raw}`;
-  let parsed: URL;
-
-  try {
-    parsed = new URL(withProtocol);
-  } catch {
-    throw new DkbError(`Invalid registry URL: ${value}`);
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new DkbError(`Registry URL must use http or https: ${value}`);
-  }
-
-  parsed.pathname = parsed.pathname.replace(/\/+$/g, '');
-  parsed.search = '';
-  parsed.hash = '';
-
-  return parsed.toString().replace(/\/+$/g, '');
 }
 
 export async function configuredRegistry(options: RegistryConfigurationOptions = {}): Promise<ConfiguredRegistry> {
@@ -161,33 +117,6 @@ export async function writeConfiguredRegistryUrl(url: string, options: {
   }
 
   return configuredResult(normalized, projectRoot ? 'project' : 'user', configPath, projectRoot);
-}
-
-export async function verifyRegistryEndpoint(url: string): Promise<RegistryVerification> {
-  const normalized = normalizeRegistryUrl(url);
-  const checks = await Promise.all([
-    jsonCheck(normalized, '/.well-known/dkb-registry-keys.json', 'public signing keys', true, (body) => {
-      if (!isObject(body) || !Array.isArray(body.keys)) {
-        return 'expected a keys array';
-      }
-
-      return null;
-    }),
-    jsonCheck(normalized, '/api/registry/packages', 'package listing API', true, (body) => {
-      if (!isObject(body) || !Array.isArray(body.data)) {
-        return 'expected a data array';
-      }
-
-      return null;
-    }),
-    jsonCheck(normalized, '/health', 'health endpoint', false, () => null),
-  ]);
-
-  return {
-    ok: checks.every((check) => check.ok || !check.required),
-    url: normalized,
-    checks,
-  };
 }
 
 async function readCliConfig(configPath: string): Promise<DkbCliConfig> {
@@ -289,73 +218,6 @@ function configuredResult(
     configPath,
     ...(root ? { root } : {}),
   };
-}
-
-async function jsonCheck(
-  baseUrl: string,
-  endpoint: string,
-  name: string,
-  required: boolean,
-  validate: (body: unknown) => string | null,
-): Promise<RegistryVerificationCheck> {
-  try {
-    const response = await fetch(`${baseUrl}${endpoint}`, {
-      signal: AbortSignal.timeout(5_000),
-    });
-    const text = await response.text();
-
-    if (!response.ok) {
-      return {
-        name,
-        ok: false,
-        required,
-        status: response.status,
-        message: `HTTP ${response.status}`,
-      };
-    }
-
-    const body = text ? JSON.parse(text) as unknown : null;
-    const validationMessage = validate(body);
-
-    return {
-      name,
-      ok: validationMessage === null,
-      required,
-      status: response.status,
-      ...(validationMessage ? { message: validationMessage } : {}),
-    };
-  } catch (error) {
-    return {
-      name,
-      ok: false,
-      required,
-      message: registryFetchFailureMessage(error),
-    };
-  }
-}
-
-function registryFetchFailureMessage(error: unknown): string {
-  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-    return 'request timed out';
-  }
-
-  const cause = error instanceof Error ? error.cause : undefined;
-  if (isObject(cause)) {
-    if (cause.code === 'ECONNREFUSED') {
-      return 'connection refused';
-    }
-    if (cause.code === 'ENOTFOUND') {
-      return 'host not found';
-    }
-    if (cause.code === 'ECONNRESET') {
-      return 'connection reset';
-    }
-    if (typeof cause.message === 'string' && cause.message.trim()) {
-      return cause.message.trim();
-    }
-  }
-
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

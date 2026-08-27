@@ -11,7 +11,7 @@ import { getQueryContext, closeQueryContext } from '../dist/src/indexes/queryCon
 import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 import { semanticSearch } from '../dist/src/read/navigation.js';
 import { loadDkb, loadLibrary } from '@dkb/protocol/manifest.js';
-import { createDkbPackageArchive, extractDkbPackageArchive } from '../dist/src/registry/archive.js';
+import { createDkbPackageArchive, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../dist/src/providers/runtimeIndex.js';
 
 const compilerUrl = (process.env.DKB_PROOF_COMPILER_URL ?? 'http://127.0.0.1:7333').replace(/\/+$/, '');

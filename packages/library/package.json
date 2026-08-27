@@ -21,7 +21,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check": "tsc -b --pretty false"
   },
   "dependencies": {
     "@dkb/pipeline": "0.1.0",

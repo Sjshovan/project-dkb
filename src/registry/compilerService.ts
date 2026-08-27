@@ -13,7 +13,7 @@ import { loadDkb } from '@dkb/protocol/manifest.js';
 import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '@dkb/protocol/paths.js';
 import { DKB_ARTIFACT_MANIFEST_PATH } from '../artifacts/manifest.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '../signing/index.js';
-import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
+import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';

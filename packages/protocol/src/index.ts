@@ -3,6 +3,7 @@ export * from './errors.js';
 export * from './identity.js';
 export * from './manifest.js';
 export * from './paths.js';
+export * from './progress.js';
 export * from './space.js';
 export * from './types.js';
 export * from './validation.js';

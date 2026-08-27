@@ -19,7 +19,7 @@ import {
 } from '../dist/src/host/inventory.js';
 import { inspectHostLibraries } from '../dist/src/host/inspection.js';
 import { resolveCliLibraryRoot, resolveCliRuntimeUrl } from '../dist/src/cli/context.js';
-import { configuredRegistry, writeConfiguredRegistryUrl } from '../dist/src/registry/config.js';
+import { configuredRegistry, writeConfiguredRegistryUrl } from '../dist/src/cli/registryConfig.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'dist', 'src', 'cli', 'index.js');

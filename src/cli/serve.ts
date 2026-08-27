@@ -12,7 +12,7 @@ import {
   writeConfiguredRegistryUrl,
   type ConfiguredRegistry,
   type RegistryVerification,
-} from '../registry/config.js';
+} from './registryConfig.js';
 
 export interface PrepareServeOptions {
   cwd?: string;
