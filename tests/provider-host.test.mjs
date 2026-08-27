@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@dkb/pipeline/config.js';
 import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
-import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../dist/src/providers/management.js';
+import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../apps/cli/dist/providers/management.js';
 import { compileDkbWithProviderHost } from '@dkb/compiler/pipelineRunner.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { compileComposeProject } from '@dkb/compiler/compile.js';

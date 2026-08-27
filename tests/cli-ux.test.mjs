@@ -6,23 +6,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { humanSummary } from '../dist/src/cli/presentation.js';
+import { humanSummary } from '../apps/cli/dist/cli/presentation.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import { DkbRegistryClient, writeArchiveFileFromPath } from '@dkb/registry-client/client.js';
-import { prepareServeLibrary } from '../dist/src/cli/serve.js';
+import { prepareServeLibrary } from '../apps/cli/dist/cli/serve.js';
 import {
   configuredRegistry,
   normalizeRegistryUrl,
   libraryRegistryConfigPath,
   verifyRegistryEndpoint,
   writeConfiguredRegistryUrl,
-} from '../dist/src/cli/registryConfig.js';
-import { preflightDkbInstall } from '../dist/src/registry/packageRegistry.js';
+} from '../apps/cli/dist/cli/registryConfig.js';
+import { preflightDkbInstall } from '../apps/cli/dist/registry/packageRegistry.js';
 import { applyLibraryLock } from '@dkb/library/state.js';
 import { sourceAssetsFromChunks } from '@dkb/providers-bundled/sourceIndex.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cliPath = path.join(repositoryRoot, 'dist', 'src', 'cli', 'index.js');
+const cliPath = path.join(repositoryRoot, 'apps', 'cli', 'dist', 'cli', 'index.js');
 let cliInvocation = 0;
 
 test('spawned CLI inventories are removed after each invocation', async () => {

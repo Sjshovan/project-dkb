@@ -1,4 +1,16 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-await fs.rm(path.resolve('dist'), { recursive: true, force: true });
+for (const target of [
+  'dist',
+  'apps/cli/dist',
+  'services/compiler/dist',
+  'services/runtime/dist',
+  'packages/protocol/dist',
+  'packages/library/dist',
+  'packages/pipeline/dist',
+  'packages/registry-client/dist',
+  'providers/bundled/dist',
+]) {
+  await fs.rm(path.resolve(target), { recursive: true, force: true });
+}

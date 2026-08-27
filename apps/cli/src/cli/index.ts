@@ -10,6 +10,8 @@ import { identityDisplayName, parseDkbIdentity } from '@dkb/protocol/identity.js
 import { loadCollection, loadDkb, loadManifest } from '@dkb/protocol/manifest.js';
 import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
 import { DKB_PROTOCOL_VERSION } from '@dkb/protocol/version.js';
+import { DKB_PROTOCOL_COMPATIBILITY } from '@dkb/protocol/version.js';
+import { DKB_CLI_VERSION } from '../version.js';
 import {
   countLabel,
   createCliPresenter,
@@ -30,7 +32,7 @@ const jsonRequested = process.argv.includes('--json');
 program
   .name('dkb')
   .description('Package, verify, install, and serve durable knowledgebases')
-  .version(DKB_PROTOCOL_VERSION, '-V, --cli-version')
+  .version(DKB_CLI_VERSION, '-V, --cli-version')
   .option('--json', 'Emit one machine-readable JSON document')
   .option('--no-progress', 'Keep human output but disable spinners and progress bars')
   .showSuggestionAfterError(true)
@@ -51,6 +53,38 @@ Examples:
   dkb --json registry packages
 
 Run 'dkb <command> --help' for command-specific usage.`);
+
+program
+  .command('version')
+  .description('Show independently versioned DKB components and compatibility')
+  .action(async () => {
+    const [{ DKB_COMPILER_VERSION }, { DKB_RUNTIME_VERSION }, { DKB_BUNDLED_PROVIDERS_VERSION }] = await Promise.all([
+      import('@dkb/compiler/version.js'),
+      import('@dkb/runtime/version.js'),
+      import('@dkb/providers-bundled/version.js'),
+    ]);
+    const result = {
+      cli: DKB_CLI_VERSION,
+      protocol: DKB_PROTOCOL_VERSION,
+      runtime: DKB_RUNTIME_VERSION,
+      compiler: DKB_COMPILER_VERSION,
+      providers: DKB_BUNDLED_PROVIDERS_VERSION,
+      buildCommit: process.env.DKB_BUILD_COMMIT ?? 'development',
+      compatibility: DKB_PROTOCOL_COMPATIBILITY,
+    };
+
+    presenter().print(result, (value) => {
+      const versions = value as typeof result;
+      return [
+        `CLI: ${versions.cli}`,
+        `protocol: ${versions.protocol} (${versions.compatibility})`,
+        `Runtime: ${versions.runtime}`,
+        `compiler: ${versions.compiler}`,
+        `providers: ${versions.providers}`,
+        `build: ${versions.buildCommit}`,
+      ];
+    });
+  });
 
 program
   .command('init')

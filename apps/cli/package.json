@@ -1,0 +1,51 @@
+{
+  "name": "@dkb/cli",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "dkb": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist/cli/",
+    "dist/host/",
+    "dist/inspect/",
+    "dist/knowledge/",
+    "dist/lifecycle/",
+    "dist/mcp/",
+    "dist/providers/",
+    "dist/registry/",
+    "dist/remote/",
+    "dist/watch/",
+    "dist/writes/"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@dkb/compiler": "0.1.0",
+    "@dkb/library": "0.1.0",
+    "@dkb/pipeline": "0.1.0",
+    "@dkb/protocol": "1.0.0",
+    "@dkb/providers-bundled": "0.1.0",
+    "@dkb/registry-client": "0.1.0",
+    "@dkb/runtime": "0.1.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "chokidar": "^5.0.0",
+    "cli-progress": "^3.12.0",
+    "commander": "^12.1.0",
+    "ora": "^9.4.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  }
+}

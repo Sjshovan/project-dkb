@@ -9,31 +9,17 @@
     "packages/*",
     "providers/*"
   ],
-  "bin": {
-    "dkb": "./dist/src/cli/index.js"
-  },
-  "files": [
-    "dist/",
-    "!dist/src/testing/",
-    "schemas/",
-    "providers/bundled/python/llamaindex/compile.py",
-    "providers/bundled/python/llamaindex/embedder.py",
-    "providers/bundled/python/llamaindex/service.py",
-    "providers/bundled/python/llamaindex/requirements.txt",
-    "providers/bundled/python/llamaindex/Dockerfile",
-    "providers/bundled/python/llamaindex/Dockerfile.gpu"
-  ],
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && npm run build --workspace @dkb/providers-bundled && npm run build --workspace @dkb/library && npm run build --workspace @dkb/registry-client && npm run build --workspace @dkb/compiler && npm run build --workspace @dkb/runtime && tsc -p tsconfig.build.json",
-    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && npm run check --workspace @dkb/providers-bundled && npm run check --workspace @dkb/library && npm run check --workspace @dkb/registry-client && npm run check --workspace @dkb/compiler && npm run check --workspace @dkb/runtime && tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && npm run build --workspace @dkb/providers-bundled && npm run build --workspace @dkb/library && npm run build --workspace @dkb/registry-client && npm run build --workspace @dkb/compiler && npm run build --workspace @dkb/runtime && npm run build --workspace @dkb/cli",
+    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && npm run check --workspace @dkb/providers-bundled && npm run check --workspace @dkb/library && npm run check --workspace @dkb/registry-client && npm run check --workspace @dkb/compiler && npm run check --workspace @dkb/runtime && npm run check --workspace @dkb/cli",
     "test": "npm run build && node --test tests/*.test.mjs",
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
     "proof:meilisearch": "npm run build && node scripts/prove-meilisearch-lifecycle.mjs",
     "temp:audit": "node scripts/clean-dkb-temp.mjs",
     "temp:clean": "node scripts/clean-dkb-temp.mjs --apply",
-    "dkb": "node dist/src/cli/index.js",
-    "mcp": "node dist/src/cli/index.js mcp serve"
+    "dkb": "node apps/cli/dist/cli/index.js",
+    "mcp": "node apps/cli/dist/cli/index.js mcp serve"
   },
   "dependencies": {
     "@dkb/compiler": "0.1.0",

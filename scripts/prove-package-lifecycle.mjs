@@ -7,7 +7,7 @@ import { closeQueryContext } from '../services/runtime/dist/indexes/queryContext
 import {
   installDkbFromMockRegistry,
   publishDkbToMockRegistry,
-} from '../dist/src/registry/packageRegistry.js';
+} from '../apps/cli/dist/registry/packageRegistry.js';
 import {
   listRuntimePackages,
   removeDkbFromRuntime,

@@ -1,26 +1,13 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": ".",
-    "baseUrl": ".",
-    "paths": {
-      "@dkb/compiler": ["services/compiler/src/index.ts"],
-      "@dkb/compiler/*": ["services/compiler/src/*"],
-      "@dkb/library": ["packages/library/src/index.ts"],
-      "@dkb/library/*": ["packages/library/src/*"],
-      "@dkb/pipeline": ["packages/pipeline/src/index.ts"],
-      "@dkb/pipeline/*": ["packages/pipeline/src/*"],
-      "@dkb/protocol": ["packages/protocol/src/index.ts"],
-      "@dkb/protocol/*": ["packages/protocol/src/*"],
-      "@dkb/registry-client": ["packages/registry-client/src/index.ts"],
-      "@dkb/registry-client/*": ["packages/registry-client/src/*"],
-      "@dkb/runtime": ["services/runtime/src/index.ts"],
-      "@dkb/runtime/*": ["services/runtime/src/*"],
-      "@dkb/providers-bundled": ["providers/bundled/src/index.ts"],
-      "@dkb/providers-bundled/*": ["providers/bundled/src/*"]
-    }
-  },
-  "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules"]
+  "files": [],
+  "references": [
+    { "path": "apps/cli" },
+    { "path": "services/compiler" },
+    { "path": "services/runtime" },
+    { "path": "packages/protocol" },
+    { "path": "packages/library" },
+    { "path": "packages/pipeline" },
+    { "path": "packages/registry-client" },
+    { "path": "providers/bundled" }
+  ]
 }

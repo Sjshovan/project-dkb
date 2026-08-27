@@ -16,13 +16,13 @@ import {
   selectHostRuntime,
   unregisterHostLibrary,
   unregisterHostRegistry,
-} from '../dist/src/host/inventory.js';
-import { inspectHostLibraries } from '../dist/src/host/inspection.js';
-import { resolveCliLibraryRoot, resolveCliRuntimeUrl } from '../dist/src/cli/context.js';
-import { configuredRegistry, writeConfiguredRegistryUrl } from '../dist/src/cli/registryConfig.js';
+} from '../apps/cli/dist/host/inventory.js';
+import { inspectHostLibraries } from '../apps/cli/dist/host/inspection.js';
+import { resolveCliLibraryRoot, resolveCliRuntimeUrl } from '../apps/cli/dist/cli/context.js';
+import { configuredRegistry, writeConfiguredRegistryUrl } from '../apps/cli/dist/cli/registryConfig.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cliPath = path.join(repositoryRoot, 'dist', 'src', 'cli', 'index.js');
+const cliPath = path.join(repositoryRoot, 'apps', 'cli', 'dist', 'cli', 'index.js');
 
 test('host inventory registers Libraries and Registries without storing secrets', async () => {
   await withInventory(async ({ inventoryPath, root }) => {

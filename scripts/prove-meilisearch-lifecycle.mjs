@@ -7,7 +7,7 @@ import { closeQueryContext } from '../services/runtime/dist/indexes/queryContext
 import { meilisearchIndexId } from '@dkb/providers-bundled/meilisearchProvider.js';
 import { cleanupRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
 import { renderModelEvidence } from '../services/runtime/dist/read/modelEvidence.js';
-import { installDkbFromMockRegistry, publishDkbToMockRegistry } from '../dist/src/registry/packageRegistry.js';
+import { installDkbFromMockRegistry, publishDkbToMockRegistry } from '../apps/cli/dist/registry/packageRegistry.js';
 import { listRuntimePackages, removeDkbFromRuntime, retrieveFromRuntime } from '../services/runtime/dist/runtime/state.js';
 
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-meilisearch-proof-'));

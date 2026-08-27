@@ -6,3 +6,4 @@ export * from './llamaindexArtifacts.js';
 export * from './meilisearchProvider.js';
 export * from './records.js';
 export * from './sourceIndex.js';
+export * from './version.js';

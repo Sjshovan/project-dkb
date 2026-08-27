@@ -10,17 +10,16 @@ Before changing behavior:
 
 1. Read `README.md` and the relevant document under `docs/`.
 2. For architecture or cross-cutting changes, read
-   `src/graphify-out/GRAPH_REPORT.md` before inferring module boundaries.
+   `apps/cli/src/graphify-out/GRAPH_REPORT.md` before inferring module boundaries. Until
+   Graphify is refreshed after the hard cut, treat that report as historical.
 3. Read the nearest subsystem `AGENTS.md` before changing files under:
-   - `src/cli/`
+   - `apps/cli/`
    - `packages/library/`
    - `packages/pipeline/`
    - `packages/registry-client/`
    - `providers/bundled/`
    - `services/compiler/`
    - `services/runtime/`
-   - `src/registry/`
-   - `src/mcp/`
 4. Check `docs/decisions/` for accepted directions that are not implemented yet.
 
 The Graphify report contains both extracted and inferred edges. Verify inferred
@@ -42,10 +41,7 @@ python -m graphify update src
 | `providers/bundled/` | LlamaIndex/Docling, FastEmbed, FAISS, Meilisearch, and hybrid retrieval implementations |
 | `services/compiler/` | Shared compilation runner and Registry-facing compiler HTTP service |
 | `services/runtime/` | Installed state, retrieval, evidence, Runtime HTTP, tracing, and read-only remote MCP |
-| `src/host/` | Disposable machine-local Library, Registry, and Runtime inventory and health inspection |
-| `src/registry/` | Package publication, immutable releases, registry client/server, installation transport |
-| `src/mcp/` | Transitional local stdio MCP and CLI compatibility shims |
-| `src/cli/` | Command registration, context resolution, presentation, and orchestration |
+| `apps/cli/` | Command registration, presentation, host inventory, context selection, and orchestration |
 | `tests/` | Cross-boundary behavior and release-regression tests |
 
 ## Product Contracts

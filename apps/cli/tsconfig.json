@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "references": [
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/pipeline" },
+    { "path": "../../packages/library" },
+    { "path": "../../packages/registry-client" },
+    { "path": "../../providers/bundled" },
+    { "path": "../../services/compiler" },
+    { "path": "../../services/runtime" }
+  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/testing/**/*.ts"]
+}

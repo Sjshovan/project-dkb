@@ -13,9 +13,9 @@ import {
   applyLibraryLock,
   readLibraryState,
 } from '@dkb/library/state.js';
-import { inspectTarget } from '../dist/src/inspect/index.js';
-import { resolveKnowledgeTarget } from '../dist/src/knowledge/target.js';
-import { healthReport } from '../dist/src/lifecycle/health.js';
+import { inspectTarget } from '../apps/cli/dist/inspect/index.js';
+import { resolveKnowledgeTarget } from '../apps/cli/dist/knowledge/target.js';
+import { healthReport } from '../apps/cli/dist/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
 import { compileComposeProject, verifyComposeProject } from '@dkb/compiler/compile.js';
 import { inspectDkbArtifactManifest } from '@dkb/library/artifacts.js';
