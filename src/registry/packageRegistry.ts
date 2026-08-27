@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { compileComposeProject } from '../compiler/compile.js';
+import { compileComposeProject } from '@dkb/compiler/compile.js';
 import { invalidateRuntimeQuerySnapshot, ensureRuntimeState } from '../runtime/state.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../runtime/catalog.js';
 import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
@@ -23,7 +23,7 @@ import {
   packageReceiptPayloadForLock,
   parsePackageReceipt,
   verifyPackageReceipt,
-} from '../signing/index.js';
+} from '@dkb/library/signing.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
 import { assertMatchingRetrievalProfiles, maybeReadRetrievalProfileLock, writeRetrievalProfileLock } from '@dkb/pipeline/profile.js';

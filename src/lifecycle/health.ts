@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { COMPILE_CACHE_PATH, compileComposeProject, verifyComposeProject } from '../compiler/compile.js';
+import { COMPILE_CACHE_PATH, compileComposeProject, verifyComposeProject } from '@dkb/compiler/compile.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '@dkb/providers-bundled/sourceIndex.js';
 import { invalidateQueryContext } from '../indexes/queryContext.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';

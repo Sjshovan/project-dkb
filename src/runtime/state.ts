@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '../signing/index.js';
-import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '../artifacts/manifest.js';
-import { compileComposeProject } from '../compiler/compile.js';
+import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@dkb/library/signing.js';
+import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '@dkb/library/artifacts.js';
+import { compileComposeProject } from '@dkb/compiler/compile.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { closeQueryContext, getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';

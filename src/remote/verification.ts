@@ -1,6 +1,6 @@
 import { createPublicKey, verify } from 'node:crypto';
 import { canonicalJson } from '@dkb/protocol/contracts/hash.js';
-import { fingerprintPublicKey } from '../signing/index.js';
+import { fingerprintPublicKey } from '@dkb/library/signing.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import type { DkbDiscoveryDocument, DkbDiscoveryPackage, DkbRemoteEndpointAttestation } from './types.js';
 

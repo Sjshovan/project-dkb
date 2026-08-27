@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { adapterFor } from '../adapters/index.js';
-import { canWrite } from '../adapters/adapter.js';
+import { adapterFor } from '@dkb/library/adapters/index.js';
+import { canWrite } from '@dkb/library/adapters/adapter.js';
 import { loadDkb } from '@dkb/protocol/manifest.js';
 import { evaluateDkbWriteIntent } from '@dkb/protocol/writeGate.js';
 import { DkbError } from '@dkb/protocol/errors.js';

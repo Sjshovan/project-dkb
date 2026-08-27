@@ -828,7 +828,7 @@ registry
   .option('--host <host>', 'Host to bind', process.env.DKB_REGISTRY_COMPILER_HOST || '127.0.0.1')
   .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_REGISTRY_COMPILER_PORT || '7333', 10))
   .action(async (options: { host: string; port: number }) => {
-    const { serveDkbRegistryCompiler } = await import('../registry/compilerService.js');
+    const { serveDkbRegistryCompiler } = await import('@dkb/compiler/server.js');
 
     await serveDkbRegistryCompiler({
       host: options.host,
@@ -1649,7 +1649,7 @@ program
     .description('Inspect .dkb/artifacts/dkb-artifact.json')
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .action(async (target: string) => {
-      const { inspectDkbArtifactManifest } = await import('../artifacts/manifest.js');
+      const { inspectDkbArtifactManifest } = await import('@dkb/library/artifacts.js');
 
       printJson(await inspectDkbArtifactManifest(path.resolve(target)));
     }))
@@ -1657,7 +1657,7 @@ program
     .description('Validate a compiled DKB artifact manifest and listed files')
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .action(async (target: string) => {
-      const { validateDkbArtifactManifest } = await import('../artifacts/manifest.js');
+      const { validateDkbArtifactManifest } = await import('@dkb/library/artifacts.js');
       const result = await presenter().check('Compiled artifact validation', async (progress) => validateDkbArtifactManifest(path.resolve(target), { progress }), (value) => value.ok);
 
       if (!result.ok) {
@@ -1669,7 +1669,7 @@ program
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .requiredOption('--out <path>', 'Archive path to write')
     .action(async (target: string, options: { out: string }) => {
-      const { packDkbArtifact } = await import('../artifacts/manifest.js');
+      const { packDkbArtifact } = await import('@dkb/library/artifacts.js');
 
       await presenter().run('Packing compiled artifact', async () => packDkbArtifact(path.resolve(target), path.resolve(options.out)), summarizeArtifactTransport);
     }))
@@ -1703,7 +1703,7 @@ program
   .addCommand(new Command('tools')
     .description('Inspect OCI transport and signing tool availability')
     .action(async () => {
-      const { inspectOciToolAvailability } = await import('../oci/tools.js');
+      const { inspectOciToolAvailability } = await import('@dkb/library/oci.js');
 
       printJson(await inspectOciToolAvailability());
     }))
@@ -1712,7 +1712,7 @@ program
     .argument('<archive>', 'Compiled .dkbpkg archive')
     .argument('<ref>', 'OCI reference, for example localhost:5000/dkb/name:version')
     .action(async (archive: string, ref: string) => {
-      const { orasPushArtifact } = await import('../oci/tools.js');
+      const { orasPushArtifact } = await import('@dkb/library/oci.js');
 
       await presenter().run('Pushing artifact', async () => orasPushArtifact({ archivePath: path.resolve(archive), ref }), summarizeArtifactTransport);
     }))
@@ -1721,7 +1721,7 @@ program
     .argument('<ref>', 'OCI reference, for example localhost:5000/dkb/name:version')
     .requiredOption('--out <path>', 'Output directory')
     .action(async (ref: string, options: { out: string }) => {
-      const { orasPullArtifact } = await import('../oci/tools.js');
+      const { orasPullArtifact } = await import('@dkb/library/oci.js');
 
       await presenter().run('Pulling artifact', async () => orasPullArtifact({ ref, outputDir: path.resolve(options.out) }), summarizeArtifactTransport);
     }))
@@ -1730,7 +1730,7 @@ program
     .requiredOption('--out <prefix>', 'Output key prefix')
     .requiredOption('--password <password>', 'Cosign key password')
     .action(async (options: { out: string; password: string }) => {
-      const { cosignGenerateKeyPair } = await import('../oci/tools.js');
+      const { cosignGenerateKeyPair } = await import('@dkb/library/oci.js');
 
       await presenter().run('Creating Cosign key pair', async () => cosignGenerateKeyPair({ outputPrefix: path.resolve(options.out), password: options.password }));
     }))
@@ -1740,7 +1740,7 @@ program
     .requiredOption('--key <path>', 'Cosign private key')
     .requiredOption('--password <password>', 'Cosign key password')
     .action(async (ref: string, options: { key: string; password: string }) => {
-      const { cosignSignArtifact } = await import('../oci/tools.js');
+      const { cosignSignArtifact } = await import('@dkb/library/oci.js');
 
       await presenter().run('Signing artifact', async () => cosignSignArtifact({ ref, keyPath: path.resolve(options.key), password: options.password }));
     }))
@@ -1749,7 +1749,7 @@ program
     .argument('<ref>', 'OCI reference to verify')
     .requiredOption('--key <path>', 'Cosign public key')
     .action(async (ref: string, options: { key: string }) => {
-      const { cosignVerifyArtifact } = await import('../oci/tools.js');
+      const { cosignVerifyArtifact } = await import('@dkb/library/oci.js');
       const result = await presenter().check('Artifact signature verification', async () => cosignVerifyArtifact({ ref, publicKeyPath: path.resolve(options.key) }), (value) => value.ok);
 
       if (!result.ok) {
@@ -1950,7 +1950,7 @@ program
   .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
   .option('--target <name>', 'Configured pipeline target')
   .action(async (target: string, options: { force?: boolean; target?: string }) => {
-    const { compileComposeProject } = await import('../compiler/compile.js');
+    const { compileComposeProject } = await import('@dkb/compiler/compile.js');
     const manifest = await loadManifest(path.resolve(target));
 
     await presenter().run(`Compiling ${path.resolve(target)}`, async () => compileComposeProject(target, {
@@ -2011,7 +2011,7 @@ program
   .argument('<path>', 'Directory containing DKB packages and dkb-lock.json')
   .option('--strict', 'Require all generated artifacts to be built')
   .action(async (target: string, options: { strict?: boolean }) => {
-    const { verifyComposeProject } = await import('../compiler/compile.js');
+    const { verifyComposeProject } = await import('@dkb/compiler/compile.js');
     const output = await presenter().check('Compiled knowledge verification', async () => {
       const result = await verifyComposeProject(target);
       const strictFailures = options.strict

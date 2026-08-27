@@ -17,8 +17,8 @@ import { inspectTarget } from '../dist/src/inspect/index.js';
 import { resolveKnowledgeTarget } from '../dist/src/knowledge/target.js';
 import { healthReport } from '../dist/src/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../dist/src/runtime/catalog.js';
-import { verifyComposeProject } from '../dist/src/compiler/compile.js';
-import { inspectDkbArtifactManifest } from '../dist/src/artifacts/manifest.js';
+import { verifyComposeProject } from '@dkb/compiler/compile.js';
+import { inspectDkbArtifactManifest } from '@dkb/library/artifacts.js';
 import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {

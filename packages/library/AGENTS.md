@@ -2,13 +2,13 @@
 
 ## Ownership
 
-This directory owns local Library discovery, Collection membership resolution, Library locks, applied-state records, artifact snapshots, and filesystem-safe Library transactions.
+This directory owns local Library discovery, Collection membership resolution, Library locks, applied-state records, artifact snapshots, source adapters, compiled-artifact verification, signing, and filesystem-safe Library transactions.
 
 The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
 
 ## Dependency direction
 
-- Depend on `@dkb/protocol` for durable formats and `@dkb/pipeline` only for profile receipts or paths.
+- Depend on `@dkb/protocol` for durable formats, `@dkb/pipeline` for profile receipts, and bundled artifact readers only where verification requires a concrete format.
 - Expose domain operations to CLI, Runtime, compiler, and Registry client orchestration.
 - Keep presentation and network transport outside this package.
 

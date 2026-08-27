@@ -5,6 +5,8 @@
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
+      "@dkb/compiler": ["services/compiler/src/index.ts"],
+      "@dkb/compiler/*": ["services/compiler/src/*"],
       "@dkb/library": ["packages/library/src/index.ts"],
       "@dkb/library/*": ["packages/library/src/*"],
       "@dkb/pipeline": ["packages/pipeline/src/index.ts"],

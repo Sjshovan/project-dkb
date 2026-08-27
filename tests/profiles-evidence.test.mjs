@@ -9,12 +9,12 @@ import {
   validateRetrievalProfileLock,
 } from '@dkb/pipeline/profile.js';
 import { buildEvidenceIr, validateEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { compileComposeProject, verifyComposeProject } from '../dist/src/compiler/compile.js';
+import { compileComposeProject, verifyComposeProject } from '@dkb/compiler/compile.js';
 import {
   readLlamaIndexCompilerBundleManifest,
   writeLlamaIndexCompilerBundle,
 } from '@dkb/providers-bundled/llamaindexArtifacts.js';
-import { analyzeSourceUnits } from '../dist/src/compiler/sourceAnalysis.js';
+import { analyzeSourceUnits } from '@dkb/compiler/sourceAnalysis.js';
 
 const image = 'dkb-compiler-llamaindex:0.3.6';
 

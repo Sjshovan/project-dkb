@@ -8,7 +8,8 @@
   },
   "references": [
     { "path": "../protocol" },
-    { "path": "../pipeline" }
+    { "path": "../pipeline" },
+    { "path": "../../providers/bundled" }
   ],
   "include": ["src/**/*.ts"]
 }

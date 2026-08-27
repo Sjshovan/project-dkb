@@ -5,7 +5,7 @@ import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } 
 import { artifactLockPath } from '@dkb/protocol/paths.js';
 import { deriveKnowledgeSpace } from '@dkb/protocol/space.js';
 import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '@dkb/protocol/types.js';
-import { verifyComposeProject } from '../compiler/compile.js';
+import { verifyComposeProject } from '@dkb/compiler/compile.js';
 
 export async function inspectTarget(root: string) {
   const resolvedRoot = path.resolve(root);

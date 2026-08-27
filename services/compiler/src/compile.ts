@@ -1,5 +1,5 @@
-import { canCompileSourceUnits } from '../adapters/adapter.js';
-import { adapterFor, adapterForStore } from '../adapters/index.js';
+import { canCompileSourceUnits } from '@dkb/library/adapters/adapter.js';
+import { adapterFor, adapterForStore } from '@dkb/library/adapters/index.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +13,7 @@ import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
-import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '../artifacts/manifest.js';
+import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
 import type { LlamaIndexCompilerResult } from '@dkb/providers-bundled/llamaindex.js';
 import {
   readLlamaIndexCompilerRecords,
@@ -33,7 +33,7 @@ import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '@dkb/pro
 import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import { sourceUnitFromPipelineRecord } from '@dkb/providers-bundled/records.js';
-import { compileDkbWithProviderHost } from '../providers/runner.js';
+import { compileDkbWithProviderHost } from './pipelineRunner.js';
 import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@dkb/pipeline/types.js';
 import { loadFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { compileComposeProject } from '../dist/src/compiler/compile.js';
+import { compileComposeProject } from '@dkb/compiler/compile.js';
 import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
 import { validateMeilisearchPackageArtifact } from '@dkb/providers-bundled/meilisearchProvider.js';
