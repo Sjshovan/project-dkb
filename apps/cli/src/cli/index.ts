@@ -32,7 +32,8 @@ const jsonRequested = process.argv.includes('--json');
 program
   .name('dkb')
   .description('Package, verify, install, and serve durable knowledgebases')
-  .version(DKB_CLI_VERSION, '-V, --cli-version')
+  .version(DKB_CLI_VERSION, '-V, --version')
+  .enablePositionalOptions()
   .option('--json', 'Emit one machine-readable JSON document')
   .option('--no-progress', 'Keep human output but disable spinners and progress bars')
   .showSuggestionAfterError(true)

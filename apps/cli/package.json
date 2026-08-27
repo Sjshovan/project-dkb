@@ -8,6 +8,7 @@
     "dkb": "./dist/cli/index.js"
   },
   "files": [
+    "dist/version.*",
     "dist/cli/",
     "dist/host/",
     "dist/inspect/",

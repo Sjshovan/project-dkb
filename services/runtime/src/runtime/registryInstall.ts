@@ -8,7 +8,7 @@ import { DkbError } from '@dkb/protocol/errors.js';
 import { registryPackagePath } from '@dkb/protocol/identity.js';
 import { loadDkbPackage, loadLibrary } from '@dkb/protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
-import type { DkbLockArtifact, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
+import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { validateDkbArtifactManifest } from '@dkb/library/artifacts.js';
 import { hashPortablePackageTree } from '@dkb/library/packageTree.js';
 import {
@@ -210,7 +210,7 @@ async function verifyExtractedPackage(
   const sourceTree = receipt.payload.packageTreeHash ? await hashPortablePackageTree(root) : null;
   const packageTreeMatches = !receipt.payload.packageTreeHash || sourceTree?.hash === receipt.payload.packageTreeHash;
   const artifact = await validateDkbArtifactManifest(root, { progress });
-  const artifactChecks = await verifyLockArtifacts(root, receipt.payload.lock.artifacts);
+  const artifactChecks = await verifyLockArtifacts(root, receipt.payload.lock);
   const signatures = await verifyPackageReceipt(receipt, ({ role, signature }) => {
     const key = trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
     return key && key.status !== 'revoked' ? key.publicKeyPem : null;
@@ -236,9 +236,9 @@ async function verifyExtractedPackage(
   };
 }
 
-async function verifyLockArtifacts(root: string, artifacts: Record<string, DkbLockArtifact | undefined>) {
+async function verifyLockArtifacts(root: string, lock: DkbLockManifest) {
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
-  for (const [name, artifact] of Object.entries(artifacts)) {
+  for (const [name, artifact] of Object.entries(lock.artifacts) as Array<[string, DkbLockArtifact | undefined]>) {
     if (!artifact || artifact.status !== 'built') continue;
     const target = containedPath(root, artifact.path);
     const actual = await hashPath(target);
@@ -246,6 +246,17 @@ async function verifyLockArtifacts(root: string, artifacts: Record<string, DkbLo
       name: `artifact.${name}`,
       ok: actual === artifact.hash,
       detail: actual === artifact.hash ? `${name} hash matches lockfile` : `expected ${artifact.hash}, got ${actual ?? 'missing'}`,
+    });
+  }
+  if (lock.compiled?.path && lock.compiled.artifactHash) {
+    const target = containedPath(root, lock.compiled.path);
+    const actual = await hashPath(target);
+    checks.push({
+      name: 'artifact.compiled',
+      ok: actual === lock.compiled.artifactHash,
+      detail: actual === lock.compiled.artifactHash
+        ? 'compiled artifact hash matches lockfile'
+        : `expected ${lock.compiled.artifactHash}, got ${actual ?? 'missing'}`,
     });
   }
   return checks;
