@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { prepareDkbStack } from '../apps/cli/dist/stack/manager.js';
+import { composeArguments, prepareDkbStack } from '../apps/cli/dist/stack/manager.js';
 
 test('stack preparation generates reusable local secrets without returning them', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-test-'));
@@ -44,6 +44,10 @@ test('Meilisearch stack target configures the same provider contract for compile
     assert.equal(runtime.activeTarget, 'meilisearch');
     assert.equal(runtime.targets.meilisearch.index, '@dkb/meilisearch');
     assert.equal(runtime.targets.meilisearch.options['@dkb/meilisearch'].apiKeyEnv, 'MEILI_MASTER_KEY');
+    assert.deepEqual(
+      composeArguments(stack, ['down', '--remove-orphans']).slice(-4),
+      ['--profile', 'meilisearch', 'down', '--remove-orphans'],
+    );
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;

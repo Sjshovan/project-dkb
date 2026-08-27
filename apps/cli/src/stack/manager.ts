@@ -52,10 +52,7 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
     if (target === 'meilisearch') await assertPortAvailable(context.meilisearchPort, 'Meilisearch');
   }
 
-  runCompose(context, [
-    ...(target === 'meilisearch' ? ['--profile', 'meilisearch'] : []),
-    'up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240',
-  ]);
+  runCompose(context, ['up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240']);
 
   const checks = await probeStack(context);
   const failed = checks.filter((check) => check.status === 'failed');
@@ -353,9 +350,7 @@ function runCompose(
   inherit = false,
   allowFailure = false,
 ): { stdout: string; stderr: string } {
-  const result = spawnSync('docker', [
-    'compose', '--env-file', context.envFile, '-p', context.projectName, '-f', context.composeFile, ...args,
-  ], {
+  const result = spawnSync('docker', composeArguments(context, args), {
     cwd: path.dirname(context.composeFile),
     encoding: 'utf8',
     stdio: inherit ? 'inherit' : 'pipe',
@@ -366,6 +361,17 @@ function runCompose(
     throw new DkbError(`Docker Compose failed for stack ${context.name}${detail ? `: ${detail}` : ''}. Run: dkb stack logs ${context.name}`);
   }
   return { stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') };
+}
+
+export function composeArguments(context: DkbStackContext, args: string[]): string[] {
+  return [
+    'compose',
+    '--env-file', context.envFile,
+    '-p', context.projectName,
+    '-f', context.composeFile,
+    ...(context.target === 'meilisearch' ? ['--profile', 'meilisearch'] : []),
+    ...args,
+  ];
 }
 
 function assertDockerAvailable(): void {
