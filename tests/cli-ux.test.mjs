@@ -17,7 +17,7 @@ import {
   verifyRegistryEndpoint,
   writeConfiguredRegistryUrl,
 } from '../apps/cli/dist/cli/registryConfig.js';
-import { preflightDkbInstall } from '../apps/cli/dist/registry/packageRegistry.js';
+import { preflightDkbInstall } from '../services/runtime/dist/runtime/registryInstall.js';
 import { applyLibraryLock } from '@dkb/library/state.js';
 import { sourceAssetsFromChunks } from '@dkb/providers-bundled/sourceIndex.js';
 

@@ -10,4 +10,5 @@ export * from './resolver.js';
 export * from './root.js';
 export * from './state.js';
 export * from './signing.js';
+export * from './packageTree.js';
 export * from './oci.js';

@@ -14,7 +14,7 @@ is authoritative.
   previous ready state or the next complete state.
 - Preserve stable evidence identities, bounded untrusted-source output,
   provenance, citations, and trace metadata.
-- Remote HTTP MCP exposes exactly `search` and `fetch`; both are read-only.
+- Every MCP transport exposes exactly `search` and `fetch`; both are read-only.
 - Never expose install, uninstall, compilation, plugin, or write-queue controls
   over remote MCP.
 - Keep credentials out of Runtime state, discovery documents, traces, and

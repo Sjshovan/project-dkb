@@ -396,7 +396,7 @@ collection
   .action(async (target: string, options: { library?: string; url?: string; public?: boolean; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
     const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { publishCollectionFromLibrary } = await import('../registry/collectionRegistry.js');
+    const { publishCollectionFromLibrary } = await import('@dkb/registry-client/collections.js');
     const collectionPath = path.resolve(target);
     const root = await currentLibraryRoot(options.library, collectionPath);
     const registryConfig = await configuredRegistry({ url: options.url, root });
@@ -420,7 +420,7 @@ collection
   .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
     const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { installRegistryCollection } = await import('../registry/collectionRegistry.js');
+    const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
     const root = await currentLibraryRoot(options.library);
     const registryConfig = await configuredRegistry({ url: options.url, root });
 
@@ -444,7 +444,7 @@ collection
   .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
     const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { installRegistryCollection } = await import('../registry/collectionRegistry.js');
+    const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
     const root = await currentLibraryRoot(options.library);
     const registryConfig = await configuredRegistry({ url: options.url, root });
 
@@ -464,7 +464,7 @@ collection
   .argument('<identity>', 'Scoped Collection identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { uninstallRegistryCollection } = await import('../registry/collectionRegistry.js');
+    const { uninstallRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
     const root = await currentLibraryRoot(options.library);
 
     await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
@@ -819,22 +819,6 @@ registry
   });
 
 registry
-  .command('serve')
-  .description('Start a local development DKB Registry HTTP API in the current process')
-  .option('--host <host>', 'Host to bind', process.env.DKB_REGISTRY_HOST || '127.0.0.1')
-  .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_REGISTRY_PORT || '7332', 10))
-  .option('--root <path>', 'Local development registry storage root', process.env.DKB_REGISTRY_ROOT || '.dkb/mock-registry')
-  .action(async (options: { host: string; port: number; root: string }) => {
-    const { serveDkbRegistry } = await import('../registry/server.js');
-
-    await serveDkbRegistry({
-      host: options.host,
-      port: options.port,
-      registryRoot: options.root,
-    });
-  });
-
-registry
   .command('status')
   .description('Show and verify the configured DKB registry')
   .option('--url <url>', 'Registry API URL to verify instead of the configured registry')
@@ -928,30 +912,15 @@ registry
 registry
   .command('login')
   .description('Create or refresh a registry publisher session')
-  .option('--root <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--account <id>', 'Publisher account id')
   .option('--name <name>', 'Publisher display name')
   .option('--email <email>', 'Publisher email')
-  .action(async (options: { root?: string; url?: string; account?: string; name?: string; email?: string }) => {
-    if (!options.root) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
-
-      await presenter().run('Creating registry session', async () => new DkbRegistryClient({ baseUrl: registryConfig.url }).login({
-        accountId: options.account,
-        name: options.name,
-        email: options.email,
-      }));
-
-      return;
-    }
-
-    const { loginMockRegistry } = await import('../registry/packageRegistry.js');
-
-    await presenter().run('Creating registry session', async () => loginMockRegistry({
-      registryRoot: options.root!,
+  .action(async (options: { url?: string; account?: string; name?: string; email?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    await presenter().run('Creating registry session', async () => new DkbRegistryClient({ baseUrl: registryConfig.url }).login({
       accountId: options.account,
       name: options.name,
       email: options.email,
@@ -961,45 +930,25 @@ registry
 registry
   .command('packages')
   .description('List packages in the configured registry')
-  .option('--root <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (options: { root?: string; url?: string; token?: string }) => {
-    if (!options.root) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
-
-      presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).packages(), summarizePackageListing);
-
-      return;
-    }
-
-    const { listMockRegistryPackages } = await import('../registry/packageRegistry.js');
-
-    presenter().print(await listMockRegistryPackages(options.root), summarizePackageListing);
+  .action(async (options: { url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).packages(), summarizePackageListing);
   });
 
 registry
   .command('keys')
   .description('List registry public signing keys')
-  .option('--root <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (options: { root?: string; url?: string; token?: string }) => {
-    if (!options.root) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
-
-      presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).publicKeys(), summarizeKeyListing);
-
-      return;
-    }
-
-    const { registryPublicKeys } = await import('../registry/packageRegistry.js');
-
-    presenter().print(await registryPublicKeys(options.root), summarizeKeyListing);
+  .action(async (options: { url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).publicKeys(), summarizeKeyListing);
   });
 
 const registryRemote = registry
@@ -1036,10 +985,9 @@ registry
   .option('--version <version>', 'Package version')
   .option('--output <path>', 'Archive path to write')
   .option('--force', 'Replace an existing output archive')
-  .option('--root <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; output?: string; force?: boolean; root?: string; url?: string; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; output?: string; force?: boolean; url?: string; token?: string }) => {
     const outputPath = path.resolve(options.output ?? defaultPackageArchiveName(packageId, options.version));
 
     if (!options.force && await exists(outputPath)) {
@@ -1048,50 +996,24 @@ registry
 
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
-    if (!options.root) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
-      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
-
-      await presenter().run('Pulling package', async (progress) => {
-        const release = await client.packageRelease(packageId, options.version);
-        const download = await client.writePackageArchive(packageId, outputPath, release.version, {
-          progress,
-          force: Boolean(options.force),
-        });
-
-        return {
-          status: 'pulled',
-          packageId,
-          version: release.version,
-          archivePath: outputPath,
-          archiveBytes: download.bytes,
-          registry: registryConfig.url,
-          ...(download.warning ? { warning: download.warning, cleanupPath: download.cleanupPath } : {}),
-        };
-      }, summarizeArtifactTransport);
-
-      return;
-    }
-
-    const { writeArchiveFileFromPath } = await import('@dkb/registry-client/client.js');
-    const { exportMockRegistryPackageArchive } = await import('../registry/packageRegistry.js');
-    const result = await exportMockRegistryPackageArchive({
-      registryRoot: options.root,
-      packageId,
-      version: options.version,
-    });
-
-    await presenter().run('Pulling package', async () => {
-      const output = await writeArchiveFileFromPath(result.archivePath, outputPath, { force: Boolean(options.force) });
-
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+    await presenter().run('Pulling package', async (progress) => {
+      const release = await client.packageRelease(packageId, options.version);
+      const download = await client.writePackageArchive(packageId, outputPath, release.version, {
+        progress,
+        force: Boolean(options.force),
+      });
       return {
-        ...result,
         status: 'pulled',
+        packageId,
+        version: release.version,
         archivePath: outputPath,
-        archiveBytes: output.bytes,
-        ...(output.warning ? { warning: output.warning, cleanupPath: output.cleanupPath } : {}),
+        archiveBytes: download.bytes,
+        registry: registryConfig.url,
+        ...(download.warning ? { warning: download.warning, cleanupPath: download.cleanupPath } : {}),
       };
     }, summarizeArtifactTransport);
   });
@@ -1101,129 +1023,72 @@ registry
   .description('Verify a DKB package receipt from the registry')
   .argument('<package-id>', 'Registry package id')
   .option('--version <version>', 'Package version')
-  .option('--root <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; root?: string; url?: string; token?: string }) => {
-    if (!options.root) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
-      const { verifyDkbArchiveFile } = await import('../registry/packageRegistry.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const registryConfig = await configuredRegistry({ url: options.url });
-      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-verify-download-'));
-      const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
-
-      try {
-        const result = await presenter().check('Package verification', async (progress) => {
-          const release = await client.packageRelease(packageId, options.version);
-          await client.writePackageArchive(packageId, archivePath, release.version, { progress });
-          const publicKeys = await client.publicKeys() as { keys: Parameters<typeof verifyDkbArchiveFile>[0]['trustedKeys'] };
-
-          return verifyDkbArchiveFile({
-            archivePath,
-            trustedKeys: publicKeys.keys,
-            expectedArchiveHash: release.archiveHash,
-            progress,
-          });
-        }, (value) => value.ok);
-
-        if (!result.ok) {
-          process.exitCode = 1;
-        }
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
-
-      return;
-    }
-
-    const { verifyDownloadedMockRelease } = await import('../registry/packageRegistry.js');
-
-    const result = await presenter().check('Package verification', async () => verifyDownloadedMockRelease({
-      registryRoot: options.root!,
-      packageId,
-      version: options.version,
-    }), (value) => value.ok);
-
-    if (!result.ok) {
-      process.exitCode = 1;
+  .action(async (packageId: string, options: { version?: string; url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
+    const { verifyDkbArchiveFile } = await import('@dkb/runtime/runtime/registryInstall.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-verify-download-'));
+    const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
+    try {
+      const result = await presenter().check('Package verification', async (progress) => {
+        const release = await client.packageRelease(packageId, options.version);
+        await client.writePackageArchive(packageId, archivePath, release.version, { progress });
+        const publicKeys = await client.publicKeys() as { keys: Parameters<typeof verifyDkbArchiveFile>[0]['trustedKeys'] };
+        return verifyDkbArchiveFile({ archivePath, trustedKeys: publicKeys.keys, expectedArchiveHash: release.archiveHash, progress });
+      }, (value) => value.ok);
+      if (!result.ok) process.exitCode = 1;
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 
 registry
   .command('rotate-key', { hidden: true })
-  .description('Rotate a local/admin registry publisher account key')
+  .description('Rotate a Registry publisher account key')
   .argument('<account-id>', 'Publisher account id')
-  .option('--root <path>', 'Local development registry storage root', process.env.DKB_REGISTRY_ROOT || '.dkb/mock-registry')
-  .option('--url <url>', 'Registry API URL for HTTP mode')
-  .action(async (accountId: string, options: { root: string; url?: string }) => {
-    if (options.url) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-
-      await presenter().run('Rotating publisher key', async () => new DkbRegistryClient({ baseUrl: options.url }).rotateAccountKey(accountId));
-
-      return;
-    }
-
-    const { rotateMockRegistryAccountKey } = await import('../registry/packageRegistry.js');
-
-    await presenter().run('Rotating publisher key', async () => rotateMockRegistryAccountKey({
-      registryRoot: options.root,
-      accountId,
-    }));
+  .option('--url <url>', 'Registry API URL')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (accountId: string, options: { url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    await presenter().run('Rotating publisher key', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).rotateAccountKey(accountId));
   });
 
 registry
   .command('rotate-registry-key', { hidden: true })
-  .description('Rotate a local/admin registry signing key')
-  .option('--root <path>', 'Local development registry storage root', process.env.DKB_REGISTRY_ROOT || '.dkb/mock-registry')
-  .option('--url <url>', 'Registry API URL for HTTP mode')
-  .action(async (options: { root: string; url?: string }) => {
-    if (options.url) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-
-      await presenter().run('Rotating registry key', async () => new DkbRegistryClient({ baseUrl: options.url }).rotateRegistryKey());
-
-      return;
-    }
-
-    const { rotateMockRegistrySigningKey } = await import('../registry/packageRegistry.js');
-
-    await presenter().run('Rotating registry key', async () => rotateMockRegistrySigningKey({
-      registryRoot: options.root,
-    }));
+  .description('Rotate a Registry signing key')
+  .option('--url <url>', 'Registry API URL')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (options: { url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    await presenter().run('Rotating registry key', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).rotateRegistryKey());
   });
 
 registry
   .command('revoke-key', { hidden: true })
-  .description('Revoke a local/admin registry signing key')
+  .description('Revoke a Registry signing key')
   .argument('<key-id>', 'Signing key id')
-  .option('--root <path>', 'Local development registry storage root', process.env.DKB_REGISTRY_ROOT || '.dkb/mock-registry')
-  .option('--url <url>', 'Registry API URL for HTTP mode')
-  .action(async (keyId: string, options: { root: string; url?: string }) => {
-    if (options.url) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-
-      await presenter().run('Revoking signing key', async () => new DkbRegistryClient({ baseUrl: options.url }).revokeKey(keyId));
-
-      return;
-    }
-
-    const { revokeMockRegistryKey } = await import('../registry/packageRegistry.js');
-
-    await presenter().run('Revoking signing key', async () => revokeMockRegistryKey({
-      registryRoot: options.root,
-      keyId,
-    }));
+  .option('--url <url>', 'Registry API URL')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (keyId: string, options: { url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url });
+    await presenter().run('Revoking signing key', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).revokeKey(keyId));
   });
 
 program
   .command('publish')
   .description('Publish a DKB or immutable Collection revision to the configured Registry')
   .argument('[path]', 'DKB or Collection folder to publish', '.')
-  .option('--registry <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--account <id>', 'Publisher account id')
   .option('--name <name>', 'Publisher display name')
@@ -1232,63 +1097,37 @@ program
   .option('--remote-url <url>', 'Register a public hosted runtime after publishing')
   .option('--public', 'Publish the package to the public catalog')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (target: string, options: { registry?: string; url?: string; account?: string; name?: string; email?: string; force?: boolean; remoteUrl?: string; public?: boolean; token?: string }) => {
+  .action(async (target: string, options: { url?: string; account?: string; name?: string; email?: string; force?: boolean; remoteUrl?: string; public?: boolean; token?: string }) => {
     const sourcePath = path.resolve(target);
-
-    if (!options.registry) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const sourceManifest = await loadManifest(sourcePath);
-      const libraryRoot = sourceManifest.type === 'collection'
-        ? await currentLibraryRoot(undefined, sourcePath)
-        : undefined;
-      const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
-      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
-
-      if (sourceManifest.type === 'collection') {
-        const { publishCollectionFromLibrary } = await import('../registry/collectionRegistry.js');
-        await presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
-          collectionPath: sourcePath,
-          libraryRoot: libraryRoot!,
-          client,
-          visibility: options.public ? 'public' : 'private',
-        }), summarizeCollectionRevision);
-        return;
-      }
-      if (sourceManifest.type !== 'dkb') {
-        throw new DkbError('Libraries are runtime configuration and cannot be published. Publish a DKB or Collection folder.');
-      }
-
-      await presenter().run('Publishing DKB', async () => client.publish({
-        sourcePath,
-        accountId: options.account,
-        accountName: options.name,
-        accountEmail: options.email,
-        force: Boolean(options.force),
-        remoteUrl: options.remoteUrl,
-        visibility: options.public || options.remoteUrl ? 'public' : 'private',
-      }), summarizePublishResult);
-
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const sourceManifest = await loadManifest(sourcePath);
+    const libraryRoot = sourceManifest.type === 'collection'
+      ? await currentLibraryRoot(undefined, sourcePath)
+      : undefined;
+    const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
+    const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+    if (sourceManifest.type === 'collection') {
+      const { publishCollectionFromLibrary } = await import('@dkb/registry-client/collections.js');
+      await presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
+        collectionPath: sourcePath,
+        libraryRoot: libraryRoot!,
+        client,
+        visibility: options.public ? 'public' : 'private',
+      }), summarizeCollectionRevision);
       return;
     }
-
-    const { publishDkbToMockRegistry } = await import('../registry/packageRegistry.js');
-    const registryRoot = options.registry;
-
-    if (!registryRoot) {
-      throw new DkbError('Local registry mode requires --registry.');
+    if (sourceManifest.type !== 'dkb') {
+      throw new DkbError('Libraries are runtime configuration and cannot be published. Publish a DKB or Collection folder.');
     }
-    if ((await loadManifest(sourcePath)).type !== 'dkb') {
-      throw new DkbError('The embedded development Registry supports DKB publishing only; use the HTTP Registry for Collections.');
-    }
-
-    await presenter().run('Publishing package', async () => publishDkbToMockRegistry({
-      registryRoot,
+    await presenter().run('Publishing DKB', async () => client.publish({
       sourcePath,
       accountId: options.account,
       accountName: options.name,
       accountEmail: options.email,
       force: Boolean(options.force),
+      remoteUrl: options.remoteUrl,
+      visibility: options.public || options.remoteUrl ? 'public' : 'private',
     }), summarizePublishResult);
   });
 
@@ -1298,91 +1137,55 @@ program
   .argument('<package-id>', 'Scoped Registry identity')
   .option('--version <version>', 'Package version')
   .option('--revision <revision>', 'Collection revision', parsePositiveInteger)
-  .option('--registry <path>', 'Local development registry storage root')
   .option('--url <url>', 'Registry API URL')
   .option('--runtime-url <url>', 'Owning Runtime URL; closes live retrieval handles before installation')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .option('--force', 'Repair an incomplete install or replace an installed DKB')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; revision?: number; registry?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; revision?: number; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
     const libraryRoot = await currentLibraryRoot(options.library);
     if (options.runtimeUrl) {
       await (await currentRuntimeAdminClient(options.runtimeUrl)).reload();
     }
-    if (!options.registry) {
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-      const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
-      const { installDkbArchiveIntoRuntime, preflightDkbInstall } = await import('../registry/packageRegistry.js');
-      const { configuredRegistry } = await import('./registryConfig.js');
-      const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
-      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
-      const kind = await client.entryKind(packageId);
+    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
+    const { installDkbArchiveIntoRuntime, preflightDkbInstall } = await import('@dkb/runtime/runtime/registryInstall.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
+    const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+    const kind = await client.entryKind(packageId);
 
-      if (kind === 'collection') {
-        if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
-        const { installRegistryCollection } = await import('../registry/collectionRegistry.js');
-        await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
-          client,
-          collectionId: packageId,
-          revision: options.revision,
-          libraryRoot,
-          progress,
-        }), summarizeCollectionInstall);
-        return;
-      }
-      if (options.revision) throw new DkbError('--revision applies to Collections; use --version for a DKB.');
-
-      await presenter().run('Installing DKB', async (progress) => {
-        const release = await client.packageRelease(packageId, options.version);
-        const existing = await preflightDkbInstall({
-          runtimeRoot: libraryRoot,
-          candidate: release,
-          force: Boolean(options.force),
-        });
-
-        if (existing) {
-          return existing;
-        }
-
-        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-install-download-'));
-        const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
-
-        try {
-          await client.writePackageArchive(packageId, archivePath, release.version, { progress });
-          const publicKeys = await client.publicKeys() as { keys: Parameters<typeof installDkbArchiveIntoRuntime>[0]['trustedKeys'] };
-
-          return await installDkbArchiveIntoRuntime({
-            archivePath,
-            trustedKeys: publicKeys.keys,
-            runtimeRoot: libraryRoot,
-            expectedArchiveHash: release.archiveHash,
-            force: Boolean(options.force),
-            progress,
-          });
-        } finally {
-          await fs.rm(tempRoot, { recursive: true, force: true });
-        }
-      }, summarizeInstallResult);
-
+    if (kind === 'collection') {
+      if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
+      const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
+      await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
+        client,
+        collectionId: packageId,
+        revision: options.revision,
+        libraryRoot,
+        progress,
+      }), summarizeCollectionInstall);
       return;
     }
+    if (options.revision) throw new DkbError('--revision applies to Collections; use --version for a DKB.');
 
-    const { installDkbFromMockRegistry } = await import('../registry/packageRegistry.js');
-    const registryRoot = options.registry;
+    await presenter().run('Installing DKB', async (progress) => {
+      const release = await client.packageRelease(packageId, options.version);
+      const existing = await preflightDkbInstall({ runtimeRoot: libraryRoot, candidate: release, force: Boolean(options.force) });
 
-    if (!registryRoot) {
-      throw new DkbError('Local registry mode requires --registry.');
-    }
+      if (existing) return existing;
 
-    await presenter().run('Installing package', async (progress) => installDkbFromMockRegistry({
-      registryRoot,
-      runtimeRoot: libraryRoot,
-      packageId,
-      version: options.version,
-      force: Boolean(options.force),
-      allowAlreadyInstalled: true,
-      progress,
-    }), summarizeInstallResult);
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-install-download-'));
+      const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
+
+      try {
+        await client.writePackageArchive(packageId, archivePath, release.version, { progress });
+        const publicKeys = await client.publicKeys() as { keys: Parameters<typeof installDkbArchiveIntoRuntime>[0]['trustedKeys'] };
+        return await installDkbArchiveIntoRuntime({ archivePath, trustedKeys: publicKeys.keys, runtimeRoot: libraryRoot, expectedArchiveHash: release.archiveHash, force: Boolean(options.force), progress });
+      } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
+    }, summarizeInstallResult);
   });
 
 program
@@ -1655,7 +1458,7 @@ program
     const entry = (await readLibraryState(libraryRoot)).entries[identity];
 
     if (entry?.kind === 'collection' && entry.source === 'registry') {
-      const { uninstallRegistryCollection } = await import('../registry/collectionRegistry.js');
+      const { uninstallRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
 
       await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
         libraryRoot,
@@ -2238,11 +2041,11 @@ const mcp = program
 
 mcp
   .command('serve')
-  .description('Start the DKB MCP server over stdio')
+  .description('Start the read-only DKB Runtime MCP server over stdio')
   .action(async () => {
-    const { serveDkbMcpServer } = await import('../mcp/server.js');
+    const { serveDkbMcpStdio } = await import('@dkb/runtime/mcp/stdio.js');
 
-    serveDkbMcpServer();
+    serveDkbMcpStdio();
   });
 
 mcp

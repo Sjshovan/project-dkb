@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '@dkb/protocol/errors.js';
-import { installDkbArchiveIntoRuntime } from '../registry/packageRegistry.js';
+import { installDkbArchiveIntoRuntime } from '@dkb/runtime/runtime/registryInstall.js';
 import { DkbRegistryClient } from '@dkb/registry-client/client.js';
 import { resolveRegistryContext } from '@dkb/registry-client/config.js';
 import { defaultRuntimeStateRoot } from '@dkb/runtime/runtime/state.js';

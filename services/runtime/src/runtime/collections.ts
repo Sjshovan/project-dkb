@@ -1,18 +1,18 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { refreshRuntimeCatalogFromInstalledArtifacts } from '@dkb/runtime/runtime/catalog.js';
-import { ensureRuntimeState, invalidateRuntimeQuerySnapshot } from '@dkb/runtime/runtime/state.js';
+import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
+import { ensureRuntimeState, invalidateRuntimeQuerySnapshot } from './state.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { discoverLibraryEntries, loadManifest } from '@dkb/protocol/manifest.js';
+import { loadManifest } from '@dkb/protocol/manifest.js';
 import type { DkbLibraryLockManifest, DkbSourceManifest } from '@dkb/protocol/types.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
 import { syncLibrary } from '@dkb/library/resolver.js';
 import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@dkb/library/artifactSnapshot.js';
 import { DKB_PACKAGE_EXTENSION } from '@dkb/registry-client/archive.js';
-import { DkbRegistryClient, type DkbRegistryCollectionRevision, type DkbRegistryRelease } from '@dkb/registry-client/client.js';
-import { installDkbArchiveIntoRuntime, preflightDkbInstall } from './packageRegistry.js';
+import { DkbRegistryClient, type DkbRegistryCollectionRevision } from '@dkb/registry-client/client.js';
+import { installDkbArchiveIntoRuntime, preflightDkbInstall } from './registryInstall.js';
 import type { DkbProgressReporter } from '@dkb/protocol/progress.js';
 
 export interface CollectionInstallResult {
@@ -22,64 +22,6 @@ export interface CollectionInstallResult {
   digest: string;
   members: Array<{ id: string; version: string; digest: string }>;
   libraryRoot: string;
-}
-
-export async function publishCollectionFromLibrary(options: {
-  collectionPath: string;
-  libraryRoot: string;
-  client: DkbRegistryClient;
-  visibility?: 'public' | 'private' | 'unlisted';
-}): Promise<DkbRegistryCollectionRevision> {
-  const collectionRoot = path.resolve(options.collectionPath);
-  const manifest = await loadManifest(collectionRoot);
-  if (manifest.type !== 'collection') throw new DkbError(`Publish target is not a Collection: ${collectionRoot}`);
-
-  const collectionIdentity = parseDkbIdentity(manifest.name, 'Collection identity');
-  const localEntries = new Map((await discoverLibraryEntries(options.libraryRoot)).map((entry) => [entry.manifest.name, entry]));
-  const members: Array<{ id: string; version: string }> = [];
-
-  for (const [identity, selector] of Object.entries(manifest.members ?? {}).sort(([left], [right]) => left.localeCompare(right))) {
-    const parsed = parseDkbIdentity(identity, `Collection ${manifest.name} member`);
-    let release: DkbRegistryRelease;
-
-    try {
-      release = await options.client.packageRelease(identity, selector === 'latest' ? undefined : selector);
-    } catch (error) {
-      const local = localEntries.get(identity);
-      if (parsed.namespace !== collectionIdentity.namespace || !local || local.manifest.type !== 'dkb') {
-        const detail = error instanceof Error ? ` Registry response: ${error.message}` : '';
-        throw new DkbError(
-          `Collection member ${identity}@${selector} is not published. `
-          + (parsed.namespace === collectionIdentity.namespace
-            ? `No editable local DKB named ${identity} exists in this Library.`
-            : `Foreign namespace @${parsed.namespace} must publish it first.`)
-          + detail,
-        );
-      }
-
-      if (selector !== 'latest' && selector !== local.manifest.version) {
-        throw new DkbError(`Local ${identity}@${local.manifest.version} cannot satisfy Collection selector ${selector}.`);
-      }
-
-      await options.client.publish({
-        sourcePath: local.root,
-        visibility: options.visibility === 'public' ? 'public' : 'private',
-      });
-      release = await options.client.packageRelease(identity, selector === 'latest' ? undefined : selector);
-    }
-
-    members.push({ id: release.packageId, version: release.version });
-  }
-
-  if (members.length === 0) throw new DkbError(`Collection ${manifest.name} has no members to publish.`);
-
-  return options.client.publishCollection({
-    id: manifest.name,
-    name: manifest.displayName ?? manifest.name,
-    description: manifest.description,
-    visibility: options.visibility ?? 'private',
-    members,
-  });
 }
 
 export async function installRegistryCollection(options: {

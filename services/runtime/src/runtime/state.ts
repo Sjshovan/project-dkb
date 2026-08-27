@@ -12,7 +12,7 @@ import { loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/man
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
+import type { DkbPackageReceipt, LoadedDkb } from '@dkb/protocol/types.js';
 import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
 import { syncLibrary } from '@dkb/library/resolver.js';
@@ -71,6 +71,8 @@ export interface ImportCompiledDkbArtifactOptions {
   id?: string;
   force?: boolean;
   progress?: DkbProgressReporter;
+  registryReceipt?: DkbPackageReceipt;
+  archiveHash?: string;
 }
 
 export interface ImportCompiledDkbArtifactResult {
@@ -84,6 +86,7 @@ export interface ImportCompiledDkbArtifactResult {
     upsert: DkbIndexMutationResult;
     removedPrevious?: DkbIndexMutationResult;
   };
+  warning?: string;
 }
 
 export function runtimePaths(stateRoot = defaultRuntimeStateRoot()): DkbRuntimePaths {
@@ -261,10 +264,21 @@ export async function importCompiledDkbArtifactIntoRuntime(
     throw new DkbError(`Compiled DKB identity override ${id} does not match its manifest ${sourceDkb.manifest.id}.`);
   }
   const activeEntry = (await readLibraryState(paths.stateRoot)).entries[id];
-  if (activeEntry?.source === 'registry') {
+  if (!options.registryReceipt && activeEntry?.source === 'registry') {
     throw new DkbError(`Cannot install local compiled DKB ${id}; that identity is owned by vendor/ in this Library.`);
   }
-  const packagePath = localEntryPath(paths.stateRoot, id);
+  if (options.registryReceipt && activeEntry?.source === 'local') {
+    throw new DkbError(`Cannot install Registry DKB ${id}; that identity is owned by editable local source in this Library.`);
+  }
+  if (options.registryReceipt && (
+    options.registryReceipt.package.id !== id
+    || options.registryReceipt.package.version !== sourceDkb.manifest.version
+  )) {
+    throw new DkbError(`Registry receipt identity does not match compiled DKB ${id}@${sourceDkb.manifest.version}.`);
+  }
+  const packagePath = options.registryReceipt
+    ? registryPackagePath(paths.stateRoot, id)
+    : localEntryPath(paths.stateRoot, id);
   const existing = await maybeInstalledPackage(packagePath, id);
   const tempPath = await copyCompiledArtifactToInstallTemp(sourceRoot, paths, id);
   const libraryManifestPath = path.join(paths.stateRoot, 'dkb.json');
@@ -326,7 +340,16 @@ export async function importCompiledDkbArtifactIntoRuntime(
       }
 
       libraryActivated = true;
-      await activateLocalImports(paths.stateRoot, [id]);
+      if (options.registryReceipt) {
+        await activateRegistryImport(
+          paths.stateRoot,
+          options.registryReceipt,
+          path.relative(paths.stateRoot, packagePath).replace(/\\/gu, '/'),
+          options.archiveHash,
+        );
+      } else {
+        await activateLocalImports(paths.stateRoot, [id]);
+      }
 
       options.progress?.(progressUpdate({
         phase: 'activate',
@@ -736,6 +759,53 @@ async function promotePackagePath<T>(
     throw error;
   }
 
+}
+
+async function activateRegistryImport(
+  root: string,
+  receipt: DkbPackageReceipt,
+  installedPath: string,
+  archiveHash?: string,
+): Promise<void> {
+  const rootManifestPath = path.join(root, 'dkb.json');
+  const rootManifest = await maybeReadJsonObject(rootManifestPath);
+  if (!rootManifest || rootManifest.type !== 'library') {
+    throw new DkbError(`Runtime Library manifest is invalid: ${rootManifestPath}`);
+  }
+  const identity = parseDkbIdentity(receipt.package.id, 'Registry DKB identity').identity;
+  const receiptPackage = receipt.payload.lock.packages[identity];
+  if (!receiptPackage) throw new DkbError(`Package receipt does not contain package lock entry: ${identity}`);
+  const previousLock = await maybeReadLibraryLock(root);
+  const now = new Date().toISOString();
+  const roots = {
+    ...(isRecord(rootManifest.roots) ? rootManifest.roots : {}),
+    [identity]: { version: receipt.package.version },
+  };
+
+  await writeJsonAtomic(rootManifestPath, { ...rootManifest, roots });
+  await applyLibraryLock(root, {
+    library: {
+      name: String(rootManifest.name),
+      ...(previousLock?.library.retrievalProfileDigest
+        ? { retrievalProfileDigest: previousLock.library.retrievalProfileDigest }
+        : {}),
+    },
+    generation: (previousLock?.generation ?? 0) + 1,
+    entries: {
+      ...(previousLock?.entries ?? {}),
+      [identity]: {
+        identity,
+        kind: 'dkb',
+        source: 'registry',
+        version: receipt.package.version,
+        digest: receipt.payload.packageTreeHash ?? receipt.payloadHash ?? archiveHash ?? 'unknown',
+        path: installedPath,
+        requiredBy: [`root:${identity}`],
+        installedAt: now,
+      },
+    },
+    resolvedAt: now,
+  });
 }
 
 async function writeJsonAtomic(target: string, value: unknown): Promise<void> {

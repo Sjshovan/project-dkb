@@ -4,6 +4,16 @@ import path from 'node:path';
 const root = path.resolve('.');
 const workspaceRoots = await discoverWorkspaces();
 const errors = [];
+const retiredProductPaths = [
+  'apps/cli/src/registry/packageRegistry.ts',
+  'apps/cli/src/registry/server.ts',
+  'apps/cli/src/mcp/server.ts',
+  'apps/cli/src/mcp/tools.ts',
+];
+
+for (const retiredPath of retiredProductPaths) {
+  if (await exists(path.join(root, retiredPath))) errors.push(`${retiredPath} is a retired product path`);
+}
 
 for (const workspace of workspaceRoots) {
   const files = await listTypeScript(path.join(workspace.root, 'src'));
@@ -74,4 +84,13 @@ function relativePath(target) {
 function dependencyName(specifier) {
   const segments = specifier.split('/');
   return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
+}
+
+async function exists(target) {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
 }

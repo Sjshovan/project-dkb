@@ -1,11 +1,11 @@
 # ChatGPT MCP Boundary
 
-DKB has two MCP surfaces with intentionally different authority.
+DKB has one Runtime-owned MCP tool surface over two transports.
 
 ## Local MCP
 
-`dkb mcp serve` uses stdio and exposes the full local protocol surface. It is
-intended for agents running under the user's local process controls.
+`dkb mcp serve` uses stdio and exposes only the Runtime's read-only `search`
+and `fetch` tools. Package lifecycle remains under explicit CLI control.
 
 ## Remote MCP
 

@@ -231,13 +231,14 @@ dkb list
 dkb uninstall @my-team/my-dkb
 ```
 
-For local CLI fixture work, the in-process development registry is still
-available explicitly:
+Start the complete developer-preview stack when you need a local Registry,
+compiler, Runtime, and MCP endpoint:
 
 ```bash
-dkb registry serve --root .dkb/mock-registry
-dkb publish ./my-dkb --registry .dkb/mock-registry
-dkb install @my-team/my-dkb --version 0.1.0 --registry .dkb/mock-registry --library ~/SecondBrain
+dkb stack up
+dkb stack status --check
+dkb publish ./my-dkb
+dkb install @my-team/my-dkb --version 0.1.0
 ```
 
 Retrieve knowledge:
@@ -259,8 +260,8 @@ Run the MCP server:
 dkb mcp serve
 ```
 
-The local stdio server keeps the full DKB tool surface. Remote agents receive a
-separate read-only HTTP surface with only `search` and `fetch`:
+Both the local stdio transport and remote HTTP transport are Runtime-owned and
+expose only the read-only `search` and `fetch` tools:
 
 ```bash
 DKB_LIBRARY_PATH=/knowledge/library \
