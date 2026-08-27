@@ -329,9 +329,33 @@ async function jsonCheck(
       name,
       ok: false,
       required,
-      message: error instanceof Error ? error.message : String(error),
+      message: registryFetchFailureMessage(error),
     };
   }
+}
+
+function registryFetchFailureMessage(error: unknown): string {
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return 'request timed out';
+  }
+
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (isObject(cause)) {
+    if (cause.code === 'ECONNREFUSED') {
+      return 'connection refused';
+    }
+    if (cause.code === 'ENOTFOUND') {
+      return 'host not found';
+    }
+    if (cause.code === 'ECONNRESET') {
+      return 'connection reset';
+    }
+    if (typeof cause.message === 'string' && cause.message.trim()) {
+      return cause.message.trim();
+    }
+  }
+
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

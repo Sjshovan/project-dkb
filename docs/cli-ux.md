@@ -32,6 +32,9 @@ event records for their lifetime.
   phase, print a compact result, and finish with `Done.`
 - Human tables use stable columns without ornamental separator rows. Empty
   collections print `(none)`.
+- Health and verification tables render `STATUS` as `OK` or `FAILED`, boolean
+  requirement fields as `YES` or `NO`, and transport response codes as `HTTP`.
+  Raw booleans remain unchanged in `--json` output.
 - Interactive terminals use restrained color for headings, paths, statuses,
   completion, warnings, and failures. `NO_COLOR`, `NODE_DISABLE_COLORS`, and
   `FORCE_COLOR` follow Node's standard terminal-color behavior.
@@ -109,6 +112,11 @@ make no network calls unless `--check` is present. Offline results are table
 statuses, not command failures. Missing and offline records remain until
 explicitly unregistered. Unregistering is non-destructive, and stopping a local
 Runtime never unregisters it.
+
+Human inventory tables label the fallback marker `DEFAULT`, not `SELECTED` or
+`CURRENT`. The word is intentional: explicit flags, environment variables, and
+a nearer Library can override that default for one command. Structured JSON
+continues to expose the stable `selected` field from `dkb.host.v1`.
 
 `dkb init` registers its Library and configured Registry. Commands that use a
 valid older Library register it opportunistically. DKB never scans disks or

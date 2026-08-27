@@ -402,13 +402,13 @@ function renderArray(values: unknown[]): string[] {
   }
 
   const widths = keys.map((key) => Math.max(
-    humanKey(key).length,
+    tableHeader(key, keys).length,
     ...rows.map((row) => formatFieldValue(key, row[key]).length),
   ));
   const line = (cells: string[]) => cells.map((cell, index) => cell.padEnd(widths[index]!)).join('  ').trimEnd();
 
   return [
-    line(keys.map((key) => humanKey(key).toUpperCase())),
+    line(keys.map((key) => tableHeader(key, keys).toUpperCase())),
     ...rows.map((row) => line(keys.map((key) => formatFieldValue(key, row[key])))),
   ];
 }
@@ -428,12 +428,34 @@ function formatScalar(value: unknown): string {
 }
 
 function formatFieldValue(key: string, value: unknown): string {
+  if (key === 'ok' && typeof value === 'boolean') {
+    return value ? 'OK' : 'FAILED';
+  }
+  if (key === 'required' && typeof value === 'boolean') {
+    return value ? 'YES' : 'NO';
+  }
+
   const formatted = formatScalar(value);
 
   return key === 'status' ? formatted.replace(/_/g, ' ') : formatted;
 }
 
+function tableHeader(key: string, keys: string[]): string {
+  if (key === 'ok') {
+    return 'Status';
+  }
+  if (key === 'status' && keys.includes('ok')) {
+    return 'HTTP';
+  }
+
+  return humanKey(key);
+}
+
 function humanKey(value: string): string {
+  if (value === 'ok') {
+    return 'Status';
+  }
+
   return value
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')

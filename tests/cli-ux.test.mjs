@@ -14,6 +14,7 @@ import {
   configuredRegistry,
   normalizeRegistryUrl,
   libraryRegistryConfigPath,
+  verifyRegistryEndpoint,
   writeConfiguredRegistryUrl,
 } from '../dist/src/registry/config.js';
 import { preflightDkbInstall } from '../dist/src/registry/packageRegistry.js';
@@ -34,6 +35,19 @@ test('human summaries render collections as aligned tables', () => {
     'PACKAGE ID  VERSION  STATUS',
     'alpha       1.0.0    published',
     'beta        2.0.0    published',
+  ]);
+});
+
+test('health-check tables use status language instead of raw booleans', () => {
+  assert.deepEqual(humanSummary({
+    checks: [
+      { name: 'public signing keys', ok: true, required: true, status: 200 },
+      { name: 'package listing API', ok: false, required: true, status: 503, message: 'HTTP 503' },
+    ],
+  }), [
+    'NAME                 STATUS  REQUIRED  HTTP  MESSAGE',
+    'public signing keys  OK      YES       200   -',
+    'package listing API  FAILED  YES       503   HTTP 503',
   ]);
 });
 
@@ -244,6 +258,53 @@ test('registry use saves an unreachable URL and reports how to retry verificatio
     await close(server);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('registry status presents an overall status and conventional check columns', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-status-table-'));
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.url === '/.well-known/dkb-registry-keys.json') {
+      response.end(JSON.stringify({ keys: [] }));
+      return;
+    }
+    response.statusCode = request.url === '/api/registry/packages' ? 503 : 404;
+    response.end(JSON.stringify({ message: 'Unavailable' }));
+  });
+
+  try {
+    await listen(server);
+    const address = server.address();
+    assert.notEqual(typeof address, 'string');
+    const registryUrl = `http://127.0.0.1:${address.port}`;
+    const result = await runCli(['registry', 'status', '--url', registryUrl], {}, tempRoot);
+    const output = stripAnsi(result.stdout);
+
+    assert.equal(result.code, 1);
+    assert.match(output, new RegExp(`Registry: ${escapeRegExp(registryUrl)}`));
+    assert.match(output, /Status: FAILED/);
+    assert.match(output, /NAME\s+STATUS\s+REQUIRED\s+HTTP\s+MESSAGE/);
+    assert.match(output, /public signing keys\s+OK\s+YES\s+200/);
+    assert.match(output, /package listing API\s+FAILED\s+YES\s+503\s+HTTP 503/);
+    assert.doesNotMatch(output, /\bOK\s+REQUIRED\b/);
+  } finally {
+    await close(server);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('registry verification reports connection refusal instead of a generic fetch failure', async () => {
+  const server = http.createServer();
+  await listen(server);
+  const address = server.address();
+  assert.notEqual(typeof address, 'string');
+  const registryUrl = `http://127.0.0.1:${address.port}`;
+  await close(server);
+
+  const verification = await verifyRegistryEndpoint(registryUrl);
+
+  assert.equal(verification.ok, false);
+  assert.ok(verification.checks.every((check) => check.message === 'connection refused'));
 });
 
 test('serve initialization uses the same offline-safe registry configuration path', async () => {

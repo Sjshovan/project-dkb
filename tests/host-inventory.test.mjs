@@ -194,12 +194,15 @@ test('focused host commands and selected Library work from an unrelated director
     const libraries = await runCli(['--json', 'library', 'list'], environment, unrelated);
     const registries = await runCli(['--json', 'registry', 'list'], environment, unrelated);
     const packages = await runCli(['--json', 'list'], environment, unrelated);
+    const humanLibraries = await runCli(['library', 'list'], environment, unrelated);
 
     assert.equal(libraries.code, 0, libraries.stderr);
     assert.equal(JSON.parse(libraries.stdout).selected, 'consumer');
     assert.equal(JSON.parse(registries.stdout).registries[0].usedBy[0], 'consumer');
     assert.equal(packages.code, 0, packages.stderr);
     assert.equal(JSON.parse(packages.stdout).libraryRoot, await fs.realpath(libraryRoot));
+    assert.match(humanLibraries.stdout, /DEFAULT\s+NAME\s+STATUS\s+REGISTRY\s+PATH/);
+    assert.doesNotMatch(humanLibraries.stdout, /SELECTED/);
   });
 });
 
@@ -218,11 +221,16 @@ test('offline Registry and Runtime checks report status without failing the inve
 
     const registries = await runCli(['--json', 'registry', 'list', '--check'], environment, root);
     const runtimes = await runCli(['--json', 'runtime', 'list', '--check'], environment, root);
+    const humanRegistries = await runCli(['registry', 'list'], environment, root);
+    const humanRuntimes = await runCli(['runtime', 'list'], environment, root);
 
     assert.equal(registries.code, 0, registries.stderr);
     assert.equal(runtimes.code, 0, runtimes.stderr);
     assert.equal(JSON.parse(registries.stdout).registries[0].status, 'unavailable');
     assert.equal(JSON.parse(runtimes.stdout).runtimes[0].status, 'offline');
+    assert.match(humanRegistries.stdout, /DEFAULT\s+NAME\s+STATUS\s+USED BY\s+URL/);
+    assert.match(humanRuntimes.stdout, /DEFAULT\s+NAME\s+KIND\s+STATUS\s+LIBRARY\s+URL/);
+    assert.doesNotMatch(`${humanRegistries.stdout}${humanRuntimes.stdout}`, /SELECTED/);
   });
 });
 

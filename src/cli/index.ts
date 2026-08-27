@@ -759,10 +759,10 @@ registry
     const configured = await configuredRegistry({ url: options.url, root: options.root });
     const verification = await verifyRegistryEndpoint(configured.url);
 
-    printJson({
+    presenter().print({
       registry: configured,
       verification,
-    });
+    }, summarizeRegistryStatus);
 
     if (!verification.ok) {
       process.exitCode = 1;
@@ -2482,13 +2482,13 @@ function summarizeHostLibraries(value: unknown): string[] {
 
   return [
     `inventory: ${String(result.inventoryPath ?? '-')}`,
-    `selected: ${String(result.selected ?? 'none')}`,
+    `default: ${String(result.selected ?? 'none')}`,
     '',
     ...humanSummary({
       results: libraries.map((value) => {
         const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
         return {
-          selected: item.selected ? '*' : '',
+          default: item.selected ? '*' : '',
           name: item.name ?? '-',
           status: item.status ?? '-',
           registry: item.registry ?? '-',
@@ -2505,14 +2505,14 @@ function summarizeHostRegistries(value: unknown): string[] {
 
   return [
     `inventory: ${String(result.inventoryPath ?? '-')}`,
-    `selected: ${String(result.selected ?? 'none')}`,
+    `default: ${String(result.selected ?? 'none')}`,
     `network checks: ${result.checked ? 'enabled' : 'skipped'}`,
     '',
     ...humanSummary({
       results: registries.map((value) => {
         const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
         return {
-          selected: item.selected ? '*' : '',
+          default: item.selected ? '*' : '',
           name: item.name ?? '-',
           status: item.status ?? '-',
           usedBy: Array.isArray(item.usedBy) && item.usedBy.length > 0 ? item.usedBy.join(', ') : '-',
@@ -2529,14 +2529,14 @@ function summarizeHostRuntimes(value: unknown): string[] {
 
   return [
     `inventory: ${String(result.inventoryPath ?? '-')}`,
-    `selected: ${String(result.selected ?? 'none')}`,
+    `default: ${String(result.selected ?? 'none')}`,
     `network checks: ${result.checked ? 'enabled' : 'skipped'}`,
     '',
     ...humanSummary({
       results: runtimes.map((value) => {
         const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
         return {
-          selected: item.selected ? '*' : '',
+          default: item.selected ? '*' : '',
           name: item.name ?? '-',
           kind: item.kind ?? '-',
           status: item.status ?? '-',
@@ -2712,6 +2712,23 @@ function summarizeRegistryConfiguration(value: unknown): string[] {
     result.verification ? `verification: ${result.verification.ok ? 'passed' : 'failed'}` : 'verification: skipped',
     typeof result.warning === 'string' ? `warning: ${result.warning}` : '',
     typeof result.retryCommand === 'string' ? `retry: ${result.retryCommand}` : '',
+  ];
+}
+
+function summarizeRegistryStatus(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const registry = result.registry && typeof result.registry === 'object' ? result.registry as Record<string, unknown> : {};
+  const verification = result.verification && typeof result.verification === 'object'
+    ? result.verification as Record<string, unknown>
+    : {};
+  const checks = Array.isArray(verification.checks) ? verification.checks : [];
+
+  return [
+    `registry: ${String(registry.url ?? '-')}`,
+    `source: ${String(registry.source ?? '-')}`,
+    `status: ${verification.ok === true ? 'OK' : 'FAILED'}`,
+    '',
+    ...humanSummary({ checks }),
   ];
 }
 
