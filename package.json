@@ -18,6 +18,14 @@
     "proof:meilisearch": "npm run build && node scripts/prove-meilisearch-lifecycle.mjs",
     "temp:audit": "node scripts/clean-dkb-temp.mjs",
     "temp:clean": "node scripts/clean-dkb-temp.mjs --apply",
+    "changeset": "changeset",
+    "version:packages": "changeset version",
+    "version:status": "changeset status",
+    "graph:write": "node scripts/workspace-graph.mjs",
+    "graph:check": "node scripts/workspace-graph.mjs --check",
+    "boundaries:check": "node scripts/check-package-boundaries.mjs",
+    "agents:check": "node scripts/check-agent-guidance.mjs",
+    "package:check": "node scripts/check-packages.mjs",
     "dkb": "node apps/cli/dist/cli/index.js",
     "mcp": "node apps/cli/dist/cli/index.js mcp serve"
   },
@@ -26,9 +34,9 @@
     "@dkb/library": "0.1.0",
     "@dkb/pipeline": "0.1.0",
     "@dkb/protocol": "1.0.0",
+    "@dkb/providers-bundled": "0.1.0",
     "@dkb/registry-client": "0.1.0",
     "@dkb/runtime": "0.1.0",
-    "@dkb/providers-bundled": "0.1.0",
     "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
@@ -46,6 +54,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.1",
     "@types/cli-progress": "^3.11.6",
     "@types/node": "^22.15.0",
     "@types/pg": "^8.21.0",

@@ -23,7 +23,7 @@ __pycache__/
 
 # local labs and scratch runs
 storage/
-src/testing/
+**/src/testing/
 Dockerfile
 docker-compose.yml
 .dockerignore

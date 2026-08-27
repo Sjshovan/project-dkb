@@ -1,0 +1,86 @@
+{
+  "format": "dkb.workspace-graph.v1",
+  "packages": [
+    {
+      "name": "@dkb/cli",
+      "version": "0.1.0",
+      "root": "apps/cli"
+    },
+    {
+      "name": "@dkb/compiler",
+      "version": "0.1.0",
+      "root": "services/compiler"
+    },
+    {
+      "name": "@dkb/library",
+      "version": "0.1.0",
+      "root": "packages/library"
+    },
+    {
+      "name": "@dkb/pipeline",
+      "version": "0.1.0",
+      "root": "packages/pipeline"
+    },
+    {
+      "name": "@dkb/protocol",
+      "version": "1.0.0",
+      "root": "packages/protocol"
+    },
+    {
+      "name": "@dkb/providers-bundled",
+      "version": "0.1.0",
+      "root": "providers/bundled"
+    },
+    {
+      "name": "@dkb/registry-client",
+      "version": "0.1.0",
+      "root": "packages/registry-client"
+    },
+    {
+      "name": "@dkb/runtime",
+      "version": "0.1.0",
+      "root": "services/runtime"
+    }
+  ],
+  "dependencies": {
+    "@dkb/cli": [
+      "@dkb/compiler",
+      "@dkb/library",
+      "@dkb/pipeline",
+      "@dkb/protocol",
+      "@dkb/providers-bundled",
+      "@dkb/registry-client",
+      "@dkb/runtime"
+    ],
+    "@dkb/compiler": [
+      "@dkb/library",
+      "@dkb/pipeline",
+      "@dkb/protocol",
+      "@dkb/providers-bundled",
+      "@dkb/registry-client"
+    ],
+    "@dkb/library": [
+      "@dkb/pipeline",
+      "@dkb/protocol",
+      "@dkb/providers-bundled"
+    ],
+    "@dkb/pipeline": [
+      "@dkb/protocol"
+    ],
+    "@dkb/protocol": [],
+    "@dkb/providers-bundled": [
+      "@dkb/pipeline",
+      "@dkb/protocol"
+    ],
+    "@dkb/registry-client": [
+      "@dkb/protocol"
+    ],
+    "@dkb/runtime": [
+      "@dkb/library",
+      "@dkb/pipeline",
+      "@dkb/protocol",
+      "@dkb/providers-bundled",
+      "@dkb/registry-client"
+    ]
+  }
+}
