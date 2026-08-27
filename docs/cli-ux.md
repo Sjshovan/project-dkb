@@ -35,9 +35,9 @@ event records for their lifetime.
 - Root, command-group, and leaf-command help use the same semantic color system:
   cyan section headings and signatures, white descriptions, and a bold usage
   label. `NO_COLOR` keeps every help level plain.
-- Health and verification tables render `STATUS` as `OK` or `FAILED`, boolean
-  requirement fields as `YES` or `NO`, and transport response codes as `HTTP`.
-  Raw booleans remain unchanged in `--json` output.
+- Health and verification tables render `STATUS` as `OK` or `FAILED`, Registry
+  verification impact as `BLOCKING` or `OPTIONAL`, and transport response codes
+  as `HTTP`. Raw booleans remain unchanged in `--json` output.
 - Interactive terminals use restrained color for headings, paths, statuses,
   completion, warnings, and failures. `NO_COLOR`, `NODE_DISABLE_COLORS`, and
   `FORCE_COLOR` follow Node's standard terminal-color behavior.

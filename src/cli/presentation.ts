@@ -221,8 +221,8 @@ function successLine(value: string): string {
 function styleStatusWords(value: string): string {
   return value
     .replace(/\b(installed|published|ready|healthy|passed|complete|completed|ok|active|online|selected)\b/giu, (match) => terminalText('green', match))
-    .replace(/\b(incomplete|pending|warning|degraded|skipped|known)\b/giu, (match) => terminalText('yellow', match))
-    .replace(/\b(failed|error|invalid|unhealthy|missing|offline|unavailable|incompatible)\b/giu, (match) => terminalText('red', match));
+    .replace(/\b(incomplete|pending|warning|degraded|skipped|known|optional)\b/giu, (match) => terminalText('yellow', match))
+    .replace(/\b(failed|error|invalid|unhealthy|missing|offline|unavailable|incompatible|blocking)\b/giu, (match) => terminalText('red', match));
 }
 
 function capitalizeLabel(line: string): string {
@@ -431,10 +431,6 @@ function formatFieldValue(key: string, value: unknown): string {
   if (key === 'ok' && typeof value === 'boolean') {
     return value ? 'OK' : 'FAILED';
   }
-  if (key === 'required' && typeof value === 'boolean') {
-    return value ? 'YES' : 'NO';
-  }
-
   const formatted = formatScalar(value);
 
   return key === 'status' ? formatted.replace(/_/g, ' ') : formatted;

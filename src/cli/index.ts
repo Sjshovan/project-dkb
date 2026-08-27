@@ -2655,7 +2655,19 @@ function summarizeRegistryStatus(value: unknown): string[] {
   const verification = result.verification && typeof result.verification === 'object'
     ? result.verification as Record<string, unknown>
     : {};
-  const checks = Array.isArray(verification.checks) ? verification.checks : [];
+  const checks = Array.isArray(verification.checks)
+    ? verification.checks.map((value) => {
+      const check = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+
+      return {
+        name: check.name ?? '-',
+        ok: check.ok === true,
+        impact: check.required === false ? 'OPTIONAL' : 'BLOCKING',
+        ...(check.status === undefined ? {} : { status: check.status }),
+        ...(check.message === undefined ? {} : { message: check.message }),
+      };
+    })
+    : [];
 
   return [
     `registry: ${String(registry.url ?? '-')}`,

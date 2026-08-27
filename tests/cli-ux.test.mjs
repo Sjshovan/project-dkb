@@ -38,16 +38,16 @@ test('human summaries render collections as aligned tables', () => {
   ]);
 });
 
-test('health-check tables use status language instead of raw booleans', () => {
+test('health-check tables describe operational impact instead of raw booleans', () => {
   assert.deepEqual(humanSummary({
     checks: [
-      { name: 'public signing keys', ok: true, required: true, status: 200 },
-      { name: 'package listing API', ok: false, required: true, status: 503, message: 'HTTP 503' },
+      { name: 'public signing keys', ok: true, impact: 'BLOCKING', status: 200 },
+      { name: 'package listing API', ok: false, impact: 'BLOCKING', status: 503, message: 'HTTP 503' },
     ],
   }), [
-    'NAME                 STATUS  REQUIRED  HTTP  MESSAGE',
-    'public signing keys  OK      YES       200   -',
-    'package listing API  FAILED  YES       503   HTTP 503',
+    'NAME                 STATUS  IMPACT    HTTP  MESSAGE',
+    'public signing keys  OK      BLOCKING  200   -',
+    'package listing API  FAILED  BLOCKING  503   HTTP 503',
   ]);
 });
 
@@ -283,10 +283,11 @@ test('registry status presents an overall status and conventional check columns'
     assert.equal(result.code, 1);
     assert.match(output, new RegExp(`Registry: ${escapeRegExp(registryUrl)}`));
     assert.match(output, /Status: FAILED/);
-    assert.match(output, /NAME\s+STATUS\s+REQUIRED\s+HTTP\s+MESSAGE/);
-    assert.match(output, /public signing keys\s+OK\s+YES\s+200/);
-    assert.match(output, /package listing API\s+FAILED\s+YES\s+503\s+HTTP 503/);
-    assert.doesNotMatch(output, /\bOK\s+REQUIRED\b/);
+    assert.match(output, /NAME\s+STATUS\s+IMPACT\s+HTTP\s+MESSAGE/);
+    assert.match(output, /public signing keys\s+OK\s+BLOCKING\s+200/);
+    assert.match(output, /package listing API\s+FAILED\s+BLOCKING\s+503\s+HTTP 503/);
+    assert.match(output, /health endpoint\s+FAILED\s+OPTIONAL\s+404\s+HTTP 404/);
+    assert.doesNotMatch(output, /\bREQUIRED\b/);
   } finally {
     await close(server);
     await fs.rm(tempRoot, { recursive: true, force: true });
