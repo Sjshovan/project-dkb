@@ -3,10 +3,22 @@ import path from 'node:path';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { resolveFrom } from '@dkb/protocol/paths.js';
-import type { DkbProviderHost, DkbProviderHostDescription } from '../providers/host.js';
-import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from '../providers/types.js';
-import { DKB_FAISS_PLUGIN_ID, DKB_HYBRID_RETRIEVAL_PLUGIN_ID } from '../providers/bundled.js';
-import type { LlamaIndexCompilerResult } from '../compiler/llamaindex.js';
+import type { DkbProviderHost, DkbProviderHostDescription } from './host.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
+
+const DEFAULT_INDEX_PROVIDER_ID = '@dkb/faiss';
+const DEFAULT_RETRIEVAL_PROVIDER_ID = '@dkb/hybrid';
+
+export interface DkbCompilerProfileResult {
+  compiler: {
+    id: string;
+    image: string;
+    model: string;
+  };
+  records: ReadonlyArray<{
+    embedding: ArrayLike<number>;
+  }>;
+}
 
 export const DKB_RETRIEVAL_PROFILE_LOCK_PATH = 'dkb-profile.lock.json';
 export const DKB_RETRIEVAL_PROFILE_FORMAT = 'dkb.retrieval-profile.v2';
@@ -111,7 +123,7 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
 
 export function retrievalProfileLockForCompilerResults(
   desired: DkbResolvedRetrievalProfile,
-  results: LlamaIndexCompilerResult[],
+  results: readonly DkbCompilerProfileResult[],
   options: {
     compilerImageDigest?: string | null;
     modelRevision?: string | null;
@@ -176,12 +188,12 @@ export function retrievalProfileLockForCompilerResults(
     providers: desired.providers,
     processors: desired.processors,
     index: {
-      provider: desired.providers.find((provider) => provider.kind === 'index')?.id ?? DKB_FAISS_PLUGIN_ID,
+      provider: desired.providers.find((provider) => provider.kind === 'index')?.id ?? DEFAULT_INDEX_PROVIDER_ID,
       mode: desired.indexMode,
       format: desired.compatibility.indexFormat,
     },
     retrieval: {
-      provider: desired.providers.find((provider) => provider.kind === 'retrieval')?.id ?? DKB_HYBRID_RETRIEVAL_PLUGIN_ID,
+      provider: desired.providers.find((provider) => provider.kind === 'retrieval')?.id ?? DEFAULT_RETRIEVAL_PROVIDER_ID,
       protocol: desired.compatibility.protocol,
     },
   };

@@ -26,7 +26,7 @@ import {
 } from '../signing/index.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
-import { assertMatchingRetrievalProfiles, maybeReadRetrievalProfileLock, writeRetrievalProfileLock } from '../profiles/retrievalProfile.js';
+import { assertMatchingRetrievalProfiles, maybeReadRetrievalProfileLock, writeRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 
 export const MOCK_REGISTRY_DB = 'registry.sqlite';
 export const MOCK_REGISTRY_PACKAGES_DIR = 'packages';

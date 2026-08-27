@@ -8,7 +8,7 @@ import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '../dist/src/indexes/faissStore.js';
 import { validateMeilisearchPackageArtifact } from '../dist/src/indexes/meilisearchProvider.js';
 import { getQueryContext, closeQueryContext } from '../dist/src/indexes/queryContext.js';
-import { readRetrievalProfileLock } from '../dist/src/profiles/retrievalProfile.js';
+import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 import { semanticSearch } from '../dist/src/read/navigation.js';
 import { loadDkb, loadLibrary } from '@dkb/protocol/manifest.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '../dist/src/registry/archive.js';

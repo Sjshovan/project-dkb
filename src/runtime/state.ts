@@ -1,4 +1,4 @@
-﻿import fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '../signing/index.js';
 import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '../artifacts/manifest.js';
@@ -24,9 +24,9 @@ import {
   maybeReadRetrievalProfileLock,
   writeRetrievalProfileLock,
   type DkbRetrievalProfileLock,
-} from '../profiles/retrievalProfile.js';
+} from '@dkb/pipeline/profile.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
-import type { DkbIndexMutationResult } from '../providers/types.js';
+import type { DkbIndexMutationResult } from '@dkb/pipeline/types.js';
 
 // Runtime snapshots are invalidated by managed mutations, not revalidated on
 // every request. This keeps the hot MCP path independent of artifact I/O.

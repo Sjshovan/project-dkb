@@ -4,45 +4,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
 import type { DkbReadOperation, DkbReadQuery, DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable } from '@dkb/protocol/types.js';
+import type { IndexedSourceAsset, IndexedSourceUnit } from '@dkb/pipeline/types.js';
 import { tokenize } from '../router/scoring.js';
+
+export type { IndexedSourceAsset, IndexedSourceUnit } from '@dkb/pipeline/types.js';
 
 export const SOURCE_INDEX_PATH = `${DKB_ARTIFACTS_DIR}/source.index`;
 export const SOURCE_GRAPH_PATH = `${DKB_ARTIFACTS_DIR}/source.index.graph`;
 export const SOURCE_VECTOR_PATH = `${DKB_ARTIFACTS_DIR}/source.index.vector.json`;
-
-export interface IndexedSourceAsset {
-  id: string;
-  dkbId: string;
-  storeId: string;
-  type: DkbStoreType;
-  locator: Record<string, unknown>;
-  title: string;
-  hash: string;
-  updatedAt: string;
-}
-
-export interface IndexedSourceUnit {
-  id: string;
-  evidenceId?: string;
-  assetId: string;
-  dkbId: string;
-  packageVersion?: string;
-  storeId: string;
-  type: DkbStoreType;
-  locator: Record<string, unknown>;
-  assetLocator: Record<string, unknown>;
-  title: string;
-  text: string;
-  keywords: string[];
-  capabilities: KnowledgeCapabilityProfile;
-  queryable?: KnowledgeQueryable;
-  hash: string;
-  updatedAt: string;
-  chunkOrdinal: number;
-  chunkStart: number;
-  chunkEnd: number;
-  heading?: string;
-}
 
 export interface IndexedSourceEdge {
   sourceId: string;

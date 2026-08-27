@@ -14,7 +14,7 @@ import type {
   DkbIndexMutationResult,
   DkbIndexRuntime,
   DkbProviderBuildReceipt,
-} from '../providers/types.js';
+} from '@dkb/pipeline/types.js';
 import { sourceUnitFromPipelineRecord } from '../providers/records.js';
 import { sourceAssetsFromChunks, type IndexedSourceUnit } from './sourceIndex.js';
 

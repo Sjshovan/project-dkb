@@ -14,11 +14,11 @@ import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '@dkb/protocol/path
 import { DKB_ARTIFACT_MANIFEST_PATH } from '../artifacts/manifest.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '../signing/index.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from './archive.js';
-import { readRetrievalProfileLock } from '../profiles/retrievalProfile.js';
-import { resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
+import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
+import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
-import { resolveContextConfig } from '../providers/config.js';
-import { DkbProviderHost } from '../providers/host.js';
+import { resolveContextConfig } from '@dkb/pipeline/config.js';
+import { DkbProviderHost } from '@dkb/pipeline/host.js';
 
 const DKB_COMPILER_RESULT_MEDIA_TYPE = 'application/vnd.dkb.compiler-result+gzip';
 const DKB_COMPILER_RESULT_HEADER = 'x-dkb-compiler-result';

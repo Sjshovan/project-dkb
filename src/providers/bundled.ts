@@ -9,8 +9,8 @@ import {
   startLlamaIndexCompilerService,
   stopLlamaIndexCompilerService,
 } from '../compiler/llamaindex.js';
-import type { DkbBundledPlugin } from './host.js';
-import type { DkbEmbeddingProvider, DkbIndexRuntime, DkbIngestionProvider } from './types.js';
+import type { DkbBundledPlugin } from '@dkb/pipeline/host.js';
+import type { DkbEmbeddingProvider, DkbIndexRuntime, DkbIngestionProvider } from '@dkb/pipeline/types.js';
 import {
   buildFaissRuntimeSnapshot,
   closeFaissSnapshot,

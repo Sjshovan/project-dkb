@@ -16,7 +16,7 @@ import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   readRetrievalProfileLock,
   type DkbRetrievalProfileLock,
-} from '../profiles/retrievalProfile.js';
+} from '@dkb/pipeline/profile.js';
 import type { DkbLockManifest } from '@dkb/protocol/types.js';
 
 export const DKB_ARTIFACT_MANIFEST_VERSION = 1;

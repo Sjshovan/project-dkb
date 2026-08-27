@@ -16,7 +16,7 @@ import { capabilitiesForSourceType, sourceAssetsFromChunks, type IndexedSourceAs
 import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { tokenize } from '../router/scoring.js';
 import { sourceUnitFromPipelineRecord } from '../providers/records.js';
-import type { DkbCompiledPipeline } from '../providers/types.js';
+import type { DkbCompiledPipeline } from '@dkb/pipeline/types.js';
 import { LLAMAINDEX_COMPILER_IMAGE } from '../compiler/llamaindex.js';
 
 const execFile = promisify(execFileCallback);

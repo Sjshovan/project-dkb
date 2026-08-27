@@ -3,7 +3,7 @@ import { capabilitiesForSourceType, type IndexedSourceUnit } from '../indexes/so
 import { DkbError } from '@dkb/protocol/errors.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { tokenize } from '../router/scoring.js';
-import type { DkbPipelineChunk, DkbPipelineDocument, DkbPipelineRecord } from './types.js';
+import type { DkbPipelineChunk, DkbPipelineDocument, DkbPipelineRecord } from '@dkb/pipeline/types.js';
 
 const EPOCH = '1970-01-01T00:00:00.000Z';
 

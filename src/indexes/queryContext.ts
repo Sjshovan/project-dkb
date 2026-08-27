@@ -6,9 +6,9 @@ import { vectorDocumentsForSourceUnits, type VectorDocument } from './vectorStor
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LexicalRuntimeSnapshot } from './lexicalStore.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
-import { DkbProviderHost } from '../providers/host.js';
-import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime } from '../providers/types.js';
-import { resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
+import { DkbProviderHost } from '@dkb/pipeline/host.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime } from '@dkb/pipeline/types.js';
+import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 
 export interface QueryContext {
   root: string;

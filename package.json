@@ -24,8 +24,8 @@
     "compiler/llamaindex/Dockerfile.gpu"
   ],
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && tsc -p tsconfig.build.json",
-    "check": "npm run check --workspace @dkb/protocol && tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/clean-dist.mjs && npm run build --workspace @dkb/protocol && npm run build --workspace @dkb/pipeline && tsc -p tsconfig.build.json",
+    "check": "npm run check --workspace @dkb/protocol && npm run check --workspace @dkb/pipeline && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "proof:pipeline": "npm run build && node scripts/prove-provider-pipeline.mjs",
     "proof:lifecycle": "npm run build && node scripts/prove-package-lifecycle.mjs",
@@ -36,6 +36,7 @@
     "mcp": "node dist/src/cli/index.js mcp serve"
   },
   "dependencies": {
+    "@dkb/pipeline": "0.1.0",
     "@dkb/protocol": "1.0.0",
     "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/client": "^2.0.0",

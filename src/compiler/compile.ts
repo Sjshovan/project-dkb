@@ -28,13 +28,13 @@ import {
   writeRetrievalProfileLock,
   type DkbResolvedRetrievalProfile,
   type DkbRetrievalProfileLock,
-} from '../profiles/retrievalProfile.js';
+} from '@dkb/pipeline/profile.js';
 import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '../providers/bundled.js';
-import { DkbProviderHost } from '../providers/host.js';
+import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import { sourceUnitFromPipelineRecord } from '../providers/records.js';
 import { compileDkbWithProviderHost } from '../providers/runner.js';
-import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '../providers/types.js';
+import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@dkb/pipeline/types.js';
 import { loadFaissPackageArtifact } from '../indexes/faissStore.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
@@ -232,7 +232,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
       ...registry.collections.flatMap((collection) => collection.dkbs),
       ...registry.dkbs,
     ]);
-    const existingProfile = await import('../profiles/retrievalProfile.js').then((module) => module.maybeReadRetrievalProfileLock(resolvedRoot));
+    const existingProfile = await import('@dkb/pipeline/profile.js').then((module) => module.maybeReadRetrievalProfileLock(resolvedRoot));
     const profileDrift = !existingProfile
       || existingProfile.profile.configDigest !== desiredProfile.configDigest
       || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;

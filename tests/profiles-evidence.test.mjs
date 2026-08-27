@@ -7,7 +7,7 @@ import {
   assertMatchingRetrievalProfiles,
   retrievalProfileLockForCompilerResults,
   validateRetrievalProfileLock,
-} from '../dist/src/profiles/retrievalProfile.js';
+} from '@dkb/pipeline/profile.js';
 import { buildEvidenceIr, validateEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { compileComposeProject, verifyComposeProject } from '../dist/src/compiler/compile.js';
 import {

@@ -13,11 +13,11 @@ import {
   writeDkbContextConfig,
   type DkbContextConfig,
   type DkbPipelineTargetConfig,
-} from './config.js';
+} from '@dkb/pipeline/config.js';
 import { BUNDLED_PROVIDER_PLUGINS } from './bundled.js';
-import { DkbProviderHost, pluginPath } from './host.js';
-import type { DkbPluginModule } from './types.js';
-import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '../profiles/retrievalProfile.js';
+import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
+import type { DkbPluginModule } from '@dkb/pipeline/types.js';
+import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 
 export type DkbPluginScope = 'local' | 'global';

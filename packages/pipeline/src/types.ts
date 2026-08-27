@@ -1,5 +1,9 @@
-import type { LoadedDkb } from '@dkb/protocol/types.js';
-import type { IndexedSourceAsset, IndexedSourceUnit } from '../indexes/sourceIndex.js';
+import type {
+  DkbStoreType,
+  KnowledgeCapabilityProfile,
+  KnowledgeQueryable,
+  LoadedDkb,
+} from '@dkb/protocol/types.js';
 
 export type DkbProviderKind = 'ingestion' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
 export type DkbProcessorStage = 'document' | 'chunk' | 'record';
@@ -40,6 +44,40 @@ export interface DkbProviderBuildReceipt {
   providerVersion: string;
   build: Record<string, unknown>;
   compatibility?: Record<string, unknown>;
+}
+
+export interface IndexedSourceAsset {
+  id: string;
+  dkbId: string;
+  storeId: string;
+  type: DkbStoreType;
+  locator: Record<string, unknown>;
+  title: string;
+  hash: string;
+  updatedAt: string;
+}
+
+export interface IndexedSourceUnit {
+  id: string;
+  evidenceId?: string;
+  assetId: string;
+  dkbId: string;
+  packageVersion?: string;
+  storeId: string;
+  type: DkbStoreType;
+  locator: Record<string, unknown>;
+  assetLocator: Record<string, unknown>;
+  title: string;
+  text: string;
+  keywords: string[];
+  capabilities: KnowledgeCapabilityProfile;
+  queryable?: KnowledgeQueryable;
+  hash: string;
+  updatedAt: string;
+  chunkOrdinal: number;
+  chunkStart: number;
+  chunkEnd: number;
+  heading?: string;
 }
 
 export interface DkbIngestionProvider {

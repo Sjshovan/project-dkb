@@ -5,6 +5,8 @@
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
+      "@dkb/pipeline": ["packages/pipeline/src/index.ts"],
+      "@dkb/pipeline/*": ["packages/pipeline/src/*"],
       "@dkb/protocol": ["packages/protocol/src/index.ts"],
       "@dkb/protocol/*": ["packages/protocol/src/*"]
     }

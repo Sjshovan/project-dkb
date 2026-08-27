@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -1863,7 +1863,7 @@ pipeline
   .option('--target <name>', 'Show a configured target other than the active target')
   .action(async (target: string, options: { target?: string }) => {
     const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
-      import('../providers/host.js'),
+      import('@dkb/pipeline/host.js'),
       import('../providers/bundled.js'),
     ]);
     const host = await DkbProviderHost.create({ root: path.resolve(target), target: options.target, bundled: BUNDLED_PROVIDER_PLUGINS });
@@ -2969,20 +2969,20 @@ async function runIngestionLifecycle(
   options?: { restart?: boolean },
 ): Promise<unknown> {
   const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
-    import('../providers/host.js'),
+    import('@dkb/pipeline/host.js'),
     import('../providers/bundled.js'),
   ]);
   const host = await DkbProviderHost.create({ root: path.resolve(root), ...(target ? { target } : {}), bundled: BUNDLED_PROVIDER_PLUGINS });
 
   try {
-    const provider = host.provider<import('../providers/types.js').DkbIngestionProvider>('ingestion');
+    const provider = host.provider<import('@dkb/pipeline/types.js').DkbIngestionProvider>('ingestion');
     const action = provider.lifecycle?.[operation];
 
     if (!action) {
       throw new DkbError(`Selected ingestion provider ${host.config.target.ingestion} does not support compiler ${operation}`);
     }
     return operation === 'start'
-      ? await (action as NonNullable<import('../providers/types.js').DkbProviderLifecycle['start']>)(options)
+      ? await (action as NonNullable<import('@dkb/pipeline/types.js').DkbProviderLifecycle['start']>)(options)
       : await (action as () => Promise<unknown>)();
   } finally {
     await host.dispose();

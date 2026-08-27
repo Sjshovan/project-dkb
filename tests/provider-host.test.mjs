@@ -3,15 +3,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { DKB_CONFIG_FORMAT, resolveContextConfig } from '../dist/src/providers/config.js';
-import { DkbProviderHost, pluginPath } from '../dist/src/providers/host.js';
+import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@dkb/pipeline/config.js';
+import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
 import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../dist/src/providers/management.js';
 import { compileDkbWithProviderHost } from '../dist/src/providers/runner.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { compileComposeProject } from '../dist/src/compiler/compile.js';
 import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { readSourceIndex } from '../dist/src/indexes/sourceIndex.js';
-import { readRetrievalProfileLock } from '../dist/src/profiles/retrievalProfile.js';
+import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 
 const allPlugin = {
   id: '@test/all',
