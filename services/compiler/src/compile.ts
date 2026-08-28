@@ -13,7 +13,7 @@ import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
-import { DKB_ARTIFACT_MANIFEST_PATH, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
+import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
 import {
   DKB_EVIDENCE_BUILD_IR,
   listPackageBuilds,
@@ -45,6 +45,19 @@ import { sourceUnitFromPipelineRecord } from '@dkb/providers-bundled/records.js'
 import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
 import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@dkb/pipeline/types.js';
 import { loadFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
+import {
+  summarizeBuildStorage,
+  summarizeEvidenceCorpus,
+  type DkbBuildStorageStatistics,
+  type DkbCorpusStatistics,
+  type DkbSourceStatistics,
+} from './buildStatistics.js';
+import {
+  assertDiskCapacity,
+  estimateIngestionWorkingBytes,
+  estimateRetrievalWorkingBytes,
+  type DkbDiskCapacityCheck,
+} from './diskCapacity.js';
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
 export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;
@@ -95,6 +108,20 @@ export interface CompileComposeProfile {
     total: number;
   };
   aggregateTimingsMs?: AtomicCompileArtifactTimings;
+  statistics?: {
+    corpus: DkbCorpusStatistics;
+    storage: DkbBuildStorageStatistics;
+    diskCapacity: {
+      ingestion?: DkbDiskCapacityCheck;
+      retrieval: DkbDiskCapacityCheck[];
+    };
+    providerStages: Array<{
+      packageId: string;
+      ingestionTimingsMs?: Record<string, number>;
+      ingestionWrapperTimingsMs?: Record<string, number>;
+      embeddingTimingsMs?: Record<string, number>;
+    }>;
+  };
 }
 
 export interface PreparedPackageBuildTarget {
@@ -163,6 +190,8 @@ interface CompilerArtifactState {
   result: LlamaIndexCompilerResult;
   compiled: DkbCompiledPipeline;
   evidence: DkbEvidenceIr;
+  corpus: DkbCorpusStatistics;
+  diskCapacity: DkbDiskCapacityCheck;
 }
 
 interface RegistryCompileState {
@@ -250,6 +279,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
     const lockPath = artifactLockPath(resolvedRoot);
     const sourceSnapshotStart = performance.now();
     const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
+    const sourceStatistics = sourceStatisticsForSnapshot(sourceSnapshot);
     const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
     const cacheLookupStart = performance.now();
     const allDkbs = uniqueDkbs([
@@ -266,6 +296,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
     const cacheLookupMs = elapsedMs(cacheLookupStart);
 
     if (cached) {
+      const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
       return {
         ...cached,
         profile: {
@@ -277,10 +308,20 @@ export async function compileComposeProject(root: string, options: CompileCompos
             compileCacheWrite: 0,
             total: elapsedMs(totalStart),
           },
+          ...(statistics ? { statistics: {
+            ...statistics,
+            diskCapacity: { retrieval: [] },
+            providerStages: [],
+          } } : {}),
         },
       };
     }
 
+    const ingestionCapacity = await assertDiskCapacity(
+      resolvedRoot,
+      estimateIngestionWorkingBytes(sourceStatistics.bytes),
+      `ingestion of ${registry.manifest.id}`,
+    );
     const collectStateStart = performance.now();
     const state = await collectRegistryState(registry, desiredProfile, contextRoot);
     const collectStateMs = elapsedMs(collectStateStart);
@@ -293,6 +334,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
       const lock = written.lock;
       await writeCompileCache(resolvedRoot, registry, sourceSnapshot, lockPath);
       const compileCacheWriteMs = elapsedMs(cacheWriteStart);
+      const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
 
       return {
         registryId: registry.manifest.id,
@@ -313,6 +355,14 @@ export async function compileComposeProject(root: string, options: CompileCompos
             total: elapsedMs(totalStart),
           },
           aggregateTimingsMs: written.timings,
+          ...(statistics ? { statistics: {
+            ...statistics,
+            diskCapacity: {
+              ingestion: ingestionCapacity,
+              retrieval: state.compilerArtifacts.map((artifact) => artifact.diskCapacity),
+            },
+            providerStages: providerStageStatistics(state),
+          } } : {}),
         },
       };
     } finally {
@@ -351,6 +401,13 @@ export async function compileRetrievalFromEvidence(
     if (packageEvidence.length !== evidence.evidence.length) {
       throw new DkbError(`Evidence Build identity does not match ${dkb.manifest.id}@${dkb.manifest.version}`);
     }
+    const sourceStatistics = sourceStatisticsForSnapshot(await quickSourceSnapshotForRegistry(registry));
+    const corpus = summarizeEvidenceCorpus(evidence, sourceStatistics);
+    const retrievalCapacity = await assertDiskCapacity(
+      resolvedRoot,
+      estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding.dimensions),
+      `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
+    );
     const providerHost = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS, target: desiredProfile.target });
 
     try {
@@ -365,6 +422,8 @@ export async function compileRetrievalFromEvidence(
         result,
         compiled,
         evidence,
+        corpus,
+        diskCapacity: retrievalCapacity,
       };
       const retrievalProfileLock = retrievalProfileLockForCompilerResults(desiredProfile, [result]);
       const state: RegistryCompileState = {
@@ -381,6 +440,7 @@ export async function compileRetrievalFromEvidence(
       };
       const written = await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs, 'faiss-package');
       const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
+      const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
 
       return {
         registryId: registry.manifest.id,
@@ -401,6 +461,11 @@ export async function compileRetrievalFromEvidence(
             total: elapsedMs(totalStart),
           },
           aggregateTimingsMs: written.timings,
+          ...(statistics ? { statistics: {
+            ...statistics,
+            diskCapacity: { retrieval: [retrievalCapacity] },
+            providerStages: providerStageStatistics(state),
+          } } : {}),
         },
       };
     } finally {
@@ -1053,6 +1118,76 @@ async function quickSourceSnapshotForRegistry(registry: LoadedLibrary): Promise<
   };
 }
 
+function sourceStatisticsForSnapshot(snapshot: QuickSourceSnapshot): DkbSourceStatistics {
+  return sourceStatisticsForStores(snapshot.sources);
+}
+
+function sourceStatisticsForStores(sources: readonly QuickStoreSnapshot[]): DkbSourceStatistics {
+  let files = 0;
+  let bytes = 0;
+
+  for (const source of sources) {
+    for (const entry of source.entries) {
+      if (entry.type === 'file' && typeof entry.size === 'number') {
+        files += 1;
+        bytes += entry.size;
+      }
+      for (const file of entry.entries ?? []) {
+        files += 1;
+        bytes += file.size;
+      }
+    }
+  }
+
+  return { files, bytes };
+}
+
+async function readCompileStatistics(
+  root: string,
+  source: DkbSourceStatistics,
+): Promise<{ corpus: DkbCorpusStatistics; storage: DkbBuildStorageStatistics } | null> {
+  try {
+    const [evidence, manifest] = await Promise.all([
+      readEvidenceIr(root),
+      inspectDkbArtifactManifest(root),
+    ]);
+
+    return {
+      corpus: summarizeEvidenceCorpus(evidence, source),
+      storage: await summarizeBuildStorage(root, manifest, source.bytes),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function providerStageStatistics(state: RegistryCompileState): NonNullable<CompileComposeProfile['statistics']>['providerStages'] {
+  return state.compilerArtifacts.map((artifact) => {
+    const embeddingReceipt = artifact.compiled.receipts.find((receipt) => {
+      return receipt.providerId === state.resolvedProfile?.embedding.adapter
+        && isRecord(receipt.build.timingsMs);
+    });
+    const ingestionTimingsMs = numberRecord(artifact.result.execution?.timingsMs);
+    const ingestionWrapperTimingsMs = numberRecord(artifact.result.execution?.wrapperTimingsMs);
+    const embeddingTimingsMs = numberRecord(embeddingReceipt?.build.timingsMs);
+
+    return {
+      packageId: artifact.dkb.manifest.id,
+      ...(ingestionTimingsMs ? { ingestionTimingsMs } : {}),
+      ...(ingestionWrapperTimingsMs ? { ingestionWrapperTimingsMs } : {}),
+      ...(embeddingTimingsMs ? { embeddingTimingsMs } : {}),
+    };
+  });
+}
+
+function numberRecord(value: unknown): Record<string, number> | null {
+  if (!isRecord(value)) return null;
+  const entries = Object.entries(value).filter((entry): entry is [string, number] => {
+    return typeof entry[1] === 'number' && Number.isFinite(entry[1]);
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
 async function quickStoreSnapshotsForDkb(dkb: LoadedDkb): Promise<QuickStoreSnapshot[]> {
   return Promise.all(storesForDkb(dkb).map(async (store) => quickStoreSnapshotFor(dkb, store)));
 }
@@ -1385,6 +1520,8 @@ async function collectDkbState(
       result: built.compilerResult,
       compiled: built.compiled!,
       evidence: built.evidence!,
+      corpus: built.corpus!,
+      diskCapacity: built.diskCapacity!,
     } : undefined,
   };
 }
@@ -1430,6 +1567,8 @@ async function buildSourceUnitsForDkb(
   compilerResult?: LlamaIndexCompilerResult;
   compiled?: DkbCompiledPipeline;
   evidence?: DkbEvidenceIr;
+  corpus?: DkbCorpusStatistics;
+  diskCapacity?: DkbDiskCapacityCheck;
 }> {
   if (providerHost) {
     if (!desiredProfile) {
@@ -1440,6 +1579,13 @@ async function buildSourceUnitsForDkb(
     const evidence = buildEvidenceIr([unembeddedResult], {
       evidenceProfileDigest: desiredProfile.evidenceProfileDigest,
     });
+    const sourceStatistics = sourceStatisticsForStores(await quickStoreSnapshotsForDkb(dkb));
+    const corpus = summarizeEvidenceCorpus(evidence, sourceStatistics);
+    const diskCapacity = await assertDiskCapacity(
+      dkb.root,
+      estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding.dimensions),
+      `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
+    );
     const annotated = annotateEvidenceIds(ingested, unembeddedResult, evidence.evidenceProfileDigest);
     const compiled = await embedDkbEvidenceWithProviderHost(providerHost, annotated);
     const result = compilerResultForPipeline(dkb, desiredProfile, compiled);
@@ -1459,6 +1605,8 @@ async function buildSourceUnitsForDkb(
       compilerResult: result,
       compiled,
       evidence,
+      corpus,
+      diskCapacity,
     };
   }
   const batches = await Promise.all(storesForDkb(dkb).map((store) => buildSourceUnitsForStore(dkb, store)));
@@ -1815,7 +1963,8 @@ function isGeneratedPackagePath(root: string, source: string): boolean {
 }
 
 function isDkbSystemArtifact(name: string): boolean {
-  return name === '.dkb'
+  return name.startsWith('.')
+    || name === 'dkb.json'
     || name === 'dkb-lock.json'
     || name === 'dkb-release.json'
     || name === '.dkb-package.json'

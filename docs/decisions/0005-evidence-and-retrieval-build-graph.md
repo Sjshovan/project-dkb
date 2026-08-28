@@ -54,6 +54,13 @@ Local build paths are content-addressed under `.dkb/builds/evidence/` and
 pruning. Uninstall removes the PackageVersion and every local build derived
 from it.
 
+This intentional coexistence increases disk use: active artifacts are retained
+for Runtime compatibility while immutable Evidence and Retrieval Builds enable
+switching and rollback. DKB therefore reports the bytes of each layer and
+preflights available space before source ingestion and retrieval compilation.
+Capacity decisions use exact Evidence record/text density once chunking has
+finished, not document count.
+
 The Registry stores `.dkbpkg`, `.dkbevidence`, and `.dkbbuild` layers
 separately. Each derived receipt names its parent receipt hash. An install plan
 binds one exact chain and is itself signed. The Runtime verifies every receipt,

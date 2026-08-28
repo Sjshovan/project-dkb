@@ -19,6 +19,7 @@
     "proof:cli": "npm run build && node scripts/prove-cli-distribution.mjs",
     "proof:real-corpus": "npm run build && node scripts/prove-real-corpus.mjs",
     "benchmark:embeddings": "npm run build && node scripts/benchmark-embedding-providers.mjs",
+    "benchmark:scale": "npm run build && node scripts/benchmark-corpus-scale.mjs",
     "temp:audit": "node scripts/clean-dkb-temp.mjs",
     "temp:clean": "node scripts/clean-dkb-temp.mjs --apply",
     "changeset": "changeset",

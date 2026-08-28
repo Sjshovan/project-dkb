@@ -8,6 +8,7 @@ const entries = await fs.readdir(tempRoot, { withFileTypes: true });
 const ownedFilePatterns = [
   /^dkb-cli-ux-\d+-\d+\.json$/u,
   /^dkb-embedding-benchmark-[A-Za-z\d_-]+\.json$/u,
+  /^dkb-registry-ui-(?:stdout|stderr)\.log$/u,
   /^dkb-tei-space-proof(?:-[A-Za-z\d_-]+)?-host\.json$/u,
 ];
 const ownedFiles = entries

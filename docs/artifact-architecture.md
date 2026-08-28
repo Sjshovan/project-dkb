@@ -124,6 +124,29 @@ measured combined peak memory from 2.410 GiB to 0.817 GiB. Correctness and
 security lifecycle proofs also passed, so `tei-faiss` is the default recipe for
 new Libraries. Explicit FastEmbed Libraries remain unchanged and selectable.
 
+Corpus scale is measured after parsing by Evidence records and their text,
+not by file count alone. A compile result reports source files/bytes, Evidence
+records/chunks, text bytes, per-record size distribution, chunks-per-source
+distribution, densest sources, artifact bytes, immutable build-layer bytes,
+and the source-to-derived expansion ratio. This makes a dense PDF, table-heavy
+document, or large code file visible even when the corpus has few files.
+
+Compilation performs two free-space checks. The first uses source size before
+ingestion. The second uses exact Evidence text/record counts plus the selected
+embedding dimensions before vectors and indexes are created. Both include a
+working-space estimate and a 512 MiB safety reserve by default. A failed check
+does not change the active build. Operators may set `DKB_MIN_FREE_DISK_BYTES`
+to a different non-negative byte reserve for a controlled environment.
+
+The bounded `npm run benchmark:scale` harness creates mixed dense prose,
+Markdown tables, and code only under a `dkb-corpus-scale-*` temporary root. It
+removes that root in `finally`, records no corpus in Git, and stops before the
+next tier when projected compilation exceeds 15 minutes or estimated working
+space exceeds 8 GiB unless an operator explicitly changes those limits. The
+checked-in 2026-08-28 reports show 88 records from 134 KiB in 33.4 seconds and
+682 records from 1.01 MiB in 3m27s. Derived storage was about 31x source in both
+runs because active artifacts and immutable Evidence/Retrieval layers coexist.
+
 Operational commands:
 
 - `dkb compiler start` starts or reuses the warm compiler service.
@@ -141,6 +164,11 @@ Determinate bars appear only when the code has a real byte/file/step total.
 ANSI animation. Only explicit `--json` selects machine-readable output. DKB does
 not display invented percentages for Docker, compiler, registry, or artifact
 phases that do not expose a real total.
+
+The durable compile summary includes source and Evidence sizes, record count,
+chunks-per-source p50/p95/max, total derived storage, and expansion ratio.
+`--json` returns the complete distributions, largest artifacts, timing stages,
+and both disk-capacity preflights.
 
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to use the one-shot compiler container path.
 If the pinned image is missing or lacks the current service label, DKB rebuilds

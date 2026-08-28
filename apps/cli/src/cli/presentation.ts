@@ -350,7 +350,7 @@ function progressPayload(event: DkbProgressEvent): Record<string, string> {
     : {};
 }
 
-function formatBytes(value: number): string {
+export function formatBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;
   }

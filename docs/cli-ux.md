@@ -170,6 +170,19 @@ explicitly. `--no-verify` is available for an intentionally offline Library.
 
 ## Registry transport safety
 
+## Compilation scale and capacity
+
+Human `dkb compile` and `dkb build` summaries report the actual scale that
+drives RAG cost: source bytes/files, Evidence text/records, chunks per source,
+derived bytes, and expansion ratio. File count is never presented as a proxy
+for chunk count. `--json` includes full distributions, the largest compiled
+artifacts, stage timings, and disk preflight results.
+
+Before parsing and again before embedding/index creation, DKB verifies that the
+target filesystem can hold the estimated working set plus its safety reserve.
+An insufficient-space error leaves the prior active build unchanged and tells
+the operator to free space and retry.
+
 `dkb registry pull` refuses to overwrite an existing archive unless `--force`
 is present. Downloads and local-registry copies are completed in a sibling
 temporary file before activation, so a failed transfer preserves the previous

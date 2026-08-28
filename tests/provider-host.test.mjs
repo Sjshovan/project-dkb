@@ -358,6 +358,11 @@ export function setup(context) {
   ]);
 
   assert.equal(result.recordCount, 1);
+  assert.equal(result.profile.statistics.corpus.sourceFiles, 1);
+  assert.equal(result.profile.statistics.corpus.evidenceRecords, 1);
+  assert.equal(result.profile.statistics.corpus.recordsPerSource.max, 1);
+  assert.ok(result.profile.statistics.storage.totalDerivedBytes > 0);
+  assert.ok(result.profile.statistics.diskCapacity.retrieval[0].requiredFreeBytes > 0);
   assert.match(sourceIndex.units[0].text, /SOURCE-PROOF-14-MUTATED/);
   assert.equal(evidence.evidence[0].text, 'SOURCE-PROOF-14-MUTATED');
   assert.equal(indexRecords[0].text, 'SOURCE-PROOF-14-MUTATED');

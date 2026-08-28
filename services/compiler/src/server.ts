@@ -215,6 +215,7 @@ async function compileRegistryPackage(
     const artifactManifestPath = resolveFrom(buildRoot, DKB_ARTIFACT_MANIFEST_PATH);
     const artifactManifest = await fs.readFile(artifactManifestPath);
     const archiveHash = `sha256:${await hashFile(archivePath)}`;
+    const archiveSize = (await fs.stat(archivePath)).size;
     const archiveFileName = packageArchiveFileName(packageId, version);
     const payload: Record<string, unknown> = {
       compiler: {
@@ -234,6 +235,7 @@ async function compileRegistryPackage(
       archive: {
         fileName: archiveFileName,
         hash: archiveHash,
+        bytes: archiveSize,
       },
       artifactManifest: {
         fileName: 'dkb-artifact.json',
@@ -249,13 +251,20 @@ async function compileRegistryPackage(
         recordCount: compiled.recordCount,
       }, null, 2)).toString('base64'),
       recordCount: compiled.recordCount,
+      buildStatistics: compiled.profile?.statistics ? {
+        corpus: compiled.profile.statistics.corpus,
+        storage: compiled.profile.statistics.storage,
+        providerStages: compiled.profile.statistics.providerStages,
+        timingsMs: compiled.profile.timingsMs,
+        aggregateTimingsMs: compiled.profile.aggregateTimingsMs,
+      } : undefined,
     };
 
     if (deliver) {
       await deliver({
         payload,
         archivePath,
-        archiveSize: (await fs.stat(archivePath)).size,
+        archiveSize,
       });
 
       return payload;

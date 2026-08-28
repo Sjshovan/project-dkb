@@ -1,0 +1,117 @@
+{
+  "format": "dkb.corpus-scale-benchmark.v1",
+  "generatedAt": "2026-08-28T10:17:32.657Z",
+  "target": "tei-faiss",
+  "boundaries": {
+    "maxProjectedMs": 900000,
+    "maxWorkingBytes": 8589934592,
+    "generatedCorpusRetained": false
+  },
+  "results": [
+    {
+      "tier": "small",
+      "status": "completed",
+      "target": "tei-faiss",
+      "wallMs": 207017.20080000002,
+      "corpus": {
+        "sourceFiles": 24,
+        "sourceBytes": 1062058,
+        "sourceAssets": 24,
+        "evidenceRecords": 682,
+        "evidenceChunks": 682,
+        "evidenceCharacters": 1162072,
+        "evidenceTextBytes": 1162072,
+        "textBytesPerRecord": {
+          "count": 682,
+          "min": 871,
+          "p50": 1674,
+          "p95": 1785,
+          "max": 1785,
+          "mean": 1703.92
+        },
+        "recordsPerSource": {
+          "count": 24,
+          "min": 28,
+          "p50": 28,
+          "p95": 29,
+          "max": 29,
+          "mean": 28.42
+        },
+        "densestSources": [
+          {
+            "source": "sources/document-0002.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0006.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0007.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0009.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0010.md",
+            "records": 29,
+            "textBytes": 50149
+          }
+        ]
+      },
+      "storage": {
+        "artifactFiles": 10,
+        "artifactBytes": 16339452,
+        "evidenceBuildBytes": 2302765,
+        "retrievalBuildBytes": 14040640,
+        "totalDerivedBytes": 32682857,
+        "sourceToDerivedRatio": 30.773
+      },
+      "timingsMs": {
+        "sourceSnapshot": 2.776,
+        "cacheLookup": 0.717,
+        "collectState": 203682.207,
+        "aggregateArtifacts": 3241.12,
+        "compileCacheWrite": 3.777,
+        "total": 207001.361
+      },
+      "aggregateTimingsMs": {
+        "stagePrepare": 3.685,
+        "sourceAnalysis": 104.321,
+        "chunkIndex": 104.321,
+        "vector": 0,
+        "graph": 0,
+        "compilerArtifacts": 2605.535,
+        "lock": 16.744,
+        "artifactManifest": 117.499,
+        "buildGraph": 270.801,
+        "validation": 99.135,
+        "promotion": 16.606,
+        "cleanup": 5.952,
+        "total": 3234.595
+      },
+      "diskCapacity": {
+        "ingestion": {
+          "freeBytes": 577184092160,
+          "reserveBytes": 536870912,
+          "estimatedWorkingBytes": 268435456,
+          "requiredFreeBytes": 805306368
+        },
+        "retrieval": [
+          {
+            "freeBytes": 577181855744,
+            "reserveBytes": 536870912,
+            "estimatedWorkingBytes": 268435456,
+            "requiredFreeBytes": 805306368
+          }
+        ]
+      }
+    }
+  ]
+}

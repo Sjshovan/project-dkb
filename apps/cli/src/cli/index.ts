@@ -17,6 +17,7 @@ import {
   countLabel,
   createCliPresenter,
   failureLine,
+  formatBytes,
   humanSummary,
   milliseconds,
   printJson as printJsonValue,
@@ -2339,10 +2340,30 @@ function summarizeCompileResult(value: unknown): string[] {
     recordCount?: unknown;
     cacheHit?: unknown;
     artifactManifestPath?: unknown;
-    profile?: { timingsMs?: Record<string, unknown>; aggregateTimingsMs?: Record<string, unknown> };
+    profile?: {
+      timingsMs?: Record<string, unknown>;
+      aggregateTimingsMs?: Record<string, unknown>;
+      statistics?: {
+        corpus?: Record<string, unknown>;
+        storage?: Record<string, unknown>;
+        providerStages?: Array<Record<string, unknown>>;
+      };
+    };
   };
   const total = milliseconds(result.profile?.timingsMs?.total);
   const aggregate = milliseconds(result.profile?.aggregateTimingsMs?.total);
+  const corpus = result.profile?.statistics?.corpus;
+  const storage = result.profile?.statistics?.storage;
+  const providerStage = result.profile?.statistics?.providerStages?.[0];
+  const ingestionTimings = providerStage?.ingestionTimingsMs && typeof providerStage.ingestionTimingsMs === 'object'
+    ? providerStage.ingestionTimingsMs as Record<string, unknown>
+    : undefined;
+  const embeddingTimings = providerStage?.embeddingTimingsMs && typeof providerStage.embeddingTimingsMs === 'object'
+    ? providerStage.embeddingTimingsMs as Record<string, unknown>
+    : undefined;
+  const recordsPerSource = corpus?.recordsPerSource && typeof corpus.recordsPerSource === 'object'
+    ? corpus.recordsPerSource as Record<string, unknown>
+    : undefined;
 
   return [
     `registry: ${String(result.registryId ?? 'unknown')}`,
@@ -2350,8 +2371,22 @@ function summarizeCompileResult(value: unknown): string[] {
     `cache: ${result.cacheHit ? 'hit' : 'updated'}`,
     total ? `total: ${total}` : '',
     aggregate ? `artifact work: ${aggregate}` : '',
+    milliseconds(ingestionTimings?.total) ? `ingestion: ${milliseconds(ingestionTimings?.total)}` : '',
+    milliseconds(embeddingTimings?.total) ? `embedding: ${milliseconds(embeddingTimings?.total)}` : '',
+    finiteBytes(corpus?.sourceBytes) ? `source: ${formatBytes(Number(corpus?.sourceBytes))} across ${String(corpus?.sourceFiles ?? 0)} files` : '',
+    finiteBytes(corpus?.evidenceTextBytes) ? `evidence text: ${formatBytes(Number(corpus?.evidenceTextBytes))} across ${String(corpus?.evidenceRecords ?? 0)} records` : '',
+    typeof recordsPerSource?.p50 === 'number' && typeof recordsPerSource?.p95 === 'number'
+      ? `chunks per source: p50 ${recordsPerSource.p50}, p95 ${recordsPerSource.p95}, max ${String(recordsPerSource.max ?? 0)}`
+      : '',
+    finiteBytes(storage?.totalDerivedBytes)
+      ? `derived storage: ${formatBytes(Number(storage?.totalDerivedBytes))}${typeof storage?.sourceToDerivedRatio === 'number' ? ` (${storage.sourceToDerivedRatio}x source)` : ''}`
+      : '',
     typeof result.artifactManifestPath === 'string' ? `artifact: ${result.artifactManifestPath}` : '',
   ];
+}
+
+function finiteBytes(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 function summarizePluginMutation(value: unknown): string[] {
