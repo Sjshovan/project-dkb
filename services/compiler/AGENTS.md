@@ -10,7 +10,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 - Depend on protocol, Library transactions, pipeline contracts, Registry archive transport, and explicitly supplied provider bundles.
 - Local and HTTP compilation must call the same job runner.
-- Keep provider-specific work behind `@dkb/pipeline` contracts.
+- Keep provider-specific work behind `@sjshovan/dkb-pipeline` contracts.
 
 ## Invariants
 
@@ -29,7 +29,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Verification
 
-- `npm run check --workspace @dkb/compiler`
-- `npm run build --workspace @dkb/compiler`
+- `npm run check --workspace @sjshovan/dkb-compiler`
+- `npm run build --workspace @sjshovan/dkb-compiler`
 - `node --test tests/profiles-evidence.test.mjs tests/provider-host.test.mjs`
 - `npm run proof:pipeline`

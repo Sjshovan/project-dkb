@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 const execFile = promisify(execFileCallback);
 

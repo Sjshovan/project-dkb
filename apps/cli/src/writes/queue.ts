@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { loadDkb } from '@dkb/protocol/manifest.js';
-import { DKB_WRITE_QUEUE_DIR } from '@dkb/protocol/paths.js';
-import { evaluateDkbWriteIntent } from '@dkb/protocol/writeGate.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
+import { DKB_WRITE_QUEUE_DIR } from '@sjshovan/dkb-protocol/paths.js';
+import { evaluateDkbWriteIntent } from '@sjshovan/dkb-protocol/writeGate.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { EnqueueWriteInput, EnqueueWriteResult, QueuedWrite, QueuedWriteStatus } from './types.js';
 
 export function defaultWriteQueueRoot(baseRoot = process.cwd()): string {

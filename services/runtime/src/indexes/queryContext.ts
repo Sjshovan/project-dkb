@@ -1,16 +1,16 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { artifactLockPath, resolveFrom } from '@dkb/protocol/paths.js';
-import { vectorDocumentsForSourceUnits, type VectorDocument } from '@dkb/providers-bundled/vectorStore.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
-import type { LexicalRuntimeSnapshot } from '@dkb/providers-bundled/lexicalStore.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
-import { DkbProviderHost } from '@dkb/pipeline/host.js';
-import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime } from '@dkb/pipeline/types.js';
-import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
-import { maybeReadRuntimeLock } from '@dkb/library/builds.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { artifactLockPath, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { vectorDocumentsForSourceUnits, type VectorDocument } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import type { LexicalRuntimeSnapshot } from '@sjshovan/dkb-providers-bundled/lexicalStore.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime } from '@sjshovan/dkb-pipeline/types.js';
+import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
+import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 export interface QueryContext {
   root: string;

@@ -2,11 +2,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { hostInventoryPath, selectedHostRegistry } from '../host/inventory.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from '@dkb/registry-client/config.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
 
-export { DEFAULT_REGISTRY_URL, normalizeRegistryUrl, verifyRegistryEndpoint } from '@dkb/registry-client/config.js';
-export type { RegistryVerification, RegistryVerificationCheck } from '@dkb/registry-client/config.js';
+export { DEFAULT_REGISTRY_URL, normalizeRegistryUrl, verifyRegistryEndpoint } from '@sjshovan/dkb-registry-client/config.js';
+export type { RegistryVerification, RegistryVerificationCheck } from '@sjshovan/dkb-registry-client/config.js';
 
 export const DKB_FOLDER_CONFIG_PATH = '.dkb/config.json';
 

@@ -1,0 +1,82 @@
+name: Private stack release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stack developer-preview version
+        required: true
+        default: 0.1.0
+        type: string
+      registry:
+        description: ghcr.io/sjshovan/dkb-registry@sha256:...
+        required: true
+        type: string
+      compiler:
+        description: ghcr.io/sjshovan/dkb-compiler@sha256:...
+        required: true
+        type: string
+      runtime:
+        description: ghcr.io/sjshovan/dkb-runtime@sha256:...
+        required: true
+        type: string
+      provider:
+        description: ghcr.io/sjshovan/dkb-provider-sidecar@sha256:...
+        required: true
+        type: string
+      release:
+        description: Create a private-repository draft release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse non-private repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)" = "private" || {
+            echo "This workflow releases only from a private repository." >&2
+            exit 1
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assemble digest-pinned stack lock
+        run: >-
+          node scripts/create-stack-lock.mjs
+          --version "${{ inputs.version }}"
+          --registry "${{ inputs.registry }}"
+          --compiler "${{ inputs.compiler }}"
+          --runtime "${{ inputs.runtime }}"
+          --provider "${{ inputs.provider }}"
+          --output "release/dkb-stack-${{ inputs.version }}.lock.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dkb-stack-${{ inputs.version }}-private-candidate
+          path: release/*.lock.json
+          if-no-files-found: error
+
+      - name: Create private-repository draft release
+        if: ${{ inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "dkb-stack-v${{ inputs.version }}"
+          release/*.lock.json
+          --draft
+          --prerelease
+          --target "$GITHUB_SHA"
+          --title "DKB Stack ${{ inputs.version }} (developer preview)"
+          --notes "Private digest-pinned developer-preview stack. Back up before upgrade."

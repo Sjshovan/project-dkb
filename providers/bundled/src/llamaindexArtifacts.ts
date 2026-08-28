@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
+import { DKB_ARTIFACTS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { capabilitiesForSourceType, type IndexedSourceUnit } from './sourceIndex.js';
 import { tokenize } from './scoring.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { LlamaIndexCompilerRecord, LlamaIndexCompilerResult } from './llamaindex.js';
-import { evidenceIdentityForRecord } from '@dkb/protocol/evidence/ir.js';
+import { evidenceIdentityForRecord } from '@sjshovan/dkb-protocol/evidence/ir.js';
 
 export const LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH = `${DKB_ARTIFACTS_DIR}/llamaindex.compiler.manifest.json`;
 export const LLAMAINDEX_COMPILER_RECORDS_DIR = `${DKB_ARTIFACTS_DIR}/llamaindex.records`;

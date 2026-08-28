@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from './signing.js';
 
 const EXCLUDED_ROOT_FILES = new Set([

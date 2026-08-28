@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { resolveFrom } from '@dkb/protocol/paths.js';
-import type { DkbEvidence, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
-import { chunkSourceUnit } from '@dkb/providers-bundled/chunking.js';
-import { capabilitiesForSourceType, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
-import { assertNoSymlinkPath, readInertTextFile, renderUntrustedSourceBlock } from '@dkb/protocol/security/sourceContent.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import type { DkbEvidence, DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { chunkSourceUnit } from '@sjshovan/dkb-providers-bundled/chunking.js';
+import { capabilitiesForSourceType, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { assertNoSymlinkPath, readInertTextFile, renderUntrustedSourceBlock } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';
 import { blocked, complete } from './sqlShared.js';
 

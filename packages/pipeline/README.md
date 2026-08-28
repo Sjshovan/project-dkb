@@ -1,4 +1,4 @@
-# @dkb/pipeline
+# @sjshovan/dkb-pipeline
 
 Provider contracts and per-context plugin hosting for DKB compilation and retrieval.
 

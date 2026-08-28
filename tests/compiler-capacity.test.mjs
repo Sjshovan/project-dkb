@@ -4,12 +4,12 @@ import {
   distribution,
   summarizeCompilerDeliveryStatistics,
   summarizeEvidenceCorpus,
-} from '@dkb/compiler/buildStatistics.js';
+} from '@sjshovan/dkb-compiler/buildStatistics.js';
 import {
   estimateIngestionWorkingBytes,
   estimateRetrievalWorkingBytes,
   evaluateDiskCapacity,
-} from '@dkb/compiler/diskCapacity.js';
+} from '@sjshovan/dkb-compiler/diskCapacity.js';
 
 test('corpus statistics measure chunk density and text volume instead of treating file count as scale', () => {
   const evidence = {

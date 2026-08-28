@@ -1,7 +1,6 @@
 {
-  "name": "@dkb/cli",
+  "name": "@sjshovan/dkb-cli",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -25,17 +24,18 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@dkb/compiler": "0.1.0",
-    "@dkb/library": "0.1.0",
-    "@dkb/pipeline": "0.1.0",
-    "@dkb/protocol": "1.0.0",
-    "@dkb/providers-bundled": "0.1.0",
-    "@dkb/registry-client": "0.1.0",
-    "@dkb/runtime": "0.1.0",
+    "@sjshovan/dkb-compiler": "0.1.0",
+    "@sjshovan/dkb-library": "0.1.0",
+    "@sjshovan/dkb-pipeline": "0.1.0",
+    "@sjshovan/dkb-protocol": "1.0.0",
+    "@sjshovan/dkb-providers-bundled": "0.1.0",
+    "@sjshovan/dkb-registry-client": "0.1.0",
+    "@sjshovan/dkb-runtime": "0.1.0",
     "chokidar": "^5.0.0",
     "cli-progress": "^3.12.0",
     "commander": "^12.1.0",
-    "ora": "^9.4.1"
+    "ora": "^9.4.1",
+    "tar": "^7.5.22"
   },
   "devDependencies": {
     "@types/cli-progress": "^3.11.6",
@@ -44,5 +44,16 @@
   },
   "engines": {
     "node": ">=22.15.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sjshovan/project-dkb.git"
+  },
+  "homepage": "https://github.com/Sjshovan/project-dkb",
+  "bugs": {
+    "url": "https://github.com/Sjshovan/project-dkb/issues"
   }
 }

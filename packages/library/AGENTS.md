@@ -8,7 +8,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Dependency direction
 
-- Depend on `@dkb/protocol` for durable formats, `@dkb/pipeline` for profile receipts, and bundled artifact readers only where verification requires a concrete format.
+- Depend on `@sjshovan/dkb-protocol` for durable formats, `@sjshovan/dkb-pipeline` for profile receipts, and bundled artifact readers only where verification requires a concrete format.
 - Expose domain operations to CLI, Runtime, compiler, and Registry client orchestration.
 - Keep presentation and network transport outside this package.
 
@@ -29,6 +29,6 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Verification
 
-- `npm run check --workspace @dkb/library`
-- `npm run build --workspace @dkb/library`
+- `npm run check --workspace @sjshovan/dkb-library`
+- `npm run build --workspace @sjshovan/dkb-library`
 - `node --test tests/library-contract.test.mjs`

@@ -16,7 +16,7 @@ plane. A native wrapper can be added later around the same web application if
 installers, a tray icon, or OS integration become product requirements.
 
 No UI code should be added until the host operations described below are moved
-out of `@dkb/cli` and the first Console information architecture is approved.
+out of `@sjshovan/dkb-cli` and the first Console information architecture is approved.
 
 ## Why this boundary fits DKB
 
@@ -26,8 +26,8 @@ The Console manages resources belonging to the host, not one Library or Runtime:
 browser
   -> loopback DKB Console
        -> host inventory and context selection
-       -> @dkb/library
-       -> @dkb/registry-client
+       -> @sjshovan/dkb-library
+       -> @sjshovan/dkb-registry-client
        -> Runtime HTTP clients
        -> local stack operations
 ```
@@ -41,7 +41,7 @@ Before the Console, extract these reusable boundaries:
 
 1. `@dkb/host`: inventory storage, selection, resolution, health inspection, and
    local launch metadata. Move `apps/cli/src/host` here.
-2. `@dkb/runtime-client`: the Runtime HTTP client and its wire validation. Move
+2. `@sjshovan/dkb-runtime-client`: the Runtime HTTP client and its wire validation. Move
    it out of the Runtime service package.
 3. Move operation behavior into its owning package when it is still embedded in
    a Commander action. CLI handlers and Console routes should only validate
@@ -144,7 +144,7 @@ remain authoritative after a restart.
 
 After approval:
 
-1. Extract `@dkb/host` and `@dkb/runtime-client`; prove the CLI remains identical.
+1. Extract `@dkb/host` and `@sjshovan/dkb-runtime-client`; prove the CLI remains identical.
 2. Add read-only Console routes and the Overview, Libraries, Runtimes, and
    Registries views.
 3. Add operation jobs and controlled mutations only after read-only state is

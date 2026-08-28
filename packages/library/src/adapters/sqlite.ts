@@ -1,11 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { resolveFrom } from '@dkb/protocol/paths.js';
-import type { DkbEvidence, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
-import { chunkSourceUnit } from '@dkb/providers-bundled/chunking.js';
-import { capabilitiesForSourceType, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import type { DkbEvidence, DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { chunkSourceUnit } from '@sjshovan/dkb-providers-bundled/chunking.js';
+import { capabilitiesForSourceType, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';
 import { blocked, boundedLimit, complete, fieldsForColumns, quoteIdentifier, returnFields, sqliteType, sqlParam, validateDkbReadQuery, whereClause } from './sqlShared.js';
 

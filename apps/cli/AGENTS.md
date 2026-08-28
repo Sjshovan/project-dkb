@@ -15,7 +15,7 @@ is authoritative.
   Planned commands use `commandLifecycle.ts` and fail honestly; do not delete or
   silently hide one without an architecture decision and matching tests/docs.
 - Package lifecycle orchestration belongs in `packageCommands.ts` under the CLI command layer;
-  installed-package inspection belongs to `@dkb/library`.
+  installed-package inspection belongs to `@sjshovan/dkb-library`.
 - Human output is concise, colored in a TTY, and progress-visible by default.
   `--json` emits one ANSI-free document; `--no-progress` changes animation only.
 - Resolve Library and Runtime context through host inventory precedence. Never
@@ -28,5 +28,5 @@ is authoritative.
 - Keep CLI version separate from protocol, Runtime, compiler, provider, and
   retrieval compatibility versions.
 
-Verify with `npm run check --workspace @dkb/cli`, focused CLI tests, a dry-run
+Verify with `npm run check --workspace @sjshovan/dkb-cli`, focused CLI tests, a dry-run
 package inspection, and a global tarball smoke test from an unrelated folder.

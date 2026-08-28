@@ -1,6 +1,6 @@
 import type { SQLInputValue } from 'node:sqlite';
-import { DkbError } from '@dkb/protocol/errors.js';
-import type { DkbEvidence, DkbReadOperator, DkbReadQuery, KnowledgeQueryable } from '@dkb/protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbEvidence, DkbReadOperator, DkbReadQuery, KnowledgeQueryable } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbReadPlanResult } from './adapter.js';
 
 export interface SqlColumnInfo {

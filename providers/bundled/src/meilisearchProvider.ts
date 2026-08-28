@@ -4,17 +4,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '@dkb/protocol/paths.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import { DKB_ARTIFACTS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type {
   DkbCompiledPipeline,
   DkbIndexMutationResult,
   DkbIndexRuntime,
   DkbProviderBuildReceipt,
-} from '@dkb/pipeline/types.js';
+} from '@sjshovan/dkb-pipeline/types.js';
 import { sourceUnitFromPipelineRecord } from './records.js';
 import { sourceAssetsFromChunks, type IndexedSourceUnit } from './sourceIndex.js';
 

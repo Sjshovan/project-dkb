@@ -1,6 +1,6 @@
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import type { DkbWriteIntent } from '@dkb/protocol/writeGate.js';
-import type { DkbRecord } from '@dkb/protocol/types.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import type { DkbWriteIntent } from '@sjshovan/dkb-protocol/writeGate.js';
+import type { DkbRecord } from '@sjshovan/dkb-protocol/types.js';
 import type { QueuedWrite } from './types.js';
 
 export function recordFromQueuedWrite(item: QueuedWrite): DkbRecord {

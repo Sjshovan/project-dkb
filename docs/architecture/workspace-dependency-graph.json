@@ -2,85 +2,85 @@
   "format": "dkb.workspace-graph.v1",
   "packages": [
     {
-      "name": "@dkb/cli",
+      "name": "@sjshovan/dkb-cli",
       "version": "0.1.0",
       "root": "apps/cli"
     },
     {
-      "name": "@dkb/compiler",
+      "name": "@sjshovan/dkb-compiler",
       "version": "0.1.0",
       "root": "services/compiler"
     },
     {
-      "name": "@dkb/library",
+      "name": "@sjshovan/dkb-library",
       "version": "0.1.0",
       "root": "packages/library"
     },
     {
-      "name": "@dkb/pipeline",
+      "name": "@sjshovan/dkb-pipeline",
       "version": "0.1.0",
       "root": "packages/pipeline"
     },
     {
-      "name": "@dkb/protocol",
+      "name": "@sjshovan/dkb-protocol",
       "version": "1.0.0",
       "root": "packages/protocol"
     },
     {
-      "name": "@dkb/providers-bundled",
+      "name": "@sjshovan/dkb-providers-bundled",
       "version": "0.1.0",
       "root": "providers/bundled"
     },
     {
-      "name": "@dkb/registry-client",
+      "name": "@sjshovan/dkb-registry-client",
       "version": "0.1.0",
       "root": "packages/registry-client"
     },
     {
-      "name": "@dkb/runtime",
+      "name": "@sjshovan/dkb-runtime",
       "version": "0.1.0",
       "root": "services/runtime"
     }
   ],
   "dependencies": {
-    "@dkb/cli": [
-      "@dkb/compiler",
-      "@dkb/library",
-      "@dkb/pipeline",
-      "@dkb/protocol",
-      "@dkb/providers-bundled",
-      "@dkb/registry-client",
-      "@dkb/runtime"
+    "@sjshovan/dkb-cli": [
+      "@sjshovan/dkb-compiler",
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-providers-bundled",
+      "@sjshovan/dkb-registry-client",
+      "@sjshovan/dkb-runtime"
     ],
-    "@dkb/compiler": [
-      "@dkb/library",
-      "@dkb/pipeline",
-      "@dkb/protocol",
-      "@dkb/providers-bundled",
-      "@dkb/registry-client"
+    "@sjshovan/dkb-compiler": [
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-providers-bundled",
+      "@sjshovan/dkb-registry-client"
     ],
-    "@dkb/library": [
-      "@dkb/pipeline",
-      "@dkb/protocol",
-      "@dkb/providers-bundled"
+    "@sjshovan/dkb-library": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-providers-bundled"
     ],
-    "@dkb/pipeline": [
-      "@dkb/protocol"
+    "@sjshovan/dkb-pipeline": [
+      "@sjshovan/dkb-protocol"
     ],
-    "@dkb/protocol": [],
-    "@dkb/providers-bundled": [
-      "@dkb/pipeline",
-      "@dkb/protocol"
+    "@sjshovan/dkb-protocol": [],
+    "@sjshovan/dkb-providers-bundled": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol"
     ],
-    "@dkb/registry-client": [
-      "@dkb/protocol"
+    "@sjshovan/dkb-registry-client": [
+      "@sjshovan/dkb-protocol"
     ],
-    "@dkb/runtime": [
-      "@dkb/library",
-      "@dkb/pipeline",
-      "@dkb/protocol",
-      "@dkb/providers-bundled",
-      "@dkb/registry-client"
+    "@sjshovan/dkb-runtime": [
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-providers-bundled",
+      "@sjshovan/dkb-registry-client"
     ]
   }
 }

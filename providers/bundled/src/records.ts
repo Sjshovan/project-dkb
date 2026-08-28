@@ -1,9 +1,9 @@
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { capabilitiesForSourceType, type IndexedSourceUnit } from './sourceIndex.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { tokenize } from './scoring.js';
-import type { DkbPipelineChunk, DkbPipelineDocument, DkbPipelineRecord } from '@dkb/pipeline/types.js';
+import type { DkbPipelineChunk, DkbPipelineDocument, DkbPipelineRecord } from '@sjshovan/dkb-pipeline/types.js';
 
 const EPOCH = '1970-01-01T00:00:00.000Z';
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { resolveContainedPath } from '@dkb/protocol/paths.js';
+import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
 import { readLibraryState } from './state.js';
 
 export interface DkbLibraryStorageReport {

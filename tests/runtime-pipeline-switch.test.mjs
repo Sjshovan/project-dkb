@@ -3,15 +3,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { compileComposeProject, ensurePackageBuildForTarget } from '@dkb/compiler/compile.js';
+import { compileComposeProject, ensurePackageBuildForTarget } from '@sjshovan/dkb-compiler/compile.js';
 import {
   activateStoredPackageBuild,
   listPackageBuilds,
   readRuntimeLock,
   writeRuntimeLock,
-} from '@dkb/library/builds.js';
-import { applyLibraryLock } from '@dkb/library/state.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
+} from '@sjshovan/dkb-library/builds.js';
+import { applyLibraryLock } from '@sjshovan/dkb-library/state.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
 import { switchRuntimePipelineFromRegistry } from '../services/runtime/dist/runtime/pipelineSwitch.js';
 

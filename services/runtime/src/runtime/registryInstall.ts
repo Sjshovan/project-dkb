@@ -3,27 +3,27 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
-import { type DkbInstallPlan } from '@dkb/protocol/builds.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { registryPackagePath } from '@dkb/protocol/identity.js';
-import { loadDkbPackage, loadLibrary } from '@dkb/protocol/manifest.js';
-import { evidenceBuildPath, retrievalBuildPath } from '@dkb/protocol/paths.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
-import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
-import { validateDkbArtifactManifest } from '@dkb/library/artifacts.js';
-import { hashPortablePackageTree } from '@dkb/library/packageTree.js';
+import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { type DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
+import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { evidenceBuildPath, retrievalBuildPath } from '@sjshovan/dkb-protocol/paths.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
+import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { validateDkbArtifactManifest } from '@sjshovan/dkb-library/artifacts.js';
+import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
   DKB_PACKAGE_RECEIPT_PATH,
   packageReceiptPayloadForLock,
   parsePackageReceipt,
   verifyLayerReceipt,
   verifyPackageReceipt,
-} from '@dkb/library/signing.js';
-import { activateStoredPackageBuild } from '@dkb/library/builds.js';
-import { readLibraryState } from '@dkb/library/state.js';
-import { extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
-import { DkbRegistryClient } from '@dkb/registry-client/client.js';
+} from '@sjshovan/dkb-library/signing.js';
+import { activateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
+import { readLibraryState } from '@sjshovan/dkb-library/state.js';
+import { extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
+import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { ensureRuntimeState, importCompiledDkbArtifactIntoRuntime } from './state.js';
 
 export interface DkbInstallCandidate {

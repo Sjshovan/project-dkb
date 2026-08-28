@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
-import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
-import { artifactLockPath } from '@dkb/protocol/paths.js';
-import { deriveKnowledgeSpace } from '@dkb/protocol/space.js';
-import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '@dkb/protocol/types.js';
-import { verifyComposeProject } from '@dkb/compiler/compile.js';
+import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import { artifactLockPath } from '@sjshovan/dkb-protocol/paths.js';
+import { deriveKnowledgeSpace } from '@sjshovan/dkb-protocol/space.js';
+import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 
 export async function inspectTarget(root: string) {
   const resolvedRoot = path.resolve(root);

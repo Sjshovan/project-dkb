@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@dkb/providers-bundled/vectorStore.js';
+import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
 import type { QueryContext } from '../indexes/queryContext.js';
-import type { LoadedCollection, QueryHit, QueryResponse } from '@dkb/protocol/types.js';
+import type { LoadedCollection, QueryHit, QueryResponse } from '@sjshovan/dkb-protocol/types.js';
 
 export interface QueryOptions {
   limit?: number;

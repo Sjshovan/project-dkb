@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -6,8 +6,9 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { maybeReadRuntimeLock } from '@dkb/library/builds.js';
+import { c as createTar, t as listTar, x as extractTar } from 'tar';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime } from '../host/inventory.js';
 
 export type DkbStackTarget = 'default' | 'meilisearch' | 'fastembed-faiss' | 'tei-faiss' | 'tei-faiss-768' | 'tei-meilisearch';
@@ -25,6 +26,7 @@ export interface DkbStackContext {
   runtimePort: number;
   meilisearchPort: number;
   teiPort: number;
+  version?: string;
 }
 
 export interface DkbStackStatus {
@@ -34,8 +36,38 @@ export interface DkbStackStatus {
   composeFile: string;
   registryUrl: string;
   runtimeUrl: string;
+  version?: string;
   services: Array<{ name: string; status: string; health: string }>;
   checks?: Array<{ component: string; status: 'ok' | 'failed'; message: string }>;
+}
+
+export interface DkbStackBackup {
+  status: 'backed_up';
+  name: string;
+  archive: string;
+  checksumFile: string;
+  sha256: string;
+  bytes: number;
+  containsSecrets: true;
+}
+
+export interface DkbStackRestore {
+  status: 'restored';
+  name: string;
+  archive: string;
+  stateRoot: string;
+  sha256: string;
+  replaced: boolean;
+}
+
+export interface DkbStackUpgrade {
+  status: 'upgraded';
+  name: string;
+  fromVersion: string;
+  toVersion: string;
+  lockFile: string;
+  backup: DkbStackBackup;
+  services: DkbStackStatus['services'];
 }
 
 export async function upDkbStack(name = 'local', target: DkbStackTarget = 'default'): Promise<DkbStackStatus & {
@@ -43,10 +75,12 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
   registryName: string;
   runtimeName: string;
   libraryName: string;
+  legacyRegistryVolume?: { status: 'copied'; volume: string; preserved: true };
 }> {
   const context = await prepareDkbStack(name, target);
   assertDockerAvailable();
   assertRequiredImages(context);
+  const legacyRegistryVolume = await migrateLegacyRegistryVolume(context);
 
   if ((await composeContainerIds(context)).length === 0) {
     await assertPortAvailable(context.registryPort, 'Registry');
@@ -92,6 +126,7 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
     registryName: registry.name,
     runtimeName: runtime.name,
     libraryName: library.name,
+    ...(legacyRegistryVolume ? { legacyRegistryVolume } : {}),
   };
 }
 
@@ -120,6 +155,7 @@ export async function statusDkbStack(name = 'local', check = false): Promise<Dkb
     composeFile: context.composeFile,
     registryUrl: context.registryUrl,
     runtimeUrl: context.runtimeUrl,
+    ...(context.version ? { version: context.version } : {}),
     services,
     ...(check ? { checks: await probeStack(context) } : {}),
   };
@@ -155,6 +191,173 @@ export async function logsDkbStack(name = 'local', service?: string, follow = fa
   const context = await readDkbStack(name);
   assertDockerAvailable();
   runCompose(context, ['logs', ...(follow ? ['--follow'] : []), '--tail', follow ? '100' : '200', ...(service ? [service] : [])], true);
+}
+
+export async function backupDkbStack(name = 'local', output?: string): Promise<DkbStackBackup> {
+  const context = await readDkbStack(name);
+  assertDockerAvailable();
+  await requireStoppedStack(context, 'back up');
+
+  const archive = path.resolve(output ?? path.join(
+    stackBackupRoot(),
+    `${context.name}-${new Date().toISOString().replace(/[:.]/gu, '-')}.tar.gz`,
+  ));
+  assertOutsideStack(context.root, archive, 'Backup archive');
+  await fs.mkdir(path.dirname(archive), { recursive: true });
+
+  const temporary = `${archive}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  try {
+    await createTar({
+      cwd: path.dirname(context.root),
+      file: temporary,
+      gzip: true,
+      portable: true,
+      noMtime: true,
+    }, [path.basename(context.root)]);
+    await fs.rename(temporary, archive);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+
+  await fs.chmod(archive, 0o600).catch(() => undefined);
+  const sha256 = await fileSha256(archive);
+  const checksumFile = `${archive}.sha256`;
+  await writeAtomic(checksumFile, `${sha256}  ${path.basename(archive)}\n`);
+  await fs.chmod(checksumFile, 0o600).catch(() => undefined);
+  const stat = await fs.stat(archive);
+
+  return {
+    status: 'backed_up',
+    name: context.name,
+    archive,
+    checksumFile,
+    sha256,
+    bytes: stat.size,
+    containsSecrets: true,
+  };
+}
+
+export async function restoreDkbStack(archivePath: string, replace = false): Promise<DkbStackRestore> {
+  const archive = path.resolve(archivePath);
+  const checksumFile = `${archive}.sha256`;
+  const expectedHash = await readChecksum(checksumFile);
+  const actualHash = await fileSha256(archive);
+
+  if (actualHash !== expectedHash) {
+    throw new DkbError(`Stack backup checksum mismatch for ${archive}. Expected ${expectedHash}, received ${actualHash}.`);
+  }
+
+  const archiveRoot = await validateStackArchive(archive);
+  const name = stackName(archiveRoot);
+  const target = path.join(stackStateRoot(), name);
+  const existing = await exists(target);
+
+  if (existing && !replace) {
+    throw new DkbError(`Stack ${name} already exists at ${target}. Stop it, then rerun with --replace to restore this backup.`);
+  }
+
+  if (existing) {
+    const context = await readDkbStack(name);
+    assertDockerAvailable();
+    await requireStoppedStack(context, 'replace from backup');
+  }
+
+  await fs.mkdir(stackStateRoot(), { recursive: true });
+  const stage = await fs.mkdtemp(path.join(stackStateRoot(), '.restore-'));
+  const previous = `${target}.rollback-${process.pid}-${Date.now().toString(36)}`;
+  let movedPrevious = false;
+
+  try {
+    await extractTar({
+      cwd: stage,
+      file: archive,
+      strict: true,
+      preservePaths: false,
+      unlink: false,
+    });
+    const stagedRoot = path.join(stage, archiveRoot);
+    if (!await exists(path.join(stagedRoot, 'stack.env'))) {
+      throw new DkbError('Stack backup is missing stack.env and cannot be restored.');
+    }
+
+    if (existing) {
+      await fs.rename(target, previous);
+      movedPrevious = true;
+    }
+    await fs.rename(stagedRoot, target);
+    if (movedPrevious) await fs.rm(previous, { recursive: true, force: true });
+  } catch (error) {
+    if (movedPrevious && !await exists(target) && await exists(previous)) {
+      await fs.rename(previous, target);
+    }
+    throw error;
+  } finally {
+    await fs.rm(stage, { recursive: true, force: true });
+  }
+
+  return {
+    status: 'restored',
+    name,
+    archive,
+    stateRoot: target,
+    sha256: actualHash,
+    replaced: existing,
+  };
+}
+
+export async function upgradeDkbStack(name: string, lockPath: string): Promise<DkbStackUpgrade> {
+  const context = await readDkbStack(name);
+  assertDockerAvailable();
+  await requireStoppedStack(context, 'upgrade');
+  const lockFile = path.resolve(lockPath);
+  const lock = await readStackLock(lockFile);
+  const backup = await backupDkbStack(name);
+  const originalEnvironment = await fs.readFile(context.envFile, 'utf8');
+
+  for (const image of Object.values(lock.images)) {
+    const pulled = spawnSync('docker', ['pull', image], { encoding: 'utf8' });
+    if (pulled.error || pulled.status !== 0) {
+      const detail = String(pulled.stderr || pulled.stdout || pulled.error?.message || '').trim();
+      throw new DkbError(`Unable to pull ${image}${detail ? `: ${detail}` : ''}. Stack ${name} remains unchanged.`);
+    }
+  }
+
+  const values = parseEnvironmentFile(originalEnvironment);
+  const updated = {
+    ...values,
+    DKB_STACK_VERSION: lock.version,
+    DKB_REGISTRY_IMAGE: lock.images.registry,
+    DKB_COMPILER_IMAGE: lock.images.compiler,
+    DKB_RUNTIME_IMAGE: lock.images.runtime,
+    DKB_PROVIDER_IMAGE: lock.images.provider,
+  };
+  await writeEnvironmentFile(context.envFile, updated);
+  await writeAtomic(path.join(context.root, 'release.lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
+
+  try {
+    const ready = await upDkbStack(name, context.target);
+    return {
+      status: 'upgraded',
+      name,
+      fromVersion: context.version ?? 'development',
+      toVersion: lock.version,
+      lockFile,
+      backup,
+      services: ready.services,
+    };
+  } catch (error) {
+    const failedContext = await readDkbStack(name);
+    runCompose(failedContext, ['down', '--remove-orphans'], false, true);
+    await restoreDkbStack(backup.archive, true);
+    let rollbackMessage = 'Previous state restored but left stopped.';
+    try {
+      await upDkbStack(name, context.target);
+      rollbackMessage = 'Previous state restored and restarted.';
+    } catch (rollbackError) {
+      rollbackMessage = `Previous state restored but restart failed: ${errorMessage(rollbackError)}`;
+    }
+    throw new DkbError(`Stack upgrade to ${lock.version} failed: ${errorMessage(error)} ${rollbackMessage}`);
+  }
 }
 
 export async function prepareDkbStack(name = 'local', target: DkbStackTarget = 'default'): Promise<DkbStackContext> {
@@ -272,6 +475,7 @@ function contextFrom(root: string, composeFile: string, envFile: string, values:
     runtimePort,
     meilisearchPort,
     teiPort,
+    ...(values.DKB_STACK_VERSION ? { version: values.DKB_STACK_VERSION } : {}),
   };
 }
 
@@ -441,6 +645,36 @@ function assertRequiredImages(context: DkbStackContext): void {
   }
 }
 
+async function migrateLegacyRegistryVolume(
+  context: DkbStackContext,
+): Promise<{ status: 'copied'; volume: string; preserved: true } | null> {
+  const destination = path.join(context.root, 'registry', 'data');
+  const marker = path.join(destination, '.legacy-volume-migrated');
+  if (await exists(marker) || await exists(path.join(destination, 'registry.sqlite'))) return null;
+
+  const volume = `${context.projectName}_dkb-registry-data`;
+  const inspected = spawnSync('docker', ['volume', 'inspect', volume], { encoding: 'utf8' });
+  if (inspected.status !== 0) return null;
+
+  const values = readEnvironmentFileSync(context.envFile);
+  const image = values.DKB_REGISTRY_IMAGE ?? 'dkb-registry:0.1.0';
+  const copied = spawnSync('docker', [
+    'run', '--rm',
+    '--mount', `type=volume,src=${volume},dst=/from,readonly`,
+    '--mount', `type=bind,src=${destination.replace(/\\/gu, '/')},dst=/to`,
+    image,
+    'sh', '-c', 'cp -a /from/. /to/',
+  ], { encoding: 'utf8' });
+
+  if (copied.error || copied.status !== 0) {
+    const detail = String(copied.stderr || copied.stdout || copied.error?.message || '').trim();
+    throw new DkbError(`Unable to migrate legacy Registry volume ${volume}${detail ? `: ${detail}` : ''}. The volume was left unchanged.`);
+  }
+
+  await fs.writeFile(marker, `${new Date().toISOString()}\n`, 'utf8');
+  return { status: 'copied', volume, preserved: true };
+}
+
 async function assertPortAvailable(port: number, label: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const server = net.createServer();
@@ -458,11 +692,15 @@ async function resolveComposeFile(): Promise<string> {
   for (const candidate of candidates) {
     if (await exists(candidate)) return candidate;
   }
-  throw new DkbError('DKB stack Compose distribution is missing. Reinstall @dkb/cli or set DKB_STACK_COMPOSE_FILE.');
+  throw new DkbError('DKB stack Compose distribution is missing. Reinstall @sjshovan/dkb-cli or set DKB_STACK_COMPOSE_FILE.');
 }
 
 function stackStateRoot(): string {
   return path.resolve(process.env.DKB_STACK_STATE_ROOT ?? path.join(os.homedir(), '.dkb', 'stacks'));
+}
+
+function stackBackupRoot(): string {
+  return path.resolve(process.env.DKB_STACK_BACKUP_ROOT ?? path.join(os.homedir(), '.dkb', 'backups'));
 }
 
 function stackName(value: string): string {
@@ -552,6 +790,96 @@ async function exists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function requireStoppedStack(context: DkbStackContext, operation: string): Promise<void> {
+  const running = await composeContainerIds(context);
+  if (running.length > 0) {
+    throw new DkbError(`Stack ${context.name} must be stopped before ${operation}. Run: dkb stack down ${context.name}`);
+  }
+}
+
+function assertOutsideStack(stackRoot: string, target: string, label: string): void {
+  const relative = path.relative(path.resolve(stackRoot), path.resolve(target));
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    throw new DkbError(`${label} must be outside the stack state root so it is not archived recursively.`);
+  }
+}
+
+async function fileSha256(target: string): Promise<string> {
+  const hash = createHash('sha256');
+  const handle = await fs.open(target, 'r');
+  try {
+    for await (const chunk of handle.readableWebStream()) hash.update(Buffer.from(chunk));
+  } finally {
+    await handle.close();
+  }
+  return hash.digest('hex');
+}
+
+async function readChecksum(target: string): Promise<string> {
+  let source: string;
+  try {
+    source = await fs.readFile(target, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new DkbError(`Stack backup checksum is missing: ${target}`);
+    }
+    throw error;
+  }
+  const digest = source.trim().split(/\s+/u)[0] ?? '';
+  if (!/^[a-f0-9]{64}$/u.test(digest)) throw new DkbError(`Stack backup checksum is invalid: ${target}`);
+  return digest;
+}
+
+async function validateStackArchive(target: string): Promise<string> {
+  const roots = new Set<string>();
+  let entries = 0;
+  await listTar({
+    file: target,
+    strict: true,
+    onentry: (entry) => {
+      entries += 1;
+      if (entries > 1_000_000) throw new DkbError('Stack backup contains too many entries.');
+      const normalized = entry.path.replace(/\\/gu, '/');
+      if (normalized.includes('\0') || normalized.startsWith('/') || /^[A-Za-z]:/u.test(normalized)) {
+        throw new DkbError(`Unsafe absolute path in stack backup: ${entry.path}`);
+      }
+      const parts = normalized.split('/').filter(Boolean);
+      if (parts.length === 0 || parts.some((part) => part === '..')) {
+        throw new DkbError(`Unsafe path in stack backup: ${entry.path}`);
+      }
+      roots.add(parts[0]!);
+    },
+  });
+  if (entries === 0 || roots.size !== 1) throw new DkbError('Stack backup must contain exactly one stack root directory.');
+  return [...roots][0]!;
+}
+
+async function readStackLock(target: string): Promise<{
+  format: 'dkb.stack-lock.v1';
+  version: string;
+  images: { registry: string; compiler: string; runtime: string; provider: string };
+}> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await fs.readFile(target, 'utf8')) as unknown;
+  } catch (error) {
+    throw new DkbError(`Unable to read stack release lock ${target}: ${errorMessage(error)}`);
+  }
+  if (!isRecord(value) || value.format !== 'dkb.stack-lock.v1' || typeof value.version !== 'string' || !isRecord(value.images)) {
+    throw new DkbError(`Invalid DKB stack release lock: ${target}`);
+  }
+  const expected = ['registry', 'compiler', 'runtime', 'provider'] as const;
+  const images = {} as { registry: string; compiler: string; runtime: string; provider: string };
+  for (const name of expected) {
+    const image = value.images[name];
+    if (typeof image !== 'string' || !/^ghcr\.io\/sjshovan\/dkb-[a-z-]+@sha256:[a-f0-9]{64}$/u.test(image)) {
+      throw new DkbError(`Stack release lock has an invalid or unpinned ${name} image.`);
+    }
+    images[name] = image;
+  }
+  return { format: 'dkb.stack-lock.v1', version: value.version, images };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

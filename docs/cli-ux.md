@@ -108,11 +108,12 @@ configuration. `outdated` checks only Registry-installed DKBs and fails on an
 unreachable Registry rather than claiming the Library is current. `upgrade
 --dry-run` resolves the exact latest version without mutating the Library.
 
-Registry authentication is supplied with `DKB_REGISTRY_TOKEN` or `--token`.
-`dkb registry login` remains visible as a planned command, but exits nonzero
-with `Not yet implemented` because the Registry does not yet expose the final
-hosted authentication contract. It never calls the development fixture or
-pretends a session was created.
+Registry authentication uses `dkb registry login`, `whoami`, and `logout`.
+Login validates an existing scoped Registry token before storing it in the
+machine-local credentials file, never in a Library, host inventory, package, or
+Git. Interactive login masks input; automation can use `--token-stdin` or
+`DKB_REGISTRY_TOKEN`. `logout --revoke` invalidates the remote token before
+removing the local credential.
 
 ## Command lifecycle
 

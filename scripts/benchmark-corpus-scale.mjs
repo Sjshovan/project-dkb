@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { compileComposeProject } from '@dkb/compiler/compile.js';
-import { estimateIngestionWorkingBytes } from '@dkb/compiler/diskCapacity.js';
+import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { estimateIngestionWorkingBytes } from '@sjshovan/dkb-compiler/diskCapacity.js';
 
 const MEBIBYTE = 1024 ** 2;
 const tiers = {

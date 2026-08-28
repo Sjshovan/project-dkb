@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { parseDkbIdentity } from '@dkb/protocol/identity.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import type { CliPresenter } from './presentation.js';
 import { humanSummary } from './presentation.js';
 import { summarizePackageListing } from './packagePresentation.js';
@@ -37,7 +37,7 @@ export function registerPackageLifecycleCommands(
     .action(async (query: string | undefined, options: RegistryOptions) => {
       const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
       const registry = await configuredRegistry({ url: options.url, root: libraryRoot });
-      const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+      const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const result = await new DkbRegistryClient({ baseUrl: registry.url, token: options.token }).searchPackages(query);
 
       dependencies.presenter().print({ registryUrl: registry.url, ...asRecord(result) }, summarizePackageListing);
@@ -50,7 +50,7 @@ export function registerPackageLifecycleCommands(
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .action(async (identity: string, options: { library?: string }) => {
       const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
-      const { inspectInstalledPackage } = await import('@dkb/library/packageInfo.js');
+      const { inspectInstalledPackage } = await import('@sjshovan/dkb-library/packageInfo.js');
 
       dependencies.presenter().print(await inspectInstalledPackage(libraryRoot, identity), summarizeInstalledPackage);
     });
@@ -80,9 +80,9 @@ export function registerPackageLifecycleCommands(
       const normalizedIdentity = parseDkbIdentity(identity, 'Installed package identity').identity;
       const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
       const [{ readLibraryState }, { maybeReadRuntimeLock }, { DkbRegistryClient }] = await Promise.all([
-        import('@dkb/library/state.js'),
-        import('@dkb/library/builds.js'),
-        import('@dkb/registry-client/client.js'),
+        import('@sjshovan/dkb-library/state.js'),
+        import('@sjshovan/dkb-library/builds.js'),
+        import('@sjshovan/dkb-registry-client/client.js'),
       ]);
       const entry = (await readLibraryState(libraryRoot)).entries[normalizedIdentity];
 
@@ -127,7 +127,7 @@ export function registerPackageLifecycleCommands(
           }));
         }
 
-        const { installDkbFromRegistry } = await import('@dkb/runtime/runtime/registryInstall.js');
+        const { installDkbFromRegistry } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
         return installDkbFromRegistry({
           registryUrl,
           registryToken: options.token,
@@ -164,8 +164,8 @@ async function inspectOutdatedPackages(
   updates: number;
 }> {
   const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
-  const { readLibraryState } = await import('@dkb/library/state.js');
-  const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+  const { readLibraryState } = await import('@sjshovan/dkb-library/state.js');
+  const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
   const state = await readLibraryState(libraryRoot);
   const normalizedIdentity = identity
     ? parseDkbIdentity(identity, 'Installed package identity').identity

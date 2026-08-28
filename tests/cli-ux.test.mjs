@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { humanSummary } from '../apps/cli/dist/cli/presentation.js';
-import { createDkbPackageArchive, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
-import { DkbRegistryClient, writeArchiveFileFromPath } from '@dkb/registry-client/client.js';
+import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
+import { DkbRegistryClient, writeArchiveFileFromPath } from '@sjshovan/dkb-registry-client/client.js';
 import { prepareServeLibrary } from '../apps/cli/dist/cli/serve.js';
 import {
   configuredRegistry,
@@ -18,8 +18,8 @@ import {
   writeConfiguredRegistryUrl,
 } from '../apps/cli/dist/cli/registryConfig.js';
 import { preflightDkbInstall } from '../services/runtime/dist/runtime/registryInstall.js';
-import { applyLibraryLock } from '@dkb/library/state.js';
-import { sourceAssetsFromChunks } from '@dkb/providers-bundled/sourceIndex.js';
+import { applyLibraryLock } from '@sjshovan/dkb-library/state.js';
+import { sourceAssetsFromChunks } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'apps', 'cli', 'dist', 'cli', 'index.js');
@@ -1327,19 +1327,22 @@ test('root help separates common, management, and advanced commands', async () =
   }
 });
 
-test('registry help preserves planned authentication without pretending it works', async () => {
+test('registry help exposes the implemented credential lifecycle', async () => {
   const group = await runCli(['registry', '--help']);
   const packages = await runCli(['registry', 'packages', '--help']);
-  const planned = await runCli(['--json', 'registry', 'login']);
+  const login = await runCli(['registry', 'login', '--help']);
+  const logout = await runCli(['registry', 'logout', '--help']);
 
   assert.equal(group.code, 0);
   assert.equal(packages.code, 0);
-  assert.match(group.stdout, /login \[options\]\s+Authenticate this host with a Registry \(not\s+yet implemented\)/);
+  assert.equal(login.code, 0);
+  assert.equal(logout.code, 0);
+  assert.match(group.stdout, /login \[options\]\s+Authenticate this host with a Registry/);
+  assert.match(group.stdout, /whoami \[options\]\s+Show the account and team/);
+  assert.match(group.stdout, /logout \[options\]\s+Remove the saved Registry credential/);
   assert.match(packages.stdout, /--token <token>/);
-  assert.equal(planned.code, 1);
-  assert.equal(planned.stderr, '');
-  assert.match(JSON.parse(planned.stdout).error.message, /^Not yet implemented: dkb registry login\./);
-  assert.match(JSON.parse(planned.stdout).error.message, /DKB_REGISTRY_TOKEN/);
+  assert.match(login.stdout, /--token-stdin/);
+  assert.match(logout.stdout, /--revoke/);
 });
 
 test('retained add and compile command surfaces expose their supported options', async () => {

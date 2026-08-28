@@ -26,7 +26,7 @@ x-registry-environment: &registry-environment
   DKB_REGISTRY_BOOTSTRAP_TOKEN: ${DKB_REGISTRY_BOOTSTRAP_TOKEN:?Run dkb stack up to generate stack secrets}
 
 x-registry-volumes: &registry-volumes
-  - dkb-registry-data:/data
+  - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/registry/data:/data
   - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/registry/storage:/var/www/html/storage/app/registry
 
 services:
@@ -217,4 +217,3 @@ volumes:
   dkb-compiler-jobs:
   dkb-fastembed-cache:
   dkb-tei-cache:
-  dkb-registry-data:

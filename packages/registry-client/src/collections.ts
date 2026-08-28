@@ -1,6 +1,6 @@
-import { DkbError } from '@dkb/protocol/errors.js';
-import { parseDkbIdentity } from '@dkb/protocol/identity.js';
-import { discoverLibraryEntries, loadManifest } from '@dkb/protocol/manifest.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
+import { discoverLibraryEntries, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { DkbRegistryClient, type DkbRegistryCollectionRevision, type DkbRegistryRelease } from './client.js';
 
 export async function publishCollectionFromLibrary(options: {

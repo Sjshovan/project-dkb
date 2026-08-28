@@ -1,4 +1,4 @@
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import type { DkbRemoteAttachInput } from '../remote/types.js';
 

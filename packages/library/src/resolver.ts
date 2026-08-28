@@ -1,16 +1,16 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { discoverLibraryEntries, loadLibrary, loadManifest } from '@dkb/protocol/manifest.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
+import { discoverLibraryEntries, loadLibrary, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import type {
   DkbLibraryLockEntry,
   DkbLibraryLockManifest,
   DkbLibraryRootRequirement,
   DkbSourceManifest,
   LoadedDkb,
-} from '@dkb/protocol/types.js';
+} from '@sjshovan/dkb-protocol/types.js';
 import { applyLibraryLock, maybeReadLibraryLock } from './state.js';
 
 export interface SyncLibraryResult {

@@ -1,5 +1,5 @@
-import { DkbError } from '@dkb/protocol/errors.js';
-import type { DkbStore, DkbRecord, LoadedDkb } from '@dkb/protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbStore, DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbReader, DkbWriter } from './adapter.js';
 import { FolderAdapter } from './folder.js';
 import { SqliteAdapter } from './sqlite.js';

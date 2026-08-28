@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
-import { loadCollection, loadDkb, loadLibrary, loadManifest } from '@dkb/protocol/manifest.js';
+import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
 
 export type AlignmentTargetType = 'library' | 'collection' | 'dkb';
 export type AlignmentAuditStatus = 'aligned' | 'issues';

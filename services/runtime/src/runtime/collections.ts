@@ -3,17 +3,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { ensureRuntimeState, invalidateRuntimeQuerySnapshot } from './state.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { loadManifest } from '@dkb/protocol/manifest.js';
-import type { DkbLibraryLockManifest, DkbSourceManifest } from '@dkb/protocol/types.js';
-import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
-import { syncLibrary } from '@dkb/library/resolver.js';
-import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@dkb/library/artifactSnapshot.js';
-import { DKB_PACKAGE_EXTENSION } from '@dkb/registry-client/archive.js';
-import { DkbRegistryClient, type DkbRegistryCollectionRevision } from '@dkb/registry-client/client.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
+import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
+import type { DkbLibraryLockManifest, DkbSourceManifest } from '@sjshovan/dkb-protocol/types.js';
+import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
+import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
+import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@sjshovan/dkb-library/artifactSnapshot.js';
+import { DKB_PACKAGE_EXTENSION } from '@sjshovan/dkb-registry-client/archive.js';
+import { DkbRegistryClient, type DkbRegistryCollectionRevision } from '@sjshovan/dkb-registry-client/client.js';
 import { installDkbArchiveIntoRuntime, preflightDkbInstall } from './registryInstall.js';
-import type { DkbProgressReporter } from '@dkb/protocol/progress.js';
+import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 
 export interface CollectionInstallResult {
   status: 'installed' | 'updated' | 'already_installed';

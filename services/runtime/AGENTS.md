@@ -23,5 +23,5 @@ are authoritative.
 - Keep credentials out of Runtime state, discovery documents, traces, and
   package artifacts.
 
-Verify with `npm run check --workspace @dkb/runtime`, focused Runtime/MCP tests,
+Verify with `npm run check --workspace @sjshovan/dkb-runtime`, focused Runtime/MCP tests,
 and the install-query-uninstall-reinstall lifecycle proof.

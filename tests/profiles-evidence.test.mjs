@@ -7,27 +7,27 @@ import {
   assertMatchingRetrievalProfiles,
   retrievalProfileLockForCompilerResults,
   validateRetrievalProfileLock,
-} from '@dkb/pipeline/profile.js';
-import { buildEvidenceIr, validateEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
+} from '@sjshovan/dkb-pipeline/profile.js';
+import { buildEvidenceIr, validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import {
   evidenceBuildLock,
   retrievalBuildLock,
   validateRetrievalBuildLock,
-} from '@dkb/protocol/builds.js';
-import { compileComposeProject, verifyComposeProject } from '@dkb/compiler/compile.js';
+} from '@sjshovan/dkb-protocol/builds.js';
+import { compileComposeProject, verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import {
   readLlamaIndexCompilerBundleManifest,
   writeLlamaIndexCompilerBundle,
-} from '@dkb/providers-bundled/llamaindexArtifacts.js';
-import { analyzeSourceUnits } from '@dkb/compiler/sourceAnalysis.js';
+} from '@sjshovan/dkb-providers-bundled/llamaindexArtifacts.js';
+import { analyzeSourceUnits } from '@sjshovan/dkb-compiler/sourceAnalysis.js';
 import {
   activateStoredPackageBuild,
   listPackageBuilds,
   mergeStoredPackageBuilds,
   validatePackageBuildGraph,
   writePackageBuildGraph,
-} from '@dkb/library/builds.js';
+} from '@sjshovan/dkb-library/builds.js';
 
 const image = 'dkb-compiler-llamaindex:0.3.7';
 

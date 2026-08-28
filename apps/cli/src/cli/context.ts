@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { registerHostLibrary, registeredHostLibrary, selectedHostLibrary, selectedHostRuntime } from '../host/inventory.js';
-import { nearestLibraryRoot, requireLibraryRoot } from '@dkb/library/root.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { nearestLibraryRoot, requireLibraryRoot } from '@sjshovan/dkb-library/root.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 export interface ResolveCliLibraryOptions {
   explicit?: string;

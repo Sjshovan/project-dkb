@@ -1,4 +1,4 @@
-# @dkb/library
+# @sjshovan/dkb-library
 
 Local DKB Library discovery, Collection resolution, lock/applied-state management, and transactional artifact snapshots.
 

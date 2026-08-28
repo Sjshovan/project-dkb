@@ -1,19 +1,19 @@
-import { canCompileSourceUnits } from '@dkb/library/adapters/adapter.js';
-import { adapterFor, adapterForStore } from '@dkb/library/adapters/index.js';
+import { canCompileSourceUnits } from '@sjshovan/dkb-library/adapters/adapter.js';
+import { adapterFor, adapterForStore } from '@sjshovan/dkb-library/adapters/index.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { loadCompose } from '@dkb/protocol/manifest.js';
-import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, DKB_RUNTIME_LOCK_PATH, artifactLockPath, manifestPath, resolveFrom } from '@dkb/protocol/paths.js';
-import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
-import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { loadCompose } from '@sjshovan/dkb-protocol/manifest.js';
+import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, DKB_RUNTIME_LOCK_PATH, artifactLockPath, manifestPath, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { validateDkbLockManifest } from '@sjshovan/dkb-protocol/validation.js';
+import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@sjshovan/dkb-protocol/types.js';
+import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
-import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
+import { DKB_ARTIFACT_MANIFEST_PATH, inspectDkbArtifactManifest, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@sjshovan/dkb-library/artifacts.js';
 import {
   DKB_EVIDENCE_BUILD_IR,
   listPackageBuilds,
@@ -22,14 +22,14 @@ import {
   validatePackageBuildGraph,
   writePackageBuildGraph,
   type DkbPackageBuildGraph,
-} from '@dkb/library/builds.js';
-import type { LlamaIndexCompilerResult } from '@dkb/providers-bundled/llamaindex.js';
+} from '@sjshovan/dkb-library/builds.js';
+import type { LlamaIndexCompilerResult } from '@sjshovan/dkb-providers-bundled/llamaindex.js';
 import {
   readLlamaIndexCompilerRecords,
   sourceUnitFromLlamaIndexRecord,
   writeLlamaIndexCompilerBundle,
   type LlamaIndexCompilerBundleManifest,
-} from '@dkb/providers-bundled/llamaindexArtifacts.js';
+} from '@sjshovan/dkb-providers-bundled/llamaindexArtifacts.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   resolveProviderRetrievalProfile,
@@ -37,14 +37,14 @@ import {
   writeRetrievalProfileLock,
   type DkbResolvedRetrievalProfile,
   type DkbRetrievalProfileLock,
-} from '@dkb/pipeline/profile.js';
-import { buildEvidenceIr, evidenceIdentityForRecord, DKB_EVIDENCE_IR_PATH, readEvidenceIr, validateEvidenceIr, writeEvidenceIr, type DkbEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
-import { DkbProviderHost } from '@dkb/pipeline/host.js';
-import { sourceUnitFromPipelineRecord } from '@dkb/providers-bundled/records.js';
+} from '@sjshovan/dkb-pipeline/profile.js';
+import { buildEvidenceIr, evidenceIdentityForRecord, DKB_EVIDENCE_IR_PATH, readEvidenceIr, validateEvidenceIr, writeEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
+import { sourceUnitFromPipelineRecord } from '@sjshovan/dkb-providers-bundled/records.js';
 import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
-import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@dkb/pipeline/types.js';
-import { loadFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
+import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@sjshovan/dkb-pipeline/types.js';
+import { loadFaissPackageArtifact } from '@sjshovan/dkb-providers-bundled/faissStore.js';
 import {
   summarizeBuildStorage,
   summarizeEvidenceCorpus,
@@ -286,7 +286,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
       ...registry.collections.flatMap((collection) => collection.dkbs),
       ...registry.dkbs,
     ]);
-    const existingProfile = await import('@dkb/pipeline/profile.js').then((module) => module.maybeReadRetrievalProfileLock(resolvedRoot));
+    const existingProfile = await import('@sjshovan/dkb-pipeline/profile.js').then((module) => module.maybeReadRetrievalProfileLock(resolvedRoot));
     const profileDrift = !existingProfile
       || existingProfile.profile.configDigest !== desiredProfile.configDigest
       || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;

@@ -1,6 +1,6 @@
 ---
-"@dkb/providers-bundled": patch
-"@dkb/compiler": patch
+"@sjshovan/dkb-providers-bundled": patch
+"@sjshovan/dkb-compiler": patch
 ---
 
 Increase CPU compiler throughput with a measured FastEmbed scheduling window,

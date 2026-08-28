@@ -1,6 +1,6 @@
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DKB_EVIDENCE_IR_FORMAT } from '@dkb/protocol/evidence/ir.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DKB_EVIDENCE_IR_FORMAT } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbProviderHost, DkbProviderHostDescription } from './host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
 

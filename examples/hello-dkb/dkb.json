@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "type": "dkb",
+  "name": "@example/operations-handbook",
+  "displayName": "Example Operations Handbook",
+  "version": "1.0.0",
+  "description": "A small, non-sensitive DKB used for first-run compilation and retrieval.",
+  "license": "CC0-1.0",
+  "permissions": {
+    "read": true,
+    "write": false
+  }
+}

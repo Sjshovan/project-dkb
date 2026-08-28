@@ -22,6 +22,10 @@ remain operator-controlled.
 
 > **Status:** developer preview. Formats and commands are being hardened on the
 > `development` branch. Do not treat this checkout as a production release.
+> Release candidates currently remain private in GitHub Packages and GHCR; see
+> [Private developer-preview releases](docs/private-releases.md).
+> Current limitations are explicit in
+> [Developer-preview boundaries](docs/developer-preview.md).
 
 ## Install from this checkout
 
@@ -31,7 +35,7 @@ Docling/LlamaIndex and TEI services.
 ```powershell
 npm install
 npm run build
-npm link --workspace @dkb/cli
+npm link --workspace @sjshovan/dkb-cli
 dkb --version
 dkb version
 ```
@@ -56,6 +60,9 @@ Initialization succeeds even when the Registry is offline. DKB saves the URL,
 prints a warning, and provides the exact verification command. Local knowledge
 authoring and compilation do not require a running Registry.
 
+For a first non-sensitive proof, compile and query the
+[example operations handbook](examples/hello-dkb/README.md).
+
 ## Package lifecycle
 
 ```powershell
@@ -75,10 +82,11 @@ chunk, or embed the package. Installing the same immutable release is a clean
 no-op. Upgrade and uninstall preserve the previous active Runtime snapshot when
 validation or activation fails.
 
-Registry credentials are supplied through `DKB_REGISTRY_TOKEN` or the relevant
-command's `--token` option. `dkb registry login` is reserved for the planned
-hosted authentication flow and currently exits with an explicit `Not yet
-implemented` error; the CLI does not invent or persist Registry login sessions.
+Registry authentication uses scoped, expiring bearer tokens. Run
+`dkb registry login` for masked entry, `dkb registry whoami` to inspect the
+active identity, and `dkb registry logout --revoke` to revoke and remove it.
+Automation may continue to use `DKB_REGISTRY_TOKEN`; command-line `--token`
+values are supported but can be exposed through shell history.
 
 ## Context and host inventory
 

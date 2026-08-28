@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { DkbEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import type { DkbArtifactManifest } from '@dkb/library/artifacts.js';
-import { listPackageBuilds } from '@dkb/library/builds.js';
+import type { DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import type { DkbArtifactManifest } from '@sjshovan/dkb-library/artifacts.js';
+import { listPackageBuilds } from '@sjshovan/dkb-library/builds.js';
 
 export interface DkbDistributionStatistics {
   count: number;

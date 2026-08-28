@@ -8,9 +8,9 @@ The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-rele
 
 ## Dependency direction
 
-- Depend on `@dkb/protocol` and transport/archive libraries only.
+- Depend on `@sjshovan/dkb-protocol` and transport/archive libraries only.
 - Expose typed operations to CLI and Runtime orchestration.
-- Keep host inventory selection and human output in `@dkb/cli`.
+- Keep host inventory selection and human output in `@sjshovan/dkb-cli`.
 
 ## Invariants
 
@@ -28,6 +28,6 @@ The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-rele
 
 ## Verification
 
-- `npm run check --workspace @dkb/registry-client`
-- `npm run build --workspace @dkb/registry-client`
+- `npm run check --workspace @sjshovan/dkb-registry-client`
+- `npm run build --workspace @sjshovan/dkb-registry-client`
 - `node --test tests/cli-ux.test.mjs`

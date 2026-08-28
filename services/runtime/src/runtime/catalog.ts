@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
-import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '@dkb/providers-bundled/llamaindexArtifacts.js';
-import { refreshInstalledLibraryArtifactMetadata } from '@dkb/library/artifactMetadata.js';
-import { validatePackageBuildGraph } from '@dkb/library/builds.js';
+import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '@sjshovan/dkb-providers-bundled/llamaindexArtifacts.js';
+import { refreshInstalledLibraryArtifactMetadata } from '@sjshovan/dkb-library/artifactMetadata.js';
+import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 
 export interface RuntimeCatalogRefreshResult {
   recordCount: number;

@@ -1,9 +1,9 @@
 import path from 'node:path';
-import { adapterFor } from '@dkb/library/adapters/index.js';
-import { canWrite } from '@dkb/library/adapters/adapter.js';
-import { loadDkb } from '@dkb/protocol/manifest.js';
-import { evaluateDkbWriteIntent } from '@dkb/protocol/writeGate.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { adapterFor } from '@sjshovan/dkb-library/adapters/index.js';
+import { canWrite } from '@sjshovan/dkb-library/adapters/adapter.js';
+import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
+import { evaluateDkbWriteIntent } from '@sjshovan/dkb-protocol/writeGate.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { listQueuedWrites, updateQueuedWrite, writeQueueItem, defaultWriteQueueRoot } from './queue.js';
 import { recordFromQueuedWrite } from './record.js';
 import type { ProcessWriteQueueInput, ProcessWriteQueueResult, QueuedWrite } from './types.js';

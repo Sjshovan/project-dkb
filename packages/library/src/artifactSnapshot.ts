@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_RUNTIME_LOCK_PATH, resolveFrom } from '@dkb/protocol/paths.js';
-import { DKB_RETRIEVAL_PROFILE_LOCK_PATH } from '@dkb/pipeline/profile.js';
+import { DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_RUNTIME_LOCK_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_RETRIEVAL_PROFILE_LOCK_PATH } from '@sjshovan/dkb-pipeline/profile.js';
 
 const SNAPSHOT_PATHS = [
   DKB_ARTIFACTS_DIR,

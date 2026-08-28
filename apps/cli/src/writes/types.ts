@@ -1,5 +1,5 @@
-import type { DkbWriteIntent, DkbWriteIntentResult } from '@dkb/protocol/writeGate.js';
-import type { DkbRecord } from '@dkb/protocol/types.js';
+import type { DkbWriteIntent, DkbWriteIntentResult } from '@sjshovan/dkb-protocol/writeGate.js';
+import type { DkbRecord } from '@sjshovan/dkb-protocol/types.js';
 
 export type QueuedWriteStatus = 'pending' | 'needs_review' | 'blocked' | 'committed' | 'failed' | 'superseded';
 

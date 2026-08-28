@@ -5,7 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { DkbRegistryClient } from '@dkb/registry-client/client.js';
+import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 
 test('install layers stream through native HTTP with byte and digest verification', async (context) => {
   const payload = Buffer.allocUnsafe(12 * 1024 * 1024);
@@ -58,4 +58,26 @@ test('install layers stream through native HTTP with byte and digest verificatio
   assert.equal(result.hash, digest);
   assert.equal((await fs.stat(destination)).size, payload.byteLength);
   assert.deepEqual(await fs.readFile(destination), payload);
+});
+
+test('Registry authentication failures include exact recovery commands', async (context) => {
+  const server = http.createServer((request, response) => {
+    const status = request.headers.authorization === 'Bearer under-scoped' ? 403 : 401;
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ message: status === 403 ? 'Forbidden' : 'Unauthenticated' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  await assert.rejects(
+    new DkbRegistryClient({ baseUrl, token: 'expired' }).packages(),
+    new RegExp(`Registry authentication failed.*dkb registry login --url ${baseUrl}`, 'u'),
+  );
+  await assert.rejects(
+    new DkbRegistryClient({ baseUrl, token: 'under-scoped' }).packages(),
+    new RegExp(`lacks permission.*dkb registry login --url ${baseUrl}`, 'u'),
+  );
 });

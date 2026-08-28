@@ -1,5 +1,5 @@
-import { DkbError } from '@dkb/protocol/errors.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import {
   LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
@@ -10,8 +10,8 @@ import {
   startLlamaIndexCompilerService,
   stopLlamaIndexCompilerService,
 } from './llamaindex.js';
-import type { DkbBundledPlugin } from '@dkb/pipeline/host.js';
-import type { DkbEmbeddingProvider, DkbIndexRuntime, DkbIngestionProvider } from '@dkb/pipeline/types.js';
+import type { DkbBundledPlugin } from '@sjshovan/dkb-pipeline/host.js';
+import type { DkbEmbeddingProvider, DkbIndexRuntime, DkbIngestionProvider } from '@sjshovan/dkb-pipeline/types.js';
 import {
   buildFaissRuntimeSnapshot,
   closeFaissSnapshot,

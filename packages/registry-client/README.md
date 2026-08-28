@@ -1,4 +1,4 @@
-# @dkb/registry-client
+# @sjshovan/dkb-registry-client
 
 Transport and archive client for the authoritative Laravel DKB Registry.
 

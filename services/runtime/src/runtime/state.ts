@@ -1,34 +1,34 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@dkb/library/signing.js';
-import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '@dkb/library/artifacts.js';
+import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@sjshovan/dkb-library/signing.js';
+import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '@sjshovan/dkb-library/artifacts.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { closeQueryContext, getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import { renderModelEvidence } from '../read/modelEvidence.js';
 import { recordRetrievalTrace, retrievalTraceEnabled } from './trace.js';
 import { enqueueQueryAudit } from './queryAudit.js';
-import { loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
-import type { DkbPackageReceipt, LoadedDkb } from '@dkb/protocol/types.js';
-import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
-import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
-import { syncLibrary } from '@dkb/library/resolver.js';
-import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
-import { maybeReadRuntimeLock, validatePackageBuildGraph, writeRuntimeLock } from '@dkb/library/builds.js';
-import { DKB_RUNTIME_LOCK_PATH } from '@dkb/protocol/paths.js';
-import { DKB_RUNTIME_LOCK_FORMAT, type DkbRuntimeLock } from '@dkb/protocol/builds.js';
+import { loadDkbPackage, loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
+import type { DkbPackageReceipt, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { DKB_ARTIFACTS_DIR } from '@sjshovan/dkb-protocol/paths.js';
+import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
+import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
+import { snapshotLibraryArtifacts } from '@sjshovan/dkb-library/artifactSnapshot.js';
+import { maybeReadRuntimeLock, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import { DKB_RUNTIME_LOCK_PATH } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_RUNTIME_LOCK_FORMAT, type DkbRuntimeLock } from '@sjshovan/dkb-protocol/builds.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   assertMatchingRetrievalProfiles,
   maybeReadRetrievalProfileLock,
   writeRetrievalProfileLock,
   type DkbRetrievalProfileLock,
-} from '@dkb/pipeline/profile.js';
+} from '@sjshovan/dkb-pipeline/profile.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
-import type { DkbIndexMutationResult } from '@dkb/pipeline/types.js';
+import type { DkbIndexMutationResult } from '@sjshovan/dkb-pipeline/types.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { withRuntimeQuery } from './mutation.js';
 

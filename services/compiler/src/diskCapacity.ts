@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbCorpusStatistics } from './buildStatistics.js';
 
 const MEBIBYTE = 1024 ** 2;

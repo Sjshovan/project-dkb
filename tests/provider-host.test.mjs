@@ -3,19 +3,19 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@dkb/pipeline/config.js';
-import { resolveBuildProfiles } from '@dkb/pipeline/buildProfiles.js';
-import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
+import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
+import { resolveBuildProfiles } from '@sjshovan/dkb-pipeline/buildProfiles.js';
+import { DkbProviderHost, pluginPath } from '@sjshovan/dkb-pipeline/host.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
 import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../apps/cli/dist/providers/management.js';
-import { compileDkbWithProviderHost } from '@dkb/compiler/pipelineRunner.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { compileComposeProject, compileRetrievalFromEvidence } from '@dkb/compiler/compile.js';
-import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
-import { meilisearchIndexId, meilisearchIndexPrefix } from '@dkb/providers-bundled/meilisearchProvider.js';
-import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
-import { listPackageBuilds } from '@dkb/library/builds.js';
+import { compileDkbWithProviderHost } from '@sjshovan/dkb-compiler/pipelineRunner.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
+import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-providers-bundled/meilisearchProvider.js';
+import { readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
+import { listPackageBuilds } from '@sjshovan/dkb-library/builds.js';
 
 const allPlugin = {
   id: '@test/all',

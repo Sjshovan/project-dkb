@@ -10,9 +10,9 @@ import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { DKB_CACHE_DIR, resolveFrom } from '@dkb/protocol/paths.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { DKB_CACHE_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 
 const execFile = promisify(execFileCallback);
 

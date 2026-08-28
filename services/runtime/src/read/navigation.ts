@@ -3,11 +3,11 @@ import {
   readSourceIndex,
   sourceAssetsFromChunks,
   type IndexedSourceUnit,
-} from '@dkb/providers-bundled/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@dkb/providers-bundled/vectorStore.js';
-import type { LexicalSearchScope } from '@dkb/providers-bundled/lexicalStore.js';
-import { tokenize } from '@dkb/providers-bundled/scoring.js';
-import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '@dkb/protocol/security/sourceContent.js';
+} from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
+import type { LexicalSearchScope } from '@sjshovan/dkb-providers-bundled/lexicalStore.js';
+import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
+import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 
 export interface DkbNavigationScope extends LexicalSearchScope {}
 

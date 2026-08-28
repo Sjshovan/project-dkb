@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { installDkbArchiveIntoRuntime } from '@dkb/runtime/runtime/registryInstall.js';
-import { DkbRegistryClient } from '@dkb/registry-client/client.js';
-import { resolveRegistryContext } from '@dkb/registry-client/config.js';
-import { defaultRuntimeStateRoot } from '@dkb/runtime/runtime/state.js';
-import { discoverRemoteDkb } from '@dkb/runtime/remote/discovery.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { installDkbArchiveIntoRuntime } from '@sjshovan/dkb-runtime/runtime/registryInstall.js';
+import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
+import { resolveRegistryContext } from '@sjshovan/dkb-registry-client/config.js';
+import { defaultRuntimeStateRoot } from '@sjshovan/dkb-runtime/runtime/state.js';
+import { discoverRemoteDkb } from '@sjshovan/dkb-runtime/remote/discovery.js';
 import {
   loadRemoteCatalog,
   markRemoteOfferPresented,
@@ -16,15 +16,15 @@ import {
   updateRemoteOfferState,
   type DkbPersistentRemote,
 } from './catalog.js';
-import { retrieveFromRemoteEndpoint } from '@dkb/runtime/remote/sessions.js';
-import { assertVerifiedDiscovery, verifyRegistryEndpointAttestation } from '@dkb/runtime/remote/verification.js';
+import { retrieveFromRemoteEndpoint } from '@sjshovan/dkb-runtime/remote/sessions.js';
+import { assertVerifiedDiscovery, verifyRegistryEndpointAttestation } from '@sjshovan/dkb-runtime/remote/verification.js';
 import type {
   DkbDiscoveryDocument,
   DkbDiscoveryEndpoint,
   DkbRemoteEndpointAttestation,
-} from '@dkb/runtime/remote/types.js';
-import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '@dkb/runtime/read/runtime.js';
-import type { DkbSigningKeyRecord } from '@dkb/protocol/types.js';
+} from '@sjshovan/dkb-runtime/remote/types.js';
+import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '@sjshovan/dkb-runtime/read/runtime.js';
+import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 
 export async function addDirectRemote(input: {
   url: string;

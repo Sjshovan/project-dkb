@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { DKB_CACHE_DIR, resolveFrom } from '@dkb/protocol/paths.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { DKB_CACHE_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 
 export const DKB_EMBEDDING_CACHE_PATH = `${DKB_CACHE_DIR}/embeddings.sqlite`;
 

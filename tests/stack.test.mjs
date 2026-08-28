@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { composeArguments, prepareDkbStack } from '../apps/cli/dist/stack/manager.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { backupDkbStack, composeArguments, prepareDkbStack, restoreDkbStack } from '../apps/cli/dist/stack/manager.js';
+
+const dockerAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
 
 test('stack preparation generates reusable local secrets without returning them', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-test-'));
@@ -128,5 +131,33 @@ test('changing the compiler target preserves a populated Runtime target until pi
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('stopped stack backup and restore preserve state with a verified sidecar', { skip: !dockerAvailable }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-backup-test-'));
+  const backups = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-backup-output-'));
+  const previousRoot = process.env.DKB_STACK_STATE_ROOT;
+  const previousBackups = process.env.DKB_STACK_BACKUP_ROOT;
+  process.env.DKB_STACK_STATE_ROOT = root;
+  process.env.DKB_STACK_BACKUP_ROOT = backups;
+
+  try {
+    const stack = await prepareDkbStack('backup-proof', 'fastembed-faiss');
+    await fs.writeFile(path.join(stack.root, 'runtime', 'proof.txt'), 'preserve me', 'utf8');
+    const backup = await backupDkbStack('backup-proof');
+    assert.equal(backup.containsSecrets, true);
+    assert.equal((await fs.readFile(backup.checksumFile, 'utf8')).startsWith(backup.sha256), true);
+
+    await fs.rm(stack.root, { recursive: true, force: true });
+    const restored = await restoreDkbStack(backup.archive);
+    assert.equal(await fs.readFile(path.join(restored.stateRoot, 'runtime', 'proof.txt'), 'utf8'), 'preserve me');
+  } finally {
+    if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
+    else process.env.DKB_STACK_STATE_ROOT = previousRoot;
+    if (previousBackups === undefined) delete process.env.DKB_STACK_BACKUP_ROOT;
+    else process.env.DKB_STACK_BACKUP_ROOT = previousBackups;
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(backups, { recursive: true, force: true });
   }
 });

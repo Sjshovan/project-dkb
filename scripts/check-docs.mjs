@@ -8,6 +8,11 @@ const required = [
   'docs/operations.md',
   'docs/security.md',
   'docs/chatgpt-mcp.md',
+  'docs/private-releases.md',
+  'docs/developer-preview.md',
+  'SECURITY.md',
+  'CONTRIBUTING.md',
+  'deploy/README.md',
 ];
 const retainedCommandReferences = [
   { pattern: /\bdkb compile\b/iu, command: 'dkb compile' },

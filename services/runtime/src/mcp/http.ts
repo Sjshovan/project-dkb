@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { hostHeaderValidation, NodeStreamableHTTPServerTransport, originValidation } from '@modelcontextprotocol/node';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { defaultRuntimeStateRoot } from '../runtime/state.js';
 import { createDkbReadOnlyMcpServer, fetchRemoteEvidence } from './readOnly.js';
 

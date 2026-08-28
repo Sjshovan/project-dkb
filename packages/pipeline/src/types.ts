@@ -3,7 +3,7 @@ import type {
   KnowledgeCapabilityProfile,
   KnowledgeQueryable,
   LoadedDkb,
-} from '@dkb/protocol/types.js';
+} from '@sjshovan/dkb-protocol/types.js';
 
 export type DkbProviderKind = 'ingestion' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
 export type DkbProcessorStage = 'document' | 'chunk' | 'record';

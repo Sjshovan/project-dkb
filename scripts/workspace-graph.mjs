@@ -74,14 +74,14 @@ function assertAcyclic(graph) {
 
 function assertBoundaries(graph) {
   const allowed = {
-    '@dkb/protocol': [],
-    '@dkb/pipeline': ['@dkb/protocol'],
-    '@dkb/providers-bundled': ['@dkb/pipeline', '@dkb/protocol'],
-    '@dkb/library': ['@dkb/pipeline', '@dkb/protocol', '@dkb/providers-bundled'],
-    '@dkb/registry-client': ['@dkb/protocol'],
-    '@dkb/compiler': ['@dkb/library', '@dkb/pipeline', '@dkb/protocol', '@dkb/providers-bundled', '@dkb/registry-client'],
-    '@dkb/runtime': ['@dkb/library', '@dkb/pipeline', '@dkb/protocol', '@dkb/providers-bundled', '@dkb/registry-client'],
-    '@dkb/cli': ['@dkb/compiler', '@dkb/library', '@dkb/pipeline', '@dkb/protocol', '@dkb/providers-bundled', '@dkb/registry-client', '@dkb/runtime'],
+    '@sjshovan/dkb-protocol': [],
+    '@sjshovan/dkb-pipeline': ['@sjshovan/dkb-protocol'],
+    '@sjshovan/dkb-providers-bundled': ['@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol'],
+    '@sjshovan/dkb-library': ['@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-providers-bundled'],
+    '@sjshovan/dkb-registry-client': ['@sjshovan/dkb-protocol'],
+    '@sjshovan/dkb-compiler': ['@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-providers-bundled', '@sjshovan/dkb-registry-client'],
+    '@sjshovan/dkb-runtime': ['@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-providers-bundled', '@sjshovan/dkb-registry-client'],
+    '@sjshovan/dkb-cli': ['@sjshovan/dkb-compiler', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-providers-bundled', '@sjshovan/dkb-registry-client', '@sjshovan/dkb-runtime'],
   };
 
   for (const [name, dependencies] of Object.entries(graph)) {

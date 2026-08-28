@@ -1,12 +1,12 @@
 ---
-"@dkb/protocol": minor
-"@dkb/library": minor
-"@dkb/pipeline": minor
-"@dkb/registry-client": minor
-"@dkb/providers-bundled": minor
-"@dkb/compiler": minor
-"@dkb/runtime": minor
-"@dkb/cli": minor
+"@sjshovan/dkb-protocol": minor
+"@sjshovan/dkb-library": minor
+"@sjshovan/dkb-pipeline": minor
+"@sjshovan/dkb-registry-client": minor
+"@sjshovan/dkb-providers-bundled": minor
+"@sjshovan/dkb-compiler": minor
+"@sjshovan/dkb-runtime": minor
+"@sjshovan/dkb-cli": minor
 ---
 
 Add deterministic PackageVersion, Evidence Build, and Retrieval Build layers;

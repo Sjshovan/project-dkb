@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { distributableWorkspaces, findForbiddenPackagePaths } from './package-policy.mjs';
 
 const repositoryRoot = process.cwd();
 const npmCli = process.env.npm_execpath;
@@ -16,26 +17,6 @@ if (windowsOnly && linuxOnly) {
   throw new Error('Choose at most one of --windows-only or --linux-only.');
 }
 
-const workspaces = [
-  '@dkb/protocol',
-  '@dkb/library',
-  '@dkb/pipeline',
-  '@dkb/registry-client',
-  '@dkb/providers-bundled',
-  '@dkb/compiler',
-  '@dkb/runtime',
-  '@dkb/cli',
-];
-const forbidden = [
-  /(^|\/)\.env($|\.)/i,
-  /(^|\/)\.dkb(\/|$)/i,
-  /(^|\/)testing(\/|$)/i,
-  /graphify-out/i,
-  /\.tsbuildinfo$/i,
-  /credential|private[-_.]?key|password|secret/i,
-  /\.dkbpkg$|\.faiss$/i,
-];
-
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-distribution-'));
 const tarballRoot = path.join(proofRoot, 'packages');
 
@@ -43,7 +24,7 @@ try {
   await fs.mkdir(tarballRoot, { recursive: true });
   const tarballs = [];
 
-  for (const workspace of workspaces) {
+  for (const workspace of distributableWorkspaces) {
     const result = run(process.execPath, [
       npmCli,
       'pack',
@@ -55,12 +36,12 @@ try {
     ]);
     const report = JSON.parse(result.stdout)[0];
     const paths = report.files.map((file) => file.path);
-    const rejected = paths.filter((file) => forbidden.some((pattern) => pattern.test(file)));
+    const rejected = findForbiddenPackagePaths(paths);
     if (rejected.length > 0) {
       throw new Error(`${workspace} package contains forbidden files: ${rejected.join(', ')}`);
     }
-    if (workspace === '@dkb/cli' && !paths.includes('dist/version.js')) {
-      throw new Error('@dkb/cli package is missing dist/version.js required by the executable.');
+    if (workspace === '@sjshovan/dkb-cli' && !paths.includes('dist/version.js')) {
+      throw new Error('@sjshovan/dkb-cli package is missing dist/version.js required by the executable.');
     }
     tarballs.push(path.join(tarballRoot, report.filename));
   }

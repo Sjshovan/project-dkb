@@ -8,7 +8,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Dependency direction
 
-- Depend only on `@dkb/protocol` and Node platform APIs.
+- Depend only on `@sjshovan/dkb-protocol` and Node platform APIs.
 - Expose contracts consumed by compiler, Runtime, bundled providers, and CLI.
 - Keep every provider host isolated to one context root.
 
@@ -29,6 +29,6 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Verification
 
-- `npm run check --workspace @dkb/pipeline`
-- `npm run build --workspace @dkb/pipeline`
+- `npm run check --workspace @sjshovan/dkb-pipeline`
+- `npm run build --workspace @sjshovan/dkb-pipeline`
 - `node --test tests/provider-host.test.mjs tests/profiles-evidence.test.mjs`

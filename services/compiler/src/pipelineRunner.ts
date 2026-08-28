@@ -1,8 +1,8 @@
-import { DkbError } from '@dkb/protocol/errors.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import type { LoadedDkb } from '@dkb/protocol/types.js';
-import { DkbProviderHost } from '@dkb/pipeline/host.js';
-import { pipelineRecordMetadata, refreshMutatedRecordHashes } from '@dkb/providers-bundled/records.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
+import { pipelineRecordMetadata, refreshMutatedRecordHashes } from '@sjshovan/dkb-providers-bundled/records.js';
 import type {
   DkbChunkerProvider,
   DkbCompiledPipeline,
@@ -10,7 +10,7 @@ import type {
   DkbIngestionProvider,
   DkbParserProvider,
   DkbPipelineRecord,
-} from '@dkb/pipeline/types.js';
+} from '@sjshovan/dkb-pipeline/types.js';
 import { embeddingCacheEnabled, openEmbeddingCache } from './embeddingCache.js';
 
 export async function compileDkbWithProviderHost(

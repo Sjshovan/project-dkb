@@ -12,15 +12,15 @@ import {
   type DkbEvidenceBuildLock,
   type DkbRetrievalBuildLock,
   type DkbRuntimeLock,
-} from '@dkb/protocol/builds.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DKB_EVIDENCE_IR_PATH, validateEvidenceIr, type DkbEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { DkbError } from '@dkb/protocol/errors.js';
+} from '@sjshovan/dkb-protocol/builds.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DKB_EVIDENCE_IR_PATH, validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   validateRetrievalProfileLock,
   type DkbRetrievalProfileLock,
-} from '@dkb/pipeline/profile.js';
+} from '@sjshovan/dkb-pipeline/profile.js';
 import {
   DKB_ARTIFACTS_DIR,
   DKB_EVIDENCE_BUILDS_DIR,
@@ -29,7 +29,7 @@ import {
   evidenceBuildPath,
   retrievalBuildPath,
   resolveFrom,
-} from '@dkb/protocol/paths.js';
+} from '@sjshovan/dkb-protocol/paths.js';
 
 export const DKB_EVIDENCE_BUILD_IR = 'evidence.ir.json';
 export const DKB_EVIDENCE_BUILD_LOCK = 'evidence.lock.json';

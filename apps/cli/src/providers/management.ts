@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   DKB_CONFIG_FORMAT,
   DKB_CONFIG_PATH,
@@ -14,13 +14,13 @@ import {
   writeDkbContextConfig,
   type DkbContextConfig,
   type DkbPipelineTargetConfig,
-} from '@dkb/pipeline/config.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
-import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
-import type { DkbPluginModule } from '@dkb/pipeline/types.js';
-import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { maybeReadRuntimeLock } from '@dkb/library/builds.js';
+} from '@sjshovan/dkb-pipeline/config.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DkbProviderHost, pluginPath } from '@sjshovan/dkb-pipeline/host.js';
+import type { DkbPluginModule } from '@sjshovan/dkb-pipeline/types.js';
+import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 
 export type DkbPluginScope = 'local' | 'global';
 

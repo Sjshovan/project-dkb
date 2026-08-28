@@ -5,13 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Command, CommanderError } from 'commander';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { identityDisplayName, parseDkbIdentity } from '@dkb/protocol/identity.js';
-import { loadCollection, loadDkb, loadManifest } from '@dkb/protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
-import { DKB_PROTOCOL_VERSION } from '@dkb/protocol/version.js';
-import { DKB_PROTOCOL_COMPATIBILITY } from '@dkb/protocol/version.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { identityDisplayName, parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
+import { loadCollection, loadDkb, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
+import { DKB_ARTIFACTS_DIR } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_PROTOCOL_VERSION } from '@sjshovan/dkb-protocol/version.js';
+import { DKB_PROTOCOL_COMPATIBILITY } from '@sjshovan/dkb-protocol/version.js';
 import { DKB_CLI_VERSION } from '../version.js';
 import {
   countLabel,
@@ -25,7 +25,6 @@ import {
   type CliPresenter,
 } from './presentation.js';
 import { configureDkbHelp } from './help.js';
-import { notYetImplemented } from './commandLifecycle.js';
 import { registerPackageLifecycleCommands } from './packageCommands.js';
 import { summarizePackageListing } from './packagePresentation.js';
 
@@ -65,9 +64,9 @@ program
   .description('Show independently versioned DKB components and compatibility')
   .action(async () => {
     const [{ DKB_COMPILER_VERSION }, { DKB_RUNTIME_VERSION }, { DKB_BUNDLED_PROVIDERS_VERSION }] = await Promise.all([
-      import('@dkb/compiler/version.js'),
-      import('@dkb/runtime/version.js'),
-      import('@dkb/providers-bundled/version.js'),
+      import('@sjshovan/dkb-compiler/version.js'),
+      import('@sjshovan/dkb-runtime/version.js'),
+      import('@sjshovan/dkb-providers-bundled/version.js'),
     ]);
     const result = {
       cli: DKB_CLI_VERSION,
@@ -245,7 +244,7 @@ library
   .description('Show source and generated disk usage for installed knowledge')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { inspectLibraryStorage } = await import('@dkb/library/storage.js');
+    const { inspectLibraryStorage } = await import('@sjshovan/dkb-library/storage.js');
     const libraryRoot = await currentLibraryRoot(options.library);
 
     presenter().print(await inspectLibraryStorage(libraryRoot), summarizeLibraryStorage);
@@ -298,7 +297,7 @@ library
   .description('Show active, inactive, broken, and untracked Library entries')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { inspectLibraryOverview } = await import('@dkb/library/overview.js');
+    const { inspectLibraryOverview } = await import('@sjshovan/dkb-library/overview.js');
     const root = await currentLibraryRoot(options.library);
     presenter().print(await inspectLibraryOverview(root), summarizeLibraryOverview);
   });
@@ -308,7 +307,7 @@ library
   .description('Resolve the Library manifest into its exact lock and applied-state ledger')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { syncLibrary } = await import('@dkb/library/resolver.js');
+    const { syncLibrary } = await import('@sjshovan/dkb-library/resolver.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run('Synchronizing Library', async () => syncLibrary(root), summarizeLibrarySync);
   });
@@ -319,7 +318,7 @@ library
   .argument('<identity>', 'Scoped @namespace/name identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { addLibraryRoot } = await import('@dkb/library/resolver.js');
+    const { addLibraryRoot } = await import('@sjshovan/dkb-library/resolver.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Activating ${identity}`, async () => addLibraryRoot(root, identity), summarizeLibrarySync);
   });
@@ -330,7 +329,7 @@ library
   .argument('<identity>', 'Scoped @namespace/name identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { removeLibraryRoot } = await import('@dkb/library/resolver.js');
+    const { removeLibraryRoot } = await import('@sjshovan/dkb-library/resolver.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(root, identity), summarizeLibrarySync);
   });
@@ -347,7 +346,7 @@ collection
   .option('--dir-name <name>', 'Local folder label; defaults to the identity name')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { displayName?: string; dirName?: string; library?: string }) => {
-    const { createLocalCollection } = await import('@dkb/library/collections.js');
+    const { createLocalCollection } = await import('@sjshovan/dkb-library/collections.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Creating Collection ${identity}`, async () => createLocalCollection({
       libraryRoot: root,
@@ -365,7 +364,7 @@ collection
   .option('--version <version>', 'latest or an exact DKB version', 'latest')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (collectionIdentity: string, dkbIdentity: string, options: { version: string; library?: string }) => {
-    const { setCollectionMember } = await import('@dkb/library/collections.js');
+    const { setCollectionMember } = await import('@sjshovan/dkb-library/collections.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Adding ${dkbIdentity}`, async () => setCollectionMember({
       libraryRoot: root,
@@ -382,7 +381,7 @@ collection
   .argument('<dkb>', 'Scoped DKB identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (collectionIdentity: string, dkbIdentity: string, options: { library?: string }) => {
-    const { removeCollectionMember } = await import('@dkb/library/collections.js');
+    const { removeCollectionMember } = await import('@sjshovan/dkb-library/collections.js');
     const root = await currentLibraryRoot(options.library);
     await presenter().run(`Removing ${dkbIdentity}`, async () => removeCollectionMember({
       libraryRoot: root,
@@ -397,7 +396,7 @@ collection
   .argument('<identity>', 'Scoped Collection identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { collectionOverview } = await import('@dkb/library/collections.js');
+    const { collectionOverview } = await import('@sjshovan/dkb-library/collections.js');
     const root = await currentLibraryRoot(options.library);
     presenter().print(await collectionOverview(root, identity), summarizeCollectionOverview);
   });
@@ -412,8 +411,8 @@ collection
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (target: string, options: { library?: string; url?: string; public?: boolean; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { publishCollectionFromLibrary } = await import('@dkb/registry-client/collections.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { publishCollectionFromLibrary } = await import('@sjshovan/dkb-registry-client/collections.js');
     const collectionPath = path.resolve(target);
     const root = await currentLibraryRoot(options.library, collectionPath);
     const registryConfig = await configuredRegistry({ url: options.url, root });
@@ -436,8 +435,8 @@ collection
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
     const root = await currentLibraryRoot(options.library);
     const registryConfig = await configuredRegistry({ url: options.url, root });
 
@@ -460,8 +459,8 @@ collection
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
     const root = await currentLibraryRoot(options.library);
     const registryConfig = await configuredRegistry({ url: options.url, root });
 
@@ -481,7 +480,7 @@ collection
   .argument('<identity>', 'Scoped Collection identity')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (identity: string, options: { library?: string }) => {
-    const { uninstallRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
+    const { uninstallRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
     const root = await currentLibraryRoot(options.library);
 
     await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
@@ -502,7 +501,7 @@ program
   .option('--name <name>', 'Host-local Runtime name', 'codename-dkb')
   .action(async (options: { root?: string; registryUrl?: string; verify?: boolean; yes?: boolean; host: string; port: number; name: string }) => {
     const { prepareServeLibrary } = await import('./serve.js');
-    const { serveDkbRuntime } = await import('@dkb/runtime/runtime/server.js');
+    const { serveDkbRuntime } = await import('@sjshovan/dkb-runtime/runtime/server.js');
     const { registerHostLibrary, registerHostRuntime } = await import('../host/inventory.js');
     const prepared = await prepareServeLibrary({
       root: options.root,
@@ -589,7 +588,7 @@ runtime
     await presenter().run('Registering Runtime', async () => {
       let warning: string | undefined;
       if (options.verify !== false) {
-        const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
+        const { DkbRuntimeClient } = await import('@sjshovan/dkb-runtime/runtime/client.js');
         try {
           await new DkbRuntimeClient({ baseUrl: url, timeoutMs: 5_000 }).status();
         } catch {
@@ -649,8 +648,8 @@ runtime
   .option('--state-root <path>', 'Runtime state root', process.env.DKB_RUNTIME_STATE_ROOT)
   .option('--name <name>', 'Host-local Runtime name', 'codename-dkb')
   .action(async (options: { host: string; port: number; stateRoot?: string; name: string }) => {
-    const { serveDkbRuntime } = await import('@dkb/runtime/runtime/server.js');
-    const { defaultRuntimeStateRoot } = await import('@dkb/runtime/runtime/state.js');
+    const { serveDkbRuntime } = await import('@sjshovan/dkb-runtime/runtime/server.js');
+    const { defaultRuntimeStateRoot } = await import('@sjshovan/dkb-runtime/runtime/state.js');
     const { registerHostLibrary, registerHostRuntime } = await import('../host/inventory.js');
     const stateRoot = path.resolve(options.stateRoot ?? defaultRuntimeStateRoot());
 
@@ -710,7 +709,7 @@ runtime
   .description('Show DKB Runtime status')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
+    const { DkbRuntimeClient } = await import('@sjshovan/dkb-runtime/runtime/client.js');
 
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).status());
   });
@@ -720,7 +719,7 @@ runtime
   .description('Show the single Library served by the DKB Runtime')
   .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
   .action(async (options: { url?: string }) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
+    const { DkbRuntimeClient } = await import('@sjshovan/dkb-runtime/runtime/client.js');
 
     printJson(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).library());
   });
@@ -778,6 +777,44 @@ stack
     const { doctorDkbStack } = await import('../stack/manager.js');
     const result = await presenter().check('Stack diagnostics', async () => doctorDkbStack(name), (value) => value.ok, summarizeStackStatus);
     if (!result.ok) process.exitCode = 1;
+  });
+
+stack
+  .command('backup')
+  .description('Create a verified backup of a stopped local stack')
+  .argument('[name]', 'Stack name', 'local')
+  .option('--output <path>', 'Backup .tar.gz path')
+  .action(async (name: string, options: { output?: string }) => {
+    const { backupDkbStack } = await import('../stack/manager.js');
+    await presenter().run('Backing up DKB stack', async () => backupDkbStack(name, options.output), (value) => {
+      const result = value as { archive: string; sha256: string; bytes: number };
+      return [
+        `Archive: ${result.archive}`,
+        `Size: ${formatBytes(result.bytes)}`,
+        `SHA-256: ${result.sha256}`,
+        'Contains secrets: yes; store it securely',
+      ];
+    });
+  });
+
+stack
+  .command('restore')
+  .description('Restore a verified stack backup while the stack is stopped')
+  .argument('<archive>', 'Backup .tar.gz path')
+  .option('--replace', 'Atomically replace existing stopped stack state')
+  .action(async (archive: string, options: { replace?: boolean }) => {
+    const { restoreDkbStack } = await import('../stack/manager.js');
+    await presenter().run('Restoring DKB stack', async () => restoreDkbStack(archive, Boolean(options.replace)));
+  });
+
+stack
+  .command('upgrade')
+  .description('Upgrade a stopped stack from a digest-pinned release lock')
+  .argument('[name]', 'Stack name', 'local')
+  .requiredOption('--lock <path>', 'Digest-pinned dkb.stack-lock.v1 file')
+  .action(async (name: string, options: { lock: string }) => {
+    const { upgradeDkbStack } = await import('../stack/manager.js');
+    await presenter().run('Upgrading DKB stack', async () => upgradeDkbStack(name, options.lock));
   });
 
 const registry = program
@@ -918,7 +955,7 @@ registry
   .option('--host <host>', 'Host to bind', process.env.DKB_REGISTRY_COMPILER_HOST || '127.0.0.1')
   .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_REGISTRY_COMPILER_PORT || '7333', 10))
   .action(async (options: { host: string; port: number }) => {
-    const { serveDkbRegistryCompiler } = await import('@dkb/compiler/server.js');
+    const { serveDkbRegistryCompiler } = await import('@sjshovan/dkb-compiler/server.js');
 
     await serveDkbRegistryCompiler({
       host: options.host,
@@ -928,14 +965,102 @@ registry
 
 registry
   .command('login')
-  .description('Authenticate this host with a Registry (not yet implemented)')
+  .description('Authenticate this host with a Registry')
   .option('--url <url>', 'Registry API URL')
-  .action(async () => {
-    notYetImplemented(
-      'dkb registry login',
-      'The hosted Registry authentication contract has not been finalized.',
-      'Supply an existing publisher token with DKB_REGISTRY_TOKEN or the command-specific --token option.',
-    );
+  .option('--token <token>', 'Registry API bearer token (prefer masked input or --token-stdin)')
+  .option('--token-stdin', 'Read the Registry token from standard input')
+  .action(async (options: { url?: string; token?: string; tokenStdin?: boolean }) => {
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { saveRegistryCredential, registryCredentialsPath } = await import('@sjshovan/dkb-registry-client/credentials.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const { registryTokenInput } = await import('./registryAuth.js');
+    const configured = await configuredRegistry({ url: options.url });
+
+    await presenter().run('Authenticating registry', async () => {
+      const token = await registryTokenInput(options);
+      const identity = await new DkbRegistryClient({ baseUrl: configured.url, token }).whoAmI();
+      await saveRegistryCredential(configured.url, {
+        token,
+        savedAt: new Date().toISOString(),
+        user: identity.user.email,
+        team: identity.team.slug,
+      });
+      return {
+        status: 'authenticated',
+        registry: configured.url,
+        credentialsPath: registryCredentialsPath(),
+        user: identity.user,
+        team: identity.team,
+        token: identity.token,
+      };
+    }, (value) => {
+      const result = value as { registry: string; user: { email: string }; team: { slug: string }; token: { name: string; expiresAt?: string | null } };
+      return [
+        `Registry: ${result.registry}`,
+        `Account: ${result.user.email}`,
+        `Team: ${result.team.slug}`,
+        `Credential: ${result.token.name}${result.token.expiresAt ? ` (expires ${result.token.expiresAt})` : ''}`,
+      ];
+    });
+  });
+
+registry
+  .command('whoami')
+  .description('Show the account and team for the active Registry credential')
+  .option('--url <url>', 'Registry API URL')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (options: { url?: string; token?: string }) => {
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const configured = await configuredRegistry({ url: options.url });
+    const identity = await new DkbRegistryClient({ baseUrl: configured.url, token: options.token }).whoAmI();
+    presenter().print({ registry: configured.url, ...identity }, (value) => {
+      const result = value as { registry: string; user: { email: string }; team: { slug: string }; token: { name: string; abilities: string[]; expiresAt?: string | null } };
+      return [
+        `Registry: ${result.registry}`,
+        `Account: ${result.user.email}`,
+        `Team: ${result.team.slug}`,
+        `Credential: ${result.token.name}`,
+        `Scopes: ${result.token.abilities.join(', ') || 'none'}`,
+        `Expires: ${result.token.expiresAt ?? 'never'}`,
+      ];
+    });
+  });
+
+registry
+  .command('logout')
+  .description('Remove the saved Registry credential from this host')
+  .option('--url <url>', 'Registry API URL')
+  .option('--revoke', 'Revoke the current token on the Registry before removing it')
+  .action(async (options: { url?: string; revoke?: boolean }) => {
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { loadRegistryCredentialSync, removeRegistryCredential, registryCredentialsPath } = await import('@sjshovan/dkb-registry-client/credentials.js');
+    const { configuredRegistry } = await import('./registryConfig.js');
+    const configured = await configuredRegistry({ url: options.url });
+
+    await presenter().run('Removing registry credential', async () => {
+      const credential = loadRegistryCredentialSync(configured.url);
+      if (options.revoke && !credential) {
+        throw new DkbError(`No saved credential exists for ${configured.url}; there is nothing to revoke.`);
+      }
+      if (options.revoke && credential) {
+        await new DkbRegistryClient({ baseUrl: configured.url, token: credential.token }).revokeCurrentToken();
+      }
+      const removed = await removeRegistryCredential(configured.url);
+      return {
+        status: removed ? 'removed' : 'not configured',
+        registry: configured.url,
+        revoked: Boolean(options.revoke && credential),
+        credentialsPath: registryCredentialsPath(),
+      };
+    }, (value) => {
+      const result = value as { status: string; registry: string; revoked: boolean };
+      return [
+        `Registry: ${result.registry}`,
+        `Local credential: ${result.status}`,
+        `Remote token: ${result.revoked ? 'revoked' : 'unchanged'}`,
+      ];
+    });
   });
 
 registry
@@ -944,7 +1069,7 @@ registry
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (options: { url?: string; token?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).packages(), summarizePackageListing);
@@ -956,7 +1081,7 @@ registry
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (options: { url?: string; token?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).publicKeys(), summarizeKeyListing);
@@ -981,7 +1106,7 @@ registryRemote
     }
 
     const { configuredRegistry } = await import('./registryConfig.js');
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const registryConfig = await configuredRegistry({ url: options.registryUrl });
     const packageId = release.slice(0, separator);
     const version = release.slice(separator + 1);
@@ -1007,7 +1132,7 @@ registry
 
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
@@ -1037,9 +1162,9 @@ registry
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (packageId: string, options: { version?: string; url?: string; token?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
-    const { verifyDkbArchiveFile } = await import('@dkb/runtime/runtime/registryInstall.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { DKB_PACKAGE_EXTENSION } = await import('@sjshovan/dkb-registry-client/archive.js');
+    const { verifyDkbArchiveFile } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
@@ -1065,7 +1190,7 @@ registry
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (accountId: string, options: { url?: string; token?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     await presenter().run('Rotating publisher key', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).rotateAccountKey(accountId));
@@ -1077,7 +1202,7 @@ registry
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (options: { url?: string; token?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     await presenter().run('Rotating registry key', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).rotateRegistryKey());
@@ -1090,7 +1215,7 @@ registry
   .option('--url <url>', 'Registry API URL')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (keyId: string, options: { url?: string; token?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
     await presenter().run('Revoking signing key', async () => new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).revokeKey(keyId));
@@ -1110,7 +1235,7 @@ program
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (target: string, options: { url?: string; account?: string; name?: string; email?: string; force?: boolean; remoteUrl?: string; public?: boolean; token?: string }) => {
     const sourcePath = path.resolve(target);
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const sourceManifest = await loadManifest(sourcePath);
     const libraryRoot = sourceManifest.type === 'collection'
@@ -1119,7 +1244,7 @@ program
     const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
     const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
     if (sourceManifest.type === 'collection') {
-      const { publishCollectionFromLibrary } = await import('@dkb/registry-client/collections.js');
+      const { publishCollectionFromLibrary } = await import('@sjshovan/dkb-registry-client/collections.js');
       await presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
         collectionPath: sourcePath,
         libraryRoot: libraryRoot!,
@@ -1156,8 +1281,8 @@ program
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (packageId: string, options: { version?: string; revision?: number; target?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
     const libraryRoot = await currentLibraryRoot(options.library);
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { installDkbFromRegistry } = await import('@dkb/runtime/runtime/registryInstall.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+    const { installDkbFromRegistry } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
     const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
@@ -1166,7 +1291,7 @@ program
     if (kind === 'collection') {
       if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
       if (options.target) throw new DkbError('--target applies to DKBs. Install the Collection, then run dkb pipeline use <target>.');
-      const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
+      const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
       await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
         client,
         collectionId: packageId,
@@ -1208,7 +1333,7 @@ program
   .description('List DKBs and Collections in the current Library')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .action(async (options: { library?: string }) => {
-    const { listRuntimePackages } = await import('@dkb/runtime/runtime/state.js');
+    const { listRuntimePackages } = await import('@sjshovan/dkb-runtime/runtime/state.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const libraryRoot = await currentLibraryRoot(options.library);
     const [listing, upstream] = await Promise.all([
@@ -1241,7 +1366,7 @@ remote
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (query: string | undefined, options: { registryUrl?: string; token?: string }) => {
     const { configuredRegistry } = await import('./registryConfig.js');
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
+    const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
     const registryConfig = await configuredRegistry({ url: options.registryUrl });
 
     presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).searchPackages(query), summarizePackageListing);
@@ -1489,12 +1614,12 @@ program
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .option('--url <url>', 'Owning Runtime URL; use when the Library is served by a running Runtime')
   .action(async (identity: string, options: { library?: string; url?: string }) => {
-    const { readLibraryState } = await import('@dkb/library/state.js');
+    const { readLibraryState } = await import('@sjshovan/dkb-library/state.js');
     const libraryRoot = await currentLibraryRoot(options.library);
     const entry = (await readLibraryState(libraryRoot)).entries[identity];
 
     if (entry?.kind === 'collection' && entry.source === 'registry') {
-      const { uninstallRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
+      const { uninstallRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
 
       await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
         libraryRoot,
@@ -1504,7 +1629,7 @@ program
     }
 
     if (entry?.kind === 'collection') {
-      const { removeLibraryRoot } = await import('@dkb/library/resolver.js');
+      const { removeLibraryRoot } = await import('@sjshovan/dkb-library/resolver.js');
 
       await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(libraryRoot, identity), summarizeLibrarySync);
       return;
@@ -1516,7 +1641,7 @@ program
       return;
     }
 
-    const { removeDkbFromRuntime } = await import('@dkb/runtime/runtime/state.js');
+    const { removeDkbFromRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
 
     await presenter().run(`Uninstalling ${identity}`, async (progress) => removeDkbFromRuntime(identity, libraryRoot, { progress }), summarizeRemoveResult);
   });
@@ -1533,7 +1658,7 @@ program
     need: string,
     options: { intent: 'evidence' | 'records' | 'count' | 'summary' | 'compare'; limit: number; profile?: boolean; url?: string },
   ) => {
-    const { DkbRuntimeClient } = await import('@dkb/runtime/runtime/client.js');
+    const { DkbRuntimeClient } = await import('@sjshovan/dkb-runtime/runtime/client.js');
 
     presenter().print(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).retrieve({
       need,
@@ -1550,7 +1675,7 @@ program
     .description('Inspect .dkb/artifacts/dkb-artifact.json')
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .action(async (target: string) => {
-      const { inspectDkbArtifactManifest } = await import('@dkb/library/artifacts.js');
+      const { inspectDkbArtifactManifest } = await import('@sjshovan/dkb-library/artifacts.js');
 
       printJson(await inspectDkbArtifactManifest(path.resolve(target)));
     }))
@@ -1558,7 +1683,7 @@ program
     .description('Validate a compiled DKB artifact manifest and listed files')
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .action(async (target: string) => {
-      const { validateDkbArtifactManifest } = await import('@dkb/library/artifacts.js');
+      const { validateDkbArtifactManifest } = await import('@sjshovan/dkb-library/artifacts.js');
       const result = await presenter().check('Compiled artifact validation', async (progress) => validateDkbArtifactManifest(path.resolve(target), { progress }), (value) => value.ok);
 
       if (!result.ok) {
@@ -1570,7 +1695,7 @@ program
     .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
     .requiredOption('--out <path>', 'Archive path to write')
     .action(async (target: string, options: { out: string }) => {
-      const { packDkbArtifact } = await import('@dkb/library/artifacts.js');
+      const { packDkbArtifact } = await import('@sjshovan/dkb-library/artifacts.js');
 
       await presenter().run('Packing compiled artifact', async () => packDkbArtifact(path.resolve(target), path.resolve(options.out)), summarizeArtifactTransport);
     }))
@@ -1581,7 +1706,7 @@ program
     .option('--id <id>', 'Installed DKB id override')
     .option('--force', 'Replace an existing installed DKB with the same id')
     .action(async (target: string, options: { library?: string; id?: string; force?: boolean }) => {
-      const { importCompiledDkbArtifactIntoRuntime } = await import('@dkb/runtime/runtime/state.js');
+      const { importCompiledDkbArtifactIntoRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
       const libraryRoot = await currentLibraryRoot(options.library);
 
       await presenter().run('Installing compiled artifact', async (progress) => importCompiledDkbArtifactIntoRuntime({
@@ -1596,7 +1721,7 @@ program
     .argument('<id>', 'Installed DKB id')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .action(async (id: string, options: { library?: string }) => {
-      const { removeDkbFromRuntime } = await import('@dkb/runtime/runtime/state.js');
+      const { removeDkbFromRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
       const libraryRoot = await currentLibraryRoot(options.library);
 
       await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, libraryRoot, { progress }), summarizeRemoveResult);
@@ -1604,7 +1729,7 @@ program
   .addCommand(new Command('tools')
     .description('Inspect OCI transport and signing tool availability')
     .action(async () => {
-      const { inspectOciToolAvailability } = await import('@dkb/library/oci.js');
+      const { inspectOciToolAvailability } = await import('@sjshovan/dkb-library/oci.js');
 
       printJson(await inspectOciToolAvailability());
     }))
@@ -1613,7 +1738,7 @@ program
     .argument('<archive>', 'Compiled .dkbpkg archive')
     .argument('<ref>', 'OCI reference, for example localhost:5000/dkb/name:version')
     .action(async (archive: string, ref: string) => {
-      const { orasPushArtifact } = await import('@dkb/library/oci.js');
+      const { orasPushArtifact } = await import('@sjshovan/dkb-library/oci.js');
 
       await presenter().run('Pushing artifact', async () => orasPushArtifact({ archivePath: path.resolve(archive), ref }), summarizeArtifactTransport);
     }))
@@ -1622,7 +1747,7 @@ program
     .argument('<ref>', 'OCI reference, for example localhost:5000/dkb/name:version')
     .requiredOption('--out <path>', 'Output directory')
     .action(async (ref: string, options: { out: string }) => {
-      const { orasPullArtifact } = await import('@dkb/library/oci.js');
+      const { orasPullArtifact } = await import('@sjshovan/dkb-library/oci.js');
 
       await presenter().run('Pulling artifact', async () => orasPullArtifact({ ref, outputDir: path.resolve(options.out) }), summarizeArtifactTransport);
     }))
@@ -1631,7 +1756,7 @@ program
     .requiredOption('--out <prefix>', 'Output key prefix')
     .requiredOption('--password <password>', 'Cosign key password')
     .action(async (options: { out: string; password: string }) => {
-      const { cosignGenerateKeyPair } = await import('@dkb/library/oci.js');
+      const { cosignGenerateKeyPair } = await import('@sjshovan/dkb-library/oci.js');
 
       await presenter().run('Creating Cosign key pair', async () => cosignGenerateKeyPair({ outputPrefix: path.resolve(options.out), password: options.password }));
     }))
@@ -1641,7 +1766,7 @@ program
     .requiredOption('--key <path>', 'Cosign private key')
     .requiredOption('--password <password>', 'Cosign key password')
     .action(async (ref: string, options: { key: string; password: string }) => {
-      const { cosignSignArtifact } = await import('@dkb/library/oci.js');
+      const { cosignSignArtifact } = await import('@sjshovan/dkb-library/oci.js');
 
       await presenter().run('Signing artifact', async () => cosignSignArtifact({ ref, keyPath: path.resolve(options.key), password: options.password }));
     }))
@@ -1650,7 +1775,7 @@ program
     .argument('<ref>', 'OCI reference to verify')
     .requiredOption('--key <path>', 'Cosign public key')
     .action(async (ref: string, options: { key: string }) => {
-      const { cosignVerifyArtifact } = await import('@dkb/library/oci.js');
+      const { cosignVerifyArtifact } = await import('@sjshovan/dkb-library/oci.js');
       const result = await presenter().check('Artifact signature verification', async () => cosignVerifyArtifact({ ref, publicKeyPath: path.resolve(options.key) }), (value) => value.ok);
 
       if (!result.ok) {
@@ -1682,7 +1807,7 @@ program
             version: collection.manifest.version,
             type: 'collection',
           }))
-        : await import('@dkb/protocol/manifest.js').then((module) => module.loadLibrary(resolved)).then((library) => ({
+        : await import('@sjshovan/dkb-protocol/manifest.js').then((module) => module.loadLibrary(resolved)).then((library) => ({
             id: library.manifest.id,
             name: library.manifest.name,
             version: library.manifest.version,
@@ -1773,8 +1898,8 @@ pipeline
   .option('--target <name>', 'Show a configured target other than the active target')
   .action(async (target: string, options: { target?: string }) => {
     const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
-      import('@dkb/pipeline/host.js'),
-      import('@dkb/providers-bundled/bundled.js'),
+      import('@sjshovan/dkb-pipeline/host.js'),
+      import('@sjshovan/dkb-providers-bundled/bundled.js'),
     ]);
     const host = await DkbProviderHost.create({ root: path.resolve(target), target: options.target, bundled: BUNDLED_PROVIDER_PLUGINS });
 
@@ -1800,10 +1925,10 @@ pipeline
     await presenter().run(`Activating pipeline ${name}`, async () => {
       if (manifest.type === 'dkb') {
         const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }, { resolveProviderRetrievalProfile }, { activateStoredPackageBuild }] = await Promise.all([
-          import('@dkb/pipeline/host.js'),
-          import('@dkb/providers-bundled/bundled.js'),
-          import('@dkb/pipeline/profile.js'),
-          import('@dkb/library/builds.js'),
+          import('@sjshovan/dkb-pipeline/host.js'),
+          import('@sjshovan/dkb-providers-bundled/bundled.js'),
+          import('@sjshovan/dkb-pipeline/profile.js'),
+          import('@sjshovan/dkb-library/builds.js'),
         ]);
         const host = await DkbProviderHost.create({ root, target: name, bundled: BUNDLED_PROVIDER_PLUGINS });
         try {
@@ -1818,7 +1943,7 @@ pipeline
             });
           } catch (error) {
             if (!/No stored Retrieval Build exists/u.test(error instanceof Error ? error.message : String(error))) throw error;
-            const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+            const { compileComposeProject } = await import('@sjshovan/dkb-compiler/compile.js');
             await compileComposeProject(root, { mode: 'package', target: name });
           }
         } finally {
@@ -1831,8 +1956,8 @@ pipeline
         throw new DkbError(`Pipeline activation requires a DKB or Library root, got ${manifest.type}`);
       }
       const [{ readLibraryState }, { ensurePackageBuildForTarget }] = await Promise.all([
-        import('@dkb/library/state.js'),
-        import('@dkb/compiler/compile.js'),
+        import('@sjshovan/dkb-library/state.js'),
+        import('@sjshovan/dkb-compiler/compile.js'),
       ]);
       const state = await readLibraryState(root);
       const localPreparations = [];
@@ -1957,7 +2082,7 @@ async function runCompileCommand(
   }
   const root = path.resolve(target);
   const manifest = await loadManifest(root);
-  const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+  const { compileComposeProject } = await import('@sjshovan/dkb-compiler/compile.js');
   const pipelineTarget = options.pipeline ?? options.target;
 
   await presenter().run(`${activity} ${root}`, async () => compileComposeProject(root, {
@@ -1972,7 +2097,7 @@ build
   .description('List stored Evidence and Retrieval Builds')
   .argument('[path]', 'Compiled DKB root', '.')
   .action(async (target: string) => {
-    const { listPackageBuilds } = await import('@dkb/library/builds.js');
+    const { listPackageBuilds } = await import('@sjshovan/dkb-library/builds.js');
     presenter().print(await listPackageBuilds(path.resolve(target)), summarizeBuildList);
   });
 
@@ -1982,7 +2107,7 @@ build
   .argument('<digest>', 'Evidence, Retrieval Build, or profile digest')
   .argument('[path]', 'Compiled DKB root', '.')
   .action(async (digest: string, target: string) => {
-    const { inspectPackageBuild } = await import('@dkb/library/builds.js');
+    const { inspectPackageBuild } = await import('@sjshovan/dkb-library/builds.js');
     presenter().print(await inspectPackageBuild(path.resolve(target), digest), summarizeBuildInspect);
   });
 
@@ -1991,7 +2116,7 @@ build
   .description('Remove inactive Builds while retaining the active Runtime graph')
   .argument('[path]', 'Compiled DKB root', '.')
   .action(async (target: string) => {
-    const { prunePackageBuilds } = await import('@dkb/library/builds.js');
+    const { prunePackageBuilds } = await import('@sjshovan/dkb-library/builds.js');
     await presenter().run('Pruning inactive Builds', async () => prunePackageBuilds(path.resolve(target)), summarizeBuildPrune);
   });
 
@@ -2046,7 +2171,7 @@ program
   .argument('<path>', 'Directory containing DKB packages and dkb-lock.json')
   .option('--strict', 'Require all generated artifacts to be built')
   .action(async (target: string, options: { strict?: boolean }) => {
-    const { verifyComposeProject } = await import('@dkb/compiler/compile.js');
+    const { verifyComposeProject } = await import('@sjshovan/dkb-compiler/compile.js');
     const output = await presenter().check('Compiled knowledge verification', async () => {
       const result = await verifyComposeProject(target);
       const strictFailures = options.strict
@@ -2122,7 +2247,7 @@ program
   .argument('<query>', 'Natural-language lookup intent for ranking chunk targets')
   .option('-l, --limit <number>', 'Maximum target count', parseLimit, 10)
   .action(async (target: string, query: string, options: { limit: number }) => {
-    const { describeQueryTargets } = await import('@dkb/runtime/read/runtime.js');
+    const { describeQueryTargets } = await import('@sjshovan/dkb-runtime/read/runtime.js');
 
     printJson(await describeQueryTargets(target, query, options.limit));
   });
@@ -2134,7 +2259,7 @@ program
   .argument('<request-path>', 'Path to a DKB Read API request JSON file')
   .action(async (target: string, requestPath: string) => {
     const fs = await import('node:fs/promises');
-    const { readDkb } = await import('@dkb/runtime/read/runtime.js');
+    const { readDkb } = await import('@sjshovan/dkb-runtime/read/runtime.js');
 
     printJson(await readDkb(target, JSON.parse(await fs.readFile(requestPath, 'utf8'))));
   });
@@ -2178,7 +2303,7 @@ trace
   .description('Show the latest retrieval trace')
   .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .action(async (options: { root: string }) => {
-    const { latestTrace } = await import('@dkb/runtime/runtime/trace.js');
+    const { latestTrace } = await import('@sjshovan/dkb-runtime/runtime/trace.js');
 
     printJson(await latestTrace(options.root));
   });
@@ -2189,7 +2314,7 @@ trace
   .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .option('--limit <number>', 'Maximum trace summaries to return', parseLimit, 20)
   .action(async (options: { root: string; limit: number }) => {
-    const { listTraces } = await import('@dkb/runtime/runtime/trace.js');
+    const { listTraces } = await import('@sjshovan/dkb-runtime/runtime/trace.js');
 
     printJson(await listTraces(options.root, options.limit));
   });
@@ -2200,7 +2325,7 @@ trace
   .argument('<trace-id>', 'Trace id from trace list/latest')
   .option('--root <path>', 'Runtime Library root', process.env.DKB_RUNTIME_STATE_ROOT || process.env.DKB_LIBRARY_PATH || '.')
   .action(async (traceId: string, options: { root: string }) => {
-    const { getTrace } = await import('@dkb/runtime/runtime/trace.js');
+    const { getTrace } = await import('@sjshovan/dkb-runtime/runtime/trace.js');
 
     printJson(await getTrace(options.root, traceId));
   });
@@ -2213,7 +2338,7 @@ mcp
   .command('serve')
   .description('Start the read-only DKB Runtime MCP server over stdio')
   .action(async () => {
-    const { serveDkbMcpStdio } = await import('@dkb/runtime/mcp/stdio.js');
+    const { serveDkbMcpStdio } = await import('@sjshovan/dkb-runtime/mcp/stdio.js');
 
     serveDkbMcpStdio();
   });
@@ -2225,7 +2350,7 @@ mcp
   .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_MCP_HTTP_PORT || '7332', 10))
   .option('--path <path>', 'MCP endpoint path', process.env.DKB_MCP_HTTP_PATH || '/mcp')
   .action(async (options: { host: string; port: number; path: string }) => {
-    const { serveDkbMcpHttp } = await import('@dkb/runtime/mcp/http.js');
+    const { serveDkbMcpHttp } = await import('@sjshovan/dkb-runtime/mcp/http.js');
 
     await serveDkbMcpHttp(options);
   });
@@ -2283,7 +2408,7 @@ async function currentRuntimeUrl(explicit?: string): Promise<string> {
 
 async function currentRuntimeAdminClient(explicit?: string, timeoutMs?: number) {
   const [{ DkbRuntimeClient }, { runtimeAdminTokenForUrl }] = await Promise.all([
-    import('@dkb/runtime/runtime/client.js'),
+    import('@sjshovan/dkb-runtime/runtime/client.js'),
     import('../stack/manager.js'),
   ]);
   const baseUrl = await currentRuntimeUrl(explicit);
@@ -3205,20 +3330,20 @@ async function runIngestionLifecycle(
   options?: { restart?: boolean },
 ): Promise<unknown> {
   const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
-    import('@dkb/pipeline/host.js'),
-    import('@dkb/providers-bundled/bundled.js'),
+    import('@sjshovan/dkb-pipeline/host.js'),
+    import('@sjshovan/dkb-providers-bundled/bundled.js'),
   ]);
   const host = await DkbProviderHost.create({ root: path.resolve(root), ...(target ? { target } : {}), bundled: BUNDLED_PROVIDER_PLUGINS });
 
   try {
-    const provider = host.provider<import('@dkb/pipeline/types.js').DkbIngestionProvider>('ingestion');
+    const provider = host.provider<import('@sjshovan/dkb-pipeline/types.js').DkbIngestionProvider>('ingestion');
     const action = provider.lifecycle?.[operation];
 
     if (!action) {
       throw new DkbError(`Selected ingestion provider ${host.config.target.ingestion} does not support compiler ${operation}`);
     }
     return operation === 'start'
-      ? await (action as NonNullable<import('@dkb/pipeline/types.js').DkbProviderLifecycle['start']>)(options)
+      ? await (action as NonNullable<import('@sjshovan/dkb-pipeline/types.js').DkbProviderLifecycle['start']>)(options)
       : await (action as () => Promise<unknown>)();
   } finally {
     await host.dispose();
@@ -3334,7 +3459,7 @@ async function prepareCompiledRuntimeImport(source: string, id?: string, name?: 
         displayName: name ?? identityDisplayName(identity),
         version: '0.1.0',
         permissions: { read: true, write: false },
-        meta: { generatedBy: '@dkb/cli' },
+        meta: { generatedBy: '@sjshovan/dkb-cli' },
       }, null, 2)}\n`, 'utf8');
       manifest = await loadManifest(packageRoot);
     }
@@ -3346,7 +3471,7 @@ async function prepareCompiledRuntimeImport(source: string, id?: string, name?: 
     if (id && parseDkbIdentity(id, 'Imported DKB identity').identity !== identity) {
       throw new DkbError(`Imported DKB identity override ${id} does not match its manifest ${identity}.`);
     }
-    const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+    const { compileComposeProject } = await import('@sjshovan/dkb-compiler/compile.js');
     // Compile the sanitized staging copy with the trusted local source as its
     // provider context. This preserves Library-local pipeline overrides while
     // ensuring plugin code and configuration never enter the import artifact.

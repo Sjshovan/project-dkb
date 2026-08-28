@@ -1,7 +1,7 @@
 import cliProgress from 'cli-progress';
 import ora from 'ora';
 import { styleText } from 'node:util';
-import type { DkbProgressEvent, DkbProgressReporter } from '@dkb/protocol/progress.js';
+import type { DkbProgressEvent, DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 
 export interface CliPresentationOptions {
   json?: boolean;

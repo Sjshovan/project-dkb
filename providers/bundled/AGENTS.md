@@ -8,7 +8,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Dependency direction
 
-- Implement contracts from `@dkb/pipeline`; use durable formats from `@dkb/protocol`.
+- Implement contracts from `@sjshovan/dkb-pipeline`; use durable formats from `@sjshovan/dkb-protocol`.
 - Export explicit plugin modules and provider-specific diagnostics.
 - Keep provider-side Python under `python/` and include it through the package allowlist.
 
@@ -28,7 +28,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Verification
 
-- `npm run check --workspace @dkb/providers-bundled`
-- `npm run build --workspace @dkb/providers-bundled`
+- `npm run check --workspace @sjshovan/dkb-providers-bundled`
+- `npm run build --workspace @sjshovan/dkb-providers-bundled`
 - `npm run proof:pipeline`
 - `npm run proof:meilisearch`

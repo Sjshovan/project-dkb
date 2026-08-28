@@ -1,5 +1,5 @@
-import { DkbError } from '@dkb/protocol/errors.js';
-import type { DkbAdapter, DkbStoreType } from '@dkb/protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbAdapter, DkbStoreType } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbAdapterHandle } from './adapter.js';
 
 export async function adapterFor(name: DkbAdapter): Promise<DkbAdapterHandle> {

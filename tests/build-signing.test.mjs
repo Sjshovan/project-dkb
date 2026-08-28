@@ -4,15 +4,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
-import { validateInstallPlan } from '@dkb/protocol/builds.js';
+import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { validateInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
 import {
   createSignedPackageReceipt,
   fingerprintPublicKey,
   generateSigningKeyPair,
   verifyLayerReceipt,
-} from '@dkb/library/signing.js';
-import { materializeDkbInstallPlan } from '@dkb/runtime/runtime/registryInstall.js';
+} from '@sjshovan/dkb-library/signing.js';
+import { materializeDkbInstallPlan } from '@sjshovan/dkb-runtime/runtime/registryInstall.js';
 
 const publisher = generateSigningKeyPair();
 const registry = generateSigningKeyPair();

@@ -14,7 +14,7 @@ RUN npm ci
 COPY packages packages
 COPY providers providers
 COPY services/compiler services/compiler
-RUN npm run build --workspace @dkb/compiler
+RUN npm run build --workspace @sjshovan/dkb-compiler
 
 FROM node:22-bookworm-slim AS runtime
 
@@ -40,7 +40,7 @@ COPY packages/library/package.json packages/library/package.json
 COPY packages/pipeline/package.json packages/pipeline/package.json
 COPY packages/registry-client/package.json packages/registry-client/package.json
 COPY providers/bundled/package.json providers/bundled/package.json
-RUN npm ci --omit=dev --workspace @dkb/compiler --include-workspace-root=false
+RUN npm ci --omit=dev --workspace @sjshovan/dkb-compiler --include-workspace-root=false
 COPY --from=build /workspace/packages/protocol/dist packages/protocol/dist
 COPY packages/protocol/schemas packages/protocol/schemas
 COPY --from=build /workspace/packages/library/dist packages/library/dist

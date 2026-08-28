@@ -1,0 +1,85 @@
+name: Private package release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish packages and create a private-repository draft release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse non-private repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)" = "private" || {
+            echo "This workflow publishes only from a private repository." >&2
+            exit 1
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: '@sjshovan'
+
+      - run: npm ci --ignore-scripts
+      - run: npm run graph:check
+      - run: npm run boundaries:check
+      - run: npm run agents:check
+      - run: npm run docs:check
+      - run: npm run check
+      - run: npm test
+      - run: npm run package:check
+      - run: npm run temp:audit
+
+      - name: Pack CLI release
+        run: |
+          mkdir -p release
+          npm pack --workspace @sjshovan/dkb-cli --pack-destination release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dkb-cli-private-candidate
+          path: release/*.tgz
+          if-no-files-found: error
+
+      - name: Publish private GitHub Packages
+        if: ${{ inputs.publish }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pending="$(find .changeset -maxdepth 1 -type f -name '*.md' ! -name README.md -size +8c -print -quit)"
+          test -z "$pending" || {
+            echo "Pending Changesets remain. Run npm run version:packages, review, commit, and rerun." >&2
+            exit 1
+          }
+          npx changeset publish
+
+      - name: Create private-repository draft release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./apps/cli/package.json').version")"
+          tag="dkb-cli-v${version}"
+          gh release create "$tag" release/*.tgz \
+            --draft \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "DKB CLI ${version} (developer preview)" \
+            --notes "Private developer-preview candidate. See docs/private-releases.md for installation and limitations."

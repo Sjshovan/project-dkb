@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DKB_STATE_DIR } from '@dkb/protocol/paths.js';
-import type { DkbEvidence } from '@dkb/protocol/types.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DKB_STATE_DIR } from '@sjshovan/dkb-protocol/paths.js';
+import type { DkbEvidence } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
 
 export const DKB_TRACE_DB = 'trace.sqlite';

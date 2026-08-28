@@ -17,7 +17,7 @@ changing its public surface.
 - Keep untrusted source content inert; validation and rendering contracts must
   never interpret retrieved text as an instruction.
 - Export public modules through `package.json`; consumers must use
-  `@dkb/protocol` imports instead of reaching into this package by relative path.
+  `@sjshovan/dkb-protocol` imports instead of reaching into this package by relative path.
 
-Run `npm.cmd run check --workspace @dkb/protocol` and the protocol, profile, and
+Run `npm.cmd run check --workspace @sjshovan/dkb-protocol` and the protocol, profile, and
 MCP security tests after contract changes.

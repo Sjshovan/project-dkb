@@ -1,8 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod/v4';
-import { DKB_PROTOCOL_VERSION } from '@dkb/protocol/version.js';
-import { loadLibrary } from '@dkb/protocol/manifest.js';
-import { tokenize } from '@dkb/providers-bundled/scoring.js';
+import { DKB_PROTOCOL_VERSION } from '@sjshovan/dkb-protocol/version.js';
+import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
 import { getQueryContext } from '../indexes/queryContext.js';
 import { readDkb } from '../read/runtime.js';
 import { semanticSearch } from '../read/navigation.js';

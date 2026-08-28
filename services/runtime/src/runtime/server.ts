@@ -1,6 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   defaultRuntimeStateRoot,
   ensureRuntimeState,
@@ -16,7 +16,7 @@ import { attachRemoteSession, detachRemoteSession, listRemoteSessions, retrieveF
 import { discoverRemoteDkb } from '../remote/discovery.js';
 import { getTrace, latestTrace, listTraces } from './trace.js';
 import { closeQueryAuditQueue } from './queryAudit.js';
-import { resolveRegistryContext } from '@dkb/registry-client/config.js';
+import { resolveRegistryContext } from '@sjshovan/dkb-registry-client/config.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js';
 import { installDkbFromRegistry } from './registryInstall.js';

@@ -1,7 +1,6 @@
 {
-  "name": "@dkb/compiler",
+  "name": "@sjshovan/dkb-compiler",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -27,13 +26,24 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@dkb/library": "0.1.0",
-    "@dkb/pipeline": "0.1.0",
-    "@dkb/protocol": "1.0.0",
-    "@dkb/providers-bundled": "0.1.0",
-    "@dkb/registry-client": "0.1.0"
+    "@sjshovan/dkb-library": "0.1.0",
+    "@sjshovan/dkb-pipeline": "0.1.0",
+    "@sjshovan/dkb-protocol": "1.0.0",
+    "@sjshovan/dkb-providers-bundled": "0.1.0",
+    "@sjshovan/dkb-registry-client": "0.1.0"
   },
   "engines": {
     "node": ">=22.15.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sjshovan/project-dkb.git"
+  },
+  "homepage": "https://github.com/Sjshovan/project-dkb",
+  "bugs": {
+    "url": "https://github.com/Sjshovan/project-dkb/issues"
   }
 }

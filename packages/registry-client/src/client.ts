@@ -7,13 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { validateInstallPlan, type DkbInstallPlan, type DkbInstallPlanArtifact } from '@dkb/protocol/builds.js';
-import { parseDkbIdentity } from '@dkb/protocol/identity.js';
-import { loadDkb } from '@dkb/protocol/manifest.js';
-import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { validateInstallPlan, type DkbInstallPlan, type DkbInstallPlanArtifact } from '@sjshovan/dkb-protocol/builds.js';
+import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
+import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
+import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE } from './archive.js';
 import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from './config.js';
+import { loadRegistryCredentialSync } from './credentials.js';
 
 export interface DkbRegistryClientOptions {
   baseUrl?: string;
@@ -69,13 +70,21 @@ export interface DkbRegistryBuildJob {
   error?: string;
 }
 
+export interface DkbRegistryIdentity {
+  user: { id: number; name: string; email: string };
+  team: { id: number; name: string; slug: string };
+  token: { id: number; name: string; abilities: string[]; lastUsedAt?: string | null; expiresAt?: string | null };
+}
+
 export class DkbRegistryClient {
   readonly baseUrl: string;
   readonly token?: string;
 
   constructor(options: DkbRegistryClientOptions = {}) {
     this.baseUrl = normalizeRegistryUrl(options.baseUrl ?? process.env.DKB_REGISTRY_URL ?? DEFAULT_REGISTRY_URL);
-    this.token = options.token ?? process.env.DKB_REGISTRY_TOKEN;
+    this.token = options.token
+      ?? process.env.DKB_REGISTRY_TOKEN
+      ?? loadRegistryCredentialSync(this.baseUrl)?.token;
   }
 
   health() {
@@ -84,6 +93,20 @@ export class DkbRegistryClient {
 
   publicKeys() {
     return this.get('/.well-known/dkb-registry-keys.json');
+  }
+
+  async whoAmI(): Promise<DkbRegistryIdentity> {
+    const data = resourceData(await this.get('/api/registry/auth/whoami'));
+
+    if (!data || !isRecord(data.user) || !isRecord(data.team) || !isRecord(data.token)) {
+      throw new DkbError('Registry returned an invalid authentication identity.');
+    }
+
+    return data as unknown as DkbRegistryIdentity;
+  }
+
+  revokeCurrentToken() {
+    return this.request('DELETE', '/api/registry/auth/token');
   }
 
   packages() {
@@ -542,11 +565,7 @@ export class DkbRegistryClient {
     const parsed = parseJson(text);
 
     if (!response.ok) {
-      const message = parsed && typeof parsed === 'object' && 'message' in parsed
-        ? String((parsed as { message: unknown }).message)
-        : `${method} ${path} failed with HTTP ${response.status}`;
-
-      throw new DkbError(message);
+      throw registryHttpError(this.baseUrl, response.status, method, path, parsed);
     }
 
     if (text && parsed === null) {
@@ -618,11 +637,7 @@ export class DkbRegistryClient {
     if (!response.ok) {
       const text = await response.text();
       const parsed = parseJson(text);
-      const message = parsed && typeof parsed === 'object' && 'message' in parsed
-        ? String((parsed as { message: unknown }).message)
-        : `GET ${requestPath} failed with HTTP ${response.status}`;
-
-      throw new DkbError(message);
+      throw registryHttpError(this.baseUrl, response.status, 'GET', requestPath, parsed);
     }
 
     const contentType = response.headers.get('content-type') ?? '';
@@ -665,15 +680,12 @@ export class DkbRegistryClient {
 
     const text = await response.text();
     const parsed = parseJson(text);
-    const message = parsed && typeof parsed === 'object' && 'message' in parsed
-      ? String((parsed as { message: unknown }).message)
-      : `POST /api/registry/packages failed with HTTP ${response.status}`;
 
     if (response.status === 422 && await this.packageAlreadyExists(input.id)) {
       return;
     }
 
-    throw new DkbError(message);
+    throw registryHttpError(this.baseUrl, response.status, 'POST', '/api/registry/packages', parsed);
   }
 
   private async packageAlreadyExists(packageId: string): Promise<boolean> {
@@ -700,9 +712,6 @@ export class DkbRegistryClient {
 
     const text = await response.text();
     const parsed = parseJson(text);
-    const message = parsed && typeof parsed === 'object' && 'message' in parsed
-      ? String((parsed as { message: unknown }).message)
-      : `POST /api/registry/collections failed with HTTP ${response.status}`;
 
     if (response.status === 422) {
       try {
@@ -713,7 +722,7 @@ export class DkbRegistryClient {
       }
     }
 
-    throw new DkbError(message);
+    throw registryHttpError(this.baseUrl, response.status, 'POST', '/api/registry/collections', parsed);
   }
 
   private async waitForPublishedVersion(packageId: string, version: string, initial: unknown) {
@@ -925,6 +934,24 @@ function resourceData(value: unknown): Record<string, unknown> | null {
 
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function registryHttpError(baseUrl: string, status: number, method: string, requestPath: string, parsed: unknown): DkbError {
+  if (status === 401) {
+    return new DkbError(`Registry authentication failed for ${baseUrl}. Run: dkb registry login --url ${baseUrl}`);
+  }
+
+  if (status === 403) {
+    return new DkbError(
+      `Registry credential for ${baseUrl} lacks permission for ${method} ${requestPath}. `
+      + `Issue a token with the required scope, then run: dkb registry login --url ${baseUrl}`,
+    );
+  }
+
+  const message = isRecord(parsed) && 'message' in parsed
+    ? String(parsed.message)
+    : `${method} ${requestPath} failed with HTTP ${status}`;
+  return new DkbError(message);
 }
 
 function versionStatus(value: unknown): string | null {

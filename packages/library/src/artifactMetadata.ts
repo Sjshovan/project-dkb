@@ -1,26 +1,26 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import {
   DKB_ARTIFACT_LOCK_PATH,
   artifactLockPath,
   resolveFrom,
-} from '@dkb/protocol/paths.js';
-import type { DkbLockArtifact, DkbLockManifest, LoadedDkb } from '@dkb/protocol/types.js';
-import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
+} from '@sjshovan/dkb-protocol/paths.js';
+import type { DkbLockArtifact, DkbLockManifest, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { validateDkbLockManifest } from '@sjshovan/dkb-protocol/validation.js';
 import {
   SOURCE_GRAPH_PATH,
   SOURCE_INDEX_PATH,
   SOURCE_VECTOR_PATH,
   readSourceIndex,
   type IndexedSourceUnit,
-} from '@dkb/providers-bundled/sourceIndex.js';
+} from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   maybeReadRetrievalProfileLock,
-} from '@dkb/pipeline/profile.js';
+} from '@sjshovan/dkb-pipeline/profile.js';
 import { inspectDkbArtifactManifest, writeDkbArtifactManifest } from './artifacts.js';
 
 /**

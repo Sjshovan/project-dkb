@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { registryPackagePath } from '@dkb/protocol/identity.js';
-import { DkbRegistryClient } from '@dkb/registry-client/client.js';
+import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
+import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

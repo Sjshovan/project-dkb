@@ -93,15 +93,13 @@ an already compiled version must not reparse, rechunk, or re-embed its source.
 
 ### Make authentication truthful
 
-The built-in TypeScript registry login route is a development fixture. The
-current Laravel registry does not expose the same `/api/login` contract and
-issues publishing tokens server-side.
-
-The development-fixture implementation behind `registry login` is removed, but
-the intentional future command surface is retained as an explicit
-`Not yet implemented` stub. Registry authentication is currently supplied with
-`DKB_REGISTRY_TOKEN` or `--token`; the CLI does not present the development-only
-session endpoint as hosted-registry authentication.
+The built-in TypeScript registry login route remains a development fixture and
+is not used by the product CLI. The Laravel Registry issues scoped, expiring,
+revocable team tokens server-side and exposes authenticated identity and
+self-revocation endpoints. `dkb registry login` validates an existing token
+against that contract and stores it in the machine-local credential file;
+`whoami` and `logout --revoke` complete the lifecycle. Automation can still use
+`DKB_REGISTRY_TOKEN` or `--token`.
 
 More generally, planned command names are retained as honest nonzero stubs, and
 renamed commands keep a working compatibility entry, until a separate product

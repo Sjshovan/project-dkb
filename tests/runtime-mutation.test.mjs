@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { withRuntimeMutation, withRuntimeQuery } from '@dkb/runtime/runtime/mutation.js';
+import { withRuntimeMutation, withRuntimeQuery } from '@sjshovan/dkb-runtime/runtime/mutation.js';
 
 test('Runtime mutation waits for an in-flight query and blocks later queries', async () => {
   const root = path.resolve('runtime-gate-proof');

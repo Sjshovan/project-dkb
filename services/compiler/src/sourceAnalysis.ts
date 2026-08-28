@@ -1,15 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { resolveFrom } from '@dkb/protocol/paths.js';
-import { tokenize } from '@dkb/providers-bundled/scoring.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
 import {
   SOURCE_GRAPH_PATH,
   SOURCE_VECTOR_PATH,
   writeSourceIndex,
   type IndexedSourceEdge,
   type IndexedSourceUnit,
-} from '@dkb/providers-bundled/sourceIndex.js';
+} from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 
 const MAX_KEYWORDS_PER_SOURCE = 24;
 const MAX_EDGE_KEYWORDS = 8;

@@ -6,20 +6,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
-import { compileComposeProject, compileRetrievalFromEvidence } from '@dkb/compiler/compile.js';
-import { DkbProviderHost } from '@dkb/pipeline/host.js';
-import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
+import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
+import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
+import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
 import {
   ensureFastEmbedService,
   fastEmbedServiceStatus,
   stopFastEmbedService,
-} from '@dkb/providers-bundled/fastembed.js';
+} from '@sjshovan/dkb-providers-bundled/fastembed.js';
 import {
   ensureTeiService,
   stopTeiService,
   teiServiceStatus,
-} from '@dkb/providers-bundled/tei.js';
+} from '@sjshovan/dkb-providers-bundled/tei.js';
 
 const executeFile = promisify(execFile);
 const sourceRoot = path.resolve(required(process.env.DKB_BENCHMARK_CORPUS_ROOT, 'DKB_BENCHMARK_CORPUS_ROOT'));

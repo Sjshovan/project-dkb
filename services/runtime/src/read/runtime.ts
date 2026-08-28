@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import type { QueryContext } from '../indexes/queryContext.js';
 import {
   queryEvidenceForSourceUnits,
@@ -9,9 +9,9 @@ import {
   type IndexedSourceUnit,
   type SourceUnitMatch,
   type SourceUnitQueryEvidence,
-} from '@dkb/providers-bundled/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@dkb/providers-bundled/vectorStore.js';
-import { validateDkbReadRequest } from '@dkb/protocol/validation.js';
+} from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
+import { validateDkbReadRequest } from '@sjshovan/dkb-protocol/validation.js';
 import type {
   DkbEvidence,
   DkbEvidenceSufficiency,
@@ -19,9 +19,9 @@ import type {
   DkbReadRequest,
   DkbReadResult,
   DkbReadStatus,
-} from '@dkb/protocol/types.js';
-import { tokenize } from '@dkb/providers-bundled/scoring.js';
-import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '@dkb/protocol/security/sourceContent.js';
+} from '@sjshovan/dkb-protocol/types.js';
+import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
+import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 import { readNavigationChunks, semanticSearch } from './navigation.js';
 
 export interface DkbRetrieveKnowledgeRequest {

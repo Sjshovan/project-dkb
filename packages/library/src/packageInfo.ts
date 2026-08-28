@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { parseDkbIdentity } from '@dkb/protocol/identity.js';
-import { loadManifest } from '@dkb/protocol/manifest.js';
-import { resolveContainedPath } from '@dkb/protocol/paths.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
+import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
+import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
 import { inspectDkbArtifactManifest } from './artifacts.js';
 import { maybeReadRuntimeLock } from './builds.js';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from './signing.js';

@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DKB_ARTIFACTS_DIR } from '@sjshovan/dkb-protocol/paths.js';
 import { tokenize } from './scoring.js';
 import type { IndexedSourceUnit } from './sourceIndex.js';
 import {

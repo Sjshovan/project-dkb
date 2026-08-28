@@ -8,7 +8,7 @@ import {
   TRUSTED_FORMAT_EPILOG,
   TRUSTED_SECURITY_PREAMBLE,
 } from '../services/runtime/dist/read/modelEvidence.js';
-import { renderUntrustedSourceBlock, renderUntrustedSourceInline } from '@dkb/protocol/security/sourceContent.js';
+import { renderUntrustedSourceBlock, renderUntrustedSourceInline } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 import { serveDkbMcpHttp } from '../services/runtime/dist/mcp/http.js';
 import { serveDkbRuntime } from '../services/runtime/dist/runtime/server.js';
 import fs from 'node:fs/promises';

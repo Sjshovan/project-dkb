@@ -1,10 +1,10 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { watch } from 'chokidar';
-import { loadCompose } from '@dkb/protocol/manifest.js';
-import { resolveFrom } from '@dkb/protocol/paths.js';
-import { compileComposeProject } from '@dkb/compiler/compile.js';
-import { invalidateQueryContext } from '@dkb/runtime/indexes/queryContext.js';
+import { loadCompose } from '@sjshovan/dkb-protocol/manifest.js';
+import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { invalidateQueryContext } from '@sjshovan/dkb-runtime/indexes/queryContext.js';
 
 export interface WatchComposeOptions {
   once?: boolean;

@@ -1,4 +1,4 @@
-import type { DkbEvidence } from '@dkb/protocol/types.js';
+import type { DkbEvidence } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbRetrieveKnowledgeResponse } from './runtime.js';
 
 const MAX_MODEL_EVIDENCE_ITEMS = 8;

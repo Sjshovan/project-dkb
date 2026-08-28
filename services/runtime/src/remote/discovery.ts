@@ -1,4 +1,4 @@
-﻿import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type {
   DkbDiscoveryDocument,
   DkbDiscoveryVersion,

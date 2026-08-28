@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import { DkbError } from '@dkb/protocol/errors.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { DKB_ARTIFACT_PACKAGE_MEDIA_TYPE } from './artifacts.js';
 
 const execFile = promisify(execFileCallback);

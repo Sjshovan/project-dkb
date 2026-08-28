@@ -8,7 +8,7 @@ import {
   LLAMAINDEX_COMPILER_IMAGE,
   LLAMAINDEX_COMPILER_SERVICE_VERSION,
   LLAMAINDEX_DOCUMENT_BATCH_SIZE,
-} from '@dkb/providers-bundled/llamaindex.js';
+} from '@sjshovan/dkb-providers-bundled/llamaindex.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 

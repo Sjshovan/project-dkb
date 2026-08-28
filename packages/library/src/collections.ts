@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DkbError } from '@dkb/protocol/errors.js';
-import { identityDisplayName, parseDkbIdentity, registryPackagePath } from '@dkb/protocol/identity.js';
-import { discoverLibraryEntries, loadManifest } from '@dkb/protocol/manifest.js';
-import { validateDkbManifest } from '@dkb/protocol/validation.js';
-import type { DkbSourceManifest, DkbVersionSelector } from '@dkb/protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { identityDisplayName, parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
+import { discoverLibraryEntries, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
+import { validateDkbManifest } from '@sjshovan/dkb-protocol/validation.js';
+import type { DkbSourceManifest, DkbVersionSelector } from '@sjshovan/dkb-protocol/types.js';
 import { addLibraryRoot, syncLibrary, type SyncLibraryResult } from './resolver.js';
 
 export interface CreateCollectionResult extends SyncLibraryResult {

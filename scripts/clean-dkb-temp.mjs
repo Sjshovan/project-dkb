@@ -20,6 +20,8 @@ const ownedDirectoryPatterns = [
   /^dkb-cli-add-staging-[A-Za-z\d_-]+$/u,
   /^dkb-cli-global-windows-proof$/u,
   /^dkb-embedding-benchmark-[A-Za-z\d_-]+$/u,
+  /^dkb-evidence-multispace$/u,
+  /^dkb-evidence-stack-proof$/u,
   /^dkb-library-artifact-refresh-[A-Za-z\d_-]+$/u,
   /^dkb-profile-source-hash-[A-Za-z\d_-]+$/u,
   /^dkb-provider-compatible-promote-[A-Za-z\d_-]+$/u,

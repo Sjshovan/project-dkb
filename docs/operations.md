@@ -8,7 +8,15 @@ its own deployment and administration guidance.
 
 ## Credentials
 
-Registry tokens are process inputs, not DKB state:
+Registry tokens are host credentials, not DKB state. Interactive users should
+authenticate once with masked input:
+
+```powershell
+dkb registry login
+dkb registry whoami
+```
+
+Automation can keep using process input:
 
 ```powershell
 $env:DKB_REGISTRY_TOKEN = '<token>'
@@ -19,6 +27,11 @@ Use `--token` only when shell-history exposure is acceptable. Tokens, MCP bearer
 secrets, Meilisearch keys, and service credentials must not be written to
 `dkb.json`, `.dkb/config.json`, `dkb-lock.json`, Runtime locks, build receipts,
 host inventory, or Git.
+
+Credentials are keyed by normalized Registry URL in `~/.dkb/credentials.json`
+(or `DKB_REGISTRY_CREDENTIALS` for isolated automation). DKB writes the file
+atomically with owner-only permissions where the operating system supports
+them. Run `dkb registry logout --revoke` on a lost or retired host.
 
 ## Storage ownership
 
@@ -41,6 +54,35 @@ one package with `dkb build list <package>`. Explicitly prune inactive package
 builds with `dkb build prune <package>`.
 
 ## Backup and restore
+
+For the complete local stack, stop writers and create a checksummed archive:
+
+```powershell
+dkb stack down local
+dkb stack backup local
+dkb stack restore C:\secure\local-2026-08-28.tar.gz --replace
+dkb stack up local
+```
+
+The archive includes the Registry SQLite database, package storage, Runtime
+Library, stack configuration, and stack secrets. It is sensitive. Restore
+requires the adjacent `.sha256` file, pre-scans archive paths, stages extraction,
+and atomically replaces an existing stopped stack only when `--replace` is
+explicit.
+
+Upgrade only from a digest-pinned private release lock:
+
+```powershell
+dkb stack down local
+dkb stack upgrade local --lock C:\secure\dkb-stack-0.1.1.lock.json
+```
+
+Upgrade creates a backup first, pulls all exact image digests before mutation,
+runs migrations, starts the stack, and checks health. On failure it stops the
+candidate, restores the prior archive, and attempts to restart the previous
+version. The backup remains available for manual recovery.
+
+For an individual Library:
 
 1. Stop writers and pipeline switches for the Library.
 2. Back up editable source, `dkb.json`, `dkb-lock.json`, `.dkb/state.sqlite`, and

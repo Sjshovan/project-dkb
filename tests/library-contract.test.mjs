@@ -8,18 +8,18 @@ import {
   loadLibrary,
   loadManifest,
   uniqueLoadedDkbs,
-} from '@dkb/protocol/manifest.js';
+} from '@sjshovan/dkb-protocol/manifest.js';
 import {
   applyLibraryLock,
   readLibraryState,
-} from '@dkb/library/state.js';
+} from '@sjshovan/dkb-library/state.js';
 import { inspectTarget } from '../apps/cli/dist/inspect/index.js';
 import { resolveKnowledgeTarget } from '../apps/cli/dist/knowledge/target.js';
 import { healthReport } from '../apps/cli/dist/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
-import { compileComposeProject, verifyComposeProject } from '@dkb/compiler/compile.js';
-import { inspectDkbArtifactManifest } from '@dkb/library/artifacts.js';
-import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
+import { compileComposeProject, verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { inspectDkbArtifactManifest } from '@sjshovan/dkb-library/artifacts.js';
+import { snapshotLibraryArtifacts } from '@sjshovan/dkb-library/artifactSnapshot.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
   const root = await tempDirectory(t, 'dkb-manifest-cutover-');
