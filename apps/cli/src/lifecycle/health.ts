@@ -113,7 +113,7 @@ export async function healthReport(root: string, queueRoot?: string): Promise<Dk
       name: 'verify',
       ok: false,
       status: 'degraded',
-      detail: 'compiled artifact lock is missing; run dkb restore or dkb compile',
+      detail: 'compiled artifact lock is missing; run dkb restore or dkb build',
     });
   }
 

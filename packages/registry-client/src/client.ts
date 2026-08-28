@@ -29,6 +29,14 @@ export interface DkbRegistryRelease {
   recordCount?: number;
 }
 
+export interface DkbRegistryPackageSummary {
+  id: string;
+  latestVersion: string;
+  name?: string;
+  description?: string;
+  visibility?: string;
+}
+
 export interface DkbRegistryCollectionRevision {
   collectionId: string;
   revision: number;
@@ -78,10 +86,6 @@ export class DkbRegistryClient {
     return this.get('/.well-known/dkb-registry-keys.json');
   }
 
-  login(input: { accountId?: string; name?: string; email?: string }) {
-    return this.post('/api/login', input);
-  }
-
   packages() {
     return this.get('/api/registry/packages');
   }
@@ -90,6 +94,22 @@ export class DkbRegistryClient {
     const suffix = query ? `?q=${encodeURIComponent(query)}` : '';
 
     return this.get(`/api/registry/packages${suffix}`);
+  }
+
+  async packageSummary(packageId: string): Promise<DkbRegistryPackageSummary> {
+    const data = resourceData(await this.download(packageId));
+
+    if (!data || data.id !== packageId || typeof data.latestVersion !== 'string' || data.latestVersion.length === 0) {
+      throw new DkbError(`Registry returned invalid package metadata for ${packageId}.`);
+    }
+
+    return {
+      id: packageId,
+      latestVersion: data.latestVersion,
+      ...(typeof data.name === 'string' ? { name: data.name } : {}),
+      ...(typeof data.description === 'string' ? { description: data.description } : {}),
+      ...(typeof data.visibility === 'string' ? { visibility: data.visibility } : {}),
+    };
   }
 
   remoteEndpoints(packageId: string, version: string) {
@@ -181,7 +201,7 @@ export class DkbRegistryClient {
   }
 
   async packageRelease(packageId: string, version?: string): Promise<DkbRegistryRelease> {
-    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const resolvedVersion = version ?? await this.latestPackageVersion(packageId);
     const data = resourceData(await this.download(packageId, resolvedVersion));
 
     if (!data || typeof data.version !== 'string' || typeof data.packageId !== 'string') {
@@ -210,7 +230,7 @@ export class DkbRegistryClient {
   }
 
   async installPlan(packageId: string, version?: string, target?: string): Promise<DkbInstallPlan> {
-    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const resolvedVersion = version ?? await this.latestPackageVersion(packageId);
     const query = target ? `?target=${encodeURIComponent(target)}` : '';
     const value = await this.get(
       `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/install-plan${query}`,
@@ -305,7 +325,7 @@ export class DkbRegistryClient {
   }
 
   async packageArchive(packageId: string, version?: string, options: { progress?: DkbProgressReporter } = {}): Promise<Buffer> {
-    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const resolvedVersion = version ?? await this.latestPackageVersion(packageId);
 
     return this.binary(`/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`, DKB_PACKAGE_MEDIA_TYPE, {
       progress: options.progress,
@@ -330,7 +350,7 @@ export class DkbRegistryClient {
       throw new DkbError(`Output archive already exists: ${archivePath}. Use --force to replace it.`);
     }
 
-    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const resolvedVersion = version ?? await this.latestPackageVersion(packageId);
     const response = await this.binaryResponse(
       `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/download`,
       DKB_PACKAGE_MEDIA_TYPE,
@@ -732,16 +752,8 @@ export class DkbRegistryClient {
     throw new DkbError(`Timed out waiting for registry publish: ${packageId}@${version}.${detail}`);
   }
 
-  private async latestVersion(packageId: string): Promise<string> {
-    const details = await this.download(packageId);
-    const data = resourceData(details);
-    const latest = data && typeof data.latestVersion === 'string' ? data.latestVersion : null;
-
-    if (!latest) {
-      throw new DkbError(`Registry package has no published version: ${packageId}`);
-    }
-
-    return latest;
+  async latestPackageVersion(packageId: string): Promise<string> {
+    return (await this.packageSummary(packageId)).latestVersion;
   }
 
   private authorizationHeader(): Record<string, string> {

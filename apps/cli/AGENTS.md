@@ -8,6 +8,14 @@ is authoritative.
 
 - Keep domain behavior in its owning workspace; CLI handlers validate input,
   resolve context, invoke public APIs, and present results.
+- Root help must classify every visible command. An unclassified command belongs
+  in `Other Commands` until its deliberate group is added; tests should keep
+  that fallback empty for the release surface.
+- Treat implemented and explicitly planned command names as product contracts.
+  Planned commands use `commandLifecycle.ts` and fail honestly; do not delete or
+  silently hide one without an architecture decision and matching tests/docs.
+- Package lifecycle orchestration belongs in `packageCommands.ts` under the CLI command layer;
+  installed-package inspection belongs to `@dkb/library`.
 - Human output is concise, colored in a TTY, and progress-visible by default.
   `--json` emits one ANSI-free document; `--no-progress` changes animation only.
 - Resolve Library and Runtime context through host inventory precedence. Never

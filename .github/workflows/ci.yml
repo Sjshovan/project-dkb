@@ -25,6 +25,7 @@ jobs:
       - run: npm run graph:check
       - run: npm run boundaries:check
       - run: npm run agents:check
+      - run: npm run docs:check
       - run: npm run check
       - run: npm test
       - run: npm run package:check

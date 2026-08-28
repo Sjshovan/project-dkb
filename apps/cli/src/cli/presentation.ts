@@ -220,8 +220,8 @@ function successLine(value: string): string {
 
 function styleStatusWords(value: string): string {
   return value
-    .replace(/\b(installed|published|ready|healthy|passed|complete|completed|ok|active|online|selected)\b/giu, (match) => terminalText('green', match))
-    .replace(/\b(incomplete|pending|warning|degraded|skipped|known|optional)\b/giu, (match) => terminalText('yellow', match))
+    .replace(/\b(installed|published|ready|healthy|passed|complete|completed|ok|active|online|selected|up to date)\b/giu, (match) => terminalText('green', match))
+    .replace(/\b(incomplete|pending|warning|degraded|skipped|known|optional|update available)\b/giu, (match) => terminalText('yellow', match))
     .replace(/\b(failed|error|invalid|unhealthy|missing|offline|unavailable|incompatible|blocking)\b/giu, (match) => terminalText('red', match));
 }
 

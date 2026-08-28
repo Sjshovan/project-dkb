@@ -4,11 +4,29 @@ import { styleHelpText } from './presentation.js';
 const ROOT_COMMAND_GROUPS = [
   {
     title: 'Common Commands',
-    names: ['init', 'install', 'list', 'uninstall', 'publish', 'retrieve', 'serve', 'inspect', 'validate', 'health', 'help'],
+    names: [
+      'init',
+      'add',
+      'search',
+      'install',
+      'list',
+      'show',
+      'retrieve',
+      'uninstall',
+      'outdated',
+      'upgrade',
+      'publish',
+      'serve',
+      'inspect',
+      'validate',
+      'health',
+      'version',
+      'help',
+    ],
   },
   {
     title: 'Management Commands',
-    names: ['artifact', 'collection', 'compiler', 'library', 'mcp', 'pipeline', 'plugin', 'registry', 'remote', 'runtime', 'stack', 'trace'],
+    names: ['artifact', 'build', 'collection', 'compiler', 'library', 'mcp', 'pipeline', 'plugin', 'registry', 'remote', 'runtime', 'stack', 'trace'],
   },
   {
     title: 'Advanced Commands',
@@ -49,7 +67,17 @@ function formatDkbHelp(command: Command, helper: Help): string {
   const commands = standard.visibleCommands(command);
   const termWidth = standard.padWidth(command, standard);
   const helpWidth = standard.helpWidth || 80;
-  const grouped = ROOT_COMMAND_GROUPS.flatMap((group) => {
+  const configuredNames = new Set<string>(ROOT_COMMAND_GROUPS.flatMap((group) => [...group.names]));
+  const commandGroups = [
+    ...ROOT_COMMAND_GROUPS,
+    {
+      title: 'Other Commands',
+      names: commands
+        .map((candidate) => candidate.name())
+        .filter((name) => !configuredNames.has(name)),
+    },
+  ];
+  const grouped = commandGroups.flatMap((group) => {
     const items = group.names
       .map((name) => commands.find((candidate) => candidate.name() === name))
       .filter((candidate): candidate is Command => Boolean(candidate))

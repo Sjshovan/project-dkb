@@ -527,6 +527,174 @@ test('install detects an identical package before requesting its archive', async
   }
 });
 
+test('package search, show, outdated, and upgrade dry-run form one read-only lifecycle', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-package-lifecycle-'));
+  const packageRoot = path.join(tempRoot, 'vendor', '@acct-test', 'knowledge');
+  const requests = [];
+  let upgradeRequest;
+  const server = http.createServer(async (request, response) => {
+    requests.push(request.url);
+    response.setHeader('content-type', 'application/json');
+
+    if (request.method === 'POST' && request.url === '/api/dkbs/install-registry') {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      upgradeRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      response.end(JSON.stringify({
+        status: 'installed',
+        packageId: '@acct-test/knowledge',
+        version: '1.1.0',
+        packagePath: packageRoot,
+      }));
+      return;
+    }
+
+    if (request.url === '/api/registry/packages?q=knowledge') {
+      response.end(JSON.stringify({
+        data: [{
+          id: '@acct-test/knowledge',
+          name: 'Knowledge',
+          latestVersion: '1.1.0',
+          visibility: 'private',
+        }],
+      }));
+      return;
+    }
+
+    if (request.url === '/api/registry/packages/acct-test/knowledge') {
+      response.end(JSON.stringify({
+        data: {
+          id: '@acct-test/knowledge',
+          name: 'Knowledge',
+          latestVersion: '1.1.0',
+          visibility: 'private',
+        },
+      }));
+      return;
+    }
+
+    response.statusCode = 500;
+    response.end(JSON.stringify({ message: `Unexpected request: ${request.url}` }));
+  });
+
+  try {
+    await writeLibraryManifest(tempRoot);
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'dkb.json'), `${JSON.stringify({
+      manifestVersion: 1,
+      type: 'dkb',
+      name: '@acct-test/knowledge',
+      displayName: 'Knowledge',
+      version: '1.0.0',
+      description: '',
+    }, null, 2)}\n`);
+    await applyLibraryLock(tempRoot, {
+      library: { name: 'Test Runtime' },
+      generation: 1,
+      entries: {
+        '@acct-test/knowledge': {
+          identity: '@acct-test/knowledge',
+          kind: 'dkb',
+          source: 'registry',
+          version: '1.0.0',
+          digest: `sha256:${'c'.repeat(64)}`,
+          path: 'vendor/@acct-test/knowledge',
+          requiredBy: ['root:@acct-test/knowledge'],
+          installedAt: '2026-08-26T00:00:00.000Z',
+        },
+      },
+      resolvedAt: '2026-08-26T00:00:00.000Z',
+    });
+    await listen(server);
+    const address = server.address();
+    assert.notEqual(typeof address, 'string');
+    const registryUrl = `http://127.0.0.1:${address.port}`;
+    await fs.mkdir(path.dirname(libraryRegistryConfigPath(tempRoot)), { recursive: true });
+    await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ registry: { url: registryUrl } }, null, 2)}\n`);
+
+    const search = await runCli(['--json', 'search', 'knowledge', '--library', tempRoot], { DKB_REGISTRY_URL: '' });
+    assert.equal(search.code, 0, search.stderr);
+    assert.equal(JSON.parse(search.stdout).data[0].id, '@acct-test/knowledge');
+
+    const shown = await runCli(['--json', 'show', '@acct-test/knowledge', '--library', tempRoot]);
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.deepEqual(JSON.parse(shown.stdout), {
+      identity: '@acct-test/knowledge',
+      kind: 'dkb',
+      source: 'registry',
+      status: 'installed',
+      version: '1.0.0',
+      digest: `sha256:${'c'.repeat(64)}`,
+      path: packageRoot,
+      requiredBy: ['root:@acct-test/knowledge'],
+      installedAt: '2026-08-26T00:00:00.000Z',
+      displayName: 'Knowledge',
+      artifactStatus: 'missing',
+      receiptStatus: 'missing',
+    });
+
+    const storage = await runCli(['--json', 'library', 'storage', '--library', tempRoot]);
+    assert.equal(storage.code, 0, storage.stderr);
+    assert.equal(JSON.parse(storage.stdout).packages[0].id, '@acct-test/knowledge');
+    assert.ok(JSON.parse(storage.stdout).packages[0].sourceBytes > 0);
+    assert.equal(JSON.parse(storage.stdout).packages[0].buildBytes, 0);
+
+    const outdated = await runCli(['--json', 'outdated', '--library', tempRoot], { DKB_REGISTRY_URL: '' });
+    assert.equal(outdated.code, 0, outdated.stderr);
+    assert.equal(JSON.parse(outdated.stdout).updates, 1);
+    assert.equal(JSON.parse(outdated.stdout).packages[0].latest, '1.1.0');
+
+    const upgrade = await runCli([
+      '--json',
+      'upgrade',
+      '@acct-test/knowledge',
+      '--dry-run',
+      '--library',
+      tempRoot,
+    ], { DKB_REGISTRY_URL: '' });
+    assert.equal(upgrade.code, 0, upgrade.stderr);
+    assert.deepEqual(JSON.parse(upgrade.stdout), {
+      status: 'update_available',
+      packageId: '@acct-test/knowledge',
+      currentVersion: '1.0.0',
+      latestVersion: '1.1.0',
+      registryUrl,
+      libraryRoot: tempRoot,
+      dryRun: true,
+    });
+
+    const applied = await runCli([
+      '--json',
+      'upgrade',
+      '@acct-test/knowledge',
+      '--library',
+      tempRoot,
+      '--url',
+      registryUrl,
+      '--runtime-url',
+      registryUrl,
+    ], { DKB_REGISTRY_URL: '' });
+    assert.equal(applied.code, 0, applied.stderr);
+    assert.equal(JSON.parse(applied.stdout).version, '1.1.0');
+    assert.deepEqual(upgradeRequest, {
+      registryUrl,
+      packageId: '@acct-test/knowledge',
+      version: '1.1.0',
+      force: true,
+    });
+    assert.deepEqual(requests, [
+      '/api/registry/packages?q=knowledge',
+      '/api/registry/packages/acct-test/knowledge',
+      '/api/registry/packages/acct-test/knowledge',
+      '/api/registry/packages/acct-test/knowledge',
+      '/api/dkbs/install-registry',
+    ]);
+  } finally {
+    await close(server);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('archive extraction reports a single indeterminate pass with an explicit completion', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-extract-'));
   const sourceRoot = path.join(tempRoot, 'source');
@@ -972,7 +1140,7 @@ test('publish survives a transient connection failure while polling compilation 
   }
 });
 
-test('runtime add removes its staged copy after a successful import', async () => {
+test('runtime import removes its staged copy after a successful activation', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-add-staging-'));
   const packageRoot = path.join(tempRoot, 'source');
   const importRoot = path.join(tempRoot, 'imports');
@@ -1055,7 +1223,8 @@ export function setup(context) {
     assert.notEqual(typeof address, 'string');
     const result = await runCli([
       '--json',
-      'add',
+      'runtime',
+      'import',
       packageRoot,
       '--url',
       `http://127.0.0.1:${address.port}`,
@@ -1132,10 +1301,18 @@ test('root help separates common, management, and advanced commands', async () =
 
   assert.equal(result.code, 0);
   assert.match(plain, /Common Commands:/);
+  assert.match(plain, /add \[options\] <path>\s+Compile a local DKB and activate/);
+  assert.match(plain, /search \[options\] \[query\]\s+Search the configured Registry/);
+  assert.match(plain, /show \[options\] <identity>\s+Show one installed DKB/);
+  assert.match(plain, /outdated \[options\] \[identity\]\s+Check installed Registry DKBs/);
+  assert.match(plain, /upgrade \[options\] <identity>\s+Upgrade one installed Registry DKB/);
   assert.match(plain, /Management Commands:/);
+  assert.match(plain, /build \[options\] \[path\]\s+Compile and manage stored Evidence and Retrieval Builds/);
   assert.match(plain, /pipeline\s+Inspect, select, and verify the provider pipeline/);
   assert.match(plain, /plugin\s+Manage trusted filesystem plugins/);
   assert.match(plain, /Advanced Commands:/);
+  assert.doesNotMatch(plain, /Other Commands:/);
+  assert.match(plain, /compile \[options\] \[path\]\s+Compile a DKB or Library/);
   assert.match(plain, /Run 'dkb <command> --help'/);
 
   for (const signature of [
@@ -1148,6 +1325,35 @@ test('root help separates common, management, and advanced commands', async () =
       `expected the complete command signature to be cyan: ${signature}`,
     );
   }
+});
+
+test('registry help preserves planned authentication without pretending it works', async () => {
+  const group = await runCli(['registry', '--help']);
+  const packages = await runCli(['registry', 'packages', '--help']);
+  const planned = await runCli(['--json', 'registry', 'login']);
+
+  assert.equal(group.code, 0);
+  assert.equal(packages.code, 0);
+  assert.match(group.stdout, /login \[options\]\s+Authenticate this host with a Registry \(not\s+yet implemented\)/);
+  assert.match(packages.stdout, /--token <token>/);
+  assert.equal(planned.code, 1);
+  assert.equal(planned.stderr, '');
+  assert.match(JSON.parse(planned.stdout).error.message, /^Not yet implemented: dkb registry login\./);
+  assert.match(JSON.parse(planned.stdout).error.message, /DKB_REGISTRY_TOKEN/);
+});
+
+test('retained add and compile command surfaces expose their supported options', async () => {
+  const add = await runCli(['add', '--help']);
+  const runtimeImport = await runCli(['runtime', 'import', '--help']);
+  const compile = await runCli(['compile', '--help']);
+
+  assert.equal(add.code, 0);
+  assert.equal(runtimeImport.code, 0);
+  assert.equal(compile.code, 0);
+  assert.match(add.stdout, /--host-import-root <path>/);
+  assert.match(runtimeImport.stdout, /--host-import-root <path>/);
+  assert.match(compile.stdout, /--pipeline <name>/);
+  assert.match(compile.stdout, /--target <name>/);
 });
 
 test('nested help uses the same color system for command groups and leaves', async () => {

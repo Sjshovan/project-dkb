@@ -1,6 +1,6 @@
 # 0001 - CLI Control Plane And Public-Release Gate
 
-- **Status:** Accepted; coherent Library context implemented, public-release gate pending
+- **Status:** Implemented command/control surface; public-release verification pending
 - **Date:** 2026-08-26
 - **Scope:** DKB CLI, local Library/runtime context, package lifecycle,
   authentication, distribution, and public-release readiness
@@ -20,8 +20,8 @@ The local-control-plane portion was implemented by the hard cutover recorded in
 [`0002-library-and-collections-hard-cutover.md`](0002-library-and-collections-hard-cutover.md):
 top-level install/list/uninstall resolve the nearest Library, one Runtime serves
 that Library, and namespaced Collections own exact shared dependencies. The
-remaining commands and distribution checks in this record are still release
-gates, not current-product claims.
+package lifecycle and truthful token-authentication surface were completed on
+2026-08-28. Distribution and clean-environment proof remain release gates.
 
 ## Evidence Snapshot
 
@@ -97,10 +97,16 @@ The built-in TypeScript registry login route is a development fixture. The
 current Laravel registry does not expose the same `/api/login` contract and
 issues publishing tokens server-side.
 
-Before a public release, either implement a real Laravel-compatible CLI login
-with safe credential storage/input, or remove the public `registry login`
-promise and document token authentication explicitly. Do not present a
-development-only session endpoint as hosted-registry authentication.
+The development-fixture implementation behind `registry login` is removed, but
+the intentional future command surface is retained as an explicit
+`Not yet implemented` stub. Registry authentication is currently supplied with
+`DKB_REGISTRY_TOKEN` or `--token`; the CLI does not present the development-only
+session endpoint as hosted-registry authentication.
+
+More generally, planned command names are retained as honest nonzero stubs, and
+renamed commands keep a working compatibility entry, until a separate product
+decision explicitly abandons them. Cleanup alone is not grounds to remove
+planned CLI surface.
 
 ### Separate implementation and protocol versions
 

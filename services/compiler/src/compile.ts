@@ -646,7 +646,6 @@ async function writeAtomicCompileArtifacts(
     timings.chunkIndex = timings.sourceAnalysis;
     const compilerArtifactStart = performance.now();
     await writeCompilerBundles(stageRoot, state.compilerArtifacts, state.providerHost, {
-      writeAggregate: false,
       writeRecordBundles: artifactProfile === 'full',
       compatibility: state.retrievalProfileLock?.compatibility ?? {},
     });
@@ -822,7 +821,7 @@ async function writeCompilerBundles(
   stageRoot: string,
   compilerArtifacts: CompilerArtifactState[],
   providerHost: DkbProviderHost,
-  options: { writeAggregate: boolean; writeRecordBundles: boolean; compatibility: Record<string, unknown> },
+  options: { writeRecordBundles: boolean; compatibility: Record<string, unknown> },
 ): Promise<void> {
   if (compilerArtifacts.length === 0) {
     return;
@@ -843,7 +842,6 @@ async function writeCompilerBundles(
   if (options.writeRecordBundles) {
     await writeLlamaIndexCompilerBundle(stageRoot, combinedResult, {
       changedSourceKeys: compilerArtifacts.length === 1 ? primary.result.cache?.changedSourceKeys : undefined,
-      writeAggregate: options.writeAggregate,
     });
   }
 

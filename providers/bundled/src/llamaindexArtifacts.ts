@@ -8,7 +8,6 @@ import type { LoadedDkb } from '@dkb/protocol/types.js';
 import type { LlamaIndexCompilerRecord, LlamaIndexCompilerResult } from './llamaindex.js';
 import { evidenceIdentityForRecord } from '@dkb/protocol/evidence/ir.js';
 
-export const LLAMAINDEX_COMPILER_AGGREGATE_PATH = `${DKB_ARTIFACTS_DIR}/llamaindex.compiler.json`;
 export const LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH = `${DKB_ARTIFACTS_DIR}/llamaindex.compiler.manifest.json`;
 export const LLAMAINDEX_COMPILER_RECORDS_DIR = `${DKB_ARTIFACTS_DIR}/llamaindex.records`;
 
@@ -43,7 +42,6 @@ export async function writeLlamaIndexCompilerBundle(
   result: LlamaIndexCompilerResult,
   options: {
     changedSourceKeys?: string[];
-    writeAggregate?: boolean;
   } = {},
 ): Promise<WriteLlamaIndexCompilerBundleResult> {
   const resolvedRoot = path.resolve(root);
@@ -107,10 +105,6 @@ export async function writeLlamaIndexCompilerBundle(
 
   await writeJsonAtomic(resolveFrom(resolvedRoot, LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH), manifest);
 
-  if (options.writeAggregate) {
-    await writeJsonAtomic(resolveFrom(resolvedRoot, LLAMAINDEX_COMPILER_AGGREGATE_PATH), result);
-  }
-
   return {
     manifest,
     changedRecordPaths,
@@ -119,25 +113,16 @@ export async function writeLlamaIndexCompilerBundle(
 }
 
 export async function readLlamaIndexCompilerRecords(root: string): Promise<LlamaIndexCompilerRecord[]> {
-  const bundle = await readLlamaIndexCompilerBundleManifest(root).catch(() => null);
+  const bundle = await readLlamaIndexCompilerBundleManifest(root);
+  const records = (await Promise.all(bundle.sources.map(async (source) => {
+    const payload = JSON.parse(await fs.readFile(resolveFrom(root, source.recordsPath), 'utf8')) as {
+      records?: unknown;
+    };
 
-  if (bundle) {
-    const records = (await Promise.all(bundle.sources.map(async (source) => {
-      const payload = JSON.parse(await fs.readFile(resolveFrom(root, source.recordsPath), 'utf8')) as {
-        records?: unknown;
-      };
+    return Array.isArray(payload.records) ? payload.records as LlamaIndexCompilerRecord[] : [];
+  }))).flat();
 
-      return Array.isArray(payload.records) ? payload.records as LlamaIndexCompilerRecord[] : [];
-    }))).flat();
-
-    return records.sort(compareRecords);
-  }
-
-  const legacy = JSON.parse(await fs.readFile(resolveFrom(root, LLAMAINDEX_COMPILER_AGGREGATE_PATH), 'utf8')) as {
-    records?: unknown;
-  };
-
-  return (Array.isArray(legacy.records) ? legacy.records as LlamaIndexCompilerRecord[] : []).sort(compareRecords);
+  return records.sort(compareRecords);
 }
 
 export async function readLlamaIndexCompilerBundleManifest(root: string): Promise<LlamaIndexCompilerBundleManifest> {

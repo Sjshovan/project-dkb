@@ -4,11 +4,11 @@ The DKB CLI follows a small, predictable output contract modeled on mature
 operator tools such as Docker.
 
 This document describes the implemented presentation contract. The accepted
-next control-plane model, known lifecycle gaps, and public-release gate are
-recorded separately in
+control-plane model and public-release gate are recorded in
 [`decisions/0001-cli-control-plane-and-release-gate.md`](decisions/0001-cli-control-plane-and-release-gate.md).
-That decision is marked implementation pending; do not read its target commands
-as claims about current behavior.
+The ordinary package lifecycle from that decision is implemented; remaining
+release gates concern distribution, cross-platform proof, and operational
+hardening rather than missing public command names.
 
 ## Output modes
 
@@ -85,6 +85,51 @@ releases before mutation. Shared members with the same identity, version, and
 digest are reused. Conflicting versions fail before download. Uninstall removes
 the Collection ownership edge and prunes only Registry DKBs with no remaining
 root or Collection owner.
+
+## Package lifecycle
+
+The top-level lifecycle is intentionally small and consistent:
+
+```text
+dkb search [query]
+dkb install <identity>
+dkb list
+dkb show <identity>
+dkb retrieve <need>
+dkb outdated [identity]
+dkb upgrade <identity> [--dry-run]
+dkb uninstall <identity>
+```
+
+`search` queries the configured Registry. `show` reports bounded operational
+metadata for an installed entry, including artifact/receipt state and the active
+Evidence/Retrieval Build when present; it never dumps source contents or secret
+configuration. `outdated` checks only Registry-installed DKBs and fails on an
+unreachable Registry rather than claiming the Library is current. `upgrade
+--dry-run` resolves the exact latest version without mutating the Library.
+
+Registry authentication is supplied with `DKB_REGISTRY_TOKEN` or `--token`.
+`dkb registry login` remains visible as a planned command, but exits nonzero
+with `Not yet implemented` because the Registry does not yet expose the final
+hosted authentication contract. It never calls the development fixture or
+pretends a session was created.
+
+## Command lifecycle
+
+An intentional public command name is product surface, including one whose
+backing service is planned but unfinished. Cleanup must not silently delete it.
+
+- Implemented commands run their real operation.
+- Renamed or reorganized commands retain a working compatibility entry until a
+  separate product decision removes it. `dkb add` delegates to the same Runtime
+  import operation as `dkb runtime import`; `dkb compile` invokes the same
+  compiler used by `dkb build`.
+- Planned commands remain visible, include `(not yet implemented)` in help, exit
+  nonzero, and name the currently supported workflow. They use the shared
+  `notYetImplemented` helper so human and `--json` behavior stay consistent.
+- A command may be removed only when an architecture decision explicitly marks
+  it superseded or abandoned and its help/documentation regression tests change
+  in the same patch.
 
 ## Host inventory and selection
 
@@ -172,7 +217,7 @@ explicitly. `--no-verify` is available for an intentionally offline Library.
 
 ## Compilation scale and capacity
 
-Human `dkb compile` and `dkb build` summaries report the actual scale that
+Human `dkb build` summaries report the actual scale that
 drives RAG cost: source bytes/files, Evidence text/records, chunks per source,
 derived bytes, and expansion ratio. File count is never presented as a proxy
 for chunk count. `--json` includes full distributions, the largest compiled
@@ -196,10 +241,14 @@ exact `dkb registry remote claim <package>@<version> --url <url>` retry command.
 An HTTP 422 during package reservation is accepted only after the client
 confirms that the requested package actually exists.
 
-`dkb add` compiles a disposable copy locally, stages only the verified compiled
+`dkb runtime import` compiles a disposable copy locally, stages only the verified compiled
 artifact, and removes both temporary copies after successful and failed Runtime
 activation. If staging cleanup fails after activation, activation remains
 successful and the retained path is reported as a warning.
+
+`dkb add` is the retained top-level convenience form of this same operation.
+`dkb compile` is the retained compiler-oriented form of `dkb build`; it accepts
+both `--pipeline` and the earlier `--target` option name.
 
 ## Examples
 

@@ -28,7 +28,7 @@ proxies; it is not a substitute for a public OAuth deployment.
 
 ```text
 DKB_LIBRARY_PATH=/knowledge/library
-DKB_QUERY_EMBEDDER_URL=http://127.0.0.1:8090/embed
+DKB_TEI_URL=http://127.0.0.1:8080
 DKB_MCP_BEARER_TOKEN=<secret>
 DKB_MCP_HTTP_HOST=127.0.0.1
 DKB_MCP_HTTP_PORT=7332
@@ -40,9 +40,10 @@ DKB_MCP_PUBLIC_DOCUMENTS=true
 DKB_MCP_ALLOW_INSECURE_NO_AUTH=false
 ```
 
-`DKB_QUERY_EMBEDDER_URL` is the complete query endpoint, including `/embed`.
-The query embedder must use the model and dimensions recorded by the active
-Library profile.
+The selected pipeline's embedding provider owns query embeddings. Bundled TEI
+uses `DKB_TEI_URL`; the FastEmbed sidecar uses `DKB_QUERY_EMBEDDER_URL`, including
+its `/embed` path. The active provider, model revision, dimensions, transforms,
+and normalization must match the Library's compatibility lock.
 
 `DKB_MCP_PUBLIC_DOCUMENTS=true` makes immutable evidence available at
 `/documents/{chunk-id}` so citations can open in a browser. Enable it only for

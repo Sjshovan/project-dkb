@@ -314,7 +314,6 @@ test('generated retrieval profile locks do not invalidate package source hashes'
   // Published packages may omit provider-specific compiler shards. Verification
   // must use the normalized portable index before raw provider/index records.
   await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.compiler.manifest.json'), { force: true });
-  await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.compiler.json'), { force: true });
   await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.records'), { force: true, recursive: true });
 
   const packagedVerification = await verifyComposeProject(root);
@@ -327,7 +326,7 @@ test('compiler bundles serialize compact Float32 embeddings as portable JSON arr
   const result = compilerResult('BAAI/bge-small-en-v1.5', 384);
   result.records[0].embedding = Float32Array.from(result.records[0].embedding);
 
-  await writeLlamaIndexCompilerBundle(root, result, { writeAggregate: false });
+  await writeLlamaIndexCompilerBundle(root, result);
 
   const manifest = await readLlamaIndexCompilerBundleManifest(root);
   const shard = JSON.parse(await fs.readFile(path.join(root, manifest.sources[0].recordsPath), 'utf8'));

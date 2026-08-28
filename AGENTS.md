@@ -10,8 +10,7 @@ Before changing behavior:
 
 1. Read `README.md` and the relevant document under `docs/`.
 2. For architecture or cross-cutting changes, read
-   `apps/cli/src/graphify-out/GRAPH_REPORT.md` before inferring module boundaries. Until
-   Graphify is refreshed after the hard cut, treat that report as historical.
+   `apps/cli/src/graphify-out/GRAPH_REPORT.md` before inferring CLI module boundaries.
 3. Read the nearest subsystem `AGENTS.md` before changing files under:
    - `apps/cli/`
    - `packages/library/`
@@ -27,7 +26,7 @@ relationships in source before relying on them. After changing TypeScript code,
 refresh the graph with:
 
 ```bash
-python -m graphify update src
+py -m graphify update apps/cli/src
 ```
 
 ## Codebase Map

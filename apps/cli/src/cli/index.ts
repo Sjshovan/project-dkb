@@ -25,6 +25,9 @@ import {
   type CliPresenter,
 } from './presentation.js';
 import { configureDkbHelp } from './help.js';
+import { notYetImplemented } from './commandLifecycle.js';
+import { registerPackageLifecycleCommands } from './packageCommands.js';
+import { summarizePackageListing } from './packagePresentation.js';
 
 installWarningFilter();
 
@@ -235,6 +238,17 @@ library
     const { inspectHostLibraries } = await import('../host/inspection.js');
 
     presenter().print(await inspectHostLibraries(), summarizeHostLibraries);
+  });
+
+library
+  .command('storage')
+  .description('Show source and generated disk usage for installed knowledge')
+  .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
+  .action(async (options: { library?: string }) => {
+    const { inspectLibraryStorage } = await import('@dkb/library/storage.js');
+    const libraryRoot = await currentLibraryRoot(options.library);
+
+    presenter().print(await inspectLibraryStorage(libraryRoot), summarizeLibraryStorage);
   });
 
 library
@@ -914,20 +928,14 @@ registry
 
 registry
   .command('login')
-  .description('Create or refresh a registry publisher session')
+  .description('Authenticate this host with a Registry (not yet implemented)')
   .option('--url <url>', 'Registry API URL')
-  .option('--account <id>', 'Publisher account id')
-  .option('--name <name>', 'Publisher display name')
-  .option('--email <email>', 'Publisher email')
-  .action(async (options: { url?: string; account?: string; name?: string; email?: string }) => {
-    const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { configuredRegistry } = await import('./registryConfig.js');
-    const registryConfig = await configuredRegistry({ url: options.url });
-    await presenter().run('Creating registry session', async () => new DkbRegistryClient({ baseUrl: registryConfig.url }).login({
-      accountId: options.account,
-      name: options.name,
-      email: options.email,
-    }));
+  .action(async () => {
+    notYetImplemented(
+      'dkb registry login',
+      'The hosted Registry authentication contract has not been finalized.',
+      'Supply an existing publisher token with DKB_REGISTRY_TOKEN or the command-specific --token option.',
+    );
   });
 
 registry
@@ -1215,6 +1223,12 @@ program
     }, summarizeInstalledPackages);
   });
 
+registerPackageLifecycleCommands(program, {
+  presenter,
+  resolveLibraryRoot: currentLibraryRoot,
+  runtimeAdminClient: currentRuntimeAdminClient,
+});
+
 const remote = program
   .command('remote')
   .description('Discover and temporarily query public remote DKB runtimes');
@@ -1372,85 +1386,100 @@ remote
     }), summarizeRetrievalResult);
   });
 
-program
-  .command('add')
-  .description('Compile a local DKB and activate its verified artifact in the Runtime')
-  .argument('<path>', 'Local DKB folder or raw knowledge folder')
-  .option('--id <id>', 'Installed DKB id override')
-  .option('--name <name>', 'Generated manifest display name for raw folders')
-  .option('--force', 'Replace an existing installed DKB with the same id')
-  .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
-  .option('--host-import-root <path>', 'Host staging directory mounted into the runtime', process.env.DKB_RUNTIME_HOST_IMPORT_ROOT || '.dkb/runtime/imports')
-  .option('--container-import-root <path>', 'Runtime-visible import mount path', process.env.DKB_RUNTIME_CONTAINER_IMPORT_ROOT || '/imports')
-  .option('--no-stage', 'Send the provided path directly to the runtime API')
-  .action(async (target: string, options: {
-    id?: string;
-    name?: string;
-    force?: boolean;
-    url?: string;
-    hostImportRoot: string;
-    containerImportRoot: string;
-    stage?: boolean;
-  }) => {
-    const compiledImport = await prepareCompiledRuntimeImport(target, options.id, options.name);
-    let stagedImport: Awaited<ReturnType<typeof stageRuntimeImport>> | undefined;
+registerRuntimeImportCommand(
+  runtime.command('import'),
+  'Compile a local DKB and activate its verified artifact in the Runtime',
+);
+
+registerRuntimeImportCommand(
+  program.command('add'),
+  'Compile a local DKB and activate its verified artifact in the Runtime',
+);
+
+function registerRuntimeImportCommand(command: Command, description: string): void {
+  command
+    .description(description)
+    .argument('<path>', 'Local DKB folder or raw knowledge folder')
+    .option('--id <id>', 'Installed DKB id override')
+    .option('--name <name>', 'Generated manifest display name for raw folders')
+    .option('--force', 'Replace an existing installed DKB with the same id')
+    .option('--url <url>', 'Runtime API URL; defaults to the selected Runtime')
+    .option('--host-import-root <path>', 'Host staging directory mounted into the runtime', process.env.DKB_RUNTIME_HOST_IMPORT_ROOT || '.dkb/runtime/imports')
+    .option('--container-import-root <path>', 'Runtime-visible import mount path', process.env.DKB_RUNTIME_CONTAINER_IMPORT_ROOT || '/imports')
+    .option('--no-stage', 'Send the provided path directly to the runtime API')
+    .action(runRuntimeImportCommand);
+}
+
+interface RuntimeImportCommandOptions {
+  id?: string;
+  name?: string;
+  force?: boolean;
+  url?: string;
+  hostImportRoot: string;
+  containerImportRoot: string;
+  stage?: boolean;
+}
+
+async function runRuntimeImportCommand(target: string, options: RuntimeImportCommandOptions): Promise<void> {
+  const compiledImport = await prepareCompiledRuntimeImport(target, options.id, options.name);
+  let stagedImport: Awaited<ReturnType<typeof stageRuntimeImport>> | undefined;
+
+  try {
+    stagedImport = options.stage === false
+      ? undefined
+      : await stageRuntimeImport(compiledImport.path, options.hostImportRoot, options.containerImportRoot, compiledImport.id);
+  } catch (error) {
+    await compiledImport.cleanup().catch(() => undefined);
+    throw error;
+  }
+
+  await presenter().run('Activating compiled package in Runtime', async () => {
+    let result: unknown;
 
     try {
-      stagedImport = options.stage === false
-        ? undefined
-        : await stageRuntimeImport(compiledImport.path, options.hostImportRoot, options.containerImportRoot, compiledImport.id);
+      result = await (await currentRuntimeAdminClient(options.url)).importArtifact({
+        sourcePath: stagedImport?.containerPath ?? compiledImport.path,
+        id: compiledImport.id,
+        force: Boolean(options.force),
+      });
     } catch (error) {
-      await compiledImport.cleanup().catch(() => undefined);
+      if (stagedImport) {
+        try {
+          await fs.rm(stagedImport.hostPath, { recursive: true, force: true });
+        } catch (cleanupError) {
+          throw new DkbError(
+            `${error instanceof Error ? error.message : String(error)} `
+            + `The failed import staging directory also could not be removed: ${stagedImport.hostPath} `
+            + `(${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)})`,
+          );
+        }
+      }
+
       throw error;
+    } finally {
+      await compiledImport.cleanup().catch(() => undefined);
     }
 
-    await presenter().run('Activating compiled package in Runtime', async () => {
-      let result: unknown;
+    if (!stagedImport) {
+      return result;
+    }
 
-      try {
-        result = await (await currentRuntimeAdminClient(options.url)).importArtifact({
-          sourcePath: stagedImport?.containerPath ?? compiledImport.path,
-          id: compiledImport.id,
-          force: Boolean(options.force),
-        });
-      } catch (error) {
-        if (stagedImport) {
-          try {
-            await fs.rm(stagedImport.hostPath, { recursive: true, force: true });
-          } catch (cleanupError) {
-            throw new DkbError(
-              `${error instanceof Error ? error.message : String(error)} `
-              + `The failed import staging directory also could not be removed: ${stagedImport.hostPath} `
-              + `(${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)})`,
-            );
-          }
-        }
+    try {
+      await fs.rm(stagedImport.hostPath, { recursive: true, force: true });
+      return result;
+    } catch (error) {
+      const baseResult = result && typeof result === 'object' && !Array.isArray(result)
+        ? result as Record<string, unknown>
+        : { result };
 
-        throw error;
-      } finally {
-        await compiledImport.cleanup().catch(() => undefined);
-      }
-
-      if (!stagedImport) {
-        return result;
-      }
-
-      try {
-        await fs.rm(stagedImport.hostPath, { recursive: true, force: true });
-        return result;
-      } catch (error) {
-        const baseResult = result && typeof result === 'object' && !Array.isArray(result)
-          ? result as Record<string, unknown>
-          : { result };
-
-        return {
-          ...baseResult,
-          warning: `Import succeeded, but its staging directory could not be removed: ${stagedImport.hostPath}`,
-          cleanupPath: stagedImport.hostPath,
-        };
-      }
-    }, summarizeInstallResult);
-  });
+      return {
+        ...baseResult,
+        warning: `Import succeeded, but its staging directory could not be removed: ${stagedImport.hostPath}`,
+        cleanupPath: stagedImport.hostPath,
+      };
+    }
+  }, summarizeInstallResult);
+}
 
 program
   .command('uninstall')
@@ -1901,40 +1930,42 @@ pipeline
     }
   });
 
-program
-  .command('compile')
-  .description('Compile a DKB or Library with its selected pipeline target')
-  .argument('<path>', 'Directory containing dkb.json')
-  .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
-  .option('--target <name>', 'Configured pipeline target')
-  .action(async (target: string, options: { force?: boolean; target?: string }) => {
-    const { compileComposeProject } = await import('@dkb/compiler/compile.js');
-    const manifest = await loadManifest(path.resolve(target));
-
-    await presenter().run(`Compiling ${path.resolve(target)}`, async () => compileComposeProject(target, {
-      force: Boolean(options.force),
-      mode: manifest.type === 'dkb' ? 'package' : 'library',
-      ...(options.target ? { target: options.target } : {}),
-    }), summarizeCompileResult);
-  });
-
 const build = program
   .command('build')
   .description('Compile and manage stored Evidence and Retrieval Builds')
   .argument('[path]', 'Directory containing dkb.json', '.')
   .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
   .option('--pipeline <name>', 'Configured pipeline target')
-  .action(async (target: string, options: { force?: boolean; pipeline?: string }) => {
-    const root = path.resolve(target);
-    const manifest = await loadManifest(root);
-    const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+  .action(async (target: string, options: { force?: boolean; pipeline?: string }) => runCompileCommand('Building', target, options));
 
-    await presenter().run(`Building ${root}`, async () => compileComposeProject(root, {
-      force: Boolean(options.force),
-      mode: manifest.type === 'dkb' ? 'package' : 'library',
-      ...(options.pipeline ? { target: options.pipeline } : {}),
-    }), summarizeCompileResult);
-  });
+program
+  .command('compile')
+  .description('Compile a DKB or Library with its selected pipeline target')
+  .argument('[path]', 'Directory containing dkb.json', '.')
+  .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
+  .option('--pipeline <name>', 'Configured pipeline target')
+  .option('--target <name>', 'Compatibility name for --pipeline')
+  .action(async (target: string, options: { force?: boolean; pipeline?: string; target?: string }) => runCompileCommand('Compiling', target, options));
+
+async function runCompileCommand(
+  activity: 'Building' | 'Compiling',
+  target: string,
+  options: { force?: boolean; pipeline?: string; target?: string },
+): Promise<void> {
+  if (options.pipeline && options.target && options.pipeline !== options.target) {
+    throw new DkbError('--pipeline and --target must name the same pipeline when both are provided.');
+  }
+  const root = path.resolve(target);
+  const manifest = await loadManifest(root);
+  const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+  const pipelineTarget = options.pipeline ?? options.target;
+
+  await presenter().run(`${activity} ${root}`, async () => compileComposeProject(root, {
+    force: Boolean(options.force),
+    mode: manifest.type === 'dkb' ? 'package' : 'library',
+    ...(pipelineTarget ? { target: pipelineTarget } : {}),
+  }), summarizeCompileResult);
+}
 
 build
   .command('list')
@@ -2784,6 +2815,28 @@ function summarizeLibraryOverview(value: unknown): string[] {
   ];
 }
 
+function summarizeLibraryStorage(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const packages = Array.isArray(result.packages)
+    ? result.packages.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+
+  return [
+    typeof result.libraryRoot === 'string' ? `library: ${result.libraryRoot}` : '',
+    `total: ${formatBytes(Number(result.totalBytes ?? 0))}`,
+    `library state: ${formatBytes(Number(result.libraryStateBytes ?? 0))}`,
+    '',
+    ...humanSummary({ packages: packages.map((entry) => ({
+      id: entry.id ?? '-',
+      source: entry.source ?? '-',
+      knowledge: formatBytes(Number(entry.sourceBytes ?? 0)),
+      builds: formatBytes(Number(entry.buildBytes ?? 0)),
+      generated: formatBytes(Number(entry.otherGeneratedBytes ?? 0)),
+      total: formatBytes(Number(entry.totalBytes ?? 0)),
+    })) }),
+  ];
+}
+
 function summarizeRegistryConfiguration(value: unknown): string[] {
   const result = value as {
     status?: unknown;
@@ -2831,25 +2884,6 @@ function summarizeRegistryStatus(value: unknown): string[] {
     '',
     ...humanSummary({ checks }),
   ];
-}
-
-function summarizePackageListing(value: unknown): string[] {
-  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-  const items = Array.isArray(record.data)
-    ? record.data
-    : Array.isArray(record.packages)
-      ? record.packages
-      : [];
-  const packages = items
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    .map((item) => ({
-      id: item.id ?? item.packageId ?? '-',
-      version: item.latestVersion ?? item.version ?? '-',
-      visibility: item.visibility ?? '-',
-      name: item.name ?? '-',
-    }));
-
-  return humanSummary({ packages });
 }
 
 function summarizeInstalledPackages(value: unknown): string[] {
@@ -3306,7 +3340,7 @@ async function prepareCompiledRuntimeImport(source: string, id?: string, name?: 
     }
 
     if (manifest.type !== 'dkb') {
-      throw new DkbError(`dkb add accepts one DKB at a time; received ${manifest.type}. Install Collections through the Registry or add their DKBs individually.`);
+      throw new DkbError(`dkb runtime import accepts one DKB at a time; received ${manifest.type}. Install Collections through the Registry or import their DKBs individually.`);
     }
     const identity = parseDkbIdentity(manifest.name, 'Imported DKB identity').identity;
     if (id && parseDkbIdentity(id, 'Imported DKB identity').identity !== identity) {

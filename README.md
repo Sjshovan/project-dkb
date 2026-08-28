@@ -1,387 +1,173 @@
-# Codename DKB
+# DKB
 
-DKB is a TypeScript reference implementation for packaging source knowledge
-into local, installable knowledgebases.
-
-The project provides:
-
-- `dkb.json` package manifests
-- flat local Libraries with ledger-based installed state
-- first-class namespaced DKBs and Collections
-- source compilation into chunk and provenance indexes
-- direct-child authoring discovery and npm-style `vendor/` installs
-- signed `.dkbpkg` package archives
-- remote Registry publish, install, update, and uninstall flows
-- runtime retrieval over a compact CLI and MCP surface
-
-## Documentation
-
-- [`docs/cli-ux.md`](docs/cli-ux.md) — implemented human and automation output contract
-- [`docs/library-and-collections.md`](docs/library-and-collections.md) — Library layout, Collection snapshots, locks, and lifecycle
-- [`docs/decisions/`](docs/decisions/) — accepted directions and implementation status
-- [`docs/artifact-architecture.md`](docs/artifact-architecture.md) — portable evidence and compiled artifact boundaries
-- [`docs/agent-navigation.md`](docs/agent-navigation.md) — model-facing search, reference, read, and source primitives
-- [`docs/chatgpt-mcp.md`](docs/chatgpt-mcp.md) — local and remote MCP authority and security boundary
-- [`docs/faiss-runtime.md`](docs/faiss-runtime.md) — installed FAISS/SQLite runtime model
-- [`docs/provider-pipeline.md`](docs/provider-pipeline.md) — plugin resolution, pipeline targets, and managed-index lifecycle
-- [`docs/remote-hosting.md`](docs/remote-hosting.md) — verified hosted-runtime discovery
-
-## Install
-
-```bash
-npm install
-npm run build
-npm link
-```
-
-The final command makes `dkb` available on this host. After later source
-changes, rebuild in this checkout; the global link continues to use it.
-
-## Basic Usage
-
-The CLI is human-readable by default, including when output is redirected.
-Interactive terminals add concise phase output for long-running commands such
-as compile, publish, install, artifact transport, verification, and package
-removal. Automation opts into one JSON document explicitly:
-
-```bash
-dkb --json compile ./my-dkb
-dkb --no-progress compiler status
-```
-
-`--no-progress` keeps the human-readable result but disables spinners, progress
-bars, and ANSI presentation. `--json` disables presentation and emits only
-machine-readable JSON, including structured failures. Non-TTY/piped output is
-still human-readable unless `--json` is present.
-
-Install performs release and runtime preflight before downloading. Installing
-the same immutable release is a successful no-op; an incomplete install is
-reported immediately with `--force` as the repair action. A real install shows
-download, archive verification, single-pass extraction, package/signature
-verification, retrieval-index validation, and activation phases before its
-final result and `Done.`
-
-Every initialized DKB Library remembers its upstream Registry URL in
-`.dkb/config.json`. Bare `dkb init` initializes the
-current directory, asks for the upstream URL, and attempts to verify it. An
-unavailable upstream never blocks local creation: the CLI stores the URL, warns,
-and prints the `dkb registry use <url>` command for retrying later. Set it later
-from that folder with `dkb registry use <url>`, or target one explicitly with
-`--root <path>`.
-Command `--url` and `DKB_REGISTRY_URL` remain temporary overrides; the user
-config is now a fallback. `dkb list` shows the resolved registry and source.
-
-See [`docs/cli-ux.md`](docs/cli-ux.md) for the complete output and exit-code
-contract.
-
-## Host Inventory
-
-DKB remembers resources used on this machine in `~/.dkb/host.json`. It is a
-catalog of names, paths, URLs, selections, and optional local launch metadata;
-it never stores credentials, package data, or pipeline configuration. The
-catalog is not authoritative and can be rebuilt by registering resources again.
-
-```bash
-dkb library list
-dkb library register ~/SecondBrain --name personal
-dkb library use personal
-
-dkb registry register team https://registry.example.com
-dkb registry list --check
-dkb registry use team
-
-dkb runtime register home http://127.0.0.1:7331 --library personal --no-verify
-dkb runtime list --check
-dkb runtime use home
-```
-
-Once a Library is selected, `dkb list`, `dkb install`, and other Library-bound
-commands work from any directory. They still prefer an explicit `--library`,
-then `DKB_LIBRARY_PATH`, then the nearest Library, before the selected Library.
-Runtime client commands similarly prefer explicit `--url`, then
-`DKB_RUNTIME_URL`, then the selected Runtime, with localhost as the final
-default. Lists never scan disks or networks; Registry and Runtime probes happen
-only with `--check`.
-
-`dkb init` automatically registers a Library. Using a valid older Library
-through the CLI registers it opportunistically. Unregistering only forgets the
-shortcut—it never deletes knowledge, stops a Runtime, or removes a Registry.
-See [Decision 0003](docs/decisions/0003-host-inventory-and-context-selection.md)
-for the authority and recovery boundaries.
-
-Serve a Library through one local runtime:
-
-```bash
-cd ~/SecondBrain
-dkb serve
-```
-
-`dkb serve` resolves the current folder first, then walks upward to the nearest
-parent Library manifest. If no Library exists and the command is running in an
-interactive terminal, it can initialize the current folder as a Library,
-compile eligible local source files, and start the runtime against that folder.
-Existing files are not moved or deleted during initialization.
-
-For scripts and other noninteractive environments, initialize explicitly first:
-
-```bash
-cd ~/SecondBrain
-dkb init --registry-url http://127.0.0.1:8000 --yes
-dkb serve
-```
-
-Use `--root` when the Library should be selected explicitly:
-
-```bash
-dkb serve --root ~/SecondBrain
-```
-
-Create a namespaced DKB inside a Library:
-
-```bash
-cd ~/SecondBrain
-dkb init @my-team/my-dkb
-```
-
-Create a Collection, add exact dependencies, and publish its immutable Registry
-snapshot:
-
-```bash
-dkb collection create @my-team/starter-knowledge
-dkb collection add @my-team/starter-knowledge @my-team/my-dkb --version 0.1.0
-dkb collection publish ./starter-knowledge
-```
-
-A Library is flat. Editable DKBs and Collections are direct child folders;
-Registry downloads live only under `vendor/@namespace/name`. The manifest says
-what an entry is, while `dkb.json`, `dkb-lock.json`, and `.dkb/state.sqlite`
-say what is active. Filesystem presence alone never means installed. See
-[`docs/library-and-collections.md`](docs/library-and-collections.md).
-
-Compile and inspect a package:
-
-```bash
-dkb validate ./my-dkb
-dkb compile ./my-dkb
-dkb verify ./my-dkb
-dkb inspect ./my-dkb
-dkb artifact inspect ./my-dkb
-dkb artifact validate ./my-dkb
-dkb artifact pack ./my-dkb --out ./my-dkb.dkbpkg
-```
-
-The bundled LlamaIndex/Docling ingestion provider runs through a local Docker
-service by default so repeated compiles reuse initialized parser state. The
-same provider pipeline is invoked directly by the local CLI and through HTTP by
-the Registry compiler:
-
-```bash
-dkb compiler start
-dkb compiler status
-dkb compiler doctor
-dkb compiler stop
-```
-
-Set `DKB_LLAMA_COMPILER_SERVICE=0` to force the older one-shot compiler
-container path for a single process.
-
-Each Library has one active pipeline target. A target selects ingestion (or a
-parser and chunker), ordered processors, embedding, index, retrieval, and
-provider-owned options. DKB stores the results as an exact build graph:
+DKB is a developer-preview toolkit for packaging, installing, compiling, and
+serving durable knowledgebases. It gives operators an npm-like knowledge
+lifecycle while keeping source, provenance, Evidence IR, and runtime-specific
+retrieval builds separate.
 
 ```text
 PackageVersion -> Evidence Build -> Retrieval Build -> Runtime
 ```
 
-Evidence Builds contain embedding-free, provenance-preserving Evidence IR.
-Retrieval Builds contain one provider-specific embedding/index space. The
-generated locks record exact provider recipes, parent digests, and a separate
-Runtime compatibility digest.
+- A **DKB** is one namespaced, versioned knowledge package.
+- A **Collection** pins a set of exact DKB releases.
+- A **Library** is one local knowledge environment served by one Runtime.
+- A **Registry** publishes and distributes signed releases and builds.
+- A **pipeline** is a recipe. Evidence and Retrieval Builds are its stored,
+  content-addressed results.
 
-```bash
-dkb pipeline show .
-dkb pipeline verify .
-dkb pipeline use fastembed-faiss .
-dkb build list ./my-dkb
-dkb plugin list .
+The remote MCP surface is deliberately read-only and exposes exactly `search`
+and `fetch`. Installation, upgrade, removal, compilation, and pipeline changes
+remain operator-controlled.
+
+> **Status:** developer preview. Formats and commands are being hardened on the
+> `development` branch. Do not treat this checkout as a production release.
+
+## Install from this checkout
+
+Requirements: Node.js 22.15 or later. Docker is required for the bundled
+Docling/LlamaIndex and TEI services.
+
+```powershell
+npm install
+npm run build
+npm link --workspace @dkb/cli
+dkb --version
+dkb version
 ```
 
-For new Libraries, the bundled default target selects Docling/LlamaIndex,
-TEI with `BAAI/bge-small-en-v1.5` at 384 dimensions, packaged FAISS, and DKB
-hybrid retrieval. `fastembed-faiss` remains installed and selectable as an
-independent space; 768-dimensional TEI and managed Meilisearch targets are also
-available. Existing Libraries with an explicit target do not change. A target
-switch prepares every missing build, validates the complete Library graph, and
-changes the active Runtime snapshot atomically. See
-[`docs/provider-pipeline.md`](docs/provider-pipeline.md).
+`dkb --version` reports the CLI version. `dkb version` reports the independently
+versioned protocol, compiler, Runtime, and provider bundle.
 
-Move a compiled package through a local OCI registry:
+## First Library
 
-```bash
-dkb artifact tools
-dkb artifact oci-push ./my-dkb.dkbpkg localhost:5000/dkb/my-dkb:0.1.0
-dkb artifact cosign-keypair --out ./cosign --password "$COSIGN_PASSWORD"
-dkb artifact cosign-sign localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.key --password "$COSIGN_PASSWORD"
-dkb artifact cosign-verify localhost:5000/dkb/my-dkb@sha256:<digest> --key ./cosign.pub
-dkb artifact oci-pull localhost:5000/dkb/my-dkb:0.1.0 --out ./pulled
-dkb artifact install ./pulled --library ~/SecondBrain
+```powershell
+mkdir MyKnowledge
+cd MyKnowledge
+dkb init --registry-url http://127.0.0.1:8000 --yes
+dkb init @my-team/handbook
+dkb validate .\handbook
+dkb build .\handbook
+dkb library add @my-team/handbook
+dkb serve
 ```
 
-Use the configured remote Registry. By default the CLI targets the development
-Registry at `http://127.0.0.1:8000`; it can instead point at a hosted Registry
-or one you operate yourself:
+Initialization succeeds even when the Registry is offline. DKB saves the URL,
+prints a warning, and provides the exact verification command. Local knowledge
+authoring and compilation do not require a running Registry.
 
-```bash
-dkb registry status
-dkb registry use http://127.0.0.1:8000
-dkb registry packages
-dkb publish ./my-dkb
-dkb install @my-team/my-dkb --version 0.1.0
-dkb install @my-team/my-dkb --version 0.1.0 --target fastembed-faiss
+## Package lifecycle
+
+```powershell
+dkb search handbook
+dkb install @my-team/handbook --version 1.0.0
 dkb list
-dkb uninstall @my-team/my-dkb
+dkb show @my-team/handbook
+dkb retrieve "How are production incidents escalated?"
+dkb outdated
+dkb upgrade @my-team/handbook --dry-run
+dkb upgrade @my-team/handbook
+dkb uninstall @my-team/handbook
 ```
 
-Start the complete developer-preview stack when you need a local Registry,
-compiler, Runtime, and MCP endpoint:
+`install` downloads an already compiled, signed build chain. It does not parse,
+chunk, or embed the package. Installing the same immutable release is a clean
+no-op. Upgrade and uninstall preserve the previous active Runtime snapshot when
+validation or activation fails.
 
-```bash
-dkb stack up
-dkb stack status --check
-dkb publish ./my-dkb
-dkb install @my-team/my-dkb --version 0.1.0
+Registry credentials are supplied through `DKB_REGISTRY_TOKEN` or the relevant
+command's `--token` option. `dkb registry login` is reserved for the planned
+hosted authentication flow and currently exits with an explicit `Not yet
+implemented` error; the CLI does not invent or persist Registry login sessions.
+
+## Context and host inventory
+
+DKB records known resources in `~/.dkb/host.json` so commands work outside a
+Library. This file stores names, paths, URLs, and defaults only—never tokens,
+knowledge, or pipeline configuration.
+
+```powershell
+dkb library list
+dkb library use personal
+dkb registry list --check
+dkb registry use team
+dkb runtime list --check
+dkb runtime use local
+dkb library storage
 ```
 
-Retrieve knowledge:
+Library resolution is explicit `--library`, `DKB_LIBRARY_PATH`, nearest parent
+Library, then the host default. Runtime resolution is explicit `--url`,
+`DKB_RUNTIME_URL`, host default, then localhost. DKB never scans disks or
+networks for resources.
 
-```bash
-dkb retrieve "what does this knowledgebase say?"
+## Build and pipeline model
+
+```powershell
+dkb pipeline list
+dkb pipeline show
+dkb pipeline verify
+dkb build .\handbook
+dkb compile .\handbook # supported compatibility command for the same compiler
+dkb build list .\handbook
+dkb pipeline use fastembed-faiss
+dkb build prune .\handbook
 ```
 
-Library knowledge becomes queryable after compilation or verified install:
+The default target uses Docling/LlamaIndex ingestion, TEI embeddings, packaged
+FAISS, and DKB hybrid retrieval. FastEmbed remains a separate selectable
+embedding space. Changing an embedder or index reuses compatible Evidence IR;
+changing parsing, chunking, or text-mutating processors creates another
+Evidence Build.
 
-```bash
-dkb compile .
-dkb retrieve "what changed in my local notes?"
-```
+Builds are staged and promoted atomically. Inactive builds remain until an
+operator prunes them. Human build output reports files, source bytes, records,
+chunks, derived size, expansion ratio, stage timings, and disk preflight—not
+file count as a proxy for corpus size.
 
-Run the MCP server:
+## Runtime and MCP
 
-```bash
+```powershell
+dkb runtime serve --state-root C:\knowledge\personal
+dkb add C:\knowledge\editable-package
+dkb runtime import C:\knowledge\editable-package
 dkb mcp serve
 ```
 
-Both the local stdio transport and remote HTTP transport are Runtime-owned and
-expose only the read-only `search` and `fetch` tools:
+For authenticated Streamable HTTP MCP:
 
-```bash
-DKB_LIBRARY_PATH=/knowledge/library \
-DKB_QUERY_EMBEDDER_URL=http://127.0.0.1:8090/embed \
-DKB_MCP_BEARER_TOKEN=replace-with-a-secret \
+```powershell
+$env:DKB_LIBRARY_PATH = 'C:\knowledge\personal'
+$env:DKB_MCP_BEARER_TOKEN = '<secret>'
 dkb mcp serve-http --host 127.0.0.1 --port 7332
 ```
 
-HTTP MCP requires a bearer token and validates Host and Origin headers. Set
-`DKB_MCP_PUBLIC_BASE_URL` when fetched evidence should include public citation
-URLs, and opt into `DKB_MCP_PUBLIC_DOCUMENTS=true` only when those immutable
-evidence documents are safe to expose. See
-[`docs/chatgpt-mcp.md`](docs/chatgpt-mcp.md) for the ChatGPT boundary and the
-temporary proof workflow.
+Public citation URLs require an explicit `DKB_MCP_PUBLIC_BASE_URL`; immutable
+evidence documents are exposed only when `DKB_MCP_PUBLIC_DOCUMENTS=true`.
 
-Discover and query registry-verified hosted runtimes:
+## Automation and recovery
 
-    dkb remote search docs
-    dkb remote add publisher/docs --version 1.4.0
-    dkb remote list
-    dkb remote query <remote-id> "How are retries configured?"
+- Human output is the default. Use `--json` for one stable JSON document.
+- `--no-progress` disables animation without changing to machine output.
+- Diagnostic commands return nonzero when their report is unhealthy.
+- Generated state lives under `.dkb/` and must not be committed.
+- `.dkb/plugins/` is trusted operator code. It is never packaged with knowledge.
+- `dkb restore` regenerates derived retrieval artifacts from canonical source.
 
-The runtime exposes /.well-known/dkb.json for package discovery. A registry
-must verify the endpoint and sign its package/version/tree-hash relationship
-before MCP treats it as trusted. A remote package is never installed
-automatically; dkb.install_package requires an explicit user-approved call
-and downloads the verified .dkbpkg from the registry.
+See [Operations](docs/operations.md) for storage, backups, credentials, and
+recovery, and [CLI UX](docs/cli-ux.md) for the output and exit-code contract.
 
-Run the lower-level runtime server directly:
+## Architecture and contributor docs
 
-```bash
-dkb runtime serve --state-root ~/SecondBrain
-```
+- [Architecture](docs/artifact-architecture.md)
+- [Libraries and Collections](docs/library-and-collections.md)
+- [Provider pipeline](docs/provider-pipeline.md)
+- [CLI UX](docs/cli-ux.md)
+- [Operations](docs/operations.md)
+- [Security](docs/security.md)
+- [ChatGPT and MCP](docs/chatgpt-mcp.md)
+- [Architecture decisions](docs/decisions/)
+- [Agent navigation](docs/agent-navigation.md)
 
-Docker-backed runtime commands remain available for local process management,
-but the folder-first flow is the default. One runtime serves one Library; the
-Library may contain many DKBs and Collections but it has one compatible
-retrieval profile and one upstream Registry configuration.
-
-## Runtime Artifacts
-
-Generated artifacts are written under `.dkb/` and are not intended to be
-committed:
-
-```text
-.dkb/artifacts/
-.dkb/cache/
-.dkb/locks/
-.dkb/plugins/
-.dkb/runs/
-.dkb/trace.sqlite
-```
-
-`.dkb/plugins/` contains operator-installed Library-local code and is preserved
-locally, but it and `.dkb/config.json` are always excluded from `.dkbpkg`
-artifacts. Knowledge packages cannot install or select executable plugins.
-
-`source.index` is the chunk-first retrieval artifact. It stores compiled source
-units with source asset provenance, chunk ordinals, offsets, hashes, and
-locators. `dkb-artifact.json` is the versioned artifact manifest for the
-compiled layout and file hashes. Verified compiled artifacts can be installed
-directly into a runtime without recompiling source; the runtime preserves the
-package `.dkb/artifacts/` state and refreshes its aggregate catalog from those
-compiled indexes. Runtime retrieval reads compiled artifacts and returns compact
-evidence text to the model; metadata remains available through trace APIs.
-
-`evidence.ir.json` is the portable, embedding-free interchange layer. It keeps
-stable evidence/source identities, source hashes, locators, text, and chunk
-boundaries without carrying vectors. FAISS segments, embedding vectors, and
-profile-specific chunk artifacts remain compiled runtime outputs and can be
-regenerated from canonical sources plus Evidence IR.
-
-The LlamaIndex compiler image includes a Docling rich-file lane for supported
-filesystem documents. By default `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`,
-and `.htm` are converted with Docling and chunked with Docling
-`HybridChunker`; plain text, Markdown, CSV, SQLite, and configured database
-sources continue through the existing LlamaIndex/database lanes. Every lane
-emits the same DKB compiled chunk and provenance records, so package install,
-index-provider import, HTTP retrieval, and MCP retrieval do not need
-source-specific runtime behavior.
-
-Docling routing can be controlled in the compiler container with:
-
-```text
-DKB_DOCLING_RICH_FILES=1
-DKB_DOCLING_FALLBACK=1
-DKB_DOCLING_EXTENSIONS=.pdf,.docx,.pptx,.xlsx,.html,.htm
-```
-
-When fallback is enabled, a Docling conversion failure is recorded in chunk
-metadata and the source is retried through the normal filesystem reader. When
-fallback is disabled, the compile fails before a new artifact is promoted.
-
-## Agent Navigation
-
-The MCP runtime exposes composable compiled-knowledge operations:
-
-```text
-dkb.semantic_search  -> discover conceptually related chunk references
-dkb.find             -> find exact terms and identifiers
-dkb.read             -> read selected compiled chunks with provenance
-dkb.sources          -> describe active source assets and chunk counts
-```
-
-Semantic search uses the active index provider. Packaged FAISS opens immutable
-package segments as one shard view; managed Meilisearch fans out across one
-immutable index per active package release and fuses the results. Exact search
-uses provider-supplied lexical search when available and otherwise the compiled
-source catalog. Both return stable package/source/chunk references first;
-`dkb.read` is the explicit evidence step. The existing
-`dkb.retrieve_knowledge` tool remains available for compatibility with
-answer-oriented integrations.
+Repository ownership and verification rules are scoped through the nearest
+`AGENTS.md`. Start with the root guidance before changing a subsystem.
