@@ -1,7 +1,14 @@
+import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import { request as httpRequest, type IncomingMessage } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { DkbError } from '@dkb/protocol/errors.js';
+import { validateInstallPlan, type DkbInstallPlan, type DkbInstallPlanArtifact } from '@dkb/protocol/builds.js';
 import { parseDkbIdentity } from '@dkb/protocol/identity.js';
 import { loadDkb } from '@dkb/protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
@@ -34,6 +41,24 @@ export interface DkbRegistryCollectionRevision {
     digest: string;
     members: Array<{ id: string; version: string; digest: string }>;
   };
+}
+
+export interface DkbRegistryBuildRequest {
+  status: 'queued' | 'ready';
+  target: string;
+  jobId?: number;
+  evidenceDigest?: string;
+}
+
+export interface DkbRegistryBuildJob {
+  jobId: number;
+  stage: 'pipeline' | 'retrieval';
+  target: string;
+  status: string;
+  attempts: number;
+  evidenceDigest?: string;
+  retrievalBuildDigest?: string;
+  error?: string;
 }
 
 export class DkbRegistryClient {
@@ -182,6 +207,101 @@ export class DkbRegistryClient {
       ...(typeof data.packageTreeHash === 'string' ? { packageTreeHash: data.packageTreeHash } : {}),
       ...(typeof data.recordCount === 'number' ? { recordCount: data.recordCount } : {}),
     };
+  }
+
+  async installPlan(packageId: string, version?: string, target?: string): Promise<DkbInstallPlan> {
+    const resolvedVersion = version ?? await this.latestVersion(packageId);
+    const query = target ? `?target=${encodeURIComponent(target)}` : '';
+    const value = await this.get(
+      `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(resolvedVersion)}/install-plan${query}`,
+    );
+    const plan = validateInstallPlan(value, `Registry install plan for ${packageId}@${resolvedVersion}`);
+    if (plan.package.id !== packageId || plan.package.version !== resolvedVersion) {
+      throw new DkbError(`Registry install plan identity mismatch for ${packageId}@${resolvedVersion}`);
+    }
+    return plan;
+  }
+
+  async requestBuild(packageId: string, version: string, target: string): Promise<DkbRegistryBuildRequest> {
+    const value = await this.post(
+      `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/builds`,
+      { target },
+    );
+    if (!isRecord(value) || (value.status !== 'queued' && value.status !== 'ready')) {
+      throw new DkbError(`Registry returned an invalid build request for ${packageId}@${version} (${target})`);
+    }
+    return {
+      status: value.status,
+      target,
+      ...(typeof value.jobId === 'number' ? { jobId: value.jobId } : {}),
+      ...(typeof value.evidenceDigest === 'string' ? { evidenceDigest: value.evidenceDigest } : {}),
+    };
+  }
+
+  async buildJob(packageId: string, version: string, jobId: number): Promise<DkbRegistryBuildJob> {
+    const value = await this.get(
+      `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/build-jobs/${jobId}`,
+    );
+    if (!isRecord(value)
+      || typeof value.jobId !== 'number'
+      || (value.stage !== 'pipeline' && value.stage !== 'retrieval')
+      || typeof value.target !== 'string'
+      || typeof value.status !== 'string'
+      || typeof value.attempts !== 'number') {
+      throw new DkbError(`Registry returned invalid build-job status for ${packageId}@${version} (job ${jobId})`);
+    }
+    return {
+      jobId: value.jobId,
+      stage: value.stage,
+      target: value.target,
+      status: value.status,
+      attempts: value.attempts,
+      ...(typeof value.evidenceDigest === 'string' ? { evidenceDigest: value.evidenceDigest } : {}),
+      ...(typeof value.retrievalBuildDigest === 'string' ? { retrievalBuildDigest: value.retrievalBuildDigest } : {}),
+      ...(typeof value.error === 'string' && value.error ? { error: value.error } : {}),
+    };
+  }
+
+  async writeInstallLayer(
+    artifact: DkbInstallPlanArtifact,
+    targetPath: string,
+    options: { progress?: DkbProgressReporter } = {},
+  ): Promise<{ path: string; bytes: number; hash: string }> {
+    const outputPath = path.resolve(targetPath);
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    const temporaryPath = siblingTemporaryPath(outputPath, artifact.kind);
+    const hash = createHash('sha256');
+    let received = 0;
+    options.progress?.(progressStart({ phase: `download-${artifact.kind}`, label: `Download ${artifact.kind} layer`, total: artifact.bytes, unit: 'bytes' }));
+    try {
+      const response = await openRegistryDownload(
+        new URL(artifact.url, `${this.baseUrl}/`),
+        this.authorizationHeader(),
+        artifact.mediaType,
+        positiveDuration(process.env.DKB_REGISTRY_DOWNLOAD_TIMEOUT_MS, 30 * 60_000),
+      );
+      const meter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          hash.update(chunk);
+          received += chunk.byteLength;
+          options.progress?.(progressUpdate({ phase: `download-${artifact.kind}`, label: `Download ${artifact.kind} layer`, value: received, total: artifact.bytes, unit: 'bytes' }));
+          callback(null, chunk);
+        },
+      });
+      await pipeline(response, meter, createWriteStream(temporaryPath, { flags: 'wx' }));
+      const digest = `sha256:${hash.digest('hex')}`;
+      if (artifact.bytes > 0 && received !== artifact.bytes) {
+        throw new DkbError(`Registry ${artifact.kind} layer was incomplete: expected ${artifact.bytes} bytes, received ${received}`);
+      }
+      if (digest !== artifact.digest) throw new DkbError(`Registry ${artifact.kind} layer hash mismatch: expected ${artifact.digest}, got ${digest}`);
+      await fs.rm(outputPath, { force: true });
+      await fs.rename(temporaryPath, outputPath);
+      options.progress?.(progressFinish({ phase: `download-${artifact.kind}`, label: `Download ${artifact.kind} layer`, total: received, unit: 'bytes' }));
+      return { path: outputPath, bytes: received, hash: digest };
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true });
+      throw error;
+    }
   }
 
   async packageArchive(packageId: string, version?: string, options: { progress?: DkbProgressReporter } = {}): Promise<Buffer> {
@@ -627,6 +747,79 @@ export class DkbRegistryClient {
   private authorizationHeader(): Record<string, string> {
     return this.token ? { authorization: `Bearer ${this.token}` } : {};
   }
+}
+
+async function openRegistryDownload(
+  url: URL,
+  headers: Record<string, string>,
+  expectedContentType: string,
+  timeoutMs: number,
+  redirects = 0,
+): Promise<IncomingMessage> {
+  const response = await requestRegistryDownload(url, headers, timeoutMs);
+  const status = response.statusCode ?? 0;
+  const location = response.headers.location;
+
+  if ([301, 302, 303, 307, 308].includes(status) && location) {
+    response.resume();
+    if (redirects >= 5) throw new DkbError(`Registry layer download exceeded 5 redirects: ${url}`);
+    const destination = new URL(location, url);
+    if (url.protocol === 'https:' && destination.protocol !== 'https:') {
+      throw new DkbError(`Registry layer download refused an HTTPS downgrade: ${destination}`);
+    }
+    return openRegistryDownload(
+      destination,
+      destination.origin === url.origin ? headers : {},
+      expectedContentType,
+      timeoutMs,
+      redirects + 1,
+    );
+  }
+
+  if (status < 200 || status >= 300) {
+    const detail = await readNativeResponseText(response);
+    throw new DkbError(detail || `GET ${url.pathname} failed with HTTP ${status}`);
+  }
+
+  const header = response.headers['content-type'];
+  const contentType = Array.isArray(header) ? header[0] ?? '' : header ?? '';
+  if (!contentType.startsWith(expectedContentType)) {
+    response.resume();
+    throw new DkbError(`Registry returned unexpected package content type: ${contentType || 'missing'}`);
+  }
+
+  return response;
+}
+
+async function requestRegistryDownload(
+  url: URL,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<IncomingMessage> {
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new DkbError(`Registry layer download requires HTTP or HTTPS: ${url}`);
+  }
+  const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
+
+  return new Promise((resolve, reject) => {
+    const pending = request(url, { method: 'GET', headers }, resolve);
+    pending.once('error', reject);
+    pending.setTimeout(timeoutMs, () => {
+      pending.destroy(new DkbError(`Registry layer download timed out after ${timeoutMs} ms: ${url}`));
+    });
+    pending.end();
+  });
+}
+
+async function readNativeResponseText(response: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const value of response) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    if (bytes < 64 * 1024) chunks.push(chunk.subarray(0, 64 * 1024 - bytes));
+    bytes += chunk.byteLength;
+  }
+  return Buffer.concat(chunks).toString('utf8').trim();
 }
 
 function positiveDuration(value: string | undefined, fallback: number): number {

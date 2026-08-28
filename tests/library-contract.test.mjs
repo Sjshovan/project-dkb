@@ -154,6 +154,7 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   const dkbRoot = path.join(root, 'core');
   await writeLibrary(root, { '@test/core': { path: 'core' } });
   await writeDkb(dkbRoot, '@test/core', '1.0.0');
+  await writeTestPipeline(dkbRoot);
   await compileComposeProject(dkbRoot, { force: true, mode: 'package' });
   const packageLockPath = path.join(dkbRoot, '.dkb', 'artifacts', 'dkb-artifact.lock.json');
   const packageLock = await fs.readFile(packageLockPath, 'utf8');
@@ -212,6 +213,67 @@ async function writeDkb(root, name, version) {
     permissions: { read: true, write: false },
   });
   await fs.writeFile(path.join(root, 'knowledge.md'), `${name} evidence\n`, 'utf8');
+}
+
+async function writeTestPipeline(root) {
+  const pluginRoot = path.join(root, '.dkb', 'plugins', '@test', 'pipeline');
+  await writeJson(path.join(root, '.dkb', 'config.json'), {
+    format: 'dkb.config.v1',
+    targets: {
+      default: {
+        ingestion: '@test/pipeline',
+        embedding: '@test/pipeline',
+        index: '@test/pipeline',
+        retrieval: '@test/pipeline',
+      },
+    },
+  });
+  await fs.mkdir(pluginRoot, { recursive: true });
+  await fs.writeFile(path.join(pluginRoot, 'plugin.mjs'), `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+export const id = '@test/pipeline';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({
+    kind: 'ingestion',
+    async compile({ dkb }) {
+      const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
+      return {
+        records: [{
+          id: 'test-record', chunkId: 'test-record', text,
+          metadata: {
+            assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem',
+            locator: { path: 'knowledge.md', chunk: 0 }, assetLocator: { path: 'knowledge.md' },
+            title: 'knowledge.md', hash: 'sha256:test-record', updatedAt: '2026-08-27T00:00:00.000Z',
+            chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length,
+            sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:test-source' },
+          },
+        }],
+        receipt: { providerId: id, providerVersion: version, build: {} },
+      };
+    },
+  });
+  context.registerProvider({
+    kind: 'embedding',
+    async embedDocuments({ texts }) { return texts.map(() => [1]); },
+    async embedQuery() { return [1]; },
+    compatibility() { return { embeddingSpace: 'test', dimensions: 1, metric: 'cosine', normalized: true }; },
+  });
+  context.registerProvider({
+    kind: 'index', mode: 'packaged', format: 'test.index.v1',
+    async compilePackage({ root, compiled }) {
+      const target = path.join(root, '.dkb', 'artifacts', 'test-index.json');
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, JSON.stringify(compiled.records));
+      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
+    },
+    async validatePackage() { return { documentCount: 1 }; },
+    async openRuntime() { return null; },
+  });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1' });
+}
+`, 'utf8');
 }
 
 async function writeCollection(root, name, members) {

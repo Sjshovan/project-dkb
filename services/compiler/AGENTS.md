@@ -4,7 +4,7 @@
 
 This directory owns the shared compilation runner, staging and rollback, source analysis, Evidence IR production, artifact locks, and the trusted Registry-facing compiler HTTP service.
 
-The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
+The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).
 
 ## Dependency direction
 
@@ -16,7 +16,8 @@ The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-rele
 
 - Compile isolated staged source; never mutate or move caller knowledge.
 - Strip uploaded plugins, operator configuration, caches, vendor content, and generated state.
-- Preserve stable evidence identity and complete parser/chunker/embedder/index provenance.
+- Finish every text mutation before Evidence IR, then route the exact Evidence Build through the selected embedder and index provider.
+- Preserve stable source anchors and enforce exact Evidence/Retrieval parent digests.
 - Validate all artifacts before atomic promotion; rollback leaves the previous complete build intact.
 - Enforce cancellation, timeouts, target compatibility, and trusted context-root containment.
 

@@ -5,6 +5,7 @@ import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '
 import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import type { DkbIndexMutationResult, DkbIndexProvider } from '@dkb/pipeline/types.js';
+import { validatePackageBuildGraph } from '@dkb/library/builds.js';
 
 export interface PreparedRuntimeIndexPackage {
   providerId: string;
@@ -18,14 +19,20 @@ export async function prepareRuntimeIndexPackage(input: {
   libraryRoot: string;
   libraryId: string;
   dkb: LoadedDkb;
+  target?: string;
   signal?: AbortSignal;
 }): Promise<PreparedRuntimeIndexPackage> {
-  const host = await DkbProviderHost.create({ root: input.libraryRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+  const host = await DkbProviderHost.create({
+    root: input.libraryRoot,
+    bundled: BUNDLED_PROVIDER_PLUGINS,
+    ...(input.target ? { target: input.target } : {}),
+  });
 
   try {
     const selected = host.config.target.index;
     const provider = host.provider<DkbIndexProvider>('index');
     const profile = await resolveProviderRetrievalProfile(host);
+    const buildGraph = await validatePackageBuildGraph(input.dkb.root);
     const packageProfile = await maybeReadRetrievalProfileLock(input.dkb.root);
 
     if (!packageProfile) {
@@ -39,6 +46,13 @@ export async function prepareRuntimeIndexPackage(input: {
     if (packageProfile.compatibilityDigest !== stableHash(profile.compatibility)) {
       throw new DkbError(
         `Pipeline compatibility mismatch for ${input.dkb.manifest.id}@${input.dkb.manifest.version}: Library ${profile.embedding.model}/${profile.embedding.dimensions}, package ${packageProfile.profile.embedding.model}/${packageProfile.profile.embedding.dimensions}`,
+      );
+    }
+    if (buildGraph.runtime.evidenceProfileDigest !== profile.evidenceProfileDigest
+      || buildGraph.runtime.retrievalProfileDigest !== profile.retrievalProfileDigest
+      || buildGraph.runtime.compatibilityDigest !== packageProfile.compatibilityDigest) {
+      throw new DkbError(
+        `Build graph mismatch for ${input.dkb.manifest.id}@${input.dkb.manifest.version}: selected pipeline ${profile.retrievalProfileDigest}, package ${buildGraph.runtime.retrievalProfileDigest}`,
       );
     }
     if (!provider.validatePackage) {
@@ -93,9 +107,14 @@ export async function verifyRuntimeIndex(input: {
   libraryId: string;
   packageId?: string;
   packageVersion?: string;
+  target?: string;
   signal?: AbortSignal;
 }): Promise<DkbIndexMutationResult | null> {
-  const host = await DkbProviderHost.create({ root: input.libraryRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+  const host = await DkbProviderHost.create({
+    root: input.libraryRoot,
+    bundled: BUNDLED_PROVIDER_PLUGINS,
+    ...(input.target ? { target: input.target } : {}),
+  });
 
   try {
     const provider = host.provider<DkbIndexProvider>('index');

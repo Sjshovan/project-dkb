@@ -40,9 +40,18 @@ export class DkbRuntimeClient {
     registryToken?: string;
     packageId: string;
     version?: string;
+    target?: string;
     force?: boolean;
   }) {
     return this.post('/api/dkbs/install-registry', input, true);
+  }
+
+  switchPipeline(input: {
+    target: string;
+    registryUrl: string;
+    registryToken?: string;
+  }) {
+    return this.post('/api/runtime/pipeline', input, true);
   }
 
   removeDkb(id: string) {

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { composeArguments, prepareDkbStack } from '../apps/cli/dist/stack/manager.js';
 
 test('stack preparation generates reusable local secrets without returning them', async () => {
@@ -23,6 +24,7 @@ test('stack preparation generates reusable local secrets without returning them'
     assert.match(firstEnvironment, /DKB_MCP_BEARER_TOKEN=/);
     assert.doesNotMatch(JSON.stringify(first), /DKB_MCP_BEARER_TOKEN|DKB_REGISTRY_APP_KEY|DKB_REGISTRY_BOOTSTRAP_TOKEN/);
     assert.equal(first.composeFile.endsWith(path.join('dist', 'stack', 'compose.yaml')), true);
+    assert.deepEqual(composeArguments(first, ['up']).slice(-3), ['--profile', 'tei', 'up']);
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;
@@ -42,12 +44,86 @@ test('Meilisearch stack target configures the same provider contract for compile
 
     assert.deepEqual(runtime, compiler);
     assert.equal(runtime.activeTarget, 'meilisearch');
+    assert.equal(runtime.targets.meilisearch.options['@dkb/llamaindex'].tokenizerModel, 'BAAI/bge-small-en-v1.5');
     assert.equal(runtime.targets.meilisearch.index, '@dkb/meilisearch');
-    assert.equal(runtime.targets.meilisearch.options['@dkb/meilisearch'].apiKeyEnv, 'MEILI_MASTER_KEY');
+    assert.equal(runtime.targets.meilisearch.options['@dkb/meilisearch'].keyEnv, 'MEILI_MASTER_KEY');
     assert.deepEqual(
-      composeArguments(stack, ['down', '--remove-orphans']).slice(-4),
-      ['--profile', 'meilisearch', 'down', '--remove-orphans'],
+      composeArguments(stack, ['down', '--remove-orphans']).slice(-6),
+      ['--profile', 'tei', '--profile', 'meilisearch', 'down', '--remove-orphans'],
     );
+  } finally {
+    if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
+    else process.env.DKB_STACK_STATE_ROOT = previousRoot;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('TEI stack targets select the pinned shared embedding service for compiler and Runtime', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-tei-test-'));
+  const previousRoot = process.env.DKB_STACK_STATE_ROOT;
+  process.env.DKB_STACK_STATE_ROOT = root;
+
+  try {
+    const stack = await prepareDkbStack('tei-proof', 'tei-meilisearch');
+    const environment = await fs.readFile(stack.envFile, 'utf8');
+    const compiler = JSON.parse(await fs.readFile(path.join(stack.root, 'compiler-context', '.dkb', 'config.json'), 'utf8'));
+    const runtime = JSON.parse(await fs.readFile(path.join(stack.root, 'runtime', '.dkb', 'config.json'), 'utf8'));
+
+    assert.deepEqual(runtime, compiler);
+    assert.equal(runtime.activeTarget, 'tei-meilisearch');
+    assert.match(environment, /DKB_TEI_IMAGE=ghcr\.io\/huggingface\/text-embeddings-inference:cpu-1\.9\.3@sha256:/);
+    assert.match(environment, /DKB_TEI_MODEL_REVISION=5c38ec7c405ec4b44b94cc5a9bb96e735b38267a/);
+    assert.deepEqual(
+      composeArguments(stack, ['up']).slice(-5),
+      ['--profile', 'tei', '--profile', 'meilisearch', 'up'],
+    );
+  } finally {
+    if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
+    else process.env.DKB_STACK_STATE_ROOT = previousRoot;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('changing the compiler target preserves a populated Runtime target until pipeline activation succeeds', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-target-transaction-test-'));
+  const previousRoot = process.env.DKB_STACK_STATE_ROOT;
+  process.env.DKB_STACK_STATE_ROOT = root;
+
+  try {
+    const first = await prepareDkbStack('target-transaction', 'fastembed-faiss');
+    const evidenceProfileDigest = stableHash({ evidence: 'default' });
+    const retrievalProfileDigest = stableHash({ retrieval: 'fastembed' });
+    await fs.writeFile(path.join(first.root, 'runtime', '.dkb', 'runtime.lock.json'), `${JSON.stringify({
+      format: 'dkb.runtime-lock.v1',
+      target: 'fastembed-faiss',
+      evidenceProfileDigest,
+      retrievalProfileDigest,
+      compatibilityDigest: stableHash({ compatibility: 'fastembed' }),
+      packages: {
+        '@test/installed': {
+          version: '1.0.0',
+          evidenceProfileDigest,
+          evidenceDigest: stableHash({ evidence: 'installed' }),
+          retrievalProfileDigest,
+          retrievalBuildDigest: stableHash({ build: 'fastembed' }),
+        },
+      },
+      generation: 1,
+      generatedAt: '2026-08-28T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    const switchedCompiler = await prepareDkbStack('target-transaction', 'tei-faiss');
+    const compiler = JSON.parse(await fs.readFile(path.join(switchedCompiler.root, 'compiler-context', '.dkb', 'config.json'), 'utf8'));
+    const runtime = JSON.parse(await fs.readFile(path.join(switchedCompiler.root, 'runtime', '.dkb', 'config.json'), 'utf8'));
+    const environment = await fs.readFile(switchedCompiler.envFile, 'utf8');
+
+    assert.deepEqual(
+      composeArguments(first, ['down']).slice(-5),
+      ['--profile', 'tei', '--profile', 'meilisearch', 'down'],
+    );
+    assert.equal(compiler.activeTarget, 'tei-faiss');
+    assert.equal(runtime.activeTarget, 'fastembed-faiss');
+    assert.match(environment, /^DKB_PIPELINE_TARGET=tei-faiss$/mu);
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;

@@ -5,6 +5,7 @@ import { DkbError } from '@dkb/protocol/errors.js';
 import {
   DKB_CONFIG_FORMAT,
   DKB_CONFIG_PATH,
+  BUNDLED_DEFAULT_CONFIG,
   defaultDkbGlobalRoot,
   isPluginId,
   readDkbContextConfig,
@@ -19,6 +20,7 @@ import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
 import type { DkbPluginModule } from '@dkb/pipeline/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { maybeReadRuntimeLock } from '@dkb/library/builds.js';
 
 export type DkbPluginScope = 'local' | 'global';
 
@@ -30,6 +32,60 @@ export interface DkbPluginListEntry {
   selected: boolean;
   valid: boolean;
   error?: string;
+}
+
+export async function listPipelineTargets(input: { root: string; globalRoot?: string }): Promise<{
+  root: string;
+  activeTarget: string;
+  targets: Array<{ name: string; active: boolean; providers: string[] }>;
+}> {
+  const resolved = await resolveContextConfig(input.root, { ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const names = [...new Set([
+    ...Object.keys(BUNDLED_DEFAULT_CONFIG.targets ?? {}),
+    ...Object.keys(resolved.global.targets ?? {}),
+    ...Object.keys(resolved.local.targets ?? {}),
+  ])];
+  return {
+    root: resolved.root,
+    activeTarget: resolved.activeTarget,
+    targets: names.map((name) => {
+      const target = resolveContextConfigDocuments(resolved.root, resolved.globalRoot, resolved.global, resolved.local, name).target;
+      return { name, active: name === resolved.activeTarget, providers: selectedPluginIds(target) };
+    }).sort((left, right) => left.name.localeCompare(right.name)),
+  };
+}
+
+export async function activatePipelineTarget(input: { root: string; name: string; globalRoot?: string }): Promise<ReturnType<DkbProviderHost['describe']>> {
+  const root = path.resolve(input.root);
+  const globalRoot = path.resolve(input.globalRoot ?? defaultDkbGlobalRoot());
+  const targetPath = path.join(root, DKB_CONFIG_PATH);
+  const [global, local] = await Promise.all([
+    readDkbContextConfig(path.join(globalRoot, 'config.json')),
+    readDkbContextConfig(targetPath),
+  ]);
+  const candidate: DkbContextConfig = { ...local, format: DKB_CONFIG_FORMAT, activeTarget: input.name };
+  const resolved = resolveContextConfigDocuments(root, globalRoot, global, candidate, input.name);
+  const host = await DkbProviderHost.createFromConfig(resolved, BUNDLED_PROVIDER_PLUGINS);
+
+  try {
+    const selected = await resolveProviderRetrievalProfile(host);
+    const runtime = await maybeReadRuntimeLock(root);
+    if (runtime && (
+      runtime.evidenceProfileDigest !== selected.evidenceProfileDigest
+      || runtime.retrievalProfileDigest !== selected.retrievalProfileDigest
+      || runtime.compatibilityDigest !== stableHash(selected.compatibility)
+    )) {
+      throw new DkbError(
+        `Cannot activate pipeline target "${input.name}": the active Runtime Build is ${runtime.retrievalProfileDigest}. `
+        + `Prepare this target first with dkb build ${root} --pipeline ${input.name}.`,
+      );
+    }
+    const description = host.describe();
+    await writeDkbContextConfig(targetPath, candidate);
+    return description;
+  } finally {
+    await host.dispose();
+  }
 }
 
 export async function addPlugin(input: {

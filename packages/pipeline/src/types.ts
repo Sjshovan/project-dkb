@@ -86,13 +86,6 @@ export interface DkbIngestionProvider {
   compile(input: {
     dkb: LoadedDkb;
     options: Readonly<Record<string, unknown>>;
-    embedding: {
-      id: string;
-      version: string;
-      options: Readonly<Record<string, unknown>>;
-      compatibility: Readonly<Record<string, unknown>>;
-      embedDocuments(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
-    };
     signal?: AbortSignal;
   }): Promise<{
     documents?: DkbPipelineDocument[];
@@ -129,6 +122,7 @@ export interface DkbChunkerProvider {
 
 export interface DkbEmbeddingProvider {
   kind: 'embedding';
+  lifecycle?: DkbProviderLifecycle;
   embedDocuments(input: {
     texts: readonly string[];
     options: Readonly<Record<string, unknown>>;

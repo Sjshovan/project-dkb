@@ -15,7 +15,6 @@ os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
 from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
 from llama_index.readers.database import DatabaseReader
 from sqlalchemy import create_engine, inspect
 
@@ -26,9 +25,6 @@ INPUT_ROOT = Path(os.environ.get("DKB_COMPILER_INPUT", "/input"))
 MODEL = os.environ.get("DKB_COMPILER_MODEL", "BAAI/bge-small-en-v1.5")
 ASYNC_WORKERS = max(1, min(4, int(os.environ.get("DKB_LLAMA_ASYNC_WORKERS", "1"))))
 DOCUMENT_BATCH_SIZE = max(1, min(256, int(os.environ.get("DKB_LLAMA_DOCUMENT_BATCH_SIZE", "32"))))
-EMBED_BATCH_SIZE = max(1, min(256, int(os.environ.get("DKB_LLAMA_EMBED_BATCH_SIZE", "96"))))
-INFERENCE_BATCH_SIZE = max(1, min(256, int(os.environ.get("DKB_LLAMA_INFERENCE_BATCH_SIZE", "10"))))
-FASTEMBED_PROVIDER = os.environ.get("DKB_FASTEMBED_PROVIDER", "").strip()
 DOCLING_ENABLED = os.environ.get("DKB_DOCLING_RICH_FILES", "1").lower() not in {"0", "false", "no", "off"}
 DOCLING_FALLBACK = os.environ.get("DKB_DOCLING_FALLBACK", "1").lower() not in {"0", "false", "no", "off"}
 DEFAULT_DOCLING_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
@@ -449,7 +445,7 @@ def database_documents(request: dict[str, Any], source: dict[str, Any]) -> list[
     return docs
 
 
-def node_record(node: Any, embedding: list[float]) -> dict[str, Any]:
+def node_record(node: Any) -> dict[str, Any]:
     metadata = dict(node.metadata)
     content = node.get_content(metadata_mode="none")
     source_type = metadata["dkb_source_type"]
@@ -481,11 +477,10 @@ def node_record(node: Any, embedding: list[float]) -> dict[str, Any]:
         "chunkStart": start,
         "chunkEnd": end,
         "metadata": metadata,
-        "embedding": embedding,
     }
 
 
-def rich_chunk_record(chunk: dict[str, Any], embedding: list[float]) -> dict[str, Any]:
+def rich_chunk_record(chunk: dict[str, Any]) -> dict[str, Any]:
     metadata = chunk["metadata"]
     identity = {
         "dkbId": metadata["dkb_package_id"],
@@ -505,7 +500,6 @@ def rich_chunk_record(chunk: dict[str, Any], embedding: list[float]) -> dict[str
         **chunk,
         "id": digest_text(json.dumps(identity, sort_keys=True, separators=(",", ":"))),
         "assetId": digest_text(json.dumps(asset_identity, sort_keys=True, separators=(",", ":"))),
-        "embedding": embedding,
     }
 
 
@@ -528,64 +522,36 @@ def write_record(output: Any, records_output: Any, record: dict[str, Any], first
     return False
 
 
-async def write_node_record_batches(
+def write_node_records(
     output: Any,
     records_output: Any,
     nodes: list[Any],
     first_record: bool,
-) -> tuple[bool, float, int]:
-    embed_seconds = 0.0
+) -> tuple[bool, int]:
     record_count = 0
-    for offset in range(0, len(nodes), EMBED_BATCH_SIZE):
-        batch = nodes[offset:offset + EMBED_BATCH_SIZE]
-        texts = [node.get_content(metadata_mode="none") for node in batch]
-        embed_started = time.perf_counter()
-        embeddings = await Settings.embed_model.aget_text_embedding_batch(texts)
-        embed_seconds += time.perf_counter() - embed_started
-        if len(embeddings) != len(batch):
-            raise RuntimeError(f"Embedding batch returned {len(embeddings)} vectors for {len(batch)} nodes")
-        for node, embedding in zip(batch, embeddings):
-            first_record = write_record(output, records_output, node_record(node, embedding), first_record)
-            record_count += 1
-    return first_record, embed_seconds, record_count
+    for node in nodes:
+        first_record = write_record(output, records_output, node_record(node), first_record)
+        record_count += 1
+    return first_record, record_count
 
 
-async def write_rich_record_batches(
+def write_rich_records(
     output: Any,
     records_output: Any,
     rich_chunks: list[dict[str, Any]],
     first_record: bool,
-) -> tuple[bool, float, int]:
-    embed_seconds = 0.0
+) -> tuple[bool, int]:
     record_count = 0
-    for offset in range(0, len(rich_chunks), EMBED_BATCH_SIZE):
-        batch = rich_chunks[offset:offset + EMBED_BATCH_SIZE]
-        texts = [chunk["text"] for chunk in batch]
-        embed_started = time.perf_counter()
-        embeddings = await Settings.embed_model.aget_text_embedding_batch(texts)
-        embed_seconds += time.perf_counter() - embed_started
-        if len(embeddings) != len(batch):
-            raise RuntimeError(f"Embedding batch returned {len(embeddings)} vectors for {len(batch)} rich chunks")
-        for chunk, embedding in zip(batch, embeddings):
-            first_record = write_record(output, records_output, rich_chunk_record(chunk, embedding), first_record)
-            record_count += 1
-    return first_record, embed_seconds, record_count
+    for chunk in rich_chunks:
+        first_record = write_record(output, records_output, rich_chunk_record(chunk), first_record)
+        record_count += 1
+    return first_record, record_count
 
 
 async def main_async() -> None:
     global _DOCLING_FALLBACKS
     started = time.perf_counter()
     request = json.loads(REQUEST.read_text(encoding="utf-8"))
-    if FASTEMBED_PROVIDER == "CUDAExecutionProvider":
-        import onnxruntime as ort
-        if hasattr(ort, "preload_dlls"):
-            ort.preload_dlls(directory="")
-    Settings.embed_model = FastEmbedEmbedding(
-        model_name=MODEL,
-        cache_dir=os.environ.get("FASTEMBED_CACHE_PATH"),
-        embed_batch_size=INFERENCE_BATCH_SIZE,
-        providers=[FASTEMBED_PROVIDER] if FASTEMBED_PROVIDER else None,
-    )
     Settings.llm = None
     document_tasks: list[Any] = []
     for store in request["stores"]:
@@ -616,7 +582,6 @@ async def main_async() -> None:
     splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
     ordinals: dict[str, int] = {}
     chunk_seconds = 0.0
-    embed_seconds = 0.0
     record_count = 0
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     temporary_output = OUTPUT.with_suffix(f"{OUTPUT.suffix}.tmp")
@@ -627,8 +592,8 @@ async def main_async() -> None:
     try:
         with temporary_output.open("w", encoding="utf-8") as output, temporary_records_output.open("w", encoding="utf-8") as records:
             output.write('{"compiler":')
-            json.dump({"id": "llamaindex.fastembed.onnx", "model": MODEL}, output, sort_keys=True, separators=(",", ":"))
-            output.write(',"format":"dkb.llamaindex.compile.v1","records":[')
+            json.dump({"id": "llamaindex.docling.evidence", "model": MODEL}, output, sort_keys=True, separators=(",", ":"))
+            output.write(',"format":"dkb.llamaindex.compile.v2","records":[')
             first_record = True
             for offset in range(0, len(docs), DOCUMENT_BATCH_SIZE):
                 document_batch = docs[offset:offset + DOCUMENT_BATCH_SIZE]
@@ -640,13 +605,12 @@ async def main_async() -> None:
                     asset_key = node_asset_key(node)
                     node.metadata["dkb_chunk_ordinal"] = ordinals.get(asset_key, 0)
                     ordinals[asset_key] = ordinals.get(asset_key, 0) + 1
-                first_record, batch_embed_seconds, batch_record_count = await write_node_record_batches(
+                first_record, batch_record_count = write_node_records(
                     output,
                     records,
                     nodes,
                     first_record,
                 )
-                embed_seconds += batch_embed_seconds
                 record_count += batch_record_count
                 completed_documents = min(offset + len(document_batch), len(docs))
                 batch_number = (offset // DOCUMENT_BATCH_SIZE) + 1
@@ -655,34 +619,28 @@ async def main_async() -> None:
                         "dkb.compiler.documents.processed",
                         chunkMs=round(batch_chunk_seconds * 1000, 3),
                         completed=completed_documents,
-                        embedMs=round(batch_embed_seconds * 1000, 3),
                         records=record_count,
                         total=len(docs),
                     )
-            first_record, rich_embed_seconds, rich_record_count = await write_rich_record_batches(
+            first_record, rich_record_count = write_rich_records(
                 output,
                 records,
                 rich_chunks,
                 first_record,
             )
-            embed_seconds += rich_embed_seconds
             record_count += rich_record_count
             completed_at = time.perf_counter()
             execution = {
-                "mode": "async-batched",
+                "mode": "embedding-free-evidence",
                 "workers": ASYNC_WORKERS,
                 "batching": {
                     "documentBatchSize": DOCUMENT_BATCH_SIZE,
-                    "embeddingBatchSize": EMBED_BATCH_SIZE,
-                    "inferenceBatchSize": INFERENCE_BATCH_SIZE,
-                    "provider": FASTEMBED_PROVIDER or "CPUExecutionProvider",
                     "recordCount": record_count,
                 },
                 "timingsMs": {
                     "startup": round((loaded_at - started) * 1000, 3),
                     "load": round((loaded_done_at - loaded_at) * 1000, 3),
                     "chunk": round(chunk_seconds * 1000, 3),
-                    "embed": round(embed_seconds * 1000, 3),
                     "total": round((completed_at - started) * 1000, 3),
                     "doclingTokenizer": round(_COMPILER_TIMINGS["doclingTokenizer"], 3),
                     "doclingConversion": round(_COMPILER_TIMINGS["doclingConversion"], 3),
@@ -700,9 +658,9 @@ async def main_async() -> None:
             json.dump(execution, output, sort_keys=True, separators=(",", ":"))
             output.write("}")
         temporary_metadata_output.write_text(json.dumps({
-            "compiler": {"id": "llamaindex.fastembed.onnx", "model": MODEL},
+            "compiler": {"id": "llamaindex.docling.evidence", "model": MODEL},
             "execution": execution,
-            "format": "dkb.llamaindex.compile.v1",
+            "format": "dkb.llamaindex.compile.v2",
             "recordsFile": records_output.name,
             "recordCount": record_count,
         }, sort_keys=True, separators=(",", ":")), encoding="utf-8")

@@ -2,6 +2,10 @@
 
 The developer-preview provider bundle for DKB.
 
-It supplies the default LlamaIndex/Docling ingestion service, FastEmbed document/query embeddings, packaged FAISS, managed Meilisearch, and current hybrid lexical/vector retrieval. Every implementation registers through `@dkb/pipeline`; no provider contract is defined here.
+It supplies LlamaIndex/Docling ingestion, independent FastEmbed and TEI
+document/query embedding providers, packaged FAISS, managed Meilisearch, and
+hybrid lexical/vector retrieval. Every implementation registers through
+`@dkb/pipeline`; no provider contract is defined here. TEI/FAISS is the default
+for new contexts; FastEmbed remains explicitly selectable.
 
-See [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
+See [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).

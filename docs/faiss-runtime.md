@@ -1,10 +1,13 @@
 # FAISS Runtime Boundary
 
-DKB runtime retrieval is chunk-first. Published packages carry compiled chunk records produced by the compiler path, including Docling rich-file chunks and LlamaIndex/database chunks, all embedded with FastEmbed. Runtime install does not read raw sources, rechunk documents, or embed documents.
+DKB runtime retrieval is chunk-first. A selected Retrieval Build carries vectors
+and package indexes produced from one exact, embedding-free Evidence Build.
+FastEmbed and TEI can each produce a FAISS Retrieval Build. Runtime install does
+not read raw sources, rechunk documents, or embed documents.
 
 ## Package Artifacts
 
-Each compiled package includes:
+Each FAISS Retrieval Build includes:
 
 - `.dkb/artifacts/faiss/chunks.sqlite`
 - `.dkb/artifacts/faiss/chunks.faiss`
@@ -17,9 +20,9 @@ The SQLite catalog is DKB-owned canonical runtime data for chunk text and proven
 
 Install/update order:
 
-1. Verify package receipt, package tree hash, and artifact hashes.
+1. Verify the PackageVersion, Evidence, Retrieval, and install-plan receipt chain.
 2. Validate package-local FAISS catalog and segment.
-3. Promote the package into `vendor/@namespace/name` with its signed receipt.
+3. Promote the source and exact build chain into `vendor/@namespace/name`.
 4. Refresh the local aggregate catalog without rebuilding a global search index.
 5. Load active package segments into one in-memory FAISS `IndexShards` view.
 6. Mark the runtime query snapshot active only after the expected package/version is present.
@@ -30,7 +33,7 @@ Uninstall removes the package directory and invalidates the runtime query snapsh
 
 HTTP and MCP retrieval share the same query path:
 
-1. Embed the query through the configured FastEmbed query endpoint.
+1. Embed the query through the provider recorded by the active Retrieval Profile.
 2. Search the active FAISS `IndexShards` view.
 3. Map FAISS numeric IDs back to deterministic DKB chunk IDs.
 4. Resolve evidence text and provenance from the package-local SQLite catalogs.
@@ -40,13 +43,14 @@ FAISS never embeds text and does not own provenance. It only stores/searches vec
 
 ## Compatibility
 
-One Runtime serves one Library. All active packages in that Library must use
-the same embedding profile: compiler ID, model, dimensions, and metric. If a
-package differs, activation fails with a clear embedding-profile mismatch and
-the previous manifest, lock, ledger, installed paths, and query catalog are
-restored.
+One Runtime serves one Library. All active packages in that Library must match
+the exact Evidence Profile and retrieval compatibility digest: embedding
+provider/space, pinned model revision, dimensions, transforms, normalization,
+metric, FAISS format, and Runtime protocol. If a package differs, activation
+fails and the previous config, Runtime lock, installed paths, managed-index
+state, and query snapshot are restored.
 
-## Current Performance Gate
+## Historical Runtime Gate
 
 The current accepted runtime result on the existing 2,004-record stress corpus is:
 
@@ -55,4 +59,7 @@ The current accepted runtime result on the existing 2,004-record stress corpus i
 - Cold first direct retrieval: 1031.458 ms.
 - Evidence correctness: all measured stress queries returned the expected marker evidence.
 
-This is accepted as close enough for the current production boundary. It does not meet the earlier aspirational 34.5 ms target against the prior txtai baseline. The remaining non-blocking performance observation is that most measured warm latency is inside `vectorQuery`, which includes FastEmbed query embedding plus FAISS helper search. No query-path workaround is planned without a later explicit performance task.
+This measurement predates the multi-build TEI promotion and remains a
+historical FAISS regression reference, not the current provider comparison.
+The current embedding benchmark and promotion result are recorded in
+[`artifact-architecture.md`](artifact-architecture.md).

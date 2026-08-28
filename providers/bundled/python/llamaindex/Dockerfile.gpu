@@ -20,7 +20,7 @@ RUN apt-get update \
 COPY compile.py embedder.py ./
 COPY service.py ./
 
-LABEL org.dkb.compiler.service.version="1"
+LABEL org.dkb.compiler.service.version="3"
 LABEL org.dkb.compiler.accelerator="nvidia-cuda"
 
 ENTRYPOINT ["python", "/compiler/compile.py"]

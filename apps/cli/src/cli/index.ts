@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Command, CommanderError } from 'commander';
+import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { identityDisplayName, parseDkbIdentity } from '@dkb/protocol/identity.js';
 import { loadCollection, loadDkb, loadManifest } from '@dkb/protocol/manifest.js';
@@ -717,8 +718,8 @@ stack
   .command('up')
   .description('Start or update a named local DKB stack')
   .argument('[name]', 'Stack name', 'local')
-  .option('--target <target>', 'Pipeline target: default or meilisearch', parseStackTarget, 'default')
-  .action(async (name: string, options: { target: 'default' | 'meilisearch' }) => {
+  .option('--target <target>', 'Pipeline target: default, fastembed-faiss, tei-faiss, tei-faiss-768, or tei-meilisearch', parseStackTarget, 'default')
+  .action(async (name: string, options: { target: import('../stack/manager.js').DkbStackTarget }) => {
     const { upDkbStack } = await import('../stack/manager.js');
     await presenter().run('Starting DKB stack', async () => upDkbStack(name, options.target), summarizeStackStatus);
   });
@@ -1138,16 +1139,16 @@ program
   .argument('<package-id>', 'Scoped Registry identity')
   .option('--version <version>', 'Package version')
   .option('--revision <revision>', 'Collection revision', parsePositiveInteger)
+  .option('--target <name>', 'Exact compiled pipeline target for a DKB; defaults to the Registry target')
   .option('--url <url>', 'Registry API URL')
   .option('--runtime-url <url>', 'Owning Runtime URL; closes live retrieval handles before installation')
   .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
   .option('--force', 'Repair an incomplete install or replace an installed DKB')
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-  .action(async (packageId: string, options: { version?: string; revision?: number; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
+  .action(async (packageId: string, options: { version?: string; revision?: number; target?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
     const libraryRoot = await currentLibraryRoot(options.library);
     const { DkbRegistryClient } = await import('@dkb/registry-client/client.js');
-    const { DKB_PACKAGE_EXTENSION } = await import('@dkb/registry-client/archive.js');
-    const { installDkbArchiveIntoRuntime, preflightDkbInstall } = await import('@dkb/runtime/runtime/registryInstall.js');
+    const { installDkbFromRegistry } = await import('@dkb/runtime/runtime/registryInstall.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
     const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
@@ -1155,6 +1156,7 @@ program
 
     if (kind === 'collection') {
       if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
+      if (options.target) throw new DkbError('--target applies to DKBs. Install the Collection, then run dkb pipeline use <target>.');
       const { installRegistryCollection } = await import('@dkb/runtime/runtime/collections.js');
       await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
         client,
@@ -1174,28 +1176,22 @@ program
         registryToken: options.token,
         packageId,
         version: options.version,
+        target: options.target,
         force: Boolean(options.force),
       }), summarizeInstallResult);
       return;
     }
 
-    await presenter().run('Installing DKB', async (progress) => {
-      const release = await client.packageRelease(packageId, options.version);
-      const existing = await preflightDkbInstall({ runtimeRoot: libraryRoot, candidate: release, force: Boolean(options.force) });
-
-      if (existing) return existing;
-
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-install-download-'));
-      const archivePath = path.join(tempRoot, `${packageId}${DKB_PACKAGE_EXTENSION}`);
-
-      try {
-        await client.writePackageArchive(packageId, archivePath, release.version, { progress });
-        const publicKeys = await client.publicKeys() as { keys: Parameters<typeof installDkbArchiveIntoRuntime>[0]['trustedKeys'] };
-        return await installDkbArchiveIntoRuntime({ archivePath, trustedKeys: publicKeys.keys, runtimeRoot: libraryRoot, expectedArchiveHash: release.archiveHash, force: Boolean(options.force), progress });
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
-    }, summarizeInstallResult);
+    await presenter().run('Installing DKB', async (progress) => installDkbFromRegistry({
+      registryUrl: registryConfig.url,
+      registryToken: options.token,
+      packageId,
+      version: options.version,
+      target: options.target,
+      runtimeRoot: libraryRoot,
+      force: Boolean(options.force),
+      progress,
+    }), summarizeInstallResult);
   });
 
 program
@@ -1732,6 +1728,15 @@ const pipeline = program
   .description('Inspect, select, and verify the provider pipeline');
 
 pipeline
+  .command('list')
+  .description('List configured pipeline targets')
+  .argument('[path]', 'Library, Runtime, or DKB root', '.')
+  .action(async (target: string) => {
+    const { listPipelineTargets } = await import('../providers/management.js');
+    presenter().print(await listPipelineTargets({ root: path.resolve(target) }), summarizePipelineList);
+  });
+
+pipeline
   .command('show')
   .description('Show the resolved target, providers, precedence, and build digest')
   .argument('[path]', 'Library or Runtime root', '.')
@@ -1748,6 +1753,83 @@ pipeline
     } finally {
       await host.dispose();
     }
+  });
+
+pipeline
+  .command('use')
+  .description('Prepare and atomically activate a pipeline target')
+  .argument('<name>', 'Configured target name')
+  .argument('[path]', 'Library, Runtime, or DKB root', '.')
+  .option('--runtime-url <url>', 'Owning Runtime URL')
+  .option('--registry-url <url>', 'Registry API URL used to fetch missing signed builds')
+  .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
+  .action(async (name: string, target: string, options: { runtimeUrl?: string; registryUrl?: string; token?: string }) => {
+    const root = path.resolve(target);
+    const manifest = await loadManifest(root);
+
+    await presenter().run(`Activating pipeline ${name}`, async () => {
+      if (manifest.type === 'dkb') {
+        const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }, { resolveProviderRetrievalProfile }, { activateStoredPackageBuild }] = await Promise.all([
+          import('@dkb/pipeline/host.js'),
+          import('@dkb/providers-bundled/bundled.js'),
+          import('@dkb/pipeline/profile.js'),
+          import('@dkb/library/builds.js'),
+        ]);
+        const host = await DkbProviderHost.create({ root, target: name, bundled: BUNDLED_PROVIDER_PLUGINS });
+        try {
+          const resolved = await resolveProviderRetrievalProfile(host);
+          try {
+            await activateStoredPackageBuild({
+              root,
+              target: name,
+              evidenceProfileDigest: resolved.evidenceProfileDigest,
+              retrievalProfileDigest: resolved.retrievalProfileDigest,
+              compatibilityDigest: stableHash(resolved.compatibility),
+            });
+          } catch (error) {
+            if (!/No stored Retrieval Build exists/u.test(error instanceof Error ? error.message : String(error))) throw error;
+            const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+            await compileComposeProject(root, { mode: 'package', target: name });
+          }
+        } finally {
+          await host.dispose();
+        }
+        const { activatePipelineTarget } = await import('../providers/management.js');
+        return activatePipelineTarget({ root, name });
+      }
+      if (manifest.type !== 'library') {
+        throw new DkbError(`Pipeline activation requires a DKB or Library root, got ${manifest.type}`);
+      }
+      const [{ readLibraryState }, { ensurePackageBuildForTarget }] = await Promise.all([
+        import('@dkb/library/state.js'),
+        import('@dkb/compiler/compile.js'),
+      ]);
+      const state = await readLibraryState(root);
+      const localPreparations = [];
+      for (const entry of Object.values(state.entries)
+        .filter((item) => item.kind === 'dkb' && item.source === 'local' && item.status === 'installed')
+        .sort((left, right) => left.identity.localeCompare(right.identity))) {
+        localPreparations.push({
+          package: entry.identity,
+          ...await ensurePackageBuildForTarget(path.resolve(root, entry.path), { target: name, contextRoot: root }),
+        });
+      }
+      const { configuredRegistry } = await import('./registryConfig.js');
+      const registry = await configuredRegistry({ url: options.registryUrl, root });
+      const runtime = await currentRuntimeAdminClient(options.runtimeUrl, 40 * 60_000);
+      const switched = await runtime.switchPipeline({
+        target: name,
+        registryUrl: registry.url,
+        registryToken: options.token,
+      });
+      if (!switched || typeof switched !== 'object' || Array.isArray(switched)) {
+        throw new DkbError('Runtime returned an invalid pipeline-switch response');
+      }
+      return { ...switched as Record<string, unknown>, localPreparations };
+    }, (result) => result && typeof result === 'object' && !Array.isArray(result)
+      && (result as Record<string, unknown>).status === 'pipeline_switched'
+      ? summarizePipelineSwitch(result)
+      : summarizePipeline(result));
   });
 
 pipeline
@@ -1833,6 +1915,52 @@ program
       mode: manifest.type === 'dkb' ? 'package' : 'library',
       ...(options.target ? { target: options.target } : {}),
     }), summarizeCompileResult);
+  });
+
+const build = program
+  .command('build')
+  .description('Compile and manage stored Evidence and Retrieval Builds')
+  .argument('[path]', 'Directory containing dkb.json', '.')
+  .option('--force', 'Rebuild generated artifacts even when the local compile cache is valid')
+  .option('--pipeline <name>', 'Configured pipeline target')
+  .action(async (target: string, options: { force?: boolean; pipeline?: string }) => {
+    const root = path.resolve(target);
+    const manifest = await loadManifest(root);
+    const { compileComposeProject } = await import('@dkb/compiler/compile.js');
+
+    await presenter().run(`Building ${root}`, async () => compileComposeProject(root, {
+      force: Boolean(options.force),
+      mode: manifest.type === 'dkb' ? 'package' : 'library',
+      ...(options.pipeline ? { target: options.pipeline } : {}),
+    }), summarizeCompileResult);
+  });
+
+build
+  .command('list')
+  .description('List stored Evidence and Retrieval Builds')
+  .argument('[path]', 'Compiled DKB root', '.')
+  .action(async (target: string) => {
+    const { listPackageBuilds } = await import('@dkb/library/builds.js');
+    presenter().print(await listPackageBuilds(path.resolve(target)), summarizeBuildList);
+  });
+
+build
+  .command('inspect')
+  .description('Inspect one Evidence or Retrieval Build')
+  .argument('<digest>', 'Evidence, Retrieval Build, or profile digest')
+  .argument('[path]', 'Compiled DKB root', '.')
+  .action(async (digest: string, target: string) => {
+    const { inspectPackageBuild } = await import('@dkb/library/builds.js');
+    presenter().print(await inspectPackageBuild(path.resolve(target), digest), summarizeBuildInspect);
+  });
+
+build
+  .command('prune')
+  .description('Remove inactive Builds while retaining the active Runtime graph')
+  .argument('[path]', 'Compiled DKB root', '.')
+  .action(async (target: string) => {
+    const { prunePackageBuilds } = await import('@dkb/library/builds.js');
+    await presenter().run('Pruning inactive Builds', async () => prunePackageBuilds(path.resolve(target)), summarizeBuildPrune);
   });
 
 program
@@ -2121,7 +2249,7 @@ async function currentRuntimeUrl(explicit?: string): Promise<string> {
   return resolveCliRuntimeUrl(explicit);
 }
 
-async function currentRuntimeAdminClient(explicit?: string) {
+async function currentRuntimeAdminClient(explicit?: string, timeoutMs?: number) {
   const [{ DkbRuntimeClient }, { runtimeAdminTokenForUrl }] = await Promise.all([
     import('@dkb/runtime/runtime/client.js'),
     import('../stack/manager.js'),
@@ -2131,6 +2259,7 @@ async function currentRuntimeAdminClient(explicit?: string) {
   return new DkbRuntimeClient({
     baseUrl,
     adminToken: await runtimeAdminTokenForUrl(baseUrl),
+    ...(timeoutMs ? { timeoutMs } : {}),
   });
 }
 
@@ -2142,9 +2271,11 @@ function parseRuntimeKind(value: string): 'process' | 'docker' | 'remote' {
   throw new DkbError('Runtime kind must be process, docker, or remote.');
 }
 
-function parseStackTarget(value: string): 'default' | 'meilisearch' {
-  if (value === 'default' || value === 'meilisearch') return value;
-  throw new DkbError('Stack target must be default or meilisearch.');
+function parseStackTarget(value: string): import('../stack/manager.js').DkbStackTarget {
+  if (['default', 'meilisearch', 'fastembed-faiss', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'].includes(value)) {
+    return value as import('../stack/manager.js').DkbStackTarget;
+  }
+  throw new DkbError('Stack target must be default, fastembed-faiss, tei-faiss, tei-faiss-768, or tei-meilisearch.');
 }
 
 function runtimeCatalogUrl(host: string, port: number): string {
@@ -2263,6 +2394,102 @@ function summarizePipeline(value: unknown): string[] {
     typeof result.buildDigest === 'string' ? `build: ${result.buildDigest}` : '',
     ...humanSummary({ providers: [...providers, ...processors] }),
   ];
+}
+
+function summarizePipelineSwitch(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const packages = Array.isArray(result.packages) ? result.packages : [];
+  const localPreparations = Array.isArray(result.localPreparations) ? result.localPreparations : [];
+
+  return [
+    `pipeline: ${String(result.target ?? '-')}`,
+    `previous: ${String(result.previousTarget ?? '-')}`,
+    typeof result.libraryPath === 'string' ? `library: ${result.libraryPath}` : '',
+    typeof result.compatibilityDigest === 'string' ? `compatibility: ${result.compatibilityDigest}` : '',
+    ...humanSummary({
+      localBuilds: localPreparations.map((value) => {
+        const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+        return {
+          package: item.package ?? '-',
+          preparation: item.preparation ?? '-',
+          status: 'ready',
+        };
+      }),
+    }),
+    ...humanSummary({
+      packages: packages.map((value) => {
+        const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+        return {
+          package: item.id ?? '-',
+          version: item.version ?? '-',
+          source: item.source ?? '-',
+          build: item.preparation ?? '-',
+          status: 'ready',
+        };
+      }),
+    }),
+  ];
+}
+
+function summarizePipelineList(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const targets = Array.isArray(result.targets) ? result.targets : [];
+  return [
+    typeof result.root === 'string' ? `context: ${result.root}` : '',
+    ...humanSummary({
+      targets: targets.map((value) => {
+        const target = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+        return {
+          default: target.active ? '*' : '',
+          name: target.name ?? '-',
+          providers: Array.isArray(target.providers) ? target.providers.join(', ') : '-',
+        };
+      }),
+    }),
+  ];
+}
+
+function summarizeBuildList(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const retrieval = Array.isArray(result.retrieval) ? result.retrieval : [];
+  const rows: Array<Record<string, unknown>> = [
+    ...evidence.map((value) => ({ ...(value as Record<string, unknown>), kind: 'evidence', digest: (value as Record<string, unknown>).evidenceDigest })),
+    ...retrieval.map((value) => ({ ...(value as Record<string, unknown>), kind: 'retrieval', digest: (value as Record<string, unknown>).buildDigest })),
+  ];
+  return [
+    typeof result.root === 'string' ? `package: ${result.root}` : '',
+    ...humanSummary({
+      builds: rows.map((row) => ({
+        active: row.active ? '*' : '',
+        kind: row.kind,
+        profile: shortDigest(row.profileDigest),
+        digest: shortDigest(row.digest),
+      })),
+    }),
+  ];
+}
+
+function summarizeBuildInspect(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const lock = result.lock && typeof result.lock === 'object' ? result.lock as Record<string, unknown> : {};
+  return [
+    `kind: ${String(result.kind ?? '-')}`,
+    `status: ${result.active ? 'active' : 'ready'}`,
+    typeof result.path === 'string' ? `path: ${result.path}` : '',
+    `digest: ${String(lock.evidenceDigest ?? lock.retrievalBuildDigest ?? '-')}`,
+  ];
+}
+
+function summarizeBuildPrune(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const removed = Array.isArray(result.removed) ? result.removed : [];
+  const retained = Array.isArray(result.retained) ? result.retained : [];
+  return [`removed: ${removed.length}`, `retained: ${retained.length}`];
+}
+
+function shortDigest(value: unknown): string {
+  return typeof value === 'string' && value.startsWith('sha256:') ? `${value.slice(7, 19)}…` : String(value ?? '-');
 }
 
 function summarizePipelineVerification(value: unknown): string[] {
@@ -3051,7 +3278,14 @@ async function prepareCompiledRuntimeImport(source: string, id?: string, name?: 
       throw new DkbError(`Imported DKB identity override ${id} does not match its manifest ${identity}.`);
     }
     const { compileComposeProject } = await import('@dkb/compiler/compile.js');
-    await compileComposeProject(packageRoot, { force: true, mode: 'package' });
+    // Compile the sanitized staging copy with the trusted local source as its
+    // provider context. This preserves Library-local pipeline overrides while
+    // ensuring plugin code and configuration never enter the import artifact.
+    await compileComposeProject(packageRoot, {
+      force: true,
+      mode: 'package',
+      contextRoot: resolvedSource,
+    });
 
     return {
       id: identity,

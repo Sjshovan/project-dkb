@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
-import { compileComposeProject } from './compile.js';
+import { compileComposeProject, compileRetrievalFromEvidence } from './compile.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { parseDkbIdentity } from '@dkb/protocol/identity.js';
@@ -14,12 +14,15 @@ import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '@dkb/protocol/path
 import { DKB_ARTIFACT_MANIFEST_PATH } from '@dkb/library/artifacts.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '@dkb/library/signing.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
-import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
+import { DKB_RETRIEVAL_PROFILE_LOCK_PATH, readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
 import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
+import { LLAMAINDEX_COMPILER_IMAGE } from '@dkb/providers-bundled/llamaindex.js';
 import { resolveContextConfig } from '@dkb/pipeline/config.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import { DKB_COMPILER_VERSION } from './version.js';
+import { validateEvidenceIr } from '@dkb/protocol/evidence/ir.js';
+import { validateEvidenceBuildLock } from '@dkb/protocol/builds.js';
 
 const DKB_COMPILER_RESULT_MEDIA_TYPE = 'application/vnd.dkb.compiler-result+gzip';
 const DKB_COMPILER_RESULT_HEADER = 'x-dkb-compiler-result';
@@ -40,8 +43,14 @@ interface CompileRequest {
       registryId?: string;
     };
     target?: string;
+    stage?: 'pipeline' | 'retrieval';
   };
   sourceArchive: {
+    fileName?: string;
+    hash?: string;
+    contents: string;
+  };
+  evidenceArchive?: {
     fileName?: string;
     hash?: string;
     contents: string;
@@ -158,6 +167,8 @@ async function compileRegistryPackage(
 
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), `dkb-registry-compile-${input.jobId}-`));
   const uploadPath = path.join(scratch, input.sourceArchive.fileName ?? 'source.dkbpkg');
+  const evidenceUploadPath = path.join(scratch, input.evidenceArchive?.fileName ?? 'evidence.dkbevidence');
+  const evidenceExtractedRoot = path.join(scratch, 'evidence');
   const extractedRoot = path.join(scratch, 'source');
   const requestedPackageId = input.request.package?.id;
   const buildRoot = path.join(scratch, safeId(requestedPackageId ?? 'build'));
@@ -169,7 +180,7 @@ async function compileRegistryPackage(
   if (target !== contextConfig.activeTarget) {
     throw new DkbError(`Registry compiler accepts only its active target "${contextConfig.activeTarget}", not "${target}"`);
   }
-  const compilerImage = process.env.DKB_LLAMA_COMPILER_IMAGE ?? 'dkb-compiler-llamaindex:0.3.7';
+  const compilerImage = process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
 
   try {
     await fs.writeFile(uploadPath, sourceArchive);
@@ -181,14 +192,18 @@ async function compileRegistryPackage(
     const version = input.request.package?.version ?? dkb.manifest.version;
     const publisherId = input.request.package?.publisherId ?? parseDkbIdentity(dkb.manifest.id).namespace;
 
-    await writeRegistryPackageManifest(buildRoot, dkb, packageId, version, publisherId);
+    assertRegistryPackageManifest(dkb, packageId, version, publisherId);
+    const sourceTreeHash = await hashPackageTree(buildRoot);
 
-    const compiled = await compileComposeProject(buildRoot, {
-      force: true,
-      mode: 'package',
-      target,
-      contextRoot,
-    });
+    const stage = input.request.stage ?? 'pipeline';
+    const compiled = stage === 'retrieval'
+      ? await compileRetrievalStage(input, buildRoot, evidenceUploadPath, evidenceExtractedRoot, target, contextRoot, packageId, version)
+      : await compileComposeProject(buildRoot, {
+          force: true,
+          mode: 'package',
+          target,
+          contextRoot,
+        });
     const retrievalProfile = await readRetrievalProfileLock(buildRoot);
 
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
@@ -214,6 +229,7 @@ async function compileRegistryPackage(
         providers: retrievalProfile.profile.providers,
       },
       lock: compiled.lock,
+      sourceTreeHash,
       packageTreeHash,
       archive: {
         fileName: archiveFileName,
@@ -226,6 +242,7 @@ async function compileRegistryPackage(
       },
       logs: Buffer.from(JSON.stringify({
         event: 'dkb.registry.compile.completed',
+        stage,
         jobId: input.jobId,
         packageId,
         version,
@@ -259,6 +276,42 @@ async function compileRegistryPackage(
   }
 }
 
+async function compileRetrievalStage(
+  input: CompileRequest,
+  buildRoot: string,
+  evidenceUploadPath: string,
+  evidenceExtractedRoot: string,
+  target: string,
+  contextRoot: string,
+  packageId: string,
+  version: string,
+): Promise<Awaited<ReturnType<typeof compileComposeProject>>> {
+  if (!input.evidenceArchive) {
+    throw new DkbError('Retrieval-only compilation requires evidenceArchive');
+  }
+  const bytes = Buffer.from(input.evidenceArchive.contents, 'base64');
+  const actualHash = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (input.evidenceArchive.hash && input.evidenceArchive.hash !== actualHash) {
+    throw new DkbError(`Evidence archive hash mismatch: expected ${input.evidenceArchive.hash}, got ${actualHash}`);
+  }
+  await fs.writeFile(evidenceUploadPath, bytes);
+  await extractDkbPackageArchive(evidenceUploadPath, evidenceExtractedRoot);
+  const evidencePath = path.join(evidenceExtractedRoot, 'evidence.ir.json');
+  const lockPath = path.join(evidenceExtractedRoot, 'evidence.lock.json');
+  const evidence = validateEvidenceIr(JSON.parse(await fs.readFile(evidencePath, 'utf8')), evidencePath);
+  const lock = validateEvidenceBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
+  if (lock.package.id !== packageId
+    || lock.package.version !== version
+    || lock.evidenceProfileDigest !== evidence.evidenceProfileDigest
+    || lock.evidenceDigest !== evidence.evidenceDigest
+    || lock.recordCount !== evidence.evidence.length
+    || lock.chunkCount !== evidence.chunks.length) {
+    throw new DkbError(`Evidence archive does not match ${packageId}@${version}`);
+  }
+
+  return compileRetrievalFromEvidence(buildRoot, evidence, { target, contextRoot });
+}
+
 export async function registryCompilerCapabilities(): Promise<{
   service: 'dkb.registry.compiler';
   version: string;
@@ -267,6 +320,8 @@ export async function registryCompilerCapabilities(): Promise<{
   providers: ReturnType<DkbProviderHost['describe']>['providers'];
   processors: ReturnType<DkbProviderHost['describe']>['processors'];
   buildDigest: string;
+  evidenceProfileDigest: string;
+  retrievalProfileDigest: string;
   compatibility: Awaited<ReturnType<typeof resolveProviderRetrievalProfile>>['compatibility'];
   compatibilityDigest: string;
 }> {
@@ -285,6 +340,8 @@ export async function registryCompilerCapabilities(): Promise<{
       providers: description.providers,
       processors: description.processors,
       buildDigest: description.buildDigest,
+      evidenceProfileDigest: profile.evidenceProfileDigest,
+      retrievalProfileDigest: profile.retrievalProfileDigest,
       compatibility: profile.compatibility,
       compatibilityDigest: stableHash(profile.compatibility),
     };
@@ -335,9 +392,7 @@ async function copyDkbSourceOnly(sourceRoot: string, targetRoot: string): Promis
   });
 }
 
-async function writeRegistryPackageManifest(root: string, dkb: Awaited<ReturnType<typeof loadDkb>>, packageId: string, version: string, publisherId: string): Promise<void> {
-  const source = manifestPath(root, 'dkb.json');
-  const manifest = await readJsonObject(source);
+function assertRegistryPackageManifest(dkb: Awaited<ReturnType<typeof loadDkb>>, packageId: string, version: string, publisherId: string): void {
   const identity = parseDkbIdentity(dkb.manifest.id);
 
   if (packageId !== dkb.manifest.id) {
@@ -346,20 +401,9 @@ async function writeRegistryPackageManifest(root: string, dkb: Awaited<ReturnTyp
   if (publisherId !== identity.namespace) {
     throw new DkbError(`Publisher ${publisherId} does not own ${dkb.manifest.id}`);
   }
-
-  delete manifest.dependencies;
-  delete manifest.publisher;
-  delete manifest.package;
-  delete manifest.collection;
-
-  await fs.writeFile(source, `${JSON.stringify({
-    manifestVersion: typeof manifest.manifestVersion === 'number' ? manifest.manifestVersion : 1,
-    type: 'dkb',
-    ...manifest,
-    name: dkb.manifest.id,
-    displayName: dkb.manifest.name,
-    version,
-  }, null, 2)}\n`, 'utf8');
+  if (version !== dkb.manifest.version) {
+    throw new DkbError(`Registry compile version mismatch: requested ${version}, source declares ${dkb.manifest.version}`);
+  }
 }
 
 async function hashPackageTree(root: string): Promise<string> {
@@ -397,16 +441,6 @@ async function listFiles(root: string, sourceRoot?: string): Promise<string[]> {
   return nested.flat().sort((left, right) => left.localeCompare(right));
 }
 
-async function readJsonObject(source: string): Promise<Record<string, unknown>> {
-  const value = JSON.parse((await fs.readFile(source, 'utf8')).replace(/^\uFEFF/, '')) as unknown;
-
-  if (!isRecord(value)) {
-    throw new DkbError(`Expected JSON object at ${source}`);
-  }
-
-  return value;
-}
-
 function packageArchiveFileName(packageId: string, version: string): string {
   return `${safeId(packageId)}-${safeId(version)}${DKB_PACKAGE_EXTENSION}`;
 }
@@ -431,11 +465,11 @@ function isDkbSystemArtifactPath(sourceRoot: string, candidate: string): boolean
   const parts = relative.split(path.sep);
   const name = path.basename(candidate);
 
-  return parts.includes('.dkb') || name === 'dkb-lock.json' || name === 'dkb-release.json' || name === DKB_PACKAGE_RECEIPT_PATH;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  return parts.includes('.dkb')
+    || name === 'dkb-lock.json'
+    || name === DKB_RETRIEVAL_PROFILE_LOCK_PATH
+    || name === 'dkb-release.json'
+    || name === DKB_PACKAGE_RECEIPT_PATH;
 }
 
 function setCommonHeaders(response: ServerResponse): void {

@@ -17,6 +17,9 @@ import { DKB_ARTIFACTS_DIR } from '@dkb/protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@dkb/library/state.js';
 import { syncLibrary } from '@dkb/library/resolver.js';
 import { snapshotLibraryArtifacts } from '@dkb/library/artifactSnapshot.js';
+import { maybeReadRuntimeLock, validatePackageBuildGraph, writeRuntimeLock } from '@dkb/library/builds.js';
+import { DKB_RUNTIME_LOCK_PATH } from '@dkb/protocol/paths.js';
+import { DKB_RUNTIME_LOCK_FORMAT, type DkbRuntimeLock } from '@dkb/protocol/builds.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   assertMatchingRetrievalProfiles,
@@ -27,6 +30,7 @@ import {
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
 import type { DkbIndexMutationResult } from '@dkb/pipeline/types.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
+import { withRuntimeQuery } from './mutation.js';
 
 // Runtime snapshots are invalidated by managed mutations, not revalidated on
 // every request. This keeps the hot MCP path independent of artifact I/O.
@@ -52,6 +56,7 @@ export interface DkbRuntimeStatus {
     packageTreeHash?: string;
   }>;
   retrievalProfile: DkbRetrievalProfileLock | null;
+  runtimeLock: DkbRuntimeLock | null;
 }
 
 export interface DkbRuntimePackageListing {
@@ -144,6 +149,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     }
   }));
   const retrievalProfile = await maybeReadRetrievalProfileLock(paths.stateRoot);
+  const runtimeLock = await maybeReadRuntimeLock(paths.stateRoot);
 
   return {
     ok: true,
@@ -154,6 +160,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     dkbIds,
     packages,
     retrievalProfile,
+    runtimeLock,
   };
 }
 
@@ -257,6 +264,7 @@ export async function importCompiledDkbArtifactIntoRuntime(
   if (!sourceValidation.ok || !sourceValidation.manifest) {
     throw new DkbError(`Compiled artifact validation failed at ${sourceRoot}`);
   }
+  await validatePackageBuildGraph(sourceRoot);
 
   const sourceDkb = await loadDkbPackage(sourceRoot);
   const id = options.id ? parseDkbIdentity(options.id, 'Compiled DKB identity').identity : sourceDkb.manifest.id;
@@ -298,11 +306,24 @@ export async function importCompiledDkbArtifactIntoRuntime(
     }
 
     const stagedDkb = await loadDkbPackage(tempPath, id);
+    const candidateGraph = await validatePackageBuildGraph(tempPath);
     const candidateProfile = await maybeReadRetrievalProfileLock(tempPath);
     const activeProfile = await maybeReadRetrievalProfileLock(paths.stateRoot);
+    const activeRuntimeLock = await maybeReadRuntimeLock(paths.stateRoot);
 
     if (activeProfile && candidateProfile) {
       assertMatchingRetrievalProfiles(activeProfile, candidateProfile, `${stagedDkb.manifest.id}@${stagedDkb.manifest.version}`);
+    }
+    if (activeRuntimeLock && (
+      activeRuntimeLock.evidenceProfileDigest !== candidateGraph.runtime.evidenceProfileDigest
+      || activeRuntimeLock.retrievalProfileDigest !== candidateGraph.runtime.retrievalProfileDigest
+      || activeRuntimeLock.compatibilityDigest !== candidateGraph.runtime.compatibilityDigest
+    )) {
+      throw new DkbError(
+        `Build-space mismatch for ${stagedDkb.manifest.id}@${stagedDkb.manifest.version}: `
+        + `the Library is active on ${activeRuntimeLock.retrievalProfileDigest}, but the package provides ${candidateGraph.runtime.retrievalProfileDigest}. `
+        + 'Build or fetch the active pipeline before installing.',
+      );
     }
     const sameVersionReplacement = existing?.dkb.manifest.version === stagedDkb.manifest.version;
 
@@ -381,6 +402,7 @@ export async function importCompiledDkbArtifactIntoRuntime(
       if (!activeProfile && candidateProfile) {
         await writeRetrievalProfileLock(paths.stateRoot, candidateProfile);
       }
+      await writeRuntimeLock(paths.stateRoot, mergedRuntimeLock(activeRuntimeLock, candidateGraph.runtime, stagedDkb.manifest.id));
       options.progress?.(progressUpdate({
         phase: 'activate',
         label: 'Activate package',
@@ -531,6 +553,21 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
     if (catalog.packageCount === 0) {
       await fs.rm(path.join(paths.stateRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), { force: true });
     }
+    const activeRuntimeLock = await maybeReadRuntimeLock(paths.stateRoot);
+    if (activeRuntimeLock) {
+      const packages = { ...activeRuntimeLock.packages };
+      delete packages[id];
+      if (Object.keys(packages).length === 0) {
+        await fs.rm(path.join(paths.stateRoot, DKB_RUNTIME_LOCK_PATH), { force: true });
+      } else {
+        await writeRuntimeLock(paths.stateRoot, {
+          ...activeRuntimeLock,
+          packages,
+          generation: activeRuntimeLock.generation + 1,
+          generatedAt: new Date().toISOString(),
+        });
+      }
+    }
     completed += 1;
     options.progress?.(progressUpdate({
       phase: 'uninstall',
@@ -571,45 +608,65 @@ export async function removeDkbFromRuntime(id: string, stateRoot?: string, optio
   }
 }
 
+function mergedRuntimeLock(active: DkbRuntimeLock | null, candidate: DkbRuntimeLock, packageId: string): DkbRuntimeLock {
+  const entry = candidate.packages[packageId];
+  if (!entry) throw new DkbError(`Candidate Runtime lock does not contain ${packageId}`);
+
+  return {
+    format: DKB_RUNTIME_LOCK_FORMAT,
+    target: candidate.target,
+    evidenceProfileDigest: candidate.evidenceProfileDigest,
+    retrievalProfileDigest: candidate.retrievalProfileDigest,
+    compatibilityDigest: candidate.compatibilityDigest,
+    packages: {
+      ...(active?.packages ?? {}),
+      [packageId]: entry,
+    },
+    generation: (active?.generation ?? 0) + 1,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 export async function retrieveFromRuntime(request: DkbRetrieveKnowledgeRequest, stateRoot?: string) {
   const paths = await ensureRuntimeState(stateRoot);
-  const registry = await loadLibrary(paths.stateRoot);
-  const snapshotKey = path.resolve(paths.stateRoot);
-  let queryContext = runtimeQueryContexts.get(snapshotKey);
+  return withRuntimeQuery(paths.stateRoot, async () => {
+    const registry = await loadLibrary(paths.stateRoot);
+    const snapshotKey = path.resolve(paths.stateRoot);
+    let queryContext = runtimeQueryContexts.get(snapshotKey);
 
-  if (!queryContext) {
-    try {
-      queryContext = await getQueryContext(paths.stateRoot, registry.manifest.id);
-      runtimeQueryContexts.set(snapshotKey, queryContext);
-    } catch (error) {
-      if (!isMissingCompiledArtifactError(error)) {
-        throw error;
+    if (!queryContext) {
+      try {
+        queryContext = await getQueryContext(paths.stateRoot, registry.manifest.id);
+        runtimeQueryContexts.set(snapshotKey, queryContext);
+      } catch (error) {
+        if (!isMissingCompiledArtifactError(error)) {
+          throw error;
+        }
       }
     }
-  }
 
-  const response = await retrieveKnowledge(paths.stateRoot, request, queryContext);
-
-  const audit = enqueueQueryAudit({
-    root: paths.stateRoot,
-    channel: 'runtime-http',
-    request,
-    response,
-  });
-  if (audit.mode === 'synchronous_fallback') {
-    await audit.flushed;
-  }
-
-  if (retrievalTraceEnabled()) {
-    await recordRetrievalTrace({
+    const response = await retrieveKnowledge(paths.stateRoot, request, queryContext);
+    const audit = enqueueQueryAudit({
       root: paths.stateRoot,
+      channel: 'runtime-http',
       request,
       response,
-      modelText: renderModelEvidence(response),
     });
-  }
+    if (audit.mode === 'synchronous_fallback') {
+      await audit.flushed;
+    }
 
-  return response;
+    if (retrievalTraceEnabled()) {
+      await recordRetrievalTrace({
+        root: paths.stateRoot,
+        request,
+        response,
+        modelText: renderModelEvidence(response),
+      });
+    }
+
+    return response;
+  });
 }
 
 function isMissingCompiledArtifactError(error: unknown): boolean {
@@ -634,7 +691,7 @@ export function invalidateRuntimeQuerySnapshot(stateRoot?: string): number {
   return removed;
 }
 
-async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
+export async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<number> {
   const root = path.resolve(stateRoot);
   const context = runtimeQueryContexts.get(root);
   const removed = runtimeQueryContexts.delete(root) ? 1 : 0;

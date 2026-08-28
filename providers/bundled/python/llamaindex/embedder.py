@@ -1,35 +1,51 @@
-"""Lean query-only FastEmbed sidecar for the DKB runtime.
+"""Lean FastEmbed sidecar for DKB document and query embeddings.
 
 It never reads package sources or creates chunks. It only places an incoming
-search question in the same vector space as the compiler output.
+document or search question in the selected retrieval space.
 """
 
 import os
 from fastapi import FastAPI
-from pydantic import BaseModel
-from llama_index.core import Settings
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
+from fastembed import TextEmbedding
+from pydantic import BaseModel, Field
 
 MODEL = os.environ.get("DKB_FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
-Settings.embed_model = FastEmbedEmbedding(model_name=MODEL, cache_dir=os.environ.get("FASTEMBED_CACHE_PATH"))
+MAX_BATCH_SIZE = 128
+INTERNAL_BATCH_SIZE = min(max(int(os.environ.get("DKB_FASTEMBED_BATCH_SIZE", "32")), 1), MAX_BATCH_SIZE)
+THREADS = int(os.environ["DKB_FASTEMBED_THREADS"]) if os.environ.get("DKB_FASTEMBED_THREADS") else None
+embedding_model = TextEmbedding(
+    model_name=MODEL,
+    cache_dir=os.environ.get("FASTEMBED_CACHE_PATH"),
+    threads=THREADS,
+)
 app = FastAPI()
 
 class EmbedRequest(BaseModel):
-    texts: list[str]
+    texts: list[str] = Field(min_length=1, max_length=MAX_BATCH_SIZE)
     mode: str = "document"
 
 @app.get("/health")
 def health():
-    return {"ok": True, "model": MODEL}
+    return {
+        "ok": True,
+        "model": MODEL,
+        "engine": "fastembed",
+        "maxBatchSize": MAX_BATCH_SIZE,
+        "batchSize": INTERNAL_BATCH_SIZE,
+    }
 
 @app.post("/embed")
 def embed(request: EmbedRequest):
     if request.mode == "query":
-        vectors = [Settings.embed_model.get_query_embedding(text) for text in request.texts]
+        vectors = embedding_model.query_embed(request.texts)
     elif request.mode == "document":
-        vectors = Settings.embed_model.get_text_embedding_batch(request.texts)
+        vectors = embedding_model.embed(request.texts, batch_size=INTERNAL_BATCH_SIZE)
     else:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="mode must be document or query")
 
-    return {"model": MODEL, "mode": request.mode, "vectors": vectors}
+    return {
+        "model": MODEL,
+        "mode": request.mode,
+        "vectors": [vector.tolist() for vector in vectors],
+    }

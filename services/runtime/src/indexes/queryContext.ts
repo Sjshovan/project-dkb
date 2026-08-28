@@ -9,6 +9,8 @@ import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime } from '@dkb/pipeline/types.js';
 import { resolveProviderRetrievalProfile } from '@dkb/pipeline/profile.js';
+import { maybeReadRuntimeLock } from '@dkb/library/builds.js';
+import { DkbError } from '@dkb/protocol/errors.js';
 
 export interface QueryContext {
   root: string;
@@ -46,7 +48,18 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     const embeddingOptions = providerHost.optionsFor(providerHost.config.target.embedding);
     const indexProvider = providerHost.provider<DkbIndexProvider>('index');
     const indexOptions = providerHost.optionsFor(providerHost.config.target.index);
-    const compatibility = (await resolveProviderRetrievalProfile(providerHost)).compatibility;
+    const resolvedProfile = await resolveProviderRetrievalProfile(providerHost);
+    const compatibility = resolvedProfile.compatibility;
+    const runtimeLock = await maybeReadRuntimeLock(resolvedRoot);
+    if (runtimeLock && (
+      runtimeLock.evidenceProfileDigest !== resolvedProfile.evidenceProfileDigest
+      || runtimeLock.retrievalProfileDigest !== resolvedProfile.retrievalProfileDigest
+      || runtimeLock.compatibilityDigest !== stableHash(compatibility)
+    )) {
+      throw new DkbError(
+        `Active Runtime Build ${runtimeLock.retrievalProfileDigest} does not match selected pipeline ${resolvedProfile.retrievalProfileDigest}`,
+      );
+    }
     indexRuntime = await indexProvider.openRuntime({
       libraryRoot: resolvedRoot,
       libraryId: searchRegistryId,
@@ -177,6 +190,8 @@ export async function closeQueryContext(root?: string): Promise<number> {
 }
 
 export async function queryArtifactHash(root: string): Promise<string> {
+  const runtimeLock = await maybeReadRuntimeLock(root);
+  if (runtimeLock) return stableHash(runtimeLock);
   const lockPath = artifactLockPath(root);
   const lock = await maybeReadFile(lockPath);
 

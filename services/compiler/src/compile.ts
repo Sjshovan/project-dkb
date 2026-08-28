@@ -8,12 +8,21 @@ import { performance } from 'node:perf_hooks';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { loadCompose } from '@dkb/protocol/manifest.js';
-import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, artifactLockPath, manifestPath, resolveFrom } from '@dkb/protocol/paths.js';
+import { DKB_ARTIFACT_LOCK_PATH, DKB_ARTIFACTS_DIR, DKB_CACHE_DIR, DKB_LOCKS_DIR, DKB_RUNTIME_LOCK_PATH, artifactLockPath, manifestPath, resolveFrom } from '@dkb/protocol/paths.js';
 import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbStore, LoadedCollection, LoadedDkb, LoadedLibrary } from '@dkb/protocol/types.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceUnit } from '@dkb/providers-bundled/sourceIndex.js';
 import { analyzeSourceUnits, writeSourceAnalysisArtifacts } from './sourceAnalysis.js';
 import { DKB_ARTIFACT_MANIFEST_PATH, validateDkbArtifactManifest, writeDkbArtifactManifest, type DkbArtifactCompiler } from '@dkb/library/artifacts.js';
+import {
+  DKB_EVIDENCE_BUILD_IR,
+  listPackageBuilds,
+  maybeReadRuntimeLock,
+  mergeStoredPackageBuilds,
+  validatePackageBuildGraph,
+  writePackageBuildGraph,
+  type DkbPackageBuildGraph,
+} from '@dkb/library/builds.js';
 import type { LlamaIndexCompilerResult } from '@dkb/providers-bundled/llamaindex.js';
 import {
   readLlamaIndexCompilerRecords,
@@ -29,11 +38,11 @@ import {
   type DkbResolvedRetrievalProfile,
   type DkbRetrievalProfileLock,
 } from '@dkb/pipeline/profile.js';
-import { buildEvidenceIr, DKB_EVIDENCE_IR_PATH, writeEvidenceIr } from '@dkb/protocol/evidence/ir.js';
+import { buildEvidenceIr, evidenceIdentityForRecord, DKB_EVIDENCE_IR_PATH, readEvidenceIr, validateEvidenceIr, writeEvidenceIr, type DkbEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import { sourceUnitFromPipelineRecord } from '@dkb/providers-bundled/records.js';
-import { compileDkbWithProviderHost } from './pipelineRunner.js';
+import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
 import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@dkb/pipeline/types.js';
 import { loadFaissPackageArtifact } from '@dkb/providers-bundled/faissStore.js';
 
@@ -88,10 +97,22 @@ export interface CompileComposeProfile {
   aggregateTimingsMs?: AtomicCompileArtifactTimings;
 }
 
+export interface PreparedPackageBuildTarget {
+  target: string;
+  preparation: 'retained' | 'retrieval_compiled' | 'evidence_compiled';
+  evidenceProfileDigest: string;
+  retrievalProfileDigest: string;
+}
+
 export interface CompileComposeProjectOptions {
   force?: boolean;
   mode?: 'library' | 'package';
   target?: string;
+  contextRoot?: string;
+}
+
+export interface CompileRetrievalFromEvidenceOptions {
+  target: string;
   contextRoot?: string;
 }
 
@@ -129,6 +150,7 @@ interface AtomicCompileArtifactTimings {
   compilerArtifacts: number;
   lock: number;
   artifactManifest: number;
+  buildGraph: number;
   validation: number;
   promotion: number;
   cleanup: number;
@@ -140,6 +162,7 @@ interface CompilerArtifactState {
   dkbRoot: string;
   result: LlamaIndexCompilerResult;
   compiled: DkbCompiledPipeline;
+  evidence: DkbEvidenceIr;
 }
 
 interface RegistryCompileState {
@@ -149,6 +172,7 @@ interface RegistryCompileState {
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
   compilerArtifacts: CompilerArtifactState[];
   retrievalProfileLock?: DkbRetrievalProfileLock;
+  resolvedProfile?: DkbResolvedRetrievalProfile;
   providerHost?: DkbProviderHost;
 }
 
@@ -297,6 +321,218 @@ export async function compileComposeProject(root: string, options: CompileCompos
   });
 }
 
+export async function compileRetrievalFromEvidence(
+  root: string,
+  inputEvidence: DkbEvidenceIr,
+  options: CompileRetrievalFromEvidenceOptions,
+): Promise<CompiledComposeProject> {
+  const resolvedRoot = path.resolve(root);
+  const evidence = validateEvidenceIr(inputEvidence, 'retrieval-only Evidence Build');
+
+  return withCompileLock(resolvedRoot, async () => {
+    const totalStart = performance.now();
+    const registry = await loadCompose(resolvedRoot);
+    const allDkbs = uniqueDkbs([
+      ...registry.collections.flatMap((collection) => collection.dkbs),
+      ...registry.dkbs,
+    ]);
+    if (allDkbs.length !== 1) {
+      throw new DkbError(`Retrieval-only compilation requires exactly one PackageVersion, got ${allDkbs.length}`);
+    }
+    const dkb = allDkbs[0]!;
+    const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
+    const desiredProfile = await resolvedProviderProfile(contextRoot, options.target);
+    if (desiredProfile.evidenceProfileDigest !== evidence.evidenceProfileDigest) {
+      throw new DkbError(
+        `Evidence Profile mismatch: target ${options.target} requires ${desiredProfile.evidenceProfileDigest}, Evidence Build uses ${evidence.evidenceProfileDigest}`,
+      );
+    }
+    const packageEvidence = evidence.evidence.filter((record) => record.packageId === dkb.manifest.id && record.packageVersion === dkb.manifest.version);
+    if (packageEvidence.length !== evidence.evidence.length) {
+      throw new DkbError(`Evidence Build identity does not match ${dkb.manifest.id}@${dkb.manifest.version}`);
+    }
+    const providerHost = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS, target: desiredProfile.target });
+
+    try {
+      const evidencePipeline = pipelineFromEvidenceIr(evidence);
+      const compiled = await embedDkbEvidenceWithProviderHost(providerHost, evidencePipeline);
+      const result = compilerResultForPipeline(dkb, desiredProfile, compiled);
+      const units = result.records.map((record) => sourceUnitFromLlamaIndexRecord(dkb, record));
+      const sourceAnalysis = analyzeSourceUnits(units);
+      const artifact: CompilerArtifactState = {
+        dkb,
+        dkbRoot: dkb.root,
+        result,
+        compiled,
+        evidence,
+      };
+      const retrievalProfileLock = retrievalProfileLockForCompilerResults(desiredProfile, [result]);
+      const state: RegistryCompileState = {
+        sourceUnits: sourceAnalysis.sourceUnits,
+        packages: {
+          [dkb.manifest.id]: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, registry.root),
+        },
+        chunkRepositoryHash: stableHash(sourceAnalysis.sourceUnits.map(chunkForHash)),
+        sourceAnalysis,
+        compilerArtifacts: [artifact],
+        retrievalProfileLock,
+        resolvedProfile: desiredProfile,
+        providerHost,
+      };
+      const written = await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs, 'faiss-package');
+      const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
+
+      return {
+        registryId: registry.manifest.id,
+        recordCount: state.sourceUnits.length,
+        databasePath: chunkIndexPath,
+        chunkIndexPath,
+        artifactManifestPath: resolveFrom(resolvedRoot, DKB_ARTIFACT_MANIFEST_PATH),
+        lockPath: artifactLockPath(resolvedRoot),
+        lock: written.lock,
+        cacheHit: false,
+        profile: {
+          timingsMs: {
+            sourceSnapshot: 0,
+            cacheLookup: 0,
+            collectState: 0,
+            aggregateArtifacts: written.timings.total,
+            compileCacheWrite: 0,
+            total: elapsedMs(totalStart),
+          },
+          aggregateTimingsMs: written.timings,
+        },
+      };
+    } finally {
+      await providerHost.dispose();
+    }
+  });
+}
+
+/**
+ * Materialize one exact package build without changing the package's active
+ * artifacts or Runtime lock. This is the CLI-side preparation boundary used
+ * before a Runtime performs an atomic Library-wide pipeline switch.
+ */
+export async function ensurePackageBuildForTarget(
+  root: string,
+  options: { target: string; contextRoot?: string },
+): Promise<PreparedPackageBuildTarget> {
+  const resolvedRoot = path.resolve(root);
+  const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
+  const profile = await resolvedProviderProfile(contextRoot, options.target);
+  const builds = await listPackageBuilds(resolvedRoot);
+  const matchingRetrieval = builds.retrieval.filter((build) => build.profileDigest === profile.retrievalProfileDigest);
+  if (matchingRetrieval.length > 1) {
+    throw new DkbError(
+      `Package has multiple Retrieval Builds for exact profile ${profile.retrievalProfileDigest}; immutable compilation is non-deterministic`,
+    );
+  }
+  if (matchingRetrieval.length === 1) {
+    return {
+      target: profile.target,
+      preparation: 'retained',
+      evidenceProfileDigest: profile.evidenceProfileDigest,
+      retrievalProfileDigest: profile.retrievalProfileDigest,
+    };
+  }
+
+  const current = await maybeReadRuntimeLock(resolvedRoot);
+  const currentEntry = current && current.evidenceProfileDigest === profile.evidenceProfileDigest
+    ? Object.values(current.packages)[0]
+    : undefined;
+  const exactEvidence = currentEntry
+    ? builds.evidence.find((build) => build.profileDigest === profile.evidenceProfileDigest
+      && build.evidenceDigest === currentEntry.evidenceDigest)
+    : undefined;
+  const unambiguousEvidence = exactEvidence
+    ?? (builds.evidence.filter((build) => build.profileDigest === profile.evidenceProfileDigest).length === 1
+      ? builds.evidence.find((build) => build.profileDigest === profile.evidenceProfileDigest)
+      : undefined);
+  const stagingParent = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-package-build-'));
+  const stagingRoot = path.join(stagingParent, 'package');
+
+  try {
+    await fs.cp(resolvedRoot, stagingRoot, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      filter: (source) => !isGeneratedPackagePath(resolvedRoot, source),
+    });
+    if (unambiguousEvidence) {
+      const evidencePath = path.join(unambiguousEvidence.path, DKB_EVIDENCE_BUILD_IR);
+      const evidence = validateEvidenceIr(JSON.parse(await fs.readFile(evidencePath, 'utf8')), evidencePath);
+      await compileRetrievalFromEvidence(stagingRoot, evidence, { target: options.target, contextRoot });
+    } else {
+      await compileComposeProject(stagingRoot, {
+        mode: 'package',
+        force: true,
+        target: options.target,
+        contextRoot,
+      });
+    }
+    await mergeStoredPackageBuilds(stagingRoot, resolvedRoot);
+    const prepared = await listPackageBuilds(resolvedRoot);
+    if (!prepared.retrieval.some((build) => build.profileDigest === profile.retrievalProfileDigest)) {
+      throw new DkbError(`Compiler did not retain the expected Retrieval Build for ${options.target}`);
+    }
+    return {
+      target: profile.target,
+      preparation: unambiguousEvidence ? 'retrieval_compiled' : 'evidence_compiled',
+      evidenceProfileDigest: profile.evidenceProfileDigest,
+      retrievalProfileDigest: profile.retrievalProfileDigest,
+    };
+  } finally {
+    await fs.rm(stagingParent, { recursive: true, force: true });
+  }
+}
+
+function pipelineFromEvidenceIr(evidence: DkbEvidenceIr): DkbCompiledPipeline {
+  const chunkByEvidence = new Map<string, DkbEvidenceIr['chunks'][number]>();
+  for (const chunk of evidence.chunks) {
+    if (chunkByEvidence.has(chunk.evidenceId)) {
+      throw new DkbError(`Evidence Build ${evidence.evidenceDigest} has multiple chunks for ${chunk.evidenceId}`);
+    }
+    chunkByEvidence.set(chunk.evidenceId, chunk);
+  }
+
+  return {
+    documents: [],
+    chunks: [],
+    records: evidence.evidence.map((record) => {
+      const chunk = chunkByEvidence.get(record.evidenceId);
+      if (!chunk) throw new DkbError(`Evidence Build ${evidence.evidenceDigest} is missing chunk metadata for ${record.evidenceId}`);
+
+      return {
+        id: record.evidenceId,
+        chunkId: chunk.chunkId,
+        text: record.text,
+        metadata: {
+          assetId: record.assetId,
+          storeId: record.storeId,
+          type: record.sourceType,
+          locator: record.locator,
+          assetLocator: record.assetLocator,
+          title: record.title,
+          hash: record.textHash,
+          updatedAt: '1970-01-01T00:00:00.000Z',
+          chunkOrdinal: chunk.ordinal,
+          chunkStart: chunk.start,
+          chunkEnd: chunk.end,
+          sourceMetadata: {
+            ...record.provenance,
+            dkb_package_id: record.packageId,
+            dkb_package_version: record.packageVersion,
+            dkb_source_hash: record.sourceHash,
+            dkb_evidence_id: record.evidenceId,
+          },
+        },
+      };
+    }),
+    receipts: [],
+  };
+}
+
 async function writeAtomicCompileArtifacts(
   root: string,
   registry: LoadedLibrary,
@@ -314,6 +550,7 @@ async function writeAtomicCompileArtifacts(
     compilerArtifacts: 0,
     lock: 0,
     artifactManifest: 0,
+    buildGraph: 0,
     validation: 0,
     promotion: 0,
     cleanup: 0,
@@ -325,6 +562,8 @@ async function writeAtomicCompileArtifacts(
   const artifactBackup = `${artifactDir}.replace-${process.pid}-${Date.now().toString(36)}`;
   const profilePath = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
   const profileBackup = `${profilePath}.replace-${process.pid}-${Date.now().toString(36)}`;
+  const runtimeLockPath = resolveFrom(root, DKB_RUNTIME_LOCK_PATH);
+  const runtimeLockBackup = `${runtimeLockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
 
   await fs.rm(stageParent, { recursive: true, force: true });
   await fs.mkdir(stageRoot, { recursive: true });
@@ -360,6 +599,11 @@ async function writeAtomicCompileArtifacts(
     await writeDkbArtifactManifest(stageRoot, lock, { compiler: artifactCompilerForState(state) });
     timings.artifactManifest = elapsedMs(artifactManifestStart);
 
+    const buildGraphStart = performance.now();
+    const buildGraph = await writeBuildGraph(stageRoot, root, state);
+    if (buildGraph) await validatePackageBuildGraph(stageRoot, buildGraph.runtime);
+    timings.buildGraph = elapsedMs(buildGraphStart);
+
     const validationStart = performance.now();
     const validation = await validateDkbArtifactManifest(stageRoot);
     timings.validation = elapsedMs(validationStart);
@@ -378,23 +622,44 @@ async function writeAtomicCompileArtifacts(
     if (state.retrievalProfileLock) {
       await moveIfExists(profilePath, profileBackup);
     }
+    if (buildGraph) await moveIfExists(runtimeLockPath, runtimeLockBackup);
+
+    const promotedBuilds: string[] = [];
+    const supersededBuilds: Array<{ original: string; staged: string }> = [];
 
     try {
+      if (buildGraph) {
+        for (const source of [buildGraph.evidencePath, buildGraph.retrievalPath]) {
+          const target = path.join(root, path.relative(stageRoot, source));
+          if (await promoteBuildDirectory(source, target)) promotedBuilds.push(target);
+        }
+        const activeRetrievalTarget = path.join(root, path.relative(stageRoot, buildGraph.retrievalPath));
+        supersededBuilds.push(...await stageSupersededRetrievalBuilds(activeRetrievalTarget, stageParent));
+      }
       await fs.rename(resolveFrom(stageRoot, DKB_ARTIFACTS_DIR), artifactDir);
       if (state.retrievalProfileLock) {
         await fs.rename(resolveFrom(stageRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), profilePath);
       }
+      if (buildGraph) await fs.rename(resolveFrom(stageRoot, DKB_RUNTIME_LOCK_PATH), runtimeLockPath);
       await fs.rm(artifactBackup, { recursive: true, force: true });
       await fs.rm(profileBackup, { force: true });
+      await fs.rm(runtimeLockBackup, { force: true });
     } catch (error) {
       await fs.rm(artifactDir, { recursive: true, force: true });
       if (state.retrievalProfileLock) {
         await fs.rm(profilePath, { force: true });
       }
+      if (buildGraph) await fs.rm(runtimeLockPath, { force: true });
+      await Promise.all(promotedBuilds.map((target) => fs.rm(target, { recursive: true, force: true })));
+      for (const build of [...supersededBuilds].reverse()) {
+        await fs.mkdir(path.dirname(build.original), { recursive: true });
+        await fs.rename(build.staged, build.original).catch(() => undefined);
+      }
       await moveIfExists(artifactBackup, artifactDir);
       if (state.retrievalProfileLock) {
         await moveIfExists(profileBackup, profilePath);
       }
+      if (buildGraph) await moveIfExists(runtimeLockBackup, runtimeLockPath);
       throw error;
     }
 
@@ -407,6 +672,85 @@ async function writeAtomicCompileArtifacts(
     await fs.rm(stageParent, { recursive: true, force: true });
     timings.cleanup = elapsedMs(cleanupStart);
   }
+}
+
+async function writeBuildGraph(
+  stageRoot: string,
+  destinationRoot: string,
+  state: RegistryCompileState,
+): Promise<DkbPackageBuildGraph | null> {
+  if (state.compilerArtifacts.length !== 1 || !state.retrievalProfileLock || !state.resolvedProfile) return null;
+
+  const artifact = state.compilerArtifacts[0]!;
+  const packageReceipt = state.packages[artifact.dkb.manifest.id];
+  if (!packageReceipt) throw new DkbError(`Compiled package receipt is missing for ${artifact.dkb.manifest.id}`);
+  const previous = await maybeReadRuntimeLock(destinationRoot);
+  const sourceDigest = stableHash({
+    manifestHash: packageReceipt.manifestHash,
+    sourceInventoryHash: packageReceipt.sourceInventoryHash,
+  });
+
+  return writePackageBuildGraph({
+    root: stageRoot,
+    package: {
+      id: artifact.dkb.manifest.id,
+      version: artifact.dkb.manifest.version,
+      sourceDigest,
+    },
+    evidence: await readEvidenceIr(stageRoot),
+    retrievalProfile: state.retrievalProfileLock,
+    target: state.resolvedProfile.target,
+    generation: (previous?.generation ?? 0) + 1,
+  });
+}
+
+async function promoteBuildDirectory(source: string, target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return false;
+  } catch {
+    // The immutable build is new to this root.
+  }
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  try {
+    await fs.rename(source, target);
+    return true;
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
+    if (code === 'EEXIST' || code === 'ENOTEMPTY') return false;
+    throw error;
+  }
+}
+
+async function stageSupersededRetrievalBuilds(
+  activeTarget: string,
+  stageParent: string,
+): Promise<Array<{ original: string; staged: string }>> {
+  const profileRoot = path.dirname(activeTarget);
+  const activeName = path.basename(activeTarget);
+  const entries = await fs.readdir(profileRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const moved: Array<{ original: string; staged: string }> = [];
+
+  try {
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!entry.isDirectory() || entry.name === activeName) continue;
+      const original = path.join(profileRoot, entry.name);
+      const staged = path.join(stageParent, 'superseded-retrieval', entry.name);
+      await fs.mkdir(path.dirname(staged), { recursive: true });
+      await fs.rename(original, staged);
+      moved.push({ original, staged });
+    }
+  } catch (error) {
+    for (const build of [...moved].reverse()) {
+      await fs.rename(build.staged, build.original).catch(() => undefined);
+    }
+    throw error;
+  }
+
+  return moved;
 }
 
 async function writeCompilerBundles(
@@ -464,10 +808,11 @@ async function writeProfileArtifacts(stageRoot: string, state: RegistryCompileSt
   }
 
   await writeRetrievalProfileLock(stageRoot, state.retrievalProfileLock);
-  await writeEvidenceIr(
-    stageRoot,
-    buildEvidenceIr(state.compilerArtifacts.map((artifact) => artifact.result), state.retrievalProfileLock),
-  );
+  const evidence = state.compilerArtifacts[0]?.evidence;
+  if (!evidence || state.compilerArtifacts.some((artifact) => artifact.evidence.evidenceDigest !== evidence.evidenceDigest)) {
+    throw new DkbError('Compilation state does not contain one canonical Evidence Build');
+  }
+  await writeEvidenceIr(stageRoot, evidence);
 }
 
 function artifactCompilerForState(state: RegistryCompileState): DkbArtifactCompiler | undefined {
@@ -913,6 +1258,7 @@ async function collectRegistryState(
     sourceAnalysis,
     compilerArtifacts,
     retrievalProfileLock,
+    resolvedProfile: desiredProfile,
     providerHost,
   };
 }
@@ -1038,6 +1384,7 @@ async function collectDkbState(
       dkbRoot: dkb.root,
       result: built.compilerResult,
       compiled: built.compiled!,
+      evidence: built.evidence!,
     } : undefined,
   };
 }
@@ -1082,9 +1429,19 @@ async function buildSourceUnitsForDkb(
   units: IndexedSourceUnit[];
   compilerResult?: LlamaIndexCompilerResult;
   compiled?: DkbCompiledPipeline;
+  evidence?: DkbEvidenceIr;
 }> {
   if (providerHost) {
-    const compiled = await compileDkbWithProviderHost(providerHost, dkb);
+    if (!desiredProfile) {
+      throw new DkbError(`Provider compilation for ${dkb.manifest.id} requires a resolved pipeline profile`);
+    }
+    const ingested = await ingestDkbWithProviderHost(providerHost, dkb);
+    const unembeddedResult = compilerResultForPipeline(dkb, desiredProfile, ingested);
+    const evidence = buildEvidenceIr([unembeddedResult], {
+      evidenceProfileDigest: desiredProfile.evidenceProfileDigest,
+    });
+    const annotated = annotateEvidenceIds(ingested, unembeddedResult, evidence.evidenceProfileDigest);
+    const compiled = await embedDkbEvidenceWithProviderHost(providerHost, annotated);
     const result = compilerResultForPipeline(dkb, desiredProfile, compiled);
 
     if (desiredProfile && result.compiler.model !== desiredProfile.embedding.model) {
@@ -1101,12 +1458,45 @@ async function buildSourceUnitsForDkb(
       units: [...unique.values()].sort((a, b) => a.id.localeCompare(b.id)),
       compilerResult: result,
       compiled,
+      evidence,
     };
   }
   const batches = await Promise.all(storesForDkb(dkb).map((store) => buildSourceUnitsForStore(dkb, store)));
 
   return {
     units: batches.flat().sort((a, b) => a.id.localeCompare(b.id)),
+  };
+}
+
+function annotateEvidenceIds(
+  compiled: DkbCompiledPipeline,
+  result: LlamaIndexCompilerResult,
+  evidenceProfileDigest: string,
+): DkbCompiledPipeline {
+  if (compiled.records.length !== result.records.length) {
+    throw new DkbError('Ingestion result changed record count while materializing Evidence IR');
+  }
+
+  return {
+    ...compiled,
+    records: compiled.records.map((record, index) => {
+      const source = result.records[index];
+      if (!source) throw new DkbError(`Evidence source record ${index} is missing`);
+      const sourceEvidenceId = evidenceIdentityForRecord(source).evidenceId;
+      const evidenceId = stableHash({ sourceEvidenceId, evidenceProfileDigest });
+      const sourceMetadata = isRecord(record.metadata.sourceMetadata) ? record.metadata.sourceMetadata : {};
+
+      return {
+        ...record,
+        metadata: {
+          ...record.metadata,
+          sourceMetadata: {
+            ...sourceMetadata,
+            dkb_evidence_id: evidenceId,
+          },
+        },
+      };
+    }),
   };
 }
 
@@ -1119,21 +1509,12 @@ function compilerResultForPipeline(
     throw new DkbError(`Provider compilation for ${dkb.manifest.id} requires a resolved pipeline profile`);
   }
   const native = llamaIndexResult(compiled.nativeResult);
-  const compilerReceipt = compiled.receipts.find((receipt) => receipt.providerId === desiredProfile.compiler)
-    ?? compiled.receipts[0];
-  const compilerId = optionalString(compilerReceipt?.build.compilerId)
-    ?? native?.compiler.id
-    ?? compilerReceipt?.providerId
-    ?? desiredProfile.compiler;
-  const compilerImage = optionalString(compilerReceipt?.build.compilerImage)
-    ?? native?.compiler.image
-    ?? `plugin:${compilerReceipt?.providerId ?? desiredProfile.compiler}@${compilerReceipt?.providerVersion ?? 'unknown'}`;
 
   return {
     compiler: {
-      id: compilerId,
+      id: desiredProfile.compiler,
       model: desiredProfile.embedding.model,
-      image: compilerImage,
+      image: `evidence:${desiredProfile.evidenceProfileDigest}`,
     },
     ...(native?.execution ? { execution: native.execution } : {}),
     records: compiled.records.map((record) => compilerRecordForPipeline(dkb, record)),
@@ -1424,6 +1805,13 @@ async function listFiles(root: string): Promise<string[]> {
   }));
 
   return nested.flat().sort((a, b) => a.localeCompare(b));
+}
+
+function isGeneratedPackagePath(root: string, source: string): boolean {
+  const relative = path.relative(root, source);
+  if (!relative) return false;
+  const [first] = relative.split(path.sep);
+  return first === '.dkb';
 }
 
 function isDkbSystemArtifact(name: string): boolean {

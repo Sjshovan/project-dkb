@@ -2,9 +2,9 @@
 
 ## Ownership
 
-This directory owns DKB's concrete developer-preview providers: LlamaIndex/Docling ingestion, FastEmbed, FAISS, Meilisearch, source/lexical/vector artifacts, and hybrid retrieval.
+This directory owns DKB's concrete developer-preview providers: LlamaIndex/Docling ingestion, FastEmbed, TEI, FAISS, Meilisearch, source/lexical/vector artifacts, and hybrid retrieval.
 
-The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
+The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).
 
 ## Dependency direction
 
@@ -14,7 +14,7 @@ The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-rele
 
 ## Invariants
 
-- Document and query embeddings share the exact recorded model, dimensions, metric, and normalization.
+- Each embedding provider owns matching document/query transforms. FastEmbed and TEI always remain distinct compatibility spaces.
 - Preserve source identity, locator, hashes, chunk bounds, parser fallback, and provider build provenance.
 - FAISS packages immutable indexes; Meilisearch imports existing vectors into one release-specific index.
 - Provider failures never promote partial artifacts or silently change the selected implementation.

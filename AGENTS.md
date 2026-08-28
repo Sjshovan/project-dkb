@@ -38,7 +38,7 @@ python -m graphify update src
 | `packages/pipeline/` | Provider contracts, configuration, plugin discovery, compatibility, and context-local lifecycle |
 | `packages/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and transactional snapshots |
 | `packages/registry-client/` | Laravel Registry transport, archive safety, publication, download, and endpoint verification |
-| `providers/bundled/` | LlamaIndex/Docling, FastEmbed, FAISS, Meilisearch, and hybrid retrieval implementations |
+| `providers/bundled/` | LlamaIndex/Docling, FastEmbed, TEI, FAISS, Meilisearch, and hybrid retrieval implementations |
 | `services/compiler/` | Shared compilation runner and Registry-facing compiler HTTP service |
 | `services/runtime/` | Installed state, retrieval, evidence, Runtime HTTP, tracing, and read-only remote MCP |
 | `apps/cli/` | Command registration, presentation, host inventory, context selection, and orchestration |
@@ -53,14 +53,13 @@ python -m graphify update src
   under `vendor/@namespace/name`.
 - `dkb-lock.json` is exact resolved state and `.dkb/state.sqlite` is applied
   state. Filesystem presence alone never means installed.
-- Original source assets and embedding-free Evidence IR are canonical and
-  portable. Chunks, vectors, FAISS indexes, and runtime catalogs are derived,
-  retrieval-profile-specific artifacts.
+- Original source assets are canonical. Embedding-free Evidence Builds are
+  portable derived interpretations; vectors, FAISS indexes, and managed-index
+  imports are Retrieval Builds tied to an exact Evidence digest.
 - One Runtime serves one Library, and one active Library uses one compatible
   retrieval space. Reject embedding space, dimensions, metric, normalization,
-  index format, or evidence-protocol mismatches before activation. Parser,
-  chunker, compiler, processor, and provider-code details remain exact build
-  provenance but do not make evidence incompatible by themselves.
+  index format, Evidence Profile, or evidence-protocol mismatches before
+  activation. Never select builds by name, recency, or partial compatibility.
 - Registry publish compiles from clean source, ignores uploaded generated state
   as canonical truth, signs an immutable release, and creates a `.dkbpkg`.
 - Runtime install verifies and promotes compiled artifacts atomically. Normal
@@ -81,7 +80,9 @@ handles, or an attention subsystem without an explicit architecture decision.
 public-release gate. `docs/decisions/0002-library-and-collections-hard-cutover.md`
 records the implemented Library and Collection model.
 `docs/decisions/0003-host-inventory-and-context-selection.md` records the
-implemented host-local inventory, selections, and resolution precedence. Verify
+implemented host-local inventory, selections, and resolution precedence.
+`docs/decisions/0005-evidence-and-retrieval-build-graph.md` records the active
+multi-build architecture. Verify
 actual behavior in source and tests rather than treating these records as
 runtime evidence.
 

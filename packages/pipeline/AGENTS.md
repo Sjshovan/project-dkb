@@ -4,7 +4,7 @@
 
 This directory owns provider and processor interfaces, context-local plugin discovery, configuration precedence, lifecycle/disposal, middleware ordering, and retrieval compatibility receipts.
 
-The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
+The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).
 
 ## Dependency direction
 
@@ -18,6 +18,7 @@ The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-rele
 - A broken local override fails closed; it never falls through silently.
 - Load only selected plugins. Uploaded knowledge must never contribute executable plugin code.
 - Preserve deterministic processor order, exact source/build digests, compatibility validation, cancellation, and disposal.
+- Keep Evidence Profile, Retrieval Profile, compatibility, and concrete build identities separate; profile names are never artifact selectors.
 - Configuration stores secret references, never secret values.
 
 ## Prohibited coupling

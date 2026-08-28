@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 import compile as compiler
 
-SERVICE_VERSION = "2"
+SERVICE_VERSION = "3"
 DEFAULT_MODEL = os.environ.get("DKB_COMPILER_MODEL", "BAAI/bge-small-en-v1.5")
 JOBS_ROOT = Path(os.environ.get("DKB_COMPILER_JOBS_ROOT", "/jobs"))
 JOB_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -35,14 +35,11 @@ def health() -> dict[str, Any]:
         "ok": True,
         "service": "dkb.llamaindex.compiler",
         "serviceVersion": SERVICE_VERSION,
-        "compilerId": "llamaindex.fastembed.onnx",
+        "compilerId": "llamaindex.docling.evidence",
         "model": DEFAULT_MODEL,
         "jobsRoot": str(JOBS_ROOT),
         "batching": {
             "documentBatchSize": compiler.DOCUMENT_BATCH_SIZE,
-            "embeddingBatchSize": compiler.EMBED_BATCH_SIZE,
-            "inferenceBatchSize": compiler.INFERENCE_BATCH_SIZE,
-            "provider": compiler.FASTEMBED_PROVIDER or "CPUExecutionProvider",
         },
     }
 

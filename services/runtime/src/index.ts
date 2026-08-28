@@ -3,6 +3,7 @@ export * from './runtime/client.js';
 export * from './runtime/server.js';
 export * from './runtime/state.js';
 export * from './runtime/registryInstall.js';
+export * from './runtime/pipelineSwitch.js';
 export * from './runtime/collections.js';
 export * from './read/runtime.js';
 export * from './mcp/http.js';

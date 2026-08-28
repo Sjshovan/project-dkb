@@ -48,15 +48,89 @@ export const BUNDLED_DEFAULT_CONFIG: DkbContextConfig = {
   targets: {
     [DEFAULT_PIPELINE_TARGET]: {
       ingestion: '@dkb/llamaindex',
+      embedding: '@dkb/tei',
+      index: '@dkb/faiss',
+      retrieval: '@dkb/hybrid',
+      processors: [],
+      options: {
+        '@dkb/llamaindex': {
+          tokenizerModel: 'BAAI/bge-small-en-v1.5',
+        },
+        '@dkb/tei': {
+          model: 'BAAI/bge-small-en-v1.5',
+          modelRevision: '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
+          dimensions: 384,
+        },
+      },
+    },
+    'fastembed-faiss': {
+      ingestion: '@dkb/llamaindex',
       embedding: '@dkb/fastembed',
       index: '@dkb/faiss',
       retrieval: '@dkb/hybrid',
       processors: [],
       options: {
-        '@dkb/fastembed': {
+        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
+        '@dkb/fastembed': { model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
+      },
+    },
+    'fastembed-faiss-768': {
+      ingestion: '@dkb/llamaindex',
+      embedding: '@dkb/fastembed',
+      index: '@dkb/faiss',
+      retrieval: '@dkb/hybrid',
+      processors: [],
+      options: {
+        // Chunking is intentionally independent from the selected embedding
+        // space so 384- and 768-dimensional builds can reuse Evidence IR.
+        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
+        '@dkb/fastembed': { model: 'BAAI/bge-base-en-v1.5', dimensions: 768 },
+      },
+    },
+    'tei-faiss': {
+      ingestion: '@dkb/llamaindex',
+      embedding: '@dkb/tei',
+      index: '@dkb/faiss',
+      retrieval: '@dkb/hybrid',
+      processors: [],
+      options: {
+        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
+        '@dkb/tei': {
           model: 'BAAI/bge-small-en-v1.5',
+          modelRevision: '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
           dimensions: 384,
         },
+      },
+    },
+    'tei-faiss-768': {
+      ingestion: '@dkb/llamaindex',
+      embedding: '@dkb/tei',
+      index: '@dkb/faiss',
+      retrieval: '@dkb/hybrid',
+      processors: [],
+      options: {
+        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
+        '@dkb/tei': {
+          model: 'BAAI/bge-base-en-v1.5',
+          modelRevision: 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a',
+          dimensions: 768,
+        },
+      },
+    },
+    'tei-meilisearch': {
+      ingestion: '@dkb/llamaindex',
+      embedding: '@dkb/tei',
+      index: '@dkb/meilisearch',
+      retrieval: '@dkb/hybrid',
+      processors: [],
+      options: {
+        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
+        '@dkb/tei': {
+          model: 'BAAI/bge-small-en-v1.5',
+          modelRevision: '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
+          dimensions: 384,
+        },
+        '@dkb/meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY' },
       },
     },
   },

@@ -4,14 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@dkb/pipeline/config.js';
+import { resolveBuildProfiles } from '@dkb/pipeline/buildProfiles.js';
 import { DkbProviderHost, pluginPath } from '@dkb/pipeline/host.js';
+import { BUNDLED_PROVIDER_PLUGINS } from '@dkb/providers-bundled/bundled.js';
 import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../apps/cli/dist/providers/management.js';
 import { compileDkbWithProviderHost } from '@dkb/compiler/pipelineRunner.js';
 import { stableHash } from '@dkb/protocol/contracts/hash.js';
-import { compileComposeProject } from '@dkb/compiler/compile.js';
+import { compileComposeProject, compileRetrievalFromEvidence } from '@dkb/compiler/compile.js';
 import { readEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { readSourceIndex } from '@dkb/providers-bundled/sourceIndex.js';
+import { meilisearchIndexId, meilisearchIndexPrefix } from '@dkb/providers-bundled/meilisearchProvider.js';
 import { readRetrievalProfileLock } from '@dkb/pipeline/profile.js';
+import { listPackageBuilds } from '@dkb/library/builds.js';
 
 const allPlugin = {
   id: '@test/all',
@@ -28,6 +32,50 @@ const allPlugin = {
     context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1' });
   },
 };
+
+test('bundled 384, 768, FastEmbed, and TEI targets share Evidence IR only when ingestion is identical', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-bundled-spaces-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const targets = ['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768'];
+  const resolved = [];
+
+  for (const target of targets) {
+    const host = await DkbProviderHost.create({
+      root,
+      globalRoot: path.join(root, 'global'),
+      bundled: BUNDLED_PROVIDER_PLUGINS,
+      target,
+    });
+    try {
+      resolved.push(await resolveBuildProfiles(host));
+    } finally {
+      await host.dispose();
+    }
+  }
+
+  assert.equal(new Set(resolved.map((profile) => profile.evidence.profileDigest)).size, 1);
+  assert.equal(new Set(resolved.map((profile) => profile.retrieval.profileDigest)).size, 4);
+  assert.deepEqual(resolved.map((profile) => profile.retrieval.embedding.dimensions), [384, 384, 768, 384, 768]);
+  assert.equal(resolved[0].retrieval.profileDigest, resolved[3].retrieval.profileDigest);
+  assert.equal(resolved[0].retrieval.compatibilityDigest, resolved[3].retrieval.compatibilityDigest);
+  assert.notEqual(resolved[1].retrieval.compatibilityDigest, resolved[3].retrieval.compatibilityDigest);
+  assert.equal(resolved[4].retrieval.embedding.modelRevision, 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a');
+});
+
+test('Meilisearch managed indexes isolate compatibility spaces for the same package release', () => {
+  const root = path.resolve('runtime-proof');
+  const prefix = meilisearchIndexPrefix(root, 'Proof Library', '@test/package', '1.0.0');
+  const fast = meilisearchIndexId(root, 'Proof Library', '@test/package', '1.0.0', stableHash({ space: 'fastembed' }));
+  const tei = meilisearchIndexId(root, 'Proof Library', '@test/package', '1.0.0', stableHash({ space: 'tei' }));
+
+  assert.match(fast, new RegExp(`^${prefix}_`));
+  assert.match(tei, new RegExp(`^${prefix}_`));
+  assert.notEqual(fast, tei);
+  assert.equal(
+    fast,
+    meilisearchIndexId(root, 'Proof Library', '@test/package', '1.0.0', stableHash({ space: 'fastembed' })),
+  );
+});
 
 test('context configuration merges bundled, global, and local targets deterministically', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-config-'));
@@ -214,7 +262,12 @@ test('separate parser, chunker, embedder, and middleware providers share one com
   assert.equal(compiled.chunks[0].text, 'parsed-document-chunked-chunk');
   assert.equal(compiled.records[0].text, 'parsed-document-chunked-chunk-record');
   assert.deepEqual(compiled.records[0].embedding, [0.5, 0.5]);
-  assert.deepEqual(compiled.receipts.slice(-3).map((receipt) => receipt.build.stage), ['document', 'chunk', 'record']);
+  assert.deepEqual(
+    compiled.receipts
+      .filter((receipt) => receipt.build.kind === 'processor')
+      .map((receipt) => receipt.build.stage),
+    ['document', 'chunk', 'record'],
+  );
 });
 
 test('separate providers compile a complete package without a LlamaIndex-native result', async (t) => {
@@ -235,7 +288,7 @@ test('separate providers compile a complete package without a LlamaIndex-native 
       default: {
         parser: '@test/separate',
         chunker: '@test/separate',
-        embedding: '@test/separate',
+        embedding: '@test/initial-embedding',
         index: '@test/separate',
         retrieval: '@test/separate',
         processors: ['@test/separate'],
@@ -250,9 +303,8 @@ import path from 'node:path';
 export const id = '@test/separate';
 export const version = '1.0.0';
 export function setup(context) {
-  context.registerProvider({ kind: 'parser', async parse() { return [{ id: 'proof', path: 'proof.md', text: 'SOURCE-PROOF-14', metadata: {} }]; } });
+  context.registerProvider({ kind: 'parser', async parse({ dkb }) { const counter = path.join(dkb.root, '.dkb', 'parse-count.txt'); await fs.mkdir(path.dirname(counter), { recursive: true }); const count = Number.parseInt(await fs.readFile(counter, 'utf8').catch(() => '0'), 10); await fs.writeFile(counter, String(count + 1)); return [{ id: 'proof', path: 'proof.md', text: 'SOURCE-PROOF-14', metadata: {} }]; } });
   context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'proof-chunk', documentId: documents[0].id, text: documents[0].text, metadata: {} }]; } });
-  context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [0.6, 0.8]); }, async embedQuery() { return [0.6, 0.8]; }, compatibility() { return { embeddingSpace: 'test-space-v1', dimensions: 2, metric: 'cosine', normalized: true }; } });
   context.registerProvider({
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
     async compilePackage({ root, compiled }) {
@@ -268,6 +320,34 @@ export function setup(context) {
   context.registerProcessor({ id, version, stage: 'record', mutate(value) { return { ...value, text: value.text + '-MUTATED' }; } });
 }
 `, 'utf8');
+  const initialEmbedding = pluginPath(path.join(root, '.dkb/plugins'), '@test/initial-embedding');
+  await fs.mkdir(path.dirname(initialEmbedding), { recursive: true });
+  await fs.writeFile(initialEmbedding, `
+export const id = '@test/initial-embedding';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [0.6, 0.8]); }, async embedQuery() { return [0.6, 0.8]; }, compatibility() { return { embeddingSpace: 'test-space-v1', dimensions: 2, metric: 'cosine', normalized: true }; } });
+}
+`, 'utf8');
+  const alternate = pluginPath(path.join(root, '.dkb/plugins'), '@test/alternate');
+  await fs.mkdir(path.dirname(alternate), { recursive: true });
+  await fs.writeFile(alternate, `
+export const id = '@test/alternate';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [1, 0]); }, async embedQuery() { return [1, 0]; }, compatibility() { return { embeddingSpace: 'test-space-v2', dimensions: 2, metric: 'cosine', normalized: true }; } });
+}
+`, 'utf8');
+  const config = JSON.parse(await fs.readFile(path.join(root, '.dkb/config.json'), 'utf8'));
+  config.targets.alternate = {
+    parser: '@test/separate',
+    chunker: '@test/separate',
+    embedding: '@test/alternate',
+    index: '@test/separate',
+    retrieval: '@test/separate',
+    processors: ['@test/separate'],
+  };
+  await writeJson(path.join(root, '.dkb/config.json'), config);
 
   const result = await compileComposeProject(root, { force: true, mode: 'package' });
   const [sourceIndex, evidence, profile, indexRecords] = await Promise.all([
@@ -284,6 +364,108 @@ export function setup(context) {
   assert.equal(profile.profile.compiler.id, '@test/separate');
   assert.equal(profile.profile.index.provider, '@test/separate');
   assert.equal(profile.compatibility.dimensions, 2);
+  assert.equal(await fs.readFile(path.join(root, '.dkb/parse-count.txt'), 'utf8'), '1');
+
+  await compileRetrievalFromEvidence(root, evidence, { target: 'alternate' });
+  const alternateEvidence = await readEvidenceIr(root);
+  const alternateProfile = await readRetrievalProfileLock(root);
+  const alternateIndex = JSON.parse(await fs.readFile(path.join(root, '.dkb/artifacts/test-index.json'), 'utf8'));
+
+  assert.equal(await fs.readFile(path.join(root, '.dkb/parse-count.txt'), 'utf8'), '1');
+  assert.equal(alternateEvidence.evidenceDigest, evidence.evidenceDigest);
+  assert.equal(alternateProfile.profile.evidence.profileDigest, profile.profile.evidence.profileDigest);
+  assert.notEqual(alternateProfile.profileDigest, profile.profileDigest);
+  assert.deepEqual(alternateIndex[0].embedding, [1, 0]);
+});
+
+test('embedding cache reuses exact text within one space and misses after a space change', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-embedding-cache-'));
+  const counterPath = path.join(root, 'embed-count.txt');
+  const previousCounter = process.env.DKB_TEST_EMBED_COUNTER;
+  process.env.DKB_TEST_EMBED_COUNTER = counterPath;
+  t.after(async () => {
+    if (previousCounter === undefined) delete process.env.DKB_TEST_EMBED_COUNTER;
+    else process.env.DKB_TEST_EMBED_COUNTER = previousCounter;
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await writeJson(path.join(root, 'dkb.json'), {
+    manifestVersion: 1,
+    type: 'dkb',
+    name: '@test/embedding-cache',
+    version: '1.0.0',
+    permissions: { read: true, write: false },
+  });
+  await fs.writeFile(path.join(root, 'knowledge.md'), 'CACHE-SPACE-55', 'utf8');
+  await writeJson(path.join(root, '.dkb/config.json'), {
+    format: DKB_CONFIG_FORMAT,
+    activeTarget: 'first',
+    targets: {
+      first: {
+        ingestion: '@test/cache-core',
+        embedding: '@test/cache-embedding',
+        index: '@test/cache-core',
+        retrieval: '@test/cache-core',
+        options: { '@test/cache-embedding': { space: 'first', value: 0.25 } },
+      },
+      second: {
+        ingestion: '@test/cache-core',
+        embedding: '@test/cache-embedding',
+        index: '@test/cache-core',
+        retrieval: '@test/cache-core',
+        options: { '@test/cache-embedding': { space: 'second', value: 0.75 } },
+      },
+    },
+  });
+  const core = pluginPath(path.join(root, '.dkb/plugins'), '@test/cache-core');
+  await fs.mkdir(path.dirname(core), { recursive: true });
+  await fs.writeFile(core, `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+export const id = '@test/cache-core';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({
+    kind: 'ingestion',
+    async compile({ dkb }) {
+      const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
+      return { records: [{ id: 'cache', chunkId: 'cache', text, metadata: { assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem', locator: { path: 'knowledge.md' }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', hash: 'sha256:cache', updatedAt: '2026-08-28T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length, sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:cache-source' } } }], receipt: { providerId: id, providerVersion: version, build: {} } };
+    },
+  });
+  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', async compilePackage({ root, compiled }) { const target = path.join(root, '.dkb', 'artifacts', 'cache-index.json'); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records)); return { providerId: id, providerVersion: version, build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async openRuntime() { return null; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1' });
+}
+`, 'utf8');
+  const embedding = pluginPath(path.join(root, '.dkb/plugins'), '@test/cache-embedding');
+  await fs.mkdir(path.dirname(embedding), { recursive: true });
+  await fs.writeFile(embedding, `
+import fs from 'node:fs/promises';
+export const id = '@test/cache-embedding';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({
+    kind: 'embedding',
+    async embedDocuments({ texts, options }) { const target = process.env.DKB_TEST_EMBED_COUNTER; const count = Number.parseInt(await fs.readFile(target, 'utf8').catch(() => '0'), 10); await fs.writeFile(target, String(count + 1)); return texts.map(() => [Number(options.value)]); },
+    async embedQuery({ options }) { return [Number(options.value)]; },
+    compatibility(options) { return { embeddingSpace: String(options.space), dimensions: 1, metric: 'cosine', normalized: true }; },
+  });
+}
+`, 'utf8');
+
+  await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
+  await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
+  assert.equal(await fs.readFile(counterPath, 'utf8'), '1');
+
+  await compileComposeProject(root, { force: true, mode: 'package', target: 'second' });
+  assert.equal(await fs.readFile(counterPath, 'utf8'), '2');
+  const builds = await listPackageBuilds(root);
+  assert.equal(builds.evidence.length, 1);
+  assert.equal(builds.retrieval.length, 2);
+
+  await fs.writeFile(path.join(root, '.dkb', 'cache', 'embeddings.sqlite'), 'not a sqlite database', 'utf8');
+  await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
+  assert.equal(await fs.readFile(counterPath, 'utf8'), '3');
+  assert.ok((await fs.readdir(path.join(root, '.dkb', 'cache'))).some((name) => name.startsWith('embeddings.sqlite.corrupt-')));
+  assert.equal((await listPackageBuilds(root)).retrieval.length, 2);
 });
 
 test('plugin add, link, list, and guarded removal operate within the selected scope', async (t) => {
@@ -371,7 +553,10 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     },
   });
   const before = await fs.readFile(configPath, 'utf8');
+  const evidenceProfileDigest = stableHash({ ingestion: '@dkb/llamaindex', processors: [] });
   const compatibility = {
+    evidenceProfileDigest,
+    embeddingProvider: '@dkb/fastembed',
     embeddingSpace: 'BAAI/bge-small-en-v1.5',
     dimensions: 384,
     metric: 'cosine',
@@ -379,17 +564,19 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     indexFormat: 'IndexIDMap2(IndexFlatIP)',
     protocol: 'dkb.evidence.v1',
   };
+  const retrievalProfileDigest = stableHash({ evidenceProfileDigest, embedding: '@dkb/fastembed', index: '@dkb/faiss' });
   const profile = {
     compiler: { adapter: '@dkb/llamaindex', id: 'test', image: 'test', imageDigest: null },
     embedding: { adapter: '@dkb/fastembed', model: compatibility.embeddingSpace, modelRevision: null, modelDigest: null, dimensions: 384, metric: 'cosine', normalized: true, queryMode: 'query', documentMode: 'passage' },
     extraction: { richParser: 'test', richChunker: 'test', fallbackParser: 'test', fallbackChunker: 'test' },
+    evidence: { profileDigest: evidenceProfileDigest },
     target: 'default',
     configDigest: 'sha256:test',
     providerBuildDigest: 'sha256:test',
     providers: [],
     processors: [],
     index: { provider: '@dkb/faiss', mode: 'packaged', format: compatibility.indexFormat },
-    retrieval: { provider: '@dkb/hybrid', protocol: compatibility.protocol },
+    retrieval: { provider: '@dkb/hybrid', protocol: compatibility.protocol, profileDigest: retrievalProfileDigest },
   };
   const compatibilityDigest = stableHash(compatibility);
   await writeJson(path.join(library, 'dkb-profile.lock.json'), {
@@ -398,7 +585,7 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     buildDigest: stableHash(profile),
     compatibility,
     compatibilityDigest,
-    profileDigest: compatibilityDigest,
+    profileDigest: retrievalProfileDigest,
     generatedAt: new Date().toISOString(),
   });
 

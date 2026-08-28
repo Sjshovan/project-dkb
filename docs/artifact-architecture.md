@@ -21,38 +21,45 @@ retrieval reads compiled chunks, not raw files.
   provenance. DKB does not choose an agent's investigation workflow.
 - One Library activates one retrieval compatibility space. Packages with a
   different embedding space, dimension count, metric, normalization, index
-  format, or evidence protocol are rejected before they can enter the live
-  query snapshot. Parser, chunker, processor, and provider-code identities
-  remain exact build provenance.
+  format, Evidence Profile, or evidence protocol are rejected before they can
+  enter the live query snapshot.
 
 ## Portable And Runtime-Specific Layers
 
 DKB deliberately separates knowledge identity from retrieval acceleration:
 
-- Original source assets and `evidence.ir.json` are portable. Evidence IR is
-  embedding-free and preserves stable evidence IDs, source IDs, hashes,
-  locators, text, and chunk boundaries.
-- `dkb-profile.lock.json` records the exact compiler, extraction, embedding,
-  and index profile used to produce a compiled release.
-- FAISS segments, vectors, and profile-specific runtime catalogs are derived
-  artifacts. They are reusable only by compatible runtimes and may be deleted
-  and regenerated from canonical knowledge.
+```text
+PackageVersion
+  -> Evidence Build
+       -> Retrieval Build
+            -> Runtime
+```
+
+- A PackageVersion owns immutable source, source hashes, and release provenance.
+- An Evidence Build owns embedding-free Evidence IR for one exact parser,
+  chunker, processor, and Evidence-schema recipe.
+- A Retrieval Build owns embeddings, index data, mappings, and search metadata
+  for one exact Evidence digest and retrieval recipe.
+
+The same PackageVersion may have multiple Evidence Builds. One Evidence Build
+may feed FastEmbed/FAISS, TEI/FAISS, or TEI/Meilisearch Retrieval Builds without
+reparsing or rechunking. FAISS segments, vectors, and managed-index import data
+are reusable only by compatible runtimes and may be deleted and regenerated.
 
 This lets another retrieval system import DKB evidence and provenance without
 pretending DKB's vectors are universally portable. DKB's own runtime provides
 the out-of-the-box path for users who want install/uninstall without building a
 second ingestion stack.
 
-## Thin Architecture Direction
+## Build and activation pipeline
 
-The production-facing core should become a small artifact pipeline:
-
-1. Source adapters discover and read public source assets.
-2. Compiler adapters convert assets into provenance-bearing chunks.
-3. DKB writes versioned compiled artifacts under `.dkb/artifacts/`.
-4. Artifact transport moves compiled packages without redefining retrieval.
-5. Signature verification proves who published an artifact and whether bytes
-   match the manifest.
+1. Source adapters discover immutable PackageVersion assets.
+2. The Evidence Profile parses, chunks, and applies every text mutation.
+3. DKB writes a content-addressed Evidence Build.
+4. The selected embedder and index provider write one Retrieval Build.
+5. The Registry signs source, Evidence, and Retrieval receipts as a parent chain.
+6. A Runtime stages exact build chains for every installed package and replaces
+   the active Library snapshot only after complete validation.
 
 This keeps commodity infrastructure replaceable:
 
@@ -64,10 +71,10 @@ This keeps commodity infrastructure replaceable:
 
 ## Compiler Source Routing
 
-Compile-time routing is source-aware, but the output contract is not. All
-routes emit the same DKB compiled chunk records: deterministic chunk identity,
-package/version, store/source identity, source hash, locator/provenance, text,
-and FastEmbed vector.
+Compile-time routing is source-aware, but the Evidence contract is not. All
+routes emit the same unembedded DKB records: deterministic Evidence identity,
+package/version, store/source identity, source hash, locator/provenance, and
+final post-processor text.
 
 - Rich filesystem documents default to Docling conversion plus Docling
   `HybridChunker`: `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, and `.htm`.
@@ -82,10 +89,11 @@ and FastEmbed vector.
   in record metadata. With fallback disabled, compilation fails before artifact
   promotion.
 
-The tokenizer used by Docling `HybridChunker` is aligned to the configured
-embedding model, defaulting to `BAAI/bge-small-en-v1.5` with a 512-token chunk
-budget. FastEmbed remains the only embedding implementation for compiled
-document and query vectors.
+The tokenizer and chunk budget used by Docling `HybridChunker` are exact
+Evidence Profile inputs. The bundled default uses the BGE small tokenizer with
+a 512-token budget. Embedding happens only after Evidence IR is complete;
+FastEmbed and TEI are independent embedding providers and never share vectors
+or compatibility digests.
 
 ## Local Compiler Service
 
@@ -96,38 +104,25 @@ compiler-service work directory. It is a compiler helper only; it is not part of
 runtime query serving.
 
 The TypeScript compiler wrapper remains responsible for cache planning,
-checkpoint/resume state, atomic artifact promotion, and final artifact
-validation. The service only reuses initialized Docling, LlamaIndex tokenizer,
-and FastEmbed state while compiling the staged job request.
+Evidence/embedding reuse, checkpoint state, atomic build promotion, and final
+validation. The ingestion service reuses initialized Docling and LlamaIndex
+parser/tokenizer state; it does not create final vectors. The selected
+embedding provider owns both document and query embeddings.
 
-For CPU compilation, the bundled provider defaults to 32 documents per
-chunking batch, a 96-record embedding scheduling window, and 10 texts per ONNX
-inference batch. The scheduling window lets LlamaIndex keep the shared
-FastEmbed session busy without creating additional model processes. These are
-execution settings, not retrieval-compatibility fields; every completed job
-records the resolved values and stage timings in its compiler receipt.
+FastEmbed uses a bounded native sidecar with 32-text batches on the proof host.
+TEI uses its own bounded HTTP batches and server-side dynamic batching. Both
+paths validate dimensions and finite values, honor cancellation/timeouts, and
+cache document vectors by Evidence digest, embedding-space digest, and
+normalized text hash.
 
-Operators can override `DKB_LLAMA_DOCUMENT_BATCH_SIZE`,
-`DKB_LLAMA_EMBED_BATCH_SIZE`, and `DKB_LLAMA_INFERENCE_BATCH_SIZE` for measured
-hardware-specific tuning. Changes should be evaluated against a fresh compile
-with the record cache disabled, using the receipt's `load`, `chunk`, `embed`,
-and `total` timings. Larger batches are not assumed to be faster and should not
-be promoted without representative-corpus evidence.
-
-The default was selected from a fresh CPU-only Docker benchmark on a 104-file,
-approximately 1 MB code/configuration corpus that produced 758 records. Moving
-only the embedding scheduling window from 32 to 96 reduced compiler time from
-418.9 seconds to 285.4 seconds (31.9%) and the embedding stage from 385.5
-seconds to 256.4 seconds (33.5%). Peak container memory increased from about
-2.10 GiB to 2.47 GiB. Record identity, text, provenance, dimensions, and the
-Float32 vector digest remained identical. A 128-record window and FastEmbed's
-two-process parallel mode were both slower on the same input, so neither is a
-default. These figures justify the bundled default; they are not a universal
-hardware claim.
-
-The tuning controls follow the existing FastEmbed and ONNX Runtime execution
-model; see the official [FastEmbed performance guide](https://qdrant.tech/documentation/fastembed/fastembed-optimize/)
-and [ONNX Runtime threading guide](https://onnxruntime.ai/docs/performance/tune-performance/threading.html).
+The 2026-08-28 promotion benchmark used one shared 178-record Evidence Build
+from a deterministic, sanitized 32-file real-project slice. Across three valid
+runs, TEI reduced fresh single-job median embedding time from 176.7 seconds to
+59.4 seconds (66.4%), increased two-job throughput from 1.692 to 3.094 records
+per second (82.8%), reduced query p50 from 770.8 ms to 470.3 ms, and reduced
+measured combined peak memory from 2.410 GiB to 0.817 GiB. Correctness and
+security lifecycle proofs also passed, so `tei-faiss` is the default recipe for
+new Libraries. Explicit FastEmbed Libraries remain unchanged and selectable.
 
 Operational commands:
 
@@ -170,10 +165,9 @@ or direct source flows:
 - `dkb artifact cosign-keypair`, `cosign-sign`, and `cosign-verify` provide
   the local signing and verification path for OCI artifact references.
 
-The current local vertical slice is intentionally narrow: compile source,
-package the compiled artifact, push to an OCI Registry, sign and verify the
-immutable digest, pull the package, install it into a Library, and
-retrieve evidence through MCP.
+The current local vertical slice supports source, Evidence, and Retrieval
+layers. OCI transport remains available for a composed package artifact, while
+the Laravel Registry distributes the layers through a signed install plan.
 
 Compiled artifact install is not a source import. After verification and
 extraction, the runtime validates `.dkb/artifacts/dkb-artifact.json`, promotes
@@ -202,19 +196,19 @@ the user-level CLI registry target after validating the registry's package API
 and public signing keys. The older file-root registry remains available only as
 an explicit local development path via `--registry`/`--root`. In normal use,
 publish/list/pull/verify/install target Laravel's `/api/registry` routes with a
-bearer token. The CLI uploads source as a source archive, waits for the Laravel
-compile job to publish the immutable version, downloads the compiled `.dkbpkg`,
-verifies the embedded receipt against Laravel's public registry keys, and
-installs the verified archive into the local Library.
+bearer token. The CLI uploads source, waits for the default Evidence and
+Retrieval Builds, requests a signed install plan, verifies all parent receipts
+and archive hashes, and atomically installs exactly that chain.
 
 Laravel does not run Docling, LlamaIndex, FastEmbed, FAISS, or query serving in
 its web process. It calls the private DKB registry compiler service over HTTP:
 `GET /health` checks readiness and `POST /compile` receives staged job metadata
 plus a base64 source archive. The Node service filters out generated DKB state,
 rewrites only registry-owned package metadata, runs the pinned compiler path,
-and returns the compiled archive, lock payload, artifact manifest, logs, hashes,
-and compiler metadata. Laravel validates that response, signs the receipt, and
-publishes the artifact.
+and returns build layers, locks, logs, hashes, timings, and provider metadata.
+Laravel owns first-class `EvidenceBuild` and `RetrievalBuild` records, signs
+each layer against its parent receipt, and may compile another allowlisted
+Retrieval target without changing the PackageVersion or Evidence Build.
 
 Published Collections add no second artifact format. The Registry stores an
 immutable Collection revision containing exact DKB identities, versions, and

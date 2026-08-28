@@ -5,7 +5,7 @@ import { DkbError } from '../errors.js';
 import { DKB_ARTIFACTS_DIR, resolveFrom } from '../paths.js';
 
 export const DKB_EVIDENCE_IR_PATH = `${DKB_ARTIFACTS_DIR}/evidence.ir.json`;
-export const DKB_EVIDENCE_IR_FORMAT = 'dkb.evidence.ir.v1';
+export const DKB_EVIDENCE_IR_FORMAT = 'dkb.evidence.ir.v3';
 
 export interface DkbEvidenceSourceRecord {
   id: string;
@@ -43,7 +43,7 @@ export interface DkbEvidenceIrRecord {
 export interface DkbEvidenceIrChunk {
   chunkId: string;
   evidenceId: string;
-  profileDigest: string;
+  evidenceProfileDigest: string;
   ordinal: number;
   start: number;
   end: number;
@@ -51,10 +51,10 @@ export interface DkbEvidenceIrChunk {
 
 export interface DkbEvidenceIr {
   format: typeof DKB_EVIDENCE_IR_FORMAT;
-  profileDigest: string;
+  evidenceProfileDigest: string;
+  evidenceDigest: string;
   evidence: DkbEvidenceIrRecord[];
   chunks: DkbEvidenceIrChunk[];
-  generatedAt: string;
 }
 
 export interface DkbEvidenceIdentity {
@@ -93,15 +93,20 @@ export function evidenceIdentityForRecord(record: DkbEvidenceSourceRecord): DkbE
 
 export function buildEvidenceIr(
   results: ReadonlyArray<{ records: readonly DkbEvidenceSourceRecord[] }>,
-  profile: { profileDigest: string },
-  generatedAt = new Date().toISOString(),
+  profile: { evidenceProfileDigest?: string; profileDigest?: string },
 ): DkbEvidenceIr {
+  const evidenceProfileDigest = profile.evidenceProfileDigest ?? profile.profileDigest;
+
+  if (!evidenceProfileDigest) {
+    throw new DkbError('Evidence IR requires an Evidence Profile digest');
+  }
   const evidence = new Map<string, DkbEvidenceIrRecord>();
   const chunks: DkbEvidenceIrChunk[] = [];
 
   for (const result of results) {
     for (const record of result.records) {
-      const { packageId, packageVersion, sourceHash, sourceId, evidenceId } = evidenceIdentityForRecord(record);
+      const { packageId, packageVersion, sourceHash, sourceId, evidenceId: sourceEvidenceId } = evidenceIdentityForRecord(record);
+      const evidenceId = stableHash({ sourceEvidenceId, evidenceProfileDigest });
 
       evidence.set(evidenceId, {
         evidenceId,
@@ -120,9 +125,15 @@ export function buildEvidenceIr(
         provenance: provenanceFor(record.metadata),
       });
       chunks.push({
-        chunkId: record.id,
+        chunkId: stableHash({
+          evidenceId,
+          evidenceProfileDigest,
+          ordinal: record.chunkOrdinal,
+          start: record.chunkStart,
+          end: record.chunkEnd,
+        }),
         evidenceId,
-        profileDigest: profile.profileDigest,
+        evidenceProfileDigest,
         ordinal: record.chunkOrdinal,
         start: record.chunkStart,
         end: record.chunkEnd,
@@ -130,12 +141,21 @@ export function buildEvidenceIr(
     }
   }
 
+  const sortedEvidence = [...evidence.values()].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId));
+  const sortedChunks = chunks.sort((left, right) => left.chunkId.localeCompare(right.chunkId));
+  const evidenceDigest = stableHash({
+    format: DKB_EVIDENCE_IR_FORMAT,
+    evidenceProfileDigest,
+    evidence: sortedEvidence,
+    chunks: sortedChunks,
+  });
+
   return {
     format: DKB_EVIDENCE_IR_FORMAT,
-    profileDigest: profile.profileDigest,
-    evidence: [...evidence.values()].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId)),
-    chunks: chunks.sort((left, right) => left.chunkId.localeCompare(right.chunkId)),
-    generatedAt,
+    evidenceProfileDigest,
+    evidenceDigest,
+    evidence: sortedEvidence,
+    chunks: sortedChunks,
   };
 }
 
@@ -164,7 +184,11 @@ export function validateEvidenceIr(value: unknown, source = DKB_EVIDENCE_IR_PATH
 
   const candidate = value as Partial<DkbEvidenceIr>;
 
-  if (candidate.format !== DKB_EVIDENCE_IR_FORMAT || typeof candidate.profileDigest !== 'string' || !Array.isArray(candidate.evidence) || !Array.isArray(candidate.chunks)) {
+  if (candidate.format !== DKB_EVIDENCE_IR_FORMAT
+    || typeof candidate.evidenceProfileDigest !== 'string'
+    || typeof candidate.evidenceDigest !== 'string'
+    || !Array.isArray(candidate.evidence)
+    || !Array.isArray(candidate.chunks)) {
     throw new DkbError(`Invalid Evidence IR at ${source}: unsupported format or missing arrays`);
   }
 
@@ -174,9 +198,20 @@ export function validateEvidenceIr(value: unknown, source = DKB_EVIDENCE_IR_PATH
     if (!chunk || typeof chunk.chunkId !== 'string' || typeof chunk.evidenceId !== 'string' || !evidenceIds.has(chunk.evidenceId)) {
       throw new DkbError(`Invalid Evidence IR at ${source}: chunk references missing evidence`);
     }
-    if (chunk.profileDigest !== candidate.profileDigest) {
+    if (chunk.evidenceProfileDigest !== candidate.evidenceProfileDigest) {
       throw new DkbError(`Invalid Evidence IR at ${source}: chunk profile does not match document profile`);
     }
+  }
+
+  const actualDigest = stableHash({
+    format: candidate.format,
+    evidenceProfileDigest: candidate.evidenceProfileDigest,
+    evidence: candidate.evidence,
+    chunks: candidate.chunks,
+  });
+
+  if (candidate.evidenceDigest !== actualDigest) {
+    throw new DkbError(`Invalid Evidence IR at ${source}: expected digest ${actualDigest}, got ${candidate.evidenceDigest}`);
   }
 
   return candidate as DkbEvidenceIr;

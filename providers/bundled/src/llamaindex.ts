@@ -16,12 +16,10 @@ import type { LoadedDkb } from '@dkb/protocol/types.js';
 
 const execFile = promisify(execFileCallback);
 
-export const LLAMAINDEX_COMPILER_IMAGE = 'dkb-compiler-llamaindex:0.3.7';
-export const LLAMAINDEX_COMPILER_ID = 'llamaindex.fastembed.onnx';
-export const LLAMAINDEX_COMPILER_SERVICE_VERSION = '2';
+export const LLAMAINDEX_COMPILER_IMAGE = 'dkb-compiler-llamaindex:0.4.0';
+export const LLAMAINDEX_COMPILER_ID = 'llamaindex.docling.evidence';
+export const LLAMAINDEX_COMPILER_SERVICE_VERSION = '3';
 export const LLAMAINDEX_DOCUMENT_BATCH_SIZE = 32;
-export const LLAMAINDEX_EMBED_BATCH_SIZE = 96;
-export const LLAMAINDEX_INFERENCE_BATCH_SIZE = 10;
 const LLAMAINDEX_COMPILER_SERVICE_CONTAINER = 'dkb-llamaindex-compiler-service';
 const LLAMAINDEX_COMPILER_SERVICE_PORT = 8091;
 
@@ -40,7 +38,7 @@ export interface LlamaIndexCompilerRecord {
   chunkStart: number;
   chunkEnd: number;
   metadata: Record<string, unknown>;
-  embedding: number[] | Float32Array;
+  embedding?: number[] | Float32Array;
 }
 
 export interface LlamaIndexCompilerResult {
@@ -81,7 +79,7 @@ export interface LlamaIndexCompilerCacheStats {
 }
 
 interface LlamaIndexCompilerOutput {
-  format: 'dkb.llamaindex.compile.v1';
+  format: 'dkb.llamaindex.compile.v2';
   compiler: { id: string; model: string };
   execution?: LlamaIndexCompilerResult['execution'];
   records: LlamaIndexCompilerRecord[];
@@ -454,9 +452,9 @@ export async function startLlamaIndexCompilerService(options: {
     return current;
   }
 
-  if (current.running || current.drift.length > 0 || options.forceRestart) {
-    await stopLlamaIndexCompilerService();
-  }
+  // A stopped container still owns its name. Once the ready fast-path above
+  // fails, remove any prior instance before creating the replacement.
+  await stopLlamaIndexCompilerService();
 
   const jobsRoot = compilerServiceJobsRoot();
   await fs.mkdir(jobsRoot, { recursive: true });
@@ -478,18 +476,10 @@ export async function startLlamaIndexCompilerService(options: {
       `127.0.0.1::${LLAMAINDEX_COMPILER_SERVICE_PORT}`,
       '--mount',
       `type=bind,src=${path.resolve(jobsRoot)},dst=/jobs`,
-      '--mount',
-      'type=volume,src=dkb-compiler-fastembed-cache,dst=/cache/fastembed',
       '-e',
       `DKB_COMPILER_MODEL=${options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5'}`,
       '-e',
       `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? String(LLAMAINDEX_DOCUMENT_BATCH_SIZE)}`,
-      '-e',
-      `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? String(LLAMAINDEX_EMBED_BATCH_SIZE)}`,
-      '-e',
-      `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? String(LLAMAINDEX_INFERENCE_BATCH_SIZE)}`,
-      '-e',
-      `DKB_FASTEMBED_PROVIDER=${process.env.DKB_FASTEMBED_PROVIDER ?? ''}`,
       '-e',
       'DKB_COMPILER_JOBS_ROOT=/jobs',
       '--entrypoint',
@@ -1277,18 +1267,12 @@ async function runCompiler(
     '--mount', `type=bind,src=${path.resolve(inputRoot)},dst=/input,readonly`,
     '--mount', `type=bind,src=${path.resolve(requestDir)},dst=/request,readonly`,
     '--mount', `type=bind,src=${path.resolve(outputDir)},dst=/output`,
-    // Keep model cache out of the user package. A Docker-managed volume avoids
-    // root-owned files in `.dkb` and keeps local recompiles reproducible.
-    '--mount', 'type=volume,src=dkb-compiler-fastembed-cache,dst=/cache/fastembed',
     image,
   ];
   const env = [
     options.model ? `DKB_COMPILER_MODEL=${options.model}` : null,
     `DKB_LLAMA_ASYNC_WORKERS=${boundedWorkerCount(options.workers ?? Number(process.env.DKB_LLAMA_ASYNC_WORKERS ?? 1))}`,
     `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? String(LLAMAINDEX_DOCUMENT_BATCH_SIZE)}`,
-    `DKB_LLAMA_EMBED_BATCH_SIZE=${process.env.DKB_LLAMA_EMBED_BATCH_SIZE ?? String(LLAMAINDEX_EMBED_BATCH_SIZE)}`,
-    `DKB_LLAMA_INFERENCE_BATCH_SIZE=${process.env.DKB_LLAMA_INFERENCE_BATCH_SIZE ?? String(LLAMAINDEX_INFERENCE_BATCH_SIZE)}`,
-    `DKB_FASTEMBED_PROVIDER=${process.env.DKB_FASTEMBED_PROVIDER ?? ''}`,
   ].filter((value): value is string => Boolean(value));
 
   for (const item of env.reverse()) {
@@ -1441,20 +1425,15 @@ function parseOutput(value: unknown, source: string): LlamaIndexCompilerOutput {
     throw new DkbError(`Invalid LlamaIndex compiler output at ${source}`);
   }
   const output = value as Partial<LlamaIndexCompilerOutput>;
-  if (output.format !== 'dkb.llamaindex.compile.v1' || !output.compiler || !Array.isArray(output.records)) {
+  if (output.format !== 'dkb.llamaindex.compile.v2' || !output.compiler || !Array.isArray(output.records)) {
     throw new DkbError(`Invalid LlamaIndex compiler output contract at ${source}`);
   }
   for (const record of output.records) {
-    if (!record || typeof record.id !== 'string' || typeof record.assetId !== 'string' || !isNumericEmbedding(record.embedding)) {
+    if (!record || typeof record.id !== 'string' || typeof record.assetId !== 'string' || record.embedding !== undefined) {
       throw new DkbError(`Invalid LlamaIndex compiler record at ${source}`);
     }
   }
   return output as LlamaIndexCompilerOutput;
-}
-
-function isNumericEmbedding(value: unknown): value is number[] | Float32Array {
-  return (Array.isArray(value) && value.every((item) => typeof item === 'number'))
-    || value instanceof Float32Array;
 }
 
 function float32JsonReplacer(_key: string, value: unknown): unknown {

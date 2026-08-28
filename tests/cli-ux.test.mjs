@@ -979,12 +979,44 @@ test('runtime add removes its staged copy after a successful import', async () =
   let requestBody;
   let requestPath;
   const server = http.createServer((request, response) => {
-    requestPath = request.url;
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
-      requestBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       response.setHeader('content-type', 'application/json');
+      if (request.url === '/embed') {
+        const embeddingRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        response.end(JSON.stringify({
+          model: 'BAAI/bge-small-en-v1.5',
+          vectors: embeddingRequest.texts.map(() => Array.from({ length: 384 }, (_, index) => index === 0 ? 1 : 0)),
+        }));
+        return;
+      }
+      if (request.url === '/compile') {
+        const compileRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        response.end(JSON.stringify({
+          format: 'dkb.llamaindex.compile.v2',
+          compiler: { id: 'test-ingestion', model: 'BAAI/bge-small-en-v1.5' },
+          records: [{
+            id: 'test-record',
+            assetId: 'notes.md',
+            storeId: compileRequest.request.stores[0].id,
+            type: 'filesystem',
+            locator: { path: 'notes.md', chunk: 0 },
+            assetLocator: { path: 'notes.md' },
+            title: 'notes.md',
+            text: 'Staged source.',
+            hash: 'sha256:test-record',
+            updatedAt: '2026-08-27T00:00:00.000Z',
+            chunkOrdinal: 0,
+            chunkStart: 0,
+            chunkEnd: 14,
+            metadata: {},
+          }],
+        }));
+        return;
+      }
+      requestPath = request.url;
+      requestBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       response.end(JSON.stringify({ status: 'installed', id: 'staged-demo' }));
     });
   });
@@ -992,6 +1024,32 @@ test('runtime add removes its staged copy after a successful import', async () =
   try {
     await writePackageManifest(packageRoot, 'Staged Demo', '0.1.0');
     await fs.writeFile(path.join(packageRoot, 'notes.md'), 'Staged source.\n');
+    await fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index'), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, '.dkb', 'config.json'), JSON.stringify({
+      format: 'dkb.config.v1',
+      targets: { default: { index: '@test/index' } },
+    }));
+    await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index', 'plugin.mjs'), `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+export const id = '@test/index';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({
+    kind: 'index',
+    mode: 'packaged',
+    format: 'test.index.v1',
+    async compilePackage({ root, compiled }) {
+      const target = path.join(root, '.dkb', 'artifacts', 'test-index.json');
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, JSON.stringify(compiled.records));
+      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
+    },
+    async validatePackage() { return { documentCount: 1 }; },
+    async openRuntime() { return null; },
+  });
+}
+`);
     await listen(server);
     const address = server.address();
     assert.notEqual(typeof address, 'string');
@@ -1005,9 +1063,13 @@ test('runtime add removes its staged copy after a successful import', async () =
       importRoot,
       '--container-import-root',
       '/imports',
-    ]);
+    ], {
+      DKB_QUERY_EMBEDDER_URL: `http://127.0.0.1:${address.port}/embed`,
+      DKB_LLAMA_COMPILER_SERVICE_URL: `http://127.0.0.1:${address.port}`,
+      DKB_LLAMA_COMPILER_SERVICE_ROOT: path.join(tempRoot, 'compiler-service'),
+    });
 
-    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.code, 0, `${result.stderr}\n${result.stdout}`);
     assert.equal(requestPath, '/api/dkbs/import-artifact');
     assert.match(requestBody.sourcePath, /^\/imports\/test-staged-demo-/);
     assert.deepEqual(await fs.readdir(importRoot), []);

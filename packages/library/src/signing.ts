@@ -11,6 +11,7 @@ import {
 import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { artifactLockPath, manifestPath } from '@dkb/protocol/paths.js';
+import { validateLayerReceipt, type DkbLayerReceipt } from '@dkb/protocol/builds.js';
 import { validateDkbLockManifest } from '@dkb/protocol/validation.js';
 import type {
   DkbLockManifest,
@@ -78,7 +79,7 @@ export interface DkbReleaseVerificationCheck {
 export type DkbReleaseKeyResolver = (input: {
   role: 'publisher' | 'registry';
   signature: DkbPublisherReleaseSignature | DkbRegistryReleaseSignature;
-  envelope: DkbReleaseEnvelope | DkbPackageReceipt;
+  envelope: DkbReleaseEnvelope | DkbPackageReceipt | DkbLayerReceipt;
 }) => string | null | Promise<string | null>;
 
 export function generateSigningKeyPair(): DkbSigningKeyPair {
@@ -301,6 +302,49 @@ export async function verifyPackageReceipt(
   };
 }
 
+export async function verifyLayerReceipt(
+  value: unknown,
+  keyResolver: DkbReleaseKeyResolver,
+  source = 'Layer receipt',
+): Promise<{
+  ok: boolean;
+  receipt: DkbLayerReceipt;
+  payloadHash: string;
+  receiptHash: string;
+  checks: DkbReleaseVerificationCheck[];
+}> {
+  const receipt = validateLayerReceipt(value, source);
+  const expectedPayloadHash = stableHash(receipt.payload);
+  const payloadHashValid = expectedPayloadHash === receipt.payloadHash;
+  const content = layerReceiptSigningContent(receipt);
+  const checks: DkbReleaseVerificationCheck[] = [{
+    name: 'payload_hash',
+    ok: payloadHashValid,
+    detail: payloadHashValid ? 'payload hash matches layer receipt payload' : `payload hash mismatch: expected ${expectedPayloadHash}`,
+  }];
+  checks.push(...await verifyRoleSignature('publisher', receipt.publisher, receipt, content, keyResolver));
+  checks.push(...await verifyRoleSignature('registry', receipt.registry, receipt, content, keyResolver));
+
+  return {
+    ok: checks.every((check) => check.ok),
+    receipt,
+    payloadHash: receipt.payloadHash,
+    receiptHash: stableHash(receipt),
+    checks,
+  };
+}
+
+function layerReceiptSigningContent(receipt: DkbLayerReceipt): Record<string, unknown> {
+  return {
+    type: `${receipt.type}.signing-content`,
+    version: 1,
+    package: receipt.package,
+    ...(receipt.parentReceiptHash ? { parentReceiptHash: receipt.parentReceiptHash } : {}),
+    payloadHash: receipt.payloadHash,
+    payload: receipt.payload,
+  };
+}
+
 export async function signComposeProject(root: string, options: SignComposeProjectOptions = {}) {
   const resolvedRoot = path.resolve(root);
   const lockPath = artifactLockPath(resolvedRoot);
@@ -470,8 +514,8 @@ function verifyCanonical(value: unknown, publicKeyPem: string, signature: string
 async function verifyRoleSignature(
   role: 'publisher' | 'registry',
   signature: DkbPublisherReleaseSignature | DkbRegistryReleaseSignature,
-  envelope: DkbReleaseEnvelope | DkbPackageReceipt,
-  content: DkbReleaseSigningContent | DkbPackageReceiptSigningContent,
+  envelope: DkbReleaseEnvelope | DkbPackageReceipt | DkbLayerReceipt,
+  content: unknown,
   keyResolver: DkbReleaseKeyResolver,
 ): Promise<DkbReleaseVerificationCheck[]> {
   const publicKeyPem = await keyResolver({ role, signature, envelope });

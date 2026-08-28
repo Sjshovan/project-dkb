@@ -33,7 +33,7 @@ artifact, and local compiled-install filters exclude `.dkb/plugins/` and
 `.dkb/config.json`. A DKB uploaded as knowledge cannot execute code or change a
 Library's pipeline.
 
-## Targets and locks
+## Profiles, targets, and stored builds
 
 User-global bindings live in `~/.dkb/config.json`. Context overrides live in
 `<context>/.dkb/config.json`. A target selects:
@@ -47,15 +47,27 @@ User-global bindings live in `~/.dkb/config.json`. Context overrides live in
 
 Options may name environment variables such as `urlEnv` or `apiKeyEnv`.
 Credential-looking inline values are rejected. The generated
-`dkb-profile.lock.json` is a build receipt, not hand-authored configuration. It
-records provider source/version/code digests and a compatibility digest over
-embedding space, dimensions, metric, normalization, index format, and evidence
-protocol.
+locks are build receipts, not hand-authored configuration. An Evidence Profile
+records the exact parser, chunker, processors, Evidence IR schema, options, and
+provider code. A target references one Evidence Profile and adds embedding,
+index, and retrieval providers. The resolved receipts keep these identities
+separate:
+
+- Evidence Profile digest: the exact ingestion recipe;
+- Evidence digest: the exact package-specific Evidence IR;
+- Retrieval Profile digest: the exact search recipe and required Evidence Profile;
+- compatibility digest: the Runtime-visible embedding/index space; and
+- Retrieval Build digest: the exact derived artifacts attached to one Evidence digest.
+
+Profiles are recipes. Evidence and Retrieval Builds are stored results. DKB
+never chooses a build by recency or target name alone.
 
 `dkb pipeline set` validates the full candidate before atomically writing the
-configuration. Activating a target that is incompatible with installed
-packages fails without changing the previous target. Save it with
-`--no-activate`, rebuild or remove incompatible packages, and then activate it.
+configuration. `dkb pipeline use` prepares an exact build chain for every
+installed package, then asks the Runtime to switch the complete Library
+snapshot. Registry packages download signed missing layers; editable local
+packages reuse matching Evidence IR when possible and compile through the same
+shared runner. Failure leaves the previous target active.
 
 ## Contracts
 
@@ -64,11 +76,11 @@ The provider boundary supports both fused and separated ingestion:
 ```text
 folder
   -> ingestion OR parser -> chunker
-  -> ordered document/chunk processors
-  -> document embedder
-  -> ordered record processors
+  -> ordered document/chunk/record processors
+  -> embedding-free Evidence Build
+  -> selected document embedder
   -> package index compiler
-  -> signed .dkbpkg
+  -> Retrieval Build
 ```
 
 At runtime the selected embedding provider embeds queries. The selected index
@@ -78,11 +90,11 @@ return DKB source-unit identities; the stable `dkb.evidence.v1` layer resolves
 text, provenance, citations, and trace metadata independently of the backend.
 
 The shared runner normalizes fused or separated ingestion output into DKB
-pipeline records before Evidence IR or an index provider sees it. Ordered
-record processors run before that boundary, and their final text and hashes are
-what every index receives. A provider may retain an opaque native result for
-diagnostics or caching, but native engine objects are never the canonical input
-to packaging, indexing, or provenance.
+pipeline records before Evidence IR is materialized. Every text-changing
+processor runs before embedding, so Evidence text, IDs, hashes, vectors, and
+provenance cannot drift. A provider may retain an opaque native result for
+diagnostics or caching, but native engine objects are never canonical package
+or provenance input.
 
 Processors register one `mutate` function plus a stage. The runner applies them
 in configured order, permits a processor to drop a value by returning `null`,
@@ -93,7 +105,8 @@ and records stage, order, version, and source-code digest in build receipts.
 | ID | Role | Behavior |
 | --- | --- | --- |
 | `@dkb/llamaindex` | ingestion | Docling rich-file parsing plus LlamaIndex fallbacks |
-| `@dkb/fastembed` | embedding | matching document/query vectors through the configured service |
+| `@dkb/fastembed` | embedding | native FastEmbed document/query vectors through the bounded sidecar |
+| `@dkb/tei` | embedding | TEI document/query vectors through its HTTP contract |
 | `@dkb/faiss` | packaged index | immutable package-local FAISS and SQLite artifacts |
 | `@dkb/meilisearch` | managed index | package vector import into immutable server-side indexes |
 | `@dkb/hybrid` | retrieval | stable DKB evidence protocol and fusion behavior |
@@ -143,12 +156,24 @@ dkb pipeline set meili --root ./Library \
 Use `--global` with plugin add, link, or remove for current-user storage.
 Windows PowerShell users should quote the JSON argument with single quotes.
 
+Build inspection and retention use:
+
+```bash
+dkb build ./my-dkb --pipeline tei-faiss
+dkb build list ./my-dkb
+dkb build inspect <digest> ./my-dkb
+dkb build prune ./my-dkb
+```
+
+Inactive Retrieval Builds remain available until pruning, so a Library can
+switch back without parsing, chunking, or embedding again.
+
 ## Registry compiler
 
 The HTTP compiler runs with a trusted `DKB_CONTEXT_ROOT`. Its capability
-response reports the selected target, provider build digest, and compatibility
-digest. Compile requests name a target; they cannot inject configuration or
-plugin code. The service strips uploaded `.dkb/plugins` and configuration,
-resolves providers from its trusted context, invokes the same shared job runner
-as local compilation, and returns resolved provider metadata for Registry
-storage and signing.
+response reports the selected target plus Evidence, Retrieval, provider-build,
+and compatibility digests. Compile requests name an allowlisted target; they
+cannot inject configuration or plugin code. The service strips uploaded
+`.dkb/plugins` and configuration, resolves providers from its trusted context,
+invokes the same shared job runner as local compilation, and returns resolved
+provider metadata for Registry storage and signing.

@@ -242,7 +242,7 @@ function recordForSourceShardHash(record: LlamaIndexCompilerRecord): Record<stri
     text: record.text,
     hash: record.hash,
     metadata: record.metadata,
-    embedding: Array.from(record.embedding),
+    embedding: record.embedding ? Array.from(record.embedding) : [],
   };
 }
 

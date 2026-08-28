@@ -8,6 +8,7 @@ import { DKB_PACKAGE_RECEIPT_PATH } from './signing.js';
 
 const EXCLUDED_ROOT_FILES = new Set([
   'dkb-lock.json',
+  'dkb-profile.lock.json',
   'dkb-release.json',
   DKB_PACKAGE_RECEIPT_PATH,
 ]);

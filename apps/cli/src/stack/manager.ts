@@ -7,9 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DkbError } from '@dkb/protocol/errors.js';
+import { maybeReadRuntimeLock } from '@dkb/library/builds.js';
 import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime } from '../host/inventory.js';
 
-export type DkbStackTarget = 'default' | 'meilisearch';
+export type DkbStackTarget = 'default' | 'meilisearch' | 'fastembed-faiss' | 'tei-faiss' | 'tei-faiss-768' | 'tei-meilisearch';
 
 export interface DkbStackContext {
   name: string;
@@ -23,6 +24,7 @@ export interface DkbStackContext {
   registryPort: number;
   runtimePort: number;
   meilisearchPort: number;
+  teiPort: number;
 }
 
 export interface DkbStackStatus {
@@ -49,7 +51,8 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
   if ((await composeContainerIds(context)).length === 0) {
     await assertPortAvailable(context.registryPort, 'Registry');
     await assertPortAvailable(context.runtimePort, 'Runtime');
-    if (target === 'meilisearch') await assertPortAvailable(context.meilisearchPort, 'Meilisearch');
+    if (usesMeilisearch(target)) await assertPortAvailable(context.meilisearchPort, 'Meilisearch');
+    if (usesTei(target)) await assertPortAvailable(context.teiPort, 'TEI');
   }
 
   runCompose(context, ['up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240']);
@@ -171,6 +174,8 @@ export async function prepareDkbStack(name = 'local', target: DkbStackTarget = '
   ]);
 
   const existing = await readEnvironmentFile(envFile);
+  const runtimeRoot = path.join(root, 'runtime');
+  const activeRuntimeBuild = await maybeReadRuntimeLock(runtimeRoot);
   const values = {
     ...existing,
     DKB_STACK_NAME: normalizedName,
@@ -179,6 +184,10 @@ export async function prepareDkbStack(name = 'local', target: DkbStackTarget = '
     DKB_REGISTRY_PORT: existing.DKB_REGISTRY_PORT ?? String(ports.registry),
     DKB_RUNTIME_PORT: existing.DKB_RUNTIME_PORT ?? String(ports.runtime),
     DKB_MEILI_PORT: existing.DKB_MEILI_PORT ?? String(ports.meilisearch),
+    DKB_TEI_PORT: existing.DKB_TEI_PORT ?? String(ports.tei),
+    DKB_TEI_IMAGE: existing.DKB_TEI_IMAGE ?? 'ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07',
+    DKB_TEI_MODEL: target === 'tei-faiss-768' ? 'BAAI/bge-base-en-v1.5' : 'BAAI/bge-small-en-v1.5',
+    DKB_TEI_MODEL_REVISION: target === 'tei-faiss-768' ? 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a' : '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
     DKB_REGISTRY_IMAGE: existing.DKB_REGISTRY_IMAGE ?? 'dkb-registry:0.1.0',
     DKB_COMPILER_IMAGE: existing.DKB_COMPILER_IMAGE ?? 'dkb-compiler:0.1.0',
     DKB_RUNTIME_IMAGE: existing.DKB_RUNTIME_IMAGE ?? 'dkb-runtime:0.1.0',
@@ -194,7 +203,14 @@ export async function prepareDkbStack(name = 'local', target: DkbStackTarget = '
 
   await writeEnvironmentFile(envFile, values);
   await writePipelineConfig(path.join(root, 'compiler-context', '.dkb', 'config.json'), target);
-  await writePipelineConfig(path.join(root, 'runtime', '.dkb', 'config.json'), target);
+  // Changing the Registry compiler target must not put a populated Runtime on
+  // a configuration that its active package builds do not satisfy. The
+  // coordinated `pipeline use` transaction updates Runtime config only after
+  // every package build has been staged and verified.
+  await writePipelineConfig(
+    path.join(runtimeRoot, '.dkb', 'config.json'),
+    parseStoredTarget(activeRuntimeBuild?.target ?? target),
+  );
 
   return contextFrom(root, composeFile, envFile, values);
 }
@@ -236,10 +252,11 @@ async function readDkbStack(name: string): Promise<DkbStackContext> {
 }
 
 function contextFrom(root: string, composeFile: string, envFile: string, values: Record<string, string>): DkbStackContext {
-  const target = values.DKB_PIPELINE_TARGET === 'meilisearch' ? 'meilisearch' : 'default';
+  const target = parseStoredTarget(values.DKB_PIPELINE_TARGET);
   const registryPort = positivePort(values.DKB_REGISTRY_PORT, 'Registry');
   const runtimePort = positivePort(values.DKB_RUNTIME_PORT, 'Runtime');
   const meilisearchPort = positivePort(values.DKB_MEILI_PORT, 'Meilisearch');
+  const teiPort = positivePort(values.DKB_TEI_PORT ?? '8080', 'TEI');
   const name = stackName(values.DKB_STACK_NAME ?? path.basename(root));
 
   return {
@@ -254,12 +271,13 @@ function contextFrom(root: string, composeFile: string, envFile: string, values:
     registryPort,
     runtimePort,
     meilisearchPort,
+    teiPort,
   };
 }
 
 async function writePipelineConfig(targetPath: string, target: DkbStackTarget): Promise<void> {
-  const config = target === 'default'
-    ? { format: 'dkb.config.v1', activeTarget: 'default' }
+  const config = target !== 'meilisearch'
+    ? { format: 'dkb.config.v1', activeTarget: target }
     : {
         format: 'dkb.config.v1',
         activeTarget: 'meilisearch',
@@ -271,8 +289,9 @@ async function writePipelineConfig(targetPath: string, target: DkbStackTarget): 
             retrieval: '@dkb/hybrid',
             processors: [],
             options: {
+              '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
               '@dkb/fastembed': { model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
-              '@dkb/meilisearch': { urlEnv: 'MEILI_URL', apiKeyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 },
+              '@dkb/meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 },
             },
           },
         },
@@ -284,7 +303,10 @@ async function probeStack(context: DkbStackContext): Promise<Array<{ component: 
   return Promise.all([
     probe('registry-web', `${context.registryUrl}/health`),
     probe('dkb-runtime', `${context.runtimeUrl}/health`),
-    ...(context.target === 'meilisearch'
+    ...(usesTei(context.target)
+      ? [probe('dkb-tei', `http://127.0.0.1:${context.teiPort}/health`, () => true, 'HTTP 2xx')]
+      : []),
+    ...(usesMeilisearch(context.target)
       ? [probe(
           'meilisearch',
           `http://127.0.0.1:${context.meilisearchPort}/health`,
@@ -304,7 +326,8 @@ async function probe(
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) return { component, status: 'failed', message: `HTTP ${response.status} from ${url}` };
-    const body = await response.json() as Record<string, unknown>;
+    const text = await response.text();
+    const body = text ? JSON.parse(text) as Record<string, unknown> : {};
     return isHealthy(body)
       ? { component, status: 'ok', message: url }
       : { component, status: 'failed', message: `Health response did not report ${expectation} at ${url}` };
@@ -364,12 +387,18 @@ function runCompose(
 }
 
 export function composeArguments(context: DkbStackContext, args: string[]): string[] {
+  const profiles = args.includes('down')
+    ? ['tei', 'meilisearch']
+    : [
+        ...(usesTei(context.target) ? ['tei'] : []),
+        ...(usesMeilisearch(context.target) ? ['meilisearch'] : []),
+      ];
   return [
     'compose',
     '--env-file', context.envFile,
     '-p', context.projectName,
     '-f', context.composeFile,
-    ...(context.target === 'meilisearch' ? ['--profile', 'meilisearch'] : []),
+    ...profiles.flatMap((profile) => ['--profile', profile]),
     ...args,
   ];
 }
@@ -448,10 +477,26 @@ function namespaceForStack(name: string): string {
   return name.replace(/[._]+/gu, '-').replace(/-+/gu, '-');
 }
 
-function portsFor(name: string): { registry: number; runtime: number; meilisearch: number } {
-  if (name === 'local') return { registry: 8018, runtime: 7331, meilisearch: 7700 };
+function portsFor(name: string): { registry: number; runtime: number; meilisearch: number; tei: number } {
+  if (name === 'local') return { registry: 8018, runtime: 7331, meilisearch: 7700, tei: 8080 };
   const offset = [...name].reduce((total, character) => (total * 31 + character.charCodeAt(0)) % 500, 0);
-  return { registry: 8100 + offset, runtime: 8600 + offset, meilisearch: 9100 + offset };
+  return { registry: 8100 + offset, runtime: 8600 + offset, meilisearch: 9100 + offset, tei: 9600 + offset };
+}
+
+function usesTei(target: DkbStackTarget): boolean {
+  return target === 'default' || target === 'tei-faiss' || target === 'tei-faiss-768' || target === 'tei-meilisearch';
+}
+
+function usesMeilisearch(target: DkbStackTarget): boolean {
+  return target === 'meilisearch' || target === 'tei-meilisearch';
+}
+
+function parseStoredTarget(value: string | undefined): DkbStackTarget {
+  const target = value ?? 'default';
+  if (['default', 'meilisearch', 'fastembed-faiss', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'].includes(target)) {
+    return target as DkbStackTarget;
+  }
+  throw new DkbError(`Stack state contains unsupported pipeline target: ${target}`);
 }
 
 async function readEnvironmentFile(target: string): Promise<Record<string, string>> {

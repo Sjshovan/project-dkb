@@ -4,7 +4,7 @@
 
 This directory owns local Library discovery, Collection membership resolution, Library locks, applied-state records, artifact snapshots, source adapters, compiled-artifact verification, signing, and filesystem-safe Library transactions.
 
-The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
+The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).
 
 ## Dependency direction
 
@@ -19,6 +19,7 @@ The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-rele
 - Filesystem presence alone never activates knowledge.
 - Resolve every package path inside its Library root and preserve provenance identity.
 - Collection membership resolves exact versions through the Library lock.
+- Build directories are immutable and content-addressed. Runtime locks are generated receipts; `.dkb/state.sqlite` remains authoritative applied state.
 
 ## Prohibited coupling
 

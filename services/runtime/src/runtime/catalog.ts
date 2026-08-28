@@ -4,6 +4,7 @@ import { loadLibrary, uniqueLoadedDkbs } from '@dkb/protocol/manifest.js';
 import type { LoadedDkb } from '@dkb/protocol/types.js';
 import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '@dkb/providers-bundled/llamaindexArtifacts.js';
 import { refreshInstalledLibraryArtifactMetadata } from '@dkb/library/artifactMetadata.js';
+import { validatePackageBuildGraph } from '@dkb/library/builds.js';
 
 export interface RuntimeCatalogRefreshResult {
   recordCount: number;
@@ -29,6 +30,7 @@ export async function refreshRuntimeCatalogFromInstalledArtifacts(
 }
 
 export async function sourceIndexForInstalledDkb(dkb: LoadedDkb): Promise<Awaited<ReturnType<typeof readSourceIndex>>> {
+  await validatePackageBuildGraph(dkb.root);
   try {
     const compilerRecords = await readLlamaIndexCompilerRecords(dkb.root);
 

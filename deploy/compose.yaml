@@ -94,6 +94,7 @@ services:
       DKB_LLAMA_COMPILER_TIMEOUT_MS: "3600000"
       DKB_LLAMA_ASYNC_WORKERS: "1"
       DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
+      DKB_TEI_URL: http://dkb-tei:80
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
     volumes:
@@ -117,11 +118,8 @@ services:
       DKB_COMPILER_JOBS_ROOT: /jobs
       DKB_COMPILER_MODEL: BAAI/bge-small-en-v1.5
       DKB_LLAMA_DOCUMENT_BATCH_SIZE: "32"
-      DKB_LLAMA_EMBED_BATCH_SIZE: "96"
-      DKB_LLAMA_INFERENCE_BATCH_SIZE: "10"
     volumes:
       - dkb-compiler-jobs:/jobs
-      - dkb-fastembed-cache:/cache/fastembed
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,json; assert json.load(urllib.request.urlopen('http://127.0.0.1:8091/health'))['ok']"]
       interval: 5s
@@ -143,6 +141,29 @@ services:
       retries: 24
       start_period: 20s
 
+  dkb-tei:
+    image: ${DKB_TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07}
+    profiles: ["tei"]
+    command:
+      - --model-id
+      - ${DKB_TEI_MODEL:-BAAI/bge-small-en-v1.5}
+      - --revision
+      - ${DKB_TEI_MODEL_REVISION:-5c38ec7c405ec4b44b94cc5a9bb96e735b38267a}
+      - --port
+      - "80"
+      - --max-client-batch-size
+      - "128"
+    ports:
+      - "${DKB_TEI_PORT:-8080}:80"
+    volumes:
+      - dkb-tei-cache:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
   dkb-runtime:
     image: ${DKB_RUNTIME_IMAGE:-dkb-runtime:0.1.0}
     environment:
@@ -154,6 +175,7 @@ services:
       DKB_MCP_PUBLIC_DOCUMENTS: "true"
       DKB_REGISTRY_URL: http://registry-web:8000
       DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
+      DKB_TEI_URL: http://dkb-tei:80
       DKB_MCP_HTTP_ENABLED: "true"
       DKB_MCP_BEARER_TOKEN: ${DKB_MCP_BEARER_TOKEN:?Run dkb stack up to generate stack secrets}
       DKB_RUNTIME_ADMIN_TOKEN: ${DKB_RUNTIME_ADMIN_TOKEN:?Run dkb stack up to generate stack secrets}
@@ -194,4 +216,5 @@ services:
 volumes:
   dkb-compiler-jobs:
   dkb-fastembed-cache:
+  dkb-tei-cache:
   dkb-registry-data:

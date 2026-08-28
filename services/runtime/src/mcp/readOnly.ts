@@ -6,6 +6,7 @@ import { tokenize } from '@dkb/providers-bundled/scoring.js';
 import { getQueryContext } from '../indexes/queryContext.js';
 import { readDkb } from '../read/runtime.js';
 import { semanticSearch } from '../read/navigation.js';
+import { withRuntimeQuery } from '../runtime/mutation.js';
 
 export function createDkbReadOnlyMcpServer(options: {
   libraryPath: string;
@@ -29,7 +30,7 @@ export function createDkbReadOnlyMcpServer(options: {
       outputSchema: z.object({}).loose(),
       annotations: readOnlyAnnotations,
     },
-    async ({ query, limit, dkbId }) => {
+    async ({ query, limit, dkbId }) => withRuntimeQuery(options.libraryPath, async () => {
       const context = await queryContext(options.libraryPath);
       const result = await semanticSearch(
         options.libraryPath,
@@ -56,7 +57,7 @@ export function createDkbReadOnlyMcpServer(options: {
           reason: results.length > 0 ? 'matched_need' : 'weak_match',
         },
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -68,7 +69,10 @@ export function createDkbReadOnlyMcpServer(options: {
       outputSchema: z.object({}).loose(),
       annotations: readOnlyAnnotations,
     },
-    async ({ id }) => toolResult(await fetchRemoteEvidence(options.libraryPath, id, options.publicBaseUrl)),
+    async ({ id }) => withRuntimeQuery(
+      options.libraryPath,
+      async () => toolResult(await fetchRemoteEvidence(options.libraryPath, id, options.publicBaseUrl)),
+    ),
   );
 
   return server;

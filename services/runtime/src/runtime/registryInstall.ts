@@ -3,10 +3,12 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { stableHash } from '@dkb/protocol/contracts/hash.js';
+import { canonicalJson, stableHash } from '@dkb/protocol/contracts/hash.js';
+import { type DkbInstallPlan } from '@dkb/protocol/builds.js';
 import { DkbError } from '@dkb/protocol/errors.js';
 import { registryPackagePath } from '@dkb/protocol/identity.js';
 import { loadDkbPackage, loadLibrary } from '@dkb/protocol/manifest.js';
+import { evidenceBuildPath, retrievalBuildPath } from '@dkb/protocol/paths.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@dkb/protocol/progress.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@dkb/protocol/types.js';
 import { validateDkbArtifactManifest } from '@dkb/library/artifacts.js';
@@ -15,8 +17,10 @@ import {
   DKB_PACKAGE_RECEIPT_PATH,
   packageReceiptPayloadForLock,
   parsePackageReceipt,
+  verifyLayerReceipt,
   verifyPackageReceipt,
 } from '@dkb/library/signing.js';
+import { activateStoredPackageBuild } from '@dkb/library/builds.js';
 import { readLibraryState } from '@dkb/library/state.js';
 import { extractDkbPackageArchive } from '@dkb/registry-client/archive.js';
 import { DkbRegistryClient } from '@dkb/registry-client/client.js';
@@ -60,6 +64,7 @@ export async function installDkbFromRegistry(options: {
   registryToken?: string;
   packageId: string;
   version?: string;
+  target?: string;
   runtimeRoot?: string;
   force?: boolean;
   progress?: DkbProgressReporter;
@@ -75,22 +80,185 @@ export async function installDkbFromRegistry(options: {
   if (existing) return existing;
 
   const downloadRoot = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-registry-download-'));
-  const archivePath = path.join(downloadRoot, `${encodeURIComponent(options.packageId)}.dkbpkg`);
 
   try {
-    await client.writePackageArchive(options.packageId, archivePath, release.version, { progress: options.progress });
+    const plan = await client.installPlan(options.packageId, release.version, options.target);
     const publicKeys = await client.publicKeys() as { keys: DkbSigningKeyRecord[] };
-    return await installDkbArchiveIntoRuntime({
-      archivePath,
+    for (const artifact of plan.artifacts) {
+      const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
+      await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
+    }
+    return await installDkbPlanIntoRuntime({
+      plan,
+      layerRoot: downloadRoot,
       trustedKeys: publicKeys.keys,
       runtimeRoot: runtime.stateRoot,
-      expectedArchiveHash: release.archiveHash,
       force: options.force,
       progress: options.progress,
     });
   } finally {
     await fs.rm(downloadRoot, { recursive: true, force: true });
   }
+}
+
+export async function installDkbPlanIntoRuntime(options: {
+  plan: DkbInstallPlan;
+  layerRoot: string;
+  runtimeRoot?: string;
+  trustedKeys: DkbSigningKeyRecord[];
+  force?: boolean;
+  progress?: DkbProgressReporter;
+}): Promise<DkbRegistryInstallResult> {
+  const runtime = await ensureRuntimeState(options.runtimeRoot);
+  const installParent = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-layer-install-'));
+  const extractedRoot = path.join(installParent, 'package');
+
+  try {
+    const materialized = await materializeDkbInstallPlan({
+      plan: options.plan,
+      layerRoot: options.layerRoot,
+      destinationRoot: extractedRoot,
+      trustedKeys: options.trustedKeys,
+      progress: options.progress,
+    });
+    const imported = await importCompiledDkbArtifactIntoRuntime({
+      sourcePath: extractedRoot,
+      id: materialized.verification.packageId,
+      force: options.force,
+      progress: options.progress,
+      registryReceipt: materialized.receipt,
+      archiveHash: materialized.installDigest,
+    }, runtime.stateRoot);
+
+    return {
+      status: 'installed',
+      packageId: materialized.verification.packageId,
+      version: materialized.verification.version,
+      runtimeRoot: imported.libraryPath,
+      packagePath: imported.packagePath,
+      verification: materialized.verification,
+      catalog: imported.catalog,
+      ...(imported.warning ? { warning: imported.warning } : {}),
+    };
+  } finally {
+    await fs.rm(installParent, { recursive: true, force: true });
+  }
+}
+
+export async function materializeDkbInstallPlan(options: {
+  plan: DkbInstallPlan;
+  layerRoot: string;
+  destinationRoot: string;
+  trustedKeys: DkbSigningKeyRecord[];
+  progress?: DkbProgressReporter;
+}): Promise<{
+  root: string;
+  receipt: DkbPackageReceipt;
+  verification: DkbPackageVerification;
+  installDigest: string;
+}> {
+  const destinationRoot = path.resolve(options.destinationRoot);
+  const resolver = ({ role, signature }: { role: 'publisher' | 'registry'; signature: { keyId: string } }) => {
+    const key = options.trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
+    return key && key.status !== 'revoked' ? key.publicKeyPem : null;
+  };
+  const [source, evidence, retrieval] = options.plan.artifacts;
+  const sourcePath = path.join(options.layerRoot, 'source.dkbpkg');
+  const evidencePath = path.join(options.layerRoot, 'evidence.dkbevidence');
+  const retrievalPath = path.join(options.layerRoot, 'retrieval.dkbbuild');
+  const sourceReceipt = parsePackageReceipt(source.receipt, 'Install plan source receipt');
+  const sourceVerification = await verifyPackageReceipt(sourceReceipt, resolver);
+  const evidenceVerification = await verifyLayerReceipt(evidence.receipt, resolver, 'Install plan Evidence receipt');
+  const retrievalVerification = await verifyLayerReceipt(retrieval.receipt, resolver, 'Install plan Retrieval receipt');
+  const planVerification = await verifyLayerReceipt(options.plan.receipt, resolver, 'Install plan receipt');
+  const planPayload = { ...options.plan } as Record<string, unknown>;
+  delete planPayload.receipt;
+  const receiptChecks = [
+    sourceVerification.ok,
+    evidenceVerification.ok,
+    retrievalVerification.ok,
+    planVerification.ok,
+    stableHash(source.receipt) === source.receiptHash,
+    evidenceVerification.receiptHash === evidence.receiptHash,
+    retrievalVerification.receiptHash === retrieval.receiptHash,
+    evidenceVerification.receipt.parentReceiptHash === source.receiptHash,
+    retrievalVerification.receipt.parentReceiptHash === evidence.receiptHash,
+    canonicalJson(planVerification.receipt.payload) === canonicalJson(planPayload),
+    sourceReceipt.package.id === options.plan.package.id,
+    sourceReceipt.package.version === options.plan.package.version,
+    source.digest === options.plan.package.sourceDigest,
+    evidenceVerification.receipt.package.id === options.plan.package.id,
+    evidenceVerification.receipt.package.version === options.plan.package.version,
+    retrievalVerification.receipt.package.id === options.plan.package.id,
+    retrievalVerification.receipt.package.version === options.plan.package.version,
+    evidenceVerification.receipt.payload.evidenceProfileDigest === options.plan.evidenceProfileDigest,
+    evidenceVerification.receipt.payload.evidenceDigest === options.plan.evidenceDigest,
+    retrievalVerification.receipt.payload.target === options.plan.target,
+    retrievalVerification.receipt.payload.evidenceProfileDigest === options.plan.evidenceProfileDigest,
+    retrievalVerification.receipt.payload.evidenceDigest === options.plan.evidenceDigest,
+    retrievalVerification.receipt.payload.retrievalProfileDigest === options.plan.retrievalProfileDigest,
+    retrievalVerification.receipt.payload.retrievalBuildDigest === options.plan.retrievalBuildDigest,
+    retrievalVerification.receipt.payload.compatibilityDigest === options.plan.compatibilityDigest,
+  ];
+  if (receiptChecks.some((check) => !check)) throw new DkbError('Registry install plan receipt chain or build identity is invalid');
+
+  const archiveDigests = await Promise.all([
+    hashArchiveFile(sourcePath),
+    hashArchiveFile(evidencePath),
+    hashArchiveFile(retrievalPath),
+  ]);
+  const expectedDigests = [source.digest, evidence.digest, retrieval.digest];
+  const mismatchedArchive = archiveDigests.findIndex((digest, index) => digest !== expectedDigests[index]);
+  if (mismatchedArchive >= 0) {
+    const kind = options.plan.artifacts[mismatchedArchive]!.kind;
+    throw new DkbError(
+      `Registry ${kind} layer hash mismatch: expected ${expectedDigests[mismatchedArchive]}, got ${archiveDigests[mismatchedArchive]}.`,
+    );
+  }
+
+  await fs.rm(destinationRoot, { recursive: true, force: true });
+  await extractDkbPackageArchive(sourcePath, destinationRoot, { progress: options.progress });
+  await fs.rm(path.join(destinationRoot, '.dkb'), { recursive: true, force: true });
+  await Promise.all([
+    fs.rm(path.join(destinationRoot, 'dkb-profile.lock.json'), { force: true }),
+    fs.rm(path.join(destinationRoot, 'dkb-release.json'), { force: true }),
+    fs.rm(path.join(destinationRoot, DKB_PACKAGE_RECEIPT_PATH), { force: true }),
+  ]);
+  const evidenceTarget = evidenceBuildPath(destinationRoot, options.plan.evidenceProfileDigest, options.plan.evidenceDigest);
+  const retrievalTarget = retrievalBuildPath(destinationRoot, options.plan.retrievalProfileDigest, options.plan.retrievalBuildDigest);
+  await extractDkbPackageArchive(evidencePath, evidenceTarget, { progress: options.progress });
+  await extractDkbPackageArchive(retrievalPath, retrievalTarget, { progress: options.progress });
+  await fs.writeFile(path.join(destinationRoot, DKB_PACKAGE_RECEIPT_PATH), `${JSON.stringify(sourceReceipt, null, 2)}\n`, 'utf8');
+  await activateStoredPackageBuild({
+    root: destinationRoot,
+    target: options.plan.target,
+    evidenceProfileDigest: options.plan.evidenceProfileDigest,
+    retrievalProfileDigest: options.plan.retrievalProfileDigest,
+    compatibilityDigest: options.plan.compatibilityDigest,
+  });
+  const { receipt, verification } = await verifyExtractedPackage(
+    destinationRoot,
+    options.trustedKeys,
+    options.progress,
+    { verifyReceiptArtifacts: false },
+  );
+  if (!verification.ok) {
+    const failed = verification.checks
+      .filter((check) => !check.ok)
+      .map((check) => `${check.name}: ${check.detail}`)
+      .join('; ');
+    throw new DkbError(
+      `Registry layered package verification failed: ${verification.packageId}@${verification.version}`
+      + (failed ? ` (${failed})` : ''),
+    );
+  }
+
+  return {
+    root: destinationRoot,
+    receipt,
+    verification,
+    installDigest: stableHash({ source: source.digest, evidence: evidence.digest, retrieval: retrieval.digest }),
+  };
 }
 
 export async function preflightDkbInstall(options: {
@@ -235,6 +403,7 @@ async function verifyExtractedPackage(
   root: string,
   trustedKeys: DkbSigningKeyRecord[],
   progress?: DkbProgressReporter,
+  options: { verifyReceiptArtifacts?: boolean } = {},
 ): Promise<{ receipt: DkbPackageReceipt; verification: DkbPackageVerification }> {
   progress?.(progressStart({ phase: 'verify-package', label: 'Verify package contents and signatures', total: 0, unit: 'steps' }));
   const receiptPath = path.join(root, DKB_PACKAGE_RECEIPT_PATH);
@@ -249,7 +418,15 @@ async function verifyExtractedPackage(
   const sourceTree = receipt.payload.packageTreeHash ? await hashPortablePackageTree(root) : null;
   const packageTreeMatches = !receipt.payload.packageTreeHash || sourceTree?.hash === receipt.payload.packageTreeHash;
   const artifact = await validateDkbArtifactManifest(root, { progress });
-  const artifactChecks = await verifyLockArtifacts(root, receipt.payload.lock);
+  // A portable source receipt may have been published with a Registry-default
+  // compiled chain. Layered installs authenticate the selected Evidence and
+  // Retrieval Builds through their own signed child receipts, so applying the
+  // source receipt's artifact hashes to another valid retrieval space would
+  // incorrectly reject it. The active artifact manifest is still verified
+  // below, and materialization validates the exact signed build graph.
+  const artifactChecks = options.verifyReceiptArtifacts === false
+    ? []
+    : await verifyLockArtifacts(root, receipt.payload.lock);
   const signatures = await verifyPackageReceipt(receipt, ({ role, signature }) => {
     const key = trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
     return key && key.status !== 'revoked' ? key.publicKeyPem : null;

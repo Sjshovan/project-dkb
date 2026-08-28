@@ -187,22 +187,32 @@ container path for a single process.
 
 Each Library has one active pipeline target. A target selects ingestion (or a
 parser and chunker), ordered processors, embedding, index, retrieval, and
-provider-owned options. The generated `dkb-profile.lock.json` records the exact
-providers and a separate compatibility digest for the embedding and retrieval
-space used by every installed package.
+provider-owned options. DKB stores the results as an exact build graph:
+
+```text
+PackageVersion -> Evidence Build -> Retrieval Build -> Runtime
+```
+
+Evidence Builds contain embedding-free, provenance-preserving Evidence IR.
+Retrieval Builds contain one provider-specific embedding/index space. The
+generated locks record exact provider recipes, parent digests, and a separate
+Runtime compatibility digest.
 
 ```bash
 dkb pipeline show .
 dkb pipeline verify .
+dkb pipeline use fastembed-faiss .
+dkb build list ./my-dkb
 dkb plugin list .
 ```
 
-The bundled default target selects Docling/LlamaIndex, FastEmbed with
-`BAAI/bge-small-en-v1.5` at 384 dimensions, packaged FAISS, and DKB hybrid
-retrieval. A target can instead select the 768-dimensional base model or the
-managed `@dkb/meilisearch` index provider. An incompatible target or package is
-rejected before activation; use `pipeline set ... --no-activate` to stage a
-future target without changing the working Library. See
+For new Libraries, the bundled default target selects Docling/LlamaIndex,
+TEI with `BAAI/bge-small-en-v1.5` at 384 dimensions, packaged FAISS, and DKB
+hybrid retrieval. `fastembed-faiss` remains installed and selectable as an
+independent space; 768-dimensional TEI and managed Meilisearch targets are also
+available. Existing Libraries with an explicit target do not change. A target
+switch prepares every missing build, validates the complete Library graph, and
+changes the active Runtime snapshot atomically. See
 [`docs/provider-pipeline.md`](docs/provider-pipeline.md).
 
 Move a compiled package through a local OCI registry:
@@ -227,6 +237,7 @@ dkb registry use http://127.0.0.1:8000
 dkb registry packages
 dkb publish ./my-dkb
 dkb install @my-team/my-dkb --version 0.1.0
+dkb install @my-team/my-dkb --version 0.1.0 --target fastembed-faiss
 dkb list
 dkb uninstall @my-team/my-dkb
 ```

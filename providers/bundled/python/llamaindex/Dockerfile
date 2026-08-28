@@ -24,7 +24,7 @@ LABEL org.opencontainers.image.title="DKB Python Provider Sidecar" \
       org.opencontainers.image.version="${DKB_VERSION}" \
       org.opencontainers.image.revision="${DKB_COMMIT}" \
       org.opencontainers.image.source="https://github.com/Sjshovan/project-dkb" \
-      org.dkb.compiler.service.version="2"
+      org.dkb.compiler.service.version="3"
 
 EXPOSE 8091
 CMD ["python", "-m", "uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8091"]

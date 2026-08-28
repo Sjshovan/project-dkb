@@ -3,6 +3,10 @@
 export const DKB_STATE_DIR = '.dkb';
 export const DKB_ARTIFACTS_DIR = '.dkb/artifacts';
 export const DKB_ARTIFACT_LOCK_PATH = `${DKB_ARTIFACTS_DIR}/dkb-artifact.lock.json`;
+export const DKB_BUILDS_DIR = '.dkb/builds';
+export const DKB_EVIDENCE_BUILDS_DIR = `${DKB_BUILDS_DIR}/evidence`;
+export const DKB_RETRIEVAL_BUILDS_DIR = `${DKB_BUILDS_DIR}/retrieval`;
+export const DKB_RUNTIME_LOCK_PATH = '.dkb/runtime.lock.json';
 export const DKB_CACHE_DIR = '.dkb/cache';
 export const DKB_LOCKS_DIR = '.dkb/locks';
 export const DKB_RUNS_DIR = '.dkb/runs';
@@ -34,6 +38,32 @@ export function defaultStatePath(root: string, relativePath: string): string {
 
 export function artifactLockPath(root: string): string {
   return resolveFrom(root, DKB_ARTIFACT_LOCK_PATH);
+}
+
+export function evidenceBuildPath(root: string, evidenceProfileDigest: string, evidenceDigest: string): string {
+  return resolveFrom(root, path.join(
+    DKB_EVIDENCE_BUILDS_DIR,
+    digestPathSegment(evidenceProfileDigest, 'Evidence Profile digest'),
+    digestPathSegment(evidenceDigest, 'Evidence digest'),
+  ));
+}
+
+export function retrievalBuildPath(root: string, retrievalProfileDigest: string, retrievalBuildDigest: string): string {
+  return resolveFrom(root, path.join(
+    DKB_RETRIEVAL_BUILDS_DIR,
+    digestPathSegment(retrievalProfileDigest, 'Retrieval Profile digest'),
+    digestPathSegment(retrievalBuildDigest, 'Retrieval Build digest'),
+  ));
+}
+
+export function digestPathSegment(value: string, label = 'digest'): string {
+  const match = /^sha256:([a-f0-9]{64})$/iu.exec(value);
+
+  if (!match) {
+    throw new Error(`${label} must be a sha256 digest`);
+  }
+
+  return match[1]!.toLowerCase();
 }
 
 export type ManifestFilename = 'dkb.json' | 'dkb-lock.json' | 'dkb-release.json' | '.dkb-package.json';

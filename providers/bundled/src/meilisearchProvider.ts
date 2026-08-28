@@ -175,7 +175,13 @@ export async function installMeilisearchPackage(input: {
   throwIfAborted(input.signal);
   const { manifest, records } = await validateMeilisearchPackageArtifact(input.dkb, input.compatibility);
   const client = await createClient(input.options);
-  const indexId = meilisearchIndexId(input.libraryRoot, input.libraryId, input.dkb.manifest.id, input.dkb.manifest.version);
+  const indexId = meilisearchIndexId(
+    input.libraryRoot,
+    input.libraryId,
+    input.dkb.manifest.id,
+    input.dkb.manifest.version,
+    manifest.compatibilityDigest,
+  );
   const existing = await indexExists(client, indexId, input.options);
 
   if (existing) {
@@ -206,7 +212,14 @@ export async function installMeilisearchPackage(input: {
     if (process.env.DKB_TEST_ABORT_MEILI_AFTER_IMPORT === '1') {
       throw new DkbError(`Aborted Meilisearch activation after importing ${input.dkb.manifest.id}@${input.dkb.manifest.version}`);
     }
-    const verification = await inspectExistingRelease(client, indexId, manifest.releaseDigest, input.options);
+    const verification = await waitForExistingRelease(
+      client,
+      indexId,
+      manifest.releaseDigest,
+      manifest.recordCount,
+      input.options,
+      input.signal,
+    );
 
     if (!verification.matches || verification.count !== manifest.recordCount) {
       throw new DkbError(`Meilisearch import verification failed for ${input.dkb.manifest.id}@${input.dkb.manifest.version}: expected ${manifest.recordCount}, got ${verification.count}`);
@@ -227,24 +240,21 @@ export async function uninstallMeilisearchPackage(input: {
   options: Readonly<Record<string, unknown>>;
   signal?: AbortSignal;
 }): Promise<DkbIndexMutationResult> {
-  const indexId = meilisearchIndexId(input.libraryRoot, input.libraryId, input.packageId, input.packageVersion);
+  const indexPrefix = meilisearchIndexPrefix(input.libraryRoot, input.libraryId, input.packageId, input.packageVersion);
 
   try {
     throwIfAborted(input.signal);
     const client = await createClient(input.options);
+    const indexIds = (await listIndexIds(client, input.options)).filter((indexId) => indexId.startsWith(`${indexPrefix}_`));
+    await Promise.all(indexIds.map((indexId) => deleteIndex(client, indexId, input.options)));
 
-    if (!(await indexExists(client, indexId, input.options))) {
-      return { indexId, documentCount: 0, status: 'removed' };
-    }
-    await deleteIndex(client, indexId, input.options);
-
-    return { indexId, documentCount: 0, status: 'removed' };
+    return { indexId: `${indexPrefix}_*`, documentCount: 0, status: 'removed' };
   } catch (error) {
     return {
-      indexId,
+      indexId: `${indexPrefix}_*`,
       documentCount: 0,
       status: 'orphaned',
-      warning: `Knowledge is inactive, but Meilisearch index ${indexId} could not be removed. Retry uninstall cleanup after restoring the service: ${errorMessage(error)}`,
+      warning: `Knowledge is inactive, but Meilisearch indexes ${indexPrefix}_* could not be removed. Retry uninstall cleanup after restoring the service: ${errorMessage(error)}`,
     };
   }
 }
@@ -270,7 +280,13 @@ export async function openMeilisearchRuntime(input: {
   const packages = loaded.map(({ dkb, manifest }) => ({
     id: dkb.manifest.id,
     version: dkb.manifest.version,
-    indexId: meilisearchIndexId(input.libraryRoot, input.libraryId, dkb.manifest.id, dkb.manifest.version),
+    indexId: meilisearchIndexId(
+      input.libraryRoot,
+      input.libraryId,
+      dkb.manifest.id,
+      dkb.manifest.version,
+      manifest.compatibilityDigest,
+    ),
     documentCount: manifest.recordCount,
   }));
   const units = loaded.flatMap((item) => item.records.map((record) => record.unit))
@@ -349,7 +365,13 @@ export async function verifyMeilisearchRuntime(input: {
 
   for (const dkb of active) {
     const { manifest } = await validateMeilisearchPackageArtifact(dkb, input.compatibility);
-    const indexId = meilisearchIndexId(input.libraryRoot, input.libraryId, dkb.manifest.id, dkb.manifest.version);
+    const indexId = meilisearchIndexId(
+      input.libraryRoot,
+      input.libraryId,
+      dkb.manifest.id,
+      dkb.manifest.version,
+      manifest.compatibilityDigest,
+    );
 
     if (!(await indexExists(client, indexId, input.options))) {
       throw new DkbError(`Meilisearch index ${indexId} is missing for ${dkb.manifest.id}@${dkb.manifest.version}`);
@@ -380,7 +402,20 @@ export async function meilisearchProviderHealth(options: Readonly<Record<string,
   }
 }
 
-export function meilisearchIndexId(libraryRoot: string, libraryId: string, packageId: string, packageVersion: string): string {
+export function meilisearchIndexId(
+  libraryRoot: string,
+  libraryId: string,
+  packageId: string,
+  packageVersion: string,
+  compatibilityDigest: string,
+): string {
+  const prefix = meilisearchIndexPrefix(libraryRoot, libraryId, packageId, packageVersion);
+  const space = createHash('sha256').update(compatibilityDigest).digest('hex').slice(0, 12);
+
+  return `${prefix}_${space}`;
+}
+
+export function meilisearchIndexPrefix(libraryRoot: string, libraryId: string, packageId: string, packageVersion: string): string {
   const namespace = createHash('sha256').update(`${path.resolve(libraryRoot)}\0${libraryId}`).digest('hex').slice(0, 12);
   const release = createHash('sha256').update(`${packageId}\0${packageVersion}`).digest('hex').slice(0, 20);
 
@@ -451,6 +486,27 @@ async function inspectExistingRelease(client: MeiliClient, indexId: string, rele
   return { matches: count > 0 && response.hits[0]?.importDigest === releaseDigest, count };
 }
 
+async function waitForExistingRelease(
+  client: MeiliClient,
+  indexId: string,
+  releaseDigest: string,
+  expectedCount: number,
+  options: Readonly<Record<string, unknown>>,
+  signal?: AbortSignal,
+): Promise<{ matches: boolean; count: number }> {
+  const deadline = Date.now() + timeoutMs(options);
+  let last = { matches: false, count: 0 };
+
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+    last = await inspectExistingRelease(client, indexId, releaseDigest, options);
+    if (last.matches && last.count === expectedCount) return last;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  return last;
+}
+
 async function isPackageActive(libraryRoot: string, packageId: string, packageVersion: string): Promise<boolean> {
   try {
     const library = await loadLibrary(libraryRoot);
@@ -479,6 +535,26 @@ async function indexExists(client: MeiliClient, indexId: string, options: Readon
     }
     throw error;
   }
+}
+
+async function listIndexIds(client: MeiliClient, options: Readonly<Record<string, unknown>>): Promise<string[]> {
+  const ids: string[] = [];
+  let offset = 0;
+  const limit = 1_000;
+
+  while (true) {
+    const page = await withMeilisearchTimeout(
+      client.getIndexes({ offset, limit }),
+      options,
+      'list package indexes',
+    ) as { results?: Array<{ uid?: unknown }>; total?: number };
+    const results = page.results ?? [];
+    ids.push(...results.flatMap((index) => typeof index.uid === 'string' ? [index.uid] : []));
+    offset += results.length;
+    if (results.length < limit || offset >= Number(page.total ?? offset)) break;
+  }
+
+  return ids;
 }
 
 type MeiliClient = InstanceType<(typeof import('meilisearch'))['MeiliSearch']>;

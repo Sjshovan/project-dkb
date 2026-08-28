@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { registryPackagePath } from '@dkb/protocol/identity.js';
 import { DkbRegistryClient } from '@dkb/registry-client/client.js';
 
 const executeFile = promisify(execFile);
@@ -24,6 +25,8 @@ const runtimeAdminToken = required(stackEnvironment.DKB_RUNTIME_ADMIN_TOKEN, 'Ru
 const proofVersion = process.env.DKB_PROOF_VERSION ?? `0.0.${Math.floor(Date.now() / 1000)}`;
 const updateVersion = nextPatch(proofVersion, 1);
 const retryVersion = nextPatch(proofVersion, 2);
+const initialTarget = required(stackEnvironment.DKB_PIPELINE_TARGET, 'Stack pipeline target');
+const alternateTarget = process.env.DKB_PROOF_ALTERNATE_TARGET?.trim() || null;
 const marineId = `@${namespace}/marine-proof`;
 const systemsId = `@${namespace}/systems-proof`;
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-lifecycle-'));
@@ -112,9 +115,58 @@ try {
   await assertRuntimeMarker('SYSTEMS-V1-17', false);
   await assertRuntimeMarker('WHALE-BUBBLE-73', true);
 
+  let multiSpace = null;
+  if (alternateTarget) {
+    step(`start ${alternateTarget} compiler services without changing the active Runtime`);
+    await runCli(['stack', 'up', stackName, '--target', alternateTarget]);
+    assert.equal((await runtimeStatus()).runtimeLock?.target, initialTarget);
+
+    step(`switch the complete Runtime atomically to ${alternateTarget}`);
+    const switched = await runCli([
+      'pipeline', 'use', alternateTarget, libraryRoot,
+      '--runtime-url', runtimeUrl,
+      '--registry-url', registryUrl,
+    ]);
+    assert.equal(switched.target, alternateTarget);
+    assert.equal(switched.packageCount, 2);
+    assert.ok(switched.packages.every((item) => item.preparation === 'downloaded' || item.preparation === 'retained'));
+    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
+    await assertRuntimeMarker('RUNTIME-MOUNT-28', true);
+    const alternateSafe = await assertRuntimeMarker('SAFE-SOURCE-91', true);
+    assert.doesNotMatch(JSON.stringify(alternateSafe), /PWNED/u);
+    assert.equal((await runtimeRetrieve('What is the launch code for the moon base?')).sufficiency?.matchedNeed, false);
+
+    const marineBuilds = await runCli(['build', 'list', registryPackagePath(libraryRoot, marineId)]);
+    const systemsBuilds = await runCli(['build', 'list', registryPackagePath(libraryRoot, systemsId)]);
+    for (const builds of [marineBuilds, systemsBuilds]) {
+      assert.equal(builds.evidence.length, 1, 'targets sharing ingestion must reuse one Evidence Build');
+      assert.ok(builds.retrieval.length >= 2, 'alternate target did not retain both Retrieval Builds');
+    }
+
+    step(`switch back to retained ${initialTarget} builds without Registry compilation`);
+    const switchedBack = await runCli([
+      'pipeline', 'use', initialTarget, libraryRoot,
+      '--runtime-url', runtimeUrl,
+      '--registry-url', registryUrl,
+    ]);
+    assert.equal(switchedBack.target, initialTarget);
+    assert.ok(switchedBack.packages.every((item) => item.preparation === 'retained'));
+    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
+    await assertRuntimeMarker('SYSTEMS-UPDATE-62', true);
+    step(`restore the Registry compiler target to ${initialTarget}`);
+    await runCli(['stack', 'up', stackName, '--target', initialTarget]);
+    assert.equal((await runtimeStatus()).runtimeLock?.target, initialTarget);
+    multiSpace = {
+      alternateTarget,
+      evidenceBuildsPerPackage: 1,
+      retrievalBuildsPerPackage: 2,
+      switchBackPreparation: 'retained',
+    };
+  }
+
   let failureRollback = 'covered by atomic Runtime tests';
   let retryAfterFailure = false;
-  if (stackEnvironment.DKB_PIPELINE_TARGET === 'meilisearch') {
+  if (usesMeilisearch(initialTarget)) {
     step(`prove failed ${systemsId}@${retryVersion} activation preserves ${updateVersion}`);
     await writeDkb(systemsRoot, systemsId, retryVersion, {
       'runtime-design.md': '# Runtime Design Notes\n\nMarker fact RUNTIME-MOUNT-28: every comparative MCP server mounts the same read-only corpus at `/corpus` so benchmark inputs remain identical.\n\nRelease marker SYSTEMS-RETRY-83 identifies the post-failure retry.\n',
@@ -152,7 +204,10 @@ try {
     await assertRuntimeMarker('SYSTEMS-RETRY-83', true);
     await assertRuntimeMarker('SYSTEMS-UPDATE-62', false);
     await assertRuntimeMarker('WHALE-BUBBLE-73', true);
-    await assertMeilisearchIndexCount(2);
+    // One index per active package release and compatibility space. A
+    // multi-space proof retains the marine package's inactive alternate index,
+    // while replacing the systems release removes every old-version index.
+    await assertMeilisearchIndexCount(multiSpace ? 3 : 2);
     failureRollback = true;
     retryAfterFailure = true;
   }
@@ -160,10 +215,10 @@ try {
   console.log(JSON.stringify({
     ok: true,
     stack: stackName,
-    target: stackEnvironment.DKB_PIPELINE_TARGET,
+    target: initialTarget,
     registryUrl,
     runtimeUrl,
-    packages: [`${marineId}@${proofVersion}`, `${systemsId}@${stackEnvironment.DKB_PIPELINE_TARGET === 'meilisearch' ? retryVersion : updateVersion}`],
+    packages: [`${marineId}@${proofVersion}`, `${systemsId}@${usesMeilisearch(initialTarget) ? retryVersion : updateVersion}`],
     checks: {
       registryCompilation: true,
       signedInstall: true,
@@ -175,6 +230,7 @@ try {
       uninstallIsolation: true,
       reinstallWithoutCompilation: true,
       update: true,
+      multiSpace,
       failureRollback,
       retryAfterFailure,
     },
@@ -348,4 +404,8 @@ function nextPatch(version, increment) {
   const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/u);
   if (!match) throw new Error(`DKB_PROOF_VERSION must be a three-part numeric version, got ${version}.`);
   return `${match[1]}.${match[2]}.${Number(match[3]) + increment}`;
+}
+
+function usesMeilisearch(target) {
+  return target === 'meilisearch' || target.endsWith('-meilisearch');
 }

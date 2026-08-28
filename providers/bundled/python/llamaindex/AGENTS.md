@@ -5,15 +5,15 @@ provider-side compiler implementation in `providers/bundled/python/llamaindex/`.
 
 ## Compiler Contract
 
-- The compiler converts staged source into deterministic, provenance-bearing
-  records and retrieval-profile-specific artifacts. It does not define DKB
-  package identity or registry policy.
+- The worker converts staged source into deterministic, provenance-bearing,
+  unembedded records. It does not define package identity, final embeddings,
+  indexes, Runtime policy, or Registry policy.
 - Rich filesystem formats route through Docling. Plain text, Markdown, CSV, and
   database sources stay on their documented LlamaIndex paths.
 - Every output record preserves package/version, source identity, locator,
-  source hash, chunk boundaries, compiler metadata, and embedding profile.
-- FastEmbed document vectors and runtime query vectors must use the same model,
-  dimensions, normalization, and metric recorded in the profile lock.
+  source hash, chunk boundaries, and compiler metadata.
+- The separate FastEmbed sidecar uses native FastEmbed only; it must not leak
+  document embedding back into ingestion.
 - Warm service and one-shot container modes must produce contract-compatible
   output. GPU support is an execution variant, not a different artifact format.
 
