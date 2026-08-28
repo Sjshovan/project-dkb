@@ -23,6 +23,7 @@ import { DkbProviderHost } from '@dkb/pipeline/host.js';
 import { DKB_COMPILER_VERSION } from './version.js';
 import { validateEvidenceIr } from '@dkb/protocol/evidence/ir.js';
 import { validateEvidenceBuildLock } from '@dkb/protocol/builds.js';
+import { summarizeCompilerDeliveryStatistics } from './buildStatistics.js';
 
 const DKB_COMPILER_RESULT_MEDIA_TYPE = 'application/vnd.dkb.compiler-result+gzip';
 const DKB_COMPILER_RESULT_HEADER = 'x-dkb-compiler-result';
@@ -251,13 +252,13 @@ async function compileRegistryPackage(
         recordCount: compiled.recordCount,
       }, null, 2)).toString('base64'),
       recordCount: compiled.recordCount,
-      buildStatistics: compiled.profile?.statistics ? {
-        corpus: compiled.profile.statistics.corpus,
-        storage: compiled.profile.statistics.storage,
-        providerStages: compiled.profile.statistics.providerStages,
-        timingsMs: compiled.profile.timingsMs,
-        aggregateTimingsMs: compiled.profile.aggregateTimingsMs,
-      } : undefined,
+      buildStatistics: compiled.profile?.statistics
+        ? summarizeCompilerDeliveryStatistics({
+            corpus: compiled.profile.statistics.corpus,
+            storage: compiled.profile.statistics.storage,
+            timingsMs: compiled.profile.timingsMs,
+          })
+        : undefined,
     };
 
     if (deliver) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   distribution,
+  summarizeCompilerDeliveryStatistics,
   summarizeEvidenceCorpus,
 } from '@dkb/compiler/buildStatistics.js';
 import {
@@ -65,6 +66,45 @@ test('capacity estimates grow with source bytes, chunk count, and embedding dime
     estimatedWorkingBytes: 400,
     requiredFreeBytes: 500,
   });
+});
+
+test('Registry delivery statistics omit unbounded source and artifact rankings', () => {
+  const result = summarizeCompilerDeliveryStatistics({
+    corpus: {
+      sourceFiles: 2,
+      sourceBytes: 1024,
+      sourceAssets: 2,
+      evidenceRecords: 8,
+      evidenceChunks: 8,
+      evidenceCharacters: 2048,
+      evidenceTextBytes: 2048,
+      textBytesPerRecord: distribution([128, 256]),
+      recordsPerSource: distribution([3, 5]),
+      densestSources: [{ source: 'private/local/path.md', records: 5, textBytes: 1280 }],
+    },
+    storage: {
+      artifactFiles: 4,
+      artifactBytes: 4096,
+      evidenceBuildBytes: 2048,
+      retrievalBuildBytes: 8192,
+      totalDerivedBytes: 14336,
+      sourceToDerivedRatio: 14,
+      largestArtifacts: [{ path: '.dkb/artifacts/large.file', bytes: 8192 }],
+    },
+    timingsMs: {
+      collectState: 3,
+      aggregateArtifacts: 4,
+      total: 15,
+    },
+  });
+
+  assert.equal(result.corpus.recordsPerSource.p95, 5);
+  assert.equal(result.storage.totalDerivedBytes, 14336);
+  assert.deepEqual(result.timingsMs, { collectState: 3, aggregateArtifacts: 4, total: 15 });
+  assert.equal('densestSources' in result.corpus, false);
+  assert.equal('textBytesPerRecord' in result.corpus, false);
+  assert.equal('largestArtifacts' in result.storage, false);
+  assert.doesNotMatch(JSON.stringify(result), /private|large\.file/u);
 });
 
 function record(id, assetId, sourcePath, text) {

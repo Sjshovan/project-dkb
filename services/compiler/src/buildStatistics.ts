@@ -48,6 +48,44 @@ export interface DkbSourceStatistics {
   bytes: number;
 }
 
+export interface DkbCompilerDeliveryStatistics {
+  corpus: Omit<DkbCorpusStatistics, 'textBytesPerRecord' | 'densestSources'>;
+  storage: Omit<DkbBuildStorageStatistics, 'largestArtifacts'>;
+  timingsMs: {
+    collectState: number;
+    aggregateArtifacts: number;
+    total: number;
+  };
+}
+
+/**
+ * Keep HTTP compiler metadata bounded. Detailed source and artifact rankings
+ * remain in the local build receipt; the Registry only needs stable aggregate
+ * values for inspection and UI presentation.
+ */
+export function summarizeCompilerDeliveryStatistics(input: {
+  corpus: DkbCorpusStatistics;
+  storage: DkbBuildStorageStatistics;
+  timingsMs: {
+    collectState: number;
+    aggregateArtifacts: number;
+    total: number;
+  };
+}): DkbCompilerDeliveryStatistics {
+  const { textBytesPerRecord: _textBytesPerRecord, densestSources: _densestSources, ...corpus } = input.corpus;
+  const { largestArtifacts: _largestArtifacts, ...storage } = input.storage;
+
+  return {
+    corpus,
+    storage,
+    timingsMs: {
+      collectState: input.timingsMs.collectState,
+      aggregateArtifacts: input.timingsMs.aggregateArtifacts,
+      total: input.timingsMs.total,
+    },
+  };
+}
+
 export function summarizeEvidenceCorpus(
   evidence: DkbEvidenceIr,
   source: DkbSourceStatistics,
