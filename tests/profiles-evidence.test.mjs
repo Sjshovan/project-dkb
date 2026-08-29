@@ -24,7 +24,7 @@ import {
   writePackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
 
-const image = 'dkb-compiler-llamaindex:0.3.7';
+const image = 'dkb-evidence-docling-llamaindex:0.1.0';
 
 function compilerResult(model, dimensions) {
   return {

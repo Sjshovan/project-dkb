@@ -23,7 +23,8 @@ export const FAISS_MANIFEST_PATH = `${FAISS_ARTIFACT_DIR}/manifest.json`;
 const FAISS_ARTIFACT_FORMAT = 'dkb.faiss.package.v1';
 const FAISS_RUNTIME_FORMAT = 'dkb.faiss.runtime.v1';
 const FAISS_HELPER_TIMEOUT_MS = 30_000;
-export const FAISS_HELPER_IMAGE = 'ghcr.io/sjshovan/dkb-faiss-helper:0.1.0';
+export const FAISS_PROVIDER_IMAGE = 'dkb-index-faiss:0.1.0';
+export const FAISS_HELPER_SERVICE_PORT = 8092;
 
 export interface FaissEmbeddingProfile {
   embeddingProvider: string;
@@ -343,6 +344,30 @@ export async function validateFaissPackageQueryability(dkb: LoadedDkb, artifacts
   }
 }
 
+export async function faissProviderHealth(): Promise<{ ok: boolean; detail: string }> {
+  const serviceUrl = configuredFaissServiceUrl();
+  if (serviceUrl) {
+    try {
+      const result = await requestFaissService(serviceUrl, '/health', { method: 'GET' });
+      return { ok: result.ok === true, detail: result.ok === true ? `FAISS service ${serviceUrl}` : 'FAISS service unhealthy' };
+    } catch (error) {
+      return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  const dockerImage = configuredFaissDockerImage();
+  try {
+    if (dockerImage) {
+      await execFile('docker', ['image', 'inspect', dockerImage], { timeout: FAISS_HELPER_TIMEOUT_MS });
+      return { ok: true, detail: `FAISS helper image ${dockerImage}` };
+    }
+    await execFile(faissPython(), ['-c', 'import faiss; print(faiss.__version__)'], { timeout: FAISS_HELPER_TIMEOUT_MS });
+    return { ok: true, detail: `FAISS available through ${faissPython()}` };
+  } catch (error) {
+    return { ok: false, detail: `FAISS helper unavailable: ${commandDetail(error)}` };
+  }
+}
+
 export async function validateFaissRuntimeReady(input: {
   root: string;
   registryId: string;
@@ -504,8 +529,22 @@ class FaissHelperClient {
   private stderrBuffer = '';
   private dockerImage: string | null = null;
   private dockerSegmentMounts: Array<{ hostDir: string; containerDir: string }> = [];
+  private readonly serviceUrl = configuredFaissServiceUrl();
+  private serviceSessionId?: string;
 
   async load(input: { dimensions: number; segments: Array<{ path: string }> }): Promise<void> {
+    if (this.serviceUrl) {
+      const result = await requestFaissService(this.serviceUrl, '/sessions', {
+        method: 'POST',
+        body: { dimensions: input.dimensions, segments: input.segments },
+      });
+      if (!result.ok || typeof result.sessionId !== 'string') {
+        throw new DkbError(`FAISS service load failed: ${result.error ?? 'missing session ID'}`);
+      }
+      this.serviceSessionId = result.sessionId;
+      return;
+    }
+
     await this.ensureStarted(input.segments);
     const result = await this.request({
       op: 'load',
@@ -519,6 +558,18 @@ class FaissHelperClient {
   }
 
   async search(vector: number[], limit: number): Promise<{ hits: FaissSearchHit[] }> {
+    if (this.serviceUrl) {
+      if (!this.serviceSessionId) throw new DkbError('FAISS service session is not loaded');
+      const result = await requestFaissService(this.serviceUrl, `/sessions/${encodeURIComponent(this.serviceSessionId)}/search`, {
+        method: 'POST',
+        body: { vector, limit },
+      });
+      if (!result.ok || !Array.isArray(result.hits)) {
+        throw new DkbError(`FAISS service search failed: ${result.error ?? 'unknown error'}`);
+      }
+      return { hits: result.hits.filter(isFaissSearchHit) };
+    }
+
     await this.ensureStarted();
     const result = await this.request({ op: 'search', vector, limit });
 
@@ -532,6 +583,15 @@ class FaissHelperClient {
   }
 
   async close(): Promise<void> {
+    if (this.serviceUrl) {
+      const sessionId = this.serviceSessionId;
+      this.serviceSessionId = undefined;
+      if (sessionId) {
+        await requestFaissService(this.serviceUrl, `/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+      }
+      return;
+    }
+
     if (!this.process) {
       return;
     }
@@ -694,6 +754,7 @@ async function waitForExit(exited: Promise<void>, timeoutMs: number): Promise<vo
 type FaissHelperResponse = {
   ok?: boolean;
   error?: string;
+  sessionId?: unknown;
   hits?: unknown;
 };
 
@@ -705,6 +766,20 @@ function isFaissSearchHit(value: unknown): value is FaissSearchHit {
 }
 
 async function runFaissHelper(args: string[]): Promise<void> {
+  const serviceUrl = configuredFaissServiceUrl();
+  if (serviceUrl && args[0] === 'build') {
+    const vectors = optionValue(args, '--vectors');
+    const output = optionValue(args, '--out');
+    if (!vectors || !output) throw new DkbError('FAISS service build requires --vectors and --out paths.');
+    const result = await requestFaissService(serviceUrl, '/build', {
+      method: 'POST',
+      body: { vectors, output },
+      timeoutMs: Math.max(FAISS_HELPER_TIMEOUT_MS, 5 * 60_000),
+    });
+    if (!result.ok) throw new DkbError(`FAISS service build failed: ${result.error ?? 'unknown error'}`);
+    return;
+  }
+
   const dockerImage = configuredFaissDockerImage();
 
   if (dockerImage && args[0] === 'build') {
@@ -778,7 +853,42 @@ function configuredFaissDockerImage(): string | null {
     return null;
   }
 
-  return FAISS_HELPER_IMAGE;
+  return FAISS_PROVIDER_IMAGE;
+}
+
+function configuredFaissServiceUrl(): string | null {
+  const value = process.env.DKB_FAISS_SERVICE_URL?.trim();
+  return value ? value.replace(/\/+$/u, '') : null;
+}
+
+async function requestFaissService(
+  baseUrl: string,
+  route: string,
+  options: { method: 'GET' | 'POST' | 'DELETE'; body?: Record<string, unknown>; timeoutMs?: number },
+): Promise<FaissHelperResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? FAISS_HELPER_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${baseUrl}${route}`, {
+      method: options.method,
+      headers: options.body ? { 'content-type': 'application/json' } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) {
+      const detail = typeof payload.detail === 'string' ? payload.detail : `HTTP ${response.status}`;
+      throw new DkbError(`FAISS service request failed: ${detail}`);
+    }
+    return payload as FaissHelperResponse;
+  } catch (error) {
+    if (error instanceof DkbError) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new DkbError(`Unable to reach FAISS service at ${baseUrl}: ${detail}`);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function optionValue(args: string[], option: string): string | null {

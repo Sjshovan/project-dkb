@@ -4,6 +4,7 @@ import { DKB_PLUGIN_API_VERSION, type DkbIndexRuntime } from '@sjshovan/dkb-pipe
 import {
   buildFaissRuntimeSnapshot,
   closeFaissSnapshot,
+  faissProviderHealth,
   loadFaissPackageArtifact,
   searchFaissSnapshot,
   validateFaissPackageQueryability,
@@ -62,7 +63,7 @@ export const FAISS_PLUGIN: DkbBundledPlugin = {
         };
         return runtime;
       },
-      health: async () => ({ ok: true, detail: 'Packaged FAISS indexes' }),
+      health: faissProviderHealth,
     });
   },
 };

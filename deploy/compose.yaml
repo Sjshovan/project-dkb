@@ -95,6 +95,7 @@ services:
       DKB_LLAMA_ASYNC_WORKERS: "1"
       DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
       DKB_TEI_URL: http://dkb-tei:80
+      DKB_FAISS_SERVICE_URL: http://dkb-faiss:8092
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
     volumes:
@@ -105,6 +106,13 @@ services:
         condition: service_healthy
       dkb-embedder:
         condition: service_healthy
+        required: false
+      dkb-tei:
+        condition: service_healthy
+        required: false
+      dkb-faiss:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7341/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -113,7 +121,7 @@ services:
       start_period: 10s
 
   dkb-compiler-worker:
-    image: ${DKB_PROVIDER_IMAGE:-dkb-provider-sidecar:0.1.0}
+    image: ${DKB_EVIDENCE_IMAGE:-dkb-evidence-docling-llamaindex:0.1.0}
     environment:
       DKB_COMPILER_JOBS_ROOT: /jobs
       DKB_COMPILER_MODEL: BAAI/bge-small-en-v1.5
@@ -128,7 +136,8 @@ services:
       start_period: 20s
 
   dkb-embedder:
-    image: ${DKB_PROVIDER_IMAGE:-dkb-provider-sidecar:0.1.0}
+    image: ${DKB_FASTEMBED_IMAGE:-dkb-embedding-fastembed:0.1.0}
+    profiles: ["fastembed"]
     command: ["python", "-m", "uvicorn", "embedder:app", "--host", "0.0.0.0", "--port", "8090"]
     environment:
       DKB_FASTEMBED_MODEL: BAAI/bge-small-en-v1.5
@@ -140,6 +149,23 @@ services:
       timeout: 3s
       retries: 24
       start_period: 20s
+
+  dkb-faiss:
+    image: ${DKB_FAISS_IMAGE:-dkb-index-faiss:0.1.0}
+    profiles: ["faiss"]
+    environment:
+      DKB_FAISS_ALLOWED_ROOTS: /context,/jobs,/state
+      DKB_FAISS_MAX_SESSIONS: "64"
+    volumes:
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-context:/context
+      - dkb-compiler-jobs:/jobs
+      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,json; assert json.load(urllib.request.urlopen('http://127.0.0.1:8092/health'))['ok']"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
 
   dkb-tei:
     image: ${DKB_TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07}
@@ -176,6 +202,7 @@ services:
       DKB_REGISTRY_URL: http://registry-web:8000
       DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
       DKB_TEI_URL: http://dkb-tei:80
+      DKB_FAISS_SERVICE_URL: http://dkb-faiss:8092
       DKB_MCP_HTTP_ENABLED: "true"
       DKB_MCP_BEARER_TOKEN: ${DKB_MCP_BEARER_TOKEN:?Run dkb stack up to generate stack secrets}
       DKB_RUNTIME_ADMIN_TOKEN: ${DKB_RUNTIME_ADMIN_TOKEN:?Run dkb stack up to generate stack secrets}
@@ -189,6 +216,16 @@ services:
     depends_on:
       dkb-embedder:
         condition: service_healthy
+        required: false
+      dkb-tei:
+        condition: service_healthy
+        required: false
+      dkb-faiss:
+        condition: service_healthy
+        required: false
+      meilisearch:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7331/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s

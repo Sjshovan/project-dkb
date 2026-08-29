@@ -20,8 +20,16 @@ on:
         description: ghcr.io/sjshovan/dkb-runtime@sha256:...
         required: true
         type: string
-      provider:
-        description: ghcr.io/sjshovan/dkb-provider-sidecar@sha256:...
+      evidence:
+        description: ghcr.io/sjshovan/dkb-evidence-docling-llamaindex@sha256:...
+        required: true
+        type: string
+      fastembed:
+        description: ghcr.io/sjshovan/dkb-embedding-fastembed@sha256:...
+        required: true
+        type: string
+      faiss:
+        description: ghcr.io/sjshovan/dkb-index-faiss@sha256:...
         required: true
         type: string
       release:
@@ -59,7 +67,9 @@ jobs:
           --registry "${{ inputs.registry }}"
           --compiler "${{ inputs.compiler }}"
           --runtime "${{ inputs.runtime }}"
-          --provider "${{ inputs.provider }}"
+          --evidence "${{ inputs.evidence }}"
+          --fastembed "${{ inputs.fastembed }}"
+          --faiss "${{ inputs.faiss }}"
           --output "release/dkb-stack-${{ inputs.version }}.lock.json"
 
       - uses: actions/upload-artifact@v4

@@ -25,12 +25,23 @@ jobs:
           - image: dkb-compiler
             dockerfile: services/compiler/Dockerfile
             package: services/compiler/package.json
+            context: .
           - image: dkb-runtime
             dockerfile: services/runtime/Dockerfile
             package: services/runtime/package.json
-          - image: dkb-provider-sidecar
-            dockerfile: providers/bundled/python/llamaindex/Dockerfile
-            package: providers/bundled/package.json
+            context: .
+          - image: dkb-evidence-docling-llamaindex
+            dockerfile: Dockerfile
+            package: providers/evidence-docling-llamaindex/package.json
+            context: providers/evidence-docling-llamaindex/python
+          - image: dkb-embedding-fastembed
+            dockerfile: Dockerfile
+            package: providers/embedding-fastembed/package.json
+            context: providers/embedding-fastembed/python
+          - image: dkb-index-faiss
+            dockerfile: Dockerfile
+            package: providers/index-faiss/package.json
+            context: providers/index-faiss/python
 
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +79,7 @@ jobs:
       - uses: docker/build-push-action@v6
         id: build
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: ${{ inputs.publish }}
           load: ${{ ! inputs.publish }}

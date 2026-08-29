@@ -27,7 +27,10 @@ test('stack preparation generates reusable local secrets without returning them'
     assert.match(firstEnvironment, /DKB_MCP_BEARER_TOKEN=/);
     assert.doesNotMatch(JSON.stringify(first), /DKB_MCP_BEARER_TOKEN|DKB_REGISTRY_APP_KEY|DKB_REGISTRY_BOOTSTRAP_TOKEN/);
     assert.equal(first.composeFile.endsWith(path.join('dist', 'stack', 'compose.yaml')), true);
-    assert.deepEqual(composeArguments(first, ['up']).slice(-3), ['--profile', 'tei', 'up']);
+    assert.deepEqual(
+      composeArguments(first, ['up']).slice(-5),
+      ['--profile', 'tei', '--profile', 'faiss', 'up'],
+    );
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;
@@ -35,24 +38,22 @@ test('stack preparation generates reusable local secrets without returning them'
   }
 });
 
-test('Meilisearch stack target configures the same provider contract for compiler and Runtime', async () => {
+test('Meilisearch stack target selects the distribution recipe for compiler and Runtime', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-meili-test-'));
   const previousRoot = process.env.DKB_STACK_STATE_ROOT;
   process.env.DKB_STACK_STATE_ROOT = root;
 
   try {
-    const stack = await prepareDkbStack('meili-proof', 'meilisearch');
+    const stack = await prepareDkbStack('meili-proof', 'tei-meilisearch');
     const compiler = JSON.parse(await fs.readFile(path.join(stack.root, 'compiler-context', '.dkb', 'config.json'), 'utf8'));
     const runtime = JSON.parse(await fs.readFile(path.join(stack.root, 'runtime', '.dkb', 'config.json'), 'utf8'));
 
     assert.deepEqual(runtime, compiler);
-    assert.equal(runtime.activeTarget, 'meilisearch');
-    assert.equal(runtime.targets.meilisearch.options['@dkb/evidence-docling-llamaindex'].tokenizerModel, 'BAAI/bge-small-en-v1.5');
-    assert.equal(runtime.targets.meilisearch.index, '@dkb/index-meilisearch');
-    assert.equal(runtime.targets.meilisearch.options['@dkb/index-meilisearch'].keyEnv, 'MEILI_MASTER_KEY');
+    assert.equal(runtime.activeTarget, 'tei-meilisearch');
+    assert.equal('targets' in runtime, false);
     assert.deepEqual(
-      composeArguments(stack, ['down', '--remove-orphans']).slice(-6),
-      ['--profile', 'tei', '--profile', 'meilisearch', 'down', '--remove-orphans'],
+      composeArguments(stack, ['down', '--remove-orphans']).slice(-10),
+      ['--profile', 'fastembed', '--profile', 'tei', '--profile', 'faiss', '--profile', 'meilisearch', 'down', '--remove-orphans'],
     );
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
@@ -121,8 +122,8 @@ test('changing the compiler target preserves a populated Runtime target until pi
     const environment = await fs.readFile(switchedCompiler.envFile, 'utf8');
 
     assert.deepEqual(
-      composeArguments(first, ['down']).slice(-5),
-      ['--profile', 'tei', '--profile', 'meilisearch', 'down'],
+      composeArguments(first, ['down']).slice(-9),
+      ['--profile', 'fastembed', '--profile', 'tei', '--profile', 'faiss', '--profile', 'meilisearch', 'down'],
     );
     assert.equal(compiler.activeTarget, 'tei-faiss');
     assert.equal(runtime.activeTarget, 'fastembed-faiss');

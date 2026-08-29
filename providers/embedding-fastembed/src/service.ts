@@ -8,7 +8,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 const execFile = promisify(execFileCallback);
 
-export const FASTEMBED_PROVIDER_IMAGE = 'dkb-provider-sidecar:0.1.0';
+export const FASTEMBED_PROVIDER_IMAGE = 'dkb-embedding-fastembed:0.1.0';
 export const FASTEMBED_PROVIDER_SERVICE_VERSION = '1';
 export const FASTEMBED_PROVIDER_SERVICE_PORT = 8090;
 export const DEFAULT_FASTEMBED_MODEL = 'BAAI/bge-small-en-v1.5';
@@ -32,7 +32,7 @@ export async function ensureFastEmbedService(options: {
   model?: string;
   restart?: boolean;
 } = {}): Promise<FastEmbedServiceStatus> {
-  const image = options.image ?? process.env.DKB_PROVIDER_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
+  const image = options.image ?? process.env.DKB_FASTEMBED_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
   const model = options.model ?? DEFAULT_FASTEMBED_MODEL;
   const key = `${image}\0${model}`;
   const existing = starts.get(key);
@@ -57,7 +57,7 @@ export async function fastEmbedServiceStatus(options: {
   image?: string;
   model?: string;
 } = {}): Promise<FastEmbedServiceStatus> {
-  const image = options.image ?? process.env.DKB_PROVIDER_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
+  const image = options.image ?? process.env.DKB_FASTEMBED_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
   const model = options.model ?? DEFAULT_FASTEMBED_MODEL;
   const container = fastEmbedContainerName(model);
 

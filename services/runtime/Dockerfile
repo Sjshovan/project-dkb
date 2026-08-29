@@ -31,11 +31,6 @@ LABEL org.opencontainers.image.title="DKB Runtime" \
       org.opencontainers.image.revision="${DKB_COMMIT}" \
       org.opencontainers.image.source="https://github.com/Sjshovan/project-dkb"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip \
-    && python3 -m pip install --break-system-packages --no-cache-dir faiss-cpu==1.15.0 \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /workspace
 COPY package.json package-lock.json ./
 COPY apps/cli/package.json apps/cli/package.json
@@ -63,7 +58,6 @@ COPY --from=build /workspace/providers/evidence-docling-llamaindex/dist provider
 COPY --from=build /workspace/providers/embedding-fastembed/dist providers/embedding-fastembed/dist
 COPY --from=build /workspace/providers/embedding-tei/dist providers/embedding-tei/dist
 COPY --from=build /workspace/providers/index-faiss/dist providers/index-faiss/dist
-COPY providers/index-faiss/python/faiss providers/index-faiss/python/faiss
 COPY --from=build /workspace/providers/index-meilisearch/dist providers/index-meilisearch/dist
 COPY --from=build /workspace/providers/retrieval-hybrid/dist providers/retrieval-hybrid/dist
 COPY --from=build /workspace/services/runtime/dist services/runtime/dist
@@ -73,7 +67,7 @@ ENV NODE_ENV=production \
     DKB_RUNTIME_PORT=7331 \
     DKB_RUNTIME_STATE_ROOT=/state \
     DKB_RUNTIME_CONTAINER=1 \
-    DKB_FAISS_PYTHON=python3 \
+    DKB_FAISS_SERVICE_URL=http://dkb-faiss:8092 \
     DKB_MCP_HTTP_ENABLED=true
 
 EXPOSE 7331

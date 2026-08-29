@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const options = parseArguments(process.argv.slice(2));
-const required = ['version', 'registry', 'compiler', 'runtime', 'provider', 'output'];
+const required = ['version', 'registry', 'compiler', 'runtime', 'evidence', 'fastembed', 'faiss', 'output'];
 for (const key of required) {
   if (!options[key]) throw new Error(`Missing --${key}`);
 }
@@ -11,13 +11,15 @@ const images = {
   registry: verifiedImage(options.registry, 'dkb-registry'),
   compiler: verifiedImage(options.compiler, 'dkb-compiler'),
   runtime: verifiedImage(options.runtime, 'dkb-runtime'),
-  provider: verifiedImage(options.provider, 'dkb-provider-sidecar'),
+  evidence: verifiedImage(options.evidence, 'dkb-evidence-docling-llamaindex'),
+  fastembed: verifiedImage(options.fastembed, 'dkb-embedding-fastembed'),
+  faiss: verifiedImage(options.faiss, 'dkb-index-faiss'),
 };
 
 const lock = {
-  format: 'dkb.stack-lock.v1',
+  format: 'dkb.stack-lock.v2',
   version: options.version,
-  protocol: '1.0',
+  protocol: '2.0',
   createdAt: new Date().toISOString(),
   sourceCommit: process.env.GITHUB_SHA ?? process.env.DKB_BUILD_COMMIT ?? 'development',
   images,

@@ -13,7 +13,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('local, one-shot, Python, and Compose compiler defaults stay aligned', async () => {
-  assert.equal(LLAMAINDEX_COMPILER_IMAGE, 'dkb-compiler-llamaindex:0.4.0');
+  assert.equal(LLAMAINDEX_COMPILER_IMAGE, 'dkb-evidence-docling-llamaindex:0.1.0');
   assert.equal(LLAMAINDEX_COMPILER_SERVICE_VERSION, '3');
   assert.equal(LLAMAINDEX_DOCUMENT_BATCH_SIZE, 32);
 

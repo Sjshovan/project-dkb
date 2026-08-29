@@ -11,7 +11,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime } from '../host/inventory.js';
 
-export type DkbStackTarget = 'default' | 'meilisearch' | 'fastembed-faiss' | 'tei-faiss' | 'tei-faiss-768' | 'tei-meilisearch';
+export type DkbStackTarget = 'default' | 'fastembed-faiss' | 'fastembed-faiss-768' | 'tei-faiss' | 'tei-faiss-768' | 'tei-meilisearch';
 
 export interface DkbStackContext {
   name: string;
@@ -329,7 +329,9 @@ export async function upgradeDkbStack(name: string, lockPath: string): Promise<D
     DKB_REGISTRY_IMAGE: lock.images.registry,
     DKB_COMPILER_IMAGE: lock.images.compiler,
     DKB_RUNTIME_IMAGE: lock.images.runtime,
-    DKB_PROVIDER_IMAGE: lock.images.provider,
+    DKB_EVIDENCE_IMAGE: lock.images.evidence,
+    DKB_FASTEMBED_IMAGE: lock.images.fastembed,
+    DKB_FAISS_IMAGE: lock.images.faiss,
   };
   await writeEnvironmentFile(context.envFile, updated);
   await writeAtomic(path.join(context.root, 'release.lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
@@ -394,7 +396,9 @@ export async function prepareDkbStack(name = 'local', target: DkbStackTarget = '
     DKB_REGISTRY_IMAGE: existing.DKB_REGISTRY_IMAGE ?? 'dkb-registry:0.1.0',
     DKB_COMPILER_IMAGE: existing.DKB_COMPILER_IMAGE ?? 'dkb-compiler:0.1.0',
     DKB_RUNTIME_IMAGE: existing.DKB_RUNTIME_IMAGE ?? 'dkb-runtime:0.1.0',
-    DKB_PROVIDER_IMAGE: existing.DKB_PROVIDER_IMAGE ?? 'dkb-provider-sidecar:0.1.0',
+    DKB_EVIDENCE_IMAGE: existing.DKB_EVIDENCE_IMAGE ?? 'dkb-evidence-docling-llamaindex:0.1.0',
+    DKB_FASTEMBED_IMAGE: existing.DKB_FASTEMBED_IMAGE ?? 'dkb-embedding-fastembed:0.1.0',
+    DKB_FAISS_IMAGE: existing.DKB_FAISS_IMAGE ?? 'dkb-index-faiss:0.1.0',
     DKB_BUILD_COMMIT: existing.DKB_BUILD_COMMIT ?? process.env.DKB_BUILD_COMMIT ?? 'development',
     DKB_REGISTRY_APP_KEY: existing.DKB_REGISTRY_APP_KEY ?? `base64:${randomBytes(32).toString('base64')}`,
     DKB_REGISTRY_BOOTSTRAP_NAMESPACE: existing.DKB_REGISTRY_BOOTSTRAP_NAMESPACE ?? namespaceForStack(normalizedName),
@@ -480,26 +484,7 @@ function contextFrom(root: string, composeFile: string, envFile: string, values:
 }
 
 async function writePipelineConfig(targetPath: string, target: DkbStackTarget): Promise<void> {
-  const config = target !== 'meilisearch'
-    ? { format: 'dkb.config.v2', activeTarget: target }
-    : {
-        format: 'dkb.config.v2',
-        activeTarget: 'meilisearch',
-        targets: {
-          meilisearch: {
-            evidence: '@dkb/evidence-docling-llamaindex',
-            embedding: '@dkb/embedding-fastembed',
-            index: '@dkb/index-meilisearch',
-            retrieval: '@dkb/retrieval-hybrid',
-            processors: [],
-            options: {
-              '@dkb/evidence-docling-llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-              '@dkb/embedding-fastembed': { model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
-              '@dkb/index-meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 },
-            },
-          },
-        },
-      };
+  const config = { format: 'dkb.config.v2', activeTarget: target };
   await writeAtomic(targetPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
@@ -592,9 +577,11 @@ function runCompose(
 
 export function composeArguments(context: DkbStackContext, args: string[]): string[] {
   const profiles = args.includes('down')
-    ? ['tei', 'meilisearch']
+    ? ['fastembed', 'tei', 'faiss', 'meilisearch']
     : [
+        ...(usesFastEmbed(context.target) ? ['fastembed'] : []),
         ...(usesTei(context.target) ? ['tei'] : []),
+        ...(usesFaiss(context.target) ? ['faiss'] : []),
         ...(usesMeilisearch(context.target) ? ['meilisearch'] : []),
       ];
   return [
@@ -630,9 +617,17 @@ function assertRequiredImages(context: DkbStackContext): void {
       recovery: 'From the project-dkb checkout run: docker build -f services/runtime/Dockerfile -t dkb-runtime:0.1.0 .',
     },
     {
-      image: values.DKB_PROVIDER_IMAGE ?? 'dkb-provider-sidecar:0.1.0',
-      recovery: 'From providers/bundled/python/llamaindex run: docker build -t dkb-provider-sidecar:0.1.0 .',
+      image: values.DKB_EVIDENCE_IMAGE ?? 'dkb-evidence-docling-llamaindex:0.1.0',
+      recovery: 'Run: docker build -f providers/evidence-docling-llamaindex/python/Dockerfile -t dkb-evidence-docling-llamaindex:0.1.0 providers/evidence-docling-llamaindex/python',
     },
+    ...(usesFastEmbed(context.target) ? [{
+      image: values.DKB_FASTEMBED_IMAGE ?? 'dkb-embedding-fastembed:0.1.0',
+      recovery: 'Run: docker build -f providers/embedding-fastembed/python/Dockerfile -t dkb-embedding-fastembed:0.1.0 providers/embedding-fastembed/python',
+    }] : []),
+    ...(usesFaiss(context.target) ? [{
+      image: values.DKB_FAISS_IMAGE ?? 'dkb-index-faiss:0.1.0',
+      recovery: 'Run: docker build -f providers/index-faiss/python/Dockerfile -t dkb-index-faiss:0.1.0 providers/index-faiss/python',
+    }] : []),
   ];
 
   for (const requirement of required) {
@@ -725,13 +720,21 @@ function usesTei(target: DkbStackTarget): boolean {
   return target === 'default' || target === 'tei-faiss' || target === 'tei-faiss-768' || target === 'tei-meilisearch';
 }
 
+function usesFastEmbed(target: DkbStackTarget): boolean {
+  return target === 'fastembed-faiss' || target === 'fastembed-faiss-768';
+}
+
+function usesFaiss(target: DkbStackTarget): boolean {
+  return target !== 'tei-meilisearch';
+}
+
 function usesMeilisearch(target: DkbStackTarget): boolean {
-  return target === 'meilisearch' || target === 'tei-meilisearch';
+  return target === 'tei-meilisearch';
 }
 
 function parseStoredTarget(value: string | undefined): DkbStackTarget {
   const target = value ?? 'default';
-  if (['default', 'meilisearch', 'fastembed-faiss', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'].includes(target)) {
+  if (['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'].includes(target)) {
     return target as DkbStackTarget;
   }
   throw new DkbError(`Stack state contains unsupported pipeline target: ${target}`);
@@ -857,9 +860,9 @@ async function validateStackArchive(target: string): Promise<string> {
 }
 
 async function readStackLock(target: string): Promise<{
-  format: 'dkb.stack-lock.v1';
+  format: 'dkb.stack-lock.v2';
   version: string;
-  images: { registry: string; compiler: string; runtime: string; provider: string };
+  images: { registry: string; compiler: string; runtime: string; evidence: string; fastembed: string; faiss: string };
 }> {
   let value: unknown;
   try {
@@ -867,11 +870,11 @@ async function readStackLock(target: string): Promise<{
   } catch (error) {
     throw new DkbError(`Unable to read stack release lock ${target}: ${errorMessage(error)}`);
   }
-  if (!isRecord(value) || value.format !== 'dkb.stack-lock.v1' || typeof value.version !== 'string' || !isRecord(value.images)) {
+  if (!isRecord(value) || value.format !== 'dkb.stack-lock.v2' || typeof value.version !== 'string' || !isRecord(value.images)) {
     throw new DkbError(`Invalid DKB stack release lock: ${target}`);
   }
-  const expected = ['registry', 'compiler', 'runtime', 'provider'] as const;
-  const images = {} as { registry: string; compiler: string; runtime: string; provider: string };
+  const expected = ['registry', 'compiler', 'runtime', 'evidence', 'fastembed', 'faiss'] as const;
+  const images = {} as { registry: string; compiler: string; runtime: string; evidence: string; fastembed: string; faiss: string };
   for (const name of expected) {
     const image = value.images[name];
     if (typeof image !== 'string' || !/^ghcr\.io\/sjshovan\/dkb-[a-z-]+@sha256:[a-f0-9]{64}$/u.test(image)) {
@@ -879,7 +882,7 @@ async function readStackLock(target: string): Promise<{
     }
     images[name] = image;
   }
-  return { format: 'dkb.stack-lock.v1', version: value.version, images };
+  return { format: 'dkb.stack-lock.v2', version: value.version, images };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

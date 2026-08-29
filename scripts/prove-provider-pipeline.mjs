@@ -203,7 +203,7 @@ try {
 async function startQueryEmbedder() {
   const container = `dkb-provider-proof-embedder-${process.pid}-${Date.now().toString(36)}`;
   const port = await availablePort();
-  const image = process.env.DKB_PROVIDER_SIDECAR_IMAGE ?? 'dkb-provider-sidecar:0.1.0';
+  const image = process.env.DKB_EVIDENCE_IMAGE ?? 'dkb-evidence-docling-llamaindex:0.1.0';
   await executeFile('docker', [
     'run', '--detach', '--rm', '--name', container,
     '--publish', `127.0.0.1:${port}:8090`,
