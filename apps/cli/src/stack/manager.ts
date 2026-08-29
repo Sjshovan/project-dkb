@@ -60,6 +60,15 @@ export async function upDkbStack(
     }
   }
 
+  if (context.inactiveComposeServices.length > 0) {
+    runCompose(
+      context,
+      ['rm', '--force', '--stop', ...context.inactiveComposeServices],
+      false,
+      false,
+      'all',
+    );
+  }
   runCompose(context, ['up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240']);
   const checks = await probeStack(context);
   const failed = checks.filter((check) => check.status === 'failed');
@@ -125,6 +134,7 @@ export async function statusDkbStack(
   return {
     name: context.name,
     target: context.target,
+    runtimeTarget: context.runtimeTarget,
     stateRoot: context.root,
     composeFile: context.composeFile,
     registryUrl: context.registryUrl,
@@ -141,8 +151,10 @@ export async function doctorDkbStack(
 ): Promise<DkbStackStatus & { ok: boolean; checks: Array<{ component: string; status: 'ok' | 'failed'; message: string }> }> {
   const context = await readDkbStack(distribution, name);
   const checks: Array<{ component: string; status: 'ok' | 'failed'; message: string }> = [];
+  let dockerReady = false;
   try {
     assertDockerAvailable();
+    dockerReady = true;
     checks.push({ component: 'docker', status: 'ok', message: 'Docker Compose is available.' });
   } catch (error) {
     checks.push({ component: 'docker', status: 'failed', message: errorMessage(error) });
@@ -150,15 +162,19 @@ export async function doctorDkbStack(
   checks.push({ component: 'compose', status: await pathExists(context.composeFile) ? 'ok' : 'failed', message: context.composeFile });
   checks.push({ component: 'secrets', status: await pathExists(context.envFile) ? 'ok' : 'failed', message: context.envFile });
   checks.push(...await probeStack(context));
-  const status = await statusDkbStack(distribution, context.name, false).catch(() => ({
+  const fallbackStatus = {
     name: context.name,
     target: context.target,
+    runtimeTarget: context.runtimeTarget,
     stateRoot: context.root,
     composeFile: context.composeFile,
     registryUrl: context.registryUrl,
     runtimeUrl: context.runtimeUrl,
     services: [],
-  }));
+  };
+  const status = dockerReady
+    ? await statusDkbStack(distribution, context.name, false).catch(() => fallbackStatus)
+    : fallbackStatus;
   return { ...status, ok: checks.every((item) => item.status === 'ok'), checks };
 }
 

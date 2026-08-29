@@ -4,7 +4,9 @@
 
 This directory owns the Laravel Registry HTTP client, Registry endpoint normalization and verification, authenticated publication/download calls, Collection requests, and safe DKB archive transport.
 
-The authoritative boundary is [ADR 0004](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md).
+The canonical [provider architecture](../../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+are authoritative.
 
 ## Dependency direction
 

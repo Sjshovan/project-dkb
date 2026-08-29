@@ -13,7 +13,7 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
-import { readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
+import { readRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { listPackageBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 
@@ -27,7 +27,14 @@ const allPlugin = {
       kind: 'embedding',
       async embedDocuments({ texts }) { return texts.map(() => [1]); },
       async embedQuery() { return [1]; },
-      compatibility() { return { dimensions: 1, metric: 'cosine' }; },
+      compatibility(options) {
+        return {
+          embeddingSpace: 'test-space',
+          dimensions: Number(options.dimensions ?? 1),
+          metric: 'cosine',
+          normalized: true,
+        };
+      },
     });
     context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } });
     context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
@@ -548,19 +555,20 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   const library = path.join(root, 'library');
   const globalRoot = path.join(root, 'global');
   const configPath = path.join(library, '.dkb/config.json');
+  const distribution = distributionWith([allPlugin], targetConfig('@test/all'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   const promoted = await setPipelineTarget({
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution,
     root: library,
     globalRoot,
     name: 'default',
     activate: true,
     patch: {
-      evidence: '@dkb/evidence-docling-llamaindex',
-      embedding: '@dkb/embedding-fastembed',
-      index: '@dkb/index-faiss',
-      retrieval: '@dkb/retrieval-hybrid',
+      evidence: '@test/all',
+      embedding: '@test/all',
+      index: '@test/all',
+      retrieval: '@test/all',
       processors: [],
     },
   });
@@ -568,16 +576,16 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   assert.equal(promoted.target, 'default');
 
   await assert.rejects(setPipelineTarget({
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution,
     root: library,
     globalRoot,
     name: 'broken',
     activate: true,
     patch: {
       evidence: '@missing/evidence',
-      embedding: '@dkb/embedding-fastembed',
-      index: '@dkb/index-faiss',
-      retrieval: '@dkb/retrieval-hybrid',
+      embedding: '@test/all',
+      index: '@test/all',
+      retrieval: '@test/all',
     },
   }), /Selected plugin @missing\/evidence was not found/);
   assert.equal(await fs.readFile(configPath, 'utf8'), before);
@@ -588,36 +596,29 @@ test('pipeline activation rejects incompatible installed artifacts without chang
   const library = path.join(root, 'library');
   const globalRoot = path.join(root, 'global');
   const configPath = path.join(library, '.dkb/config.json');
+  const distribution = distributionWith([allPlugin], targetConfig('@test/all'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   await setPipelineTarget({
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution,
     root: library,
     globalRoot,
     name: 'default',
     activate: true,
     patch: {
-      evidence: '@dkb/evidence-docling-llamaindex',
-      embedding: '@dkb/embedding-fastembed',
-      index: '@dkb/index-faiss',
-      retrieval: '@dkb/retrieval-hybrid',
+      evidence: '@test/all',
+      embedding: '@test/all',
+      index: '@test/all',
+      retrieval: '@test/all',
       processors: [],
     },
   });
   const before = await fs.readFile(configPath, 'utf8');
-  const evidenceProfileDigest = stableHash({ evidence: '@dkb/evidence-docling-llamaindex', processors: [] });
-  const compatibility = {
-    evidenceProfileDigest,
-    embeddingProvider: '@dkb/embedding-fastembed',
-    embeddingSpace: 'BAAI/bge-small-en-v1.5',
-    dimensions: 384,
-    metric: 'cosine',
-    normalized: true,
-    indexFormat: 'IndexIDMap2(IndexFlatIP)',
-    protocol: 'dkb.evidence.v1',
-  };
-  const retrievalProfileDigest = stableHash({ evidenceProfileDigest, embedding: '@dkb/embedding-fastembed', index: '@dkb/index-faiss' });
-  const compatibilityDigest = stableHash(compatibility);
+  const host = await DkbProviderHost.create({ root: library, globalRoot, distribution });
+  const resolved = await resolveProviderRetrievalProfile(host);
+  await host.dispose();
+  const { evidenceProfileDigest, retrievalProfileDigest } = resolved;
+  const compatibilityDigest = stableHash(resolved.compatibility);
   await writeJson(path.join(library, '.dkb', 'runtime.lock.json'), {
     format: 'dkb.runtime-lock.v2',
     target: 'default',
@@ -630,18 +631,18 @@ test('pipeline activation rejects incompatible installed artifacts without chang
   });
 
   await assert.rejects(setPipelineTarget({
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution,
     root: library,
     globalRoot,
     name: 'base',
     activate: true,
     patch: {
-      evidence: '@dkb/evidence-docling-llamaindex',
-      embedding: '@dkb/embedding-fastembed',
-      index: '@dkb/index-faiss',
-      retrieval: '@dkb/retrieval-hybrid',
+      evidence: '@test/all',
+      embedding: '@test/all',
+      index: '@test/all',
+      retrieval: '@test/all',
       processors: [],
-      options: { '@dkb/embedding-fastembed': { model: 'BAAI/bge-base-en-v1.5', dimensions: 768 } },
+      options: { '@test/all': { dimensions: 2 } },
     },
   }), /Cannot activate pipeline target "base".*Save it with --no-activate/);
   assert.equal(await fs.readFile(configPath, 'utf8'), before);

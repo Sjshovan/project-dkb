@@ -648,6 +648,9 @@ export function summarizeStackStatus(value: unknown): string[] {
     `stack: ${String(stack.name ?? 'local')}`,
     stack.status ? `status: ${humanStatus(stack.status)}` : '',
     stack.target ? `target: ${String(stack.target)}` : '',
+    stack.runtimeTarget && stack.runtimeTarget !== stack.target
+      ? `runtime target: ${String(stack.runtimeTarget)}`
+      : '',
     stack.registryUrl ? `registry: ${String(stack.registryUrl)}` : '',
     stack.runtimeUrl ? `runtime: ${String(stack.runtimeUrl)}` : '',
     stack.stateRoot ? `state: ${String(stack.stateRoot)}` : '',
@@ -674,6 +677,10 @@ function stackComponentLabel(value: unknown): string {
   switch (String(value)) {
     case 'registry-web': return 'Registry';
     case 'dkb-runtime': return 'Runtime';
+    case 'dkb-tei': return 'TEI';
+    case 'dkb-embedder': return 'FastEmbed';
+    case 'dkb-faiss': return 'FAISS';
+    case 'meilisearch': return 'Meilisearch';
     case 'docker': return 'Docker';
     case 'compose': return 'Compose';
     case 'secrets': return 'Secrets';

@@ -1,9 +1,10 @@
 # Protocol Guidance
 
 This package owns DKB's stable manifests, identities, schemas, canonical JSON,
-Evidence IR, validation, source-safety rules, and read-protocol constants. Read
-`../../docs/decisions/0004-monorepo-release-units-and-local-stack.md` before
-changing its public surface.
+Evidence IR, validation, source-safety rules, and read-protocol constants. The
+[canonical architecture](../../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+govern its public surface.
 
 - Keep this package independent of the CLI, Library, pipeline, providers,
   compiler, Runtime, and Registry client.

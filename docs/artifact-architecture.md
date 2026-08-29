@@ -144,8 +144,10 @@ removes that root in `finally`, records no corpus in Git, and stops before the
 next tier when projected compilation exceeds 15 minutes or estimated working
 space exceeds 8 GiB unless an operator explicitly changes those limits. The
 checked-in 2026-08-28 reports show 88 records from 134 KiB in 33.4 seconds and
-682 records from 1.01 MiB in 3m27s. Derived storage was about 31x source in both
-runs because active artifacts and immutable Evidence/Retrieval layers coexist.
+682 records from 1.01 MiB in 3m27s. That historical implementation consumed
+about 31x source because active artifacts and immutable build layers coexisted.
+The 2026-08-29 hard cut stores only immutable Evidence and Retrieval Builds;
+its corrected derived-storage ratio is 6.216x on the same 1.01 MiB corpus.
 
 Operational commands:
 

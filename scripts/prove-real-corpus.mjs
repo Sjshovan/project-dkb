@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
+import { containsSensitiveCorpusContent, isSensitiveCorpusPath } from './lib/corpus-sanitizer.mjs';
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,15 +37,6 @@ const allowedRoots = corpusMode === 'full'
   : [path.join('app', 'Providers'), path.join('app', 'Services', 'Module'), 'routes', 'config'];
 const allowedTopLevelFiles = ['composer.json'];
 const allowedExtensions = new Set(['.php', '.json', '.js', '.ts', '.vue', '.xml', '.yml', '.yaml', '.ini', '.conf']);
-const secretPathPattern = /(^|\/)(?:\.env(?:\.|$)|auth\.json$|[^/]*(?:credential|private[-_]?key|oauth[-_]?key)[^/]*$)|\.(?:pem|p12|pfx|key|crt|cer)$/iu;
-const secretContentPatterns = [
-  /-----BEGIN [^-]*PRIVATE KEY-----/u,
-  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/u,
-  /\bAIza[0-9A-Za-z_-]{30,}\b/u,
-  /\bgh[pousr]_[0-9A-Za-z]{30,}\b/u,
-  /\bsk_(?:live|test)_[0-9A-Za-z]{16,}\b/u,
-  /\b(?:token|secret|password|api[_-]?key|client[_-]?secret)\b\s*(?:=>|=|:)\s*["'][^"'$\s][^"']{11,}["']/iu,
-];
 const queries = [
   { query: 'How does ModuleServiceProvider register ModuleManager?', expected: 'ModuleManager' },
   { query: 'Which class is responsible for registering application routes?', expected: 'RouteServiceProvider' },
@@ -152,7 +144,7 @@ async function copySanitizedCorpus() {
 
   for (const source of candidates.sort((left, right) => left.localeCompare(right))) {
     const relative = path.relative(sourceRoot, source).replace(/\\/gu, '/');
-    if (secretPathPattern.test(relative) || !allowedExtensions.has(path.extname(source).toLowerCase())) continue;
+    if (isSensitiveCorpusPath(relative) || !allowedExtensions.has(path.extname(source).toLowerCase())) continue;
     const stat = await fs.stat(source);
     if (stat.size > 512 * 1024) {
       excludedOversizedFiles += 1;
@@ -160,7 +152,7 @@ async function copySanitizedCorpus() {
     }
     const contents = await fs.readFile(source);
     const text = contents.toString('utf8');
-    if (text.includes('\uFFFD') || secretContentPatterns.some((pattern) => pattern.test(text))) {
+    if (containsSensitiveCorpusContent(text)) {
       excludedSensitiveFiles += 1;
       continue;
     }

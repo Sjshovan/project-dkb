@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
-import { createDkbReadOnlyMcpServer } from '../services/runtime/dist/mcp/readOnly.js';
+import {
+  createDkbReadOnlyMcpServer,
+  hasSufficientSearchCoverage,
+  searchEvidenceCoverage,
+} from '../services/runtime/dist/mcp/readOnly.js';
 import {
   renderModelEvidence,
   TRUSTED_FORMAT_EPILOG,
@@ -242,6 +246,17 @@ test('search previews preserve facts but remove hostile source instructions', ()
   assert.match(preview, /SAFE-SOURCE-91/);
   assert.doesNotMatch(preview, /PWNED/);
   assert.doesNotMatch(preview, /Do not cite/);
+});
+
+test('MCP search rejects a query supported by only half of its meaningful terms', () => {
+  const weakQuery = 'What is the launch code for the moon base?';
+  const weakResults = [{ matchedTokens: ['base', 'code'] }];
+  assert.equal(searchEvidenceCoverage(weakQuery, weakResults), 0.5);
+  assert.equal(hasSufficientSearchCoverage(weakQuery, weakResults), false);
+  assert.equal(hasSufficientSearchCoverage(
+    'Which class registers ModuleManager?',
+    [{ matchedTokens: ['class', 'registers', 'modulemanager'] }],
+  ), true);
 });
 
 test('no-result rendering requires an evidence-insufficient answer', () => {

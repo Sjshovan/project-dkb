@@ -79,6 +79,15 @@ export async function switchRuntimePipelineFromRegistry(options: {
 
   try {
     host = await DkbProviderHost.create({ root: runtime.stateRoot, target, distribution: options.runtime.distribution });
+    const unhealthyProviders = (await host.health(['embedding', 'index', 'retrieval']))
+      .filter((provider) => !provider.ok);
+    if (unhealthyProviders.length > 0) {
+      throw new DkbError(
+        `Cannot switch the Runtime to ${target}; required providers are unhealthy: `
+        + unhealthyProviders.map((provider) => `${provider.id} (${provider.detail ?? 'health check failed'})`).join('; ')
+        + `. Start or repair the target services, then retry: dkb pipeline use ${target}`,
+      );
+    }
     artifactSnapshot = await snapshotRuntimeReceipts(runtime.stateRoot);
     previousRuntime = await maybeReadRuntimeLock(runtime.stateRoot);
     previousConfigBytes = await fs.readFile(configPath).catch((error: NodeJS.ErrnoException) => {

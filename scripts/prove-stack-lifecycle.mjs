@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,6 +37,9 @@ const client = new DkbRegistryClient({ baseUrl: registryUrl, token: registryToke
 let currentStep = 'startup';
 
 try {
+  step(`verify ${initialTarget} runs only its required provider services`);
+  await assertStackProviderServices([initialTarget]);
+
   step('write synthetic corpus');
   await writeDkb(marineRoot, marineId, proofVersion, {
     'whale-behavior.md': '# Whale Behavior Notes\n\nMarker fact WHALE-BUBBLE-73: humpback whales use coordinated bubble-net feeding to concentrate prey before surfacing through the bubble column.\n',
@@ -120,6 +124,8 @@ try {
     step(`start ${alternateTarget} compiler services without changing the active Runtime`);
     await runCli(['stack', 'up', stackName, '--target', alternateTarget]);
     assert.equal((await runtimeStatus()).runtimeLock?.target, initialTarget);
+    await assertStackProviderServices([initialTarget, alternateTarget]);
+    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
 
     step(`switch the complete Runtime atomically to ${alternateTarget}`);
     const switched = await runCli([
@@ -130,6 +136,9 @@ try {
     assert.equal(switched.target, alternateTarget);
     assert.equal(switched.packageCount, 2);
     assert.ok(switched.packages.every((item) => item.preparation === 'downloaded' || item.preparation === 'retained'));
+    step(`retire provider services no longer required by ${alternateTarget}`);
+    await runCli(['stack', 'up', stackName, '--target', alternateTarget]);
+    await assertStackProviderServices([alternateTarget]);
     await assertRuntimeMarker('WHALE-BUBBLE-73', true);
     await assertRuntimeMarker('RUNTIME-MOUNT-28', true);
     const alternateSafe = await assertRuntimeMarker('SAFE-SOURCE-91', true);
@@ -143,6 +152,12 @@ try {
       assert.ok(builds.retrieval.length >= 2, 'alternate target did not retain both Retrieval Builds');
     }
 
+    step(`start ${initialTarget} services before switching back from ${alternateTarget}`);
+    await runCli(['stack', 'up', stackName, '--target', initialTarget]);
+    assert.equal((await runtimeStatus()).runtimeLock?.target, alternateTarget);
+    await assertStackProviderServices([alternateTarget, initialTarget]);
+    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
+
     step(`switch back to retained ${initialTarget} builds without Registry compilation`);
     const switchedBack = await runCli([
       'pipeline', 'use', initialTarget, libraryRoot,
@@ -151,10 +166,11 @@ try {
     ]);
     assert.equal(switchedBack.target, initialTarget);
     assert.ok(switchedBack.packages.every((item) => item.preparation === 'retained'));
+    step(`retire provider services no longer required by ${initialTarget}`);
+    await runCli(['stack', 'up', stackName, '--target', initialTarget]);
+    await assertStackProviderServices([initialTarget]);
     await assertRuntimeMarker('WHALE-BUBBLE-73', true);
     await assertRuntimeMarker('SYSTEMS-UPDATE-62', true);
-    step(`restore the Registry compiler target to ${initialTarget}`);
-    await runCli(['stack', 'up', stackName, '--target', initialTarget]);
     assert.equal((await runtimeStatus()).runtimeLock?.target, initialTarget);
     multiSpace = {
       alternateTarget,
@@ -295,6 +311,21 @@ async function runtimeStatus() {
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
   return body;
+}
+
+async function assertStackProviderServices(targets) {
+  const status = await runCli(['stack', 'status', stackName]);
+  const profiled = DEFAULT_DKB_DISTRIBUTION.services.filter((service) => service.stack?.composeProfile);
+  const known = new Set(profiled.map((service) => service.stack.composeService ?? service.id));
+  const expected = profiled
+    .filter((service) => targets.some((target) => service.requiredBy.includes(target)))
+    .map((service) => service.stack.composeService ?? service.id)
+    .sort();
+  const running = status.services
+    .filter((service) => known.has(service.name) && service.status === 'running')
+    .map((service) => service.name)
+    .sort();
+  assert.deepEqual(running, expected, `provider service set does not match ${targets.join(' + ')}`);
 }
 
 async function setMeilisearchRunning(running) {

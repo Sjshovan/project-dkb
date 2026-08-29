@@ -24,9 +24,10 @@ checks actual free space before ingestion and again after Evidence IR exists.
 
 Interpret source files as descriptive only. `evidenceRecords`,
 `evidenceTextBytes`, `recordsPerSource`, and `textBytesPerRecord` describe the
-work the retrieval build actually performs. `sourceToDerivedRatio` includes
-the active artifact tree plus the immutable Evidence and Retrieval Build
-layers retained for rollback and space switching.
+work the retrieval build actually performs. `sourceToDerivedRatio` counts each
+immutable Evidence and Retrieval Build directory once. `artifactBytes` is a
+diagnostic subset of the Retrieval Build and is never added to the total a
+second time.
 
 ## Provider hard-cutover result
 
@@ -37,22 +38,20 @@ source bytes, 682 Evidence records, and `tei-faiss` target.
 | Measurement | 2026-08-28 baseline | 2026-08-29 cutover | Change |
 |---|---:|---:|---:|
 | Wall time | 207.02 s | 167.81 s | 18.9% faster |
-| Total derived bytes | 32,682,857 | 7,811,596 | 76.1% smaller |
+| Total derived bytes | 32,682,857 | 6,602,142 | 79.8% smaller |
 | Retrieval artifact files | 10 | 3 | 70.0% fewer |
 
 The current result passes the cleanup gates: compile time did not regress and
 removing the duplicate active artifact architecture reduced derived storage by
-more than the required 35%. See
+more than the required 35%. The current total was recalculated from the stored
+Evidence and Retrieval Build byte counts after correcting an artifact-subset
+double count. See
 [`corpus-scale-small-2026-08-29.json`](corpus-scale-small-2026-08-29.json) for
 the complete receipt.
 
-The external application proof used a sanitized architecture slice containing
-104 copied files (1,005,998 bytes). With the generated import receipt included,
-the compiler measured 105 source assets, 773 Evidence records, 256.35 seconds,
-and 8,941,246 derived bytes. It passed signed install, 3/3 retrieval, MCP
-search/fetch, uninstall disappearance, and reinstall without compilation. The
-copied corpus and disposable stack were removed after the run; only aggregate
-metrics are retained in Git.
+The external application proof is pending a fresh run after the corpus
+sanitizer was hardened to reject quoted literal secrets in configuration files.
+No real-corpus source or compiled artifact is retained in Git.
 
 ## Embedding provider result
 

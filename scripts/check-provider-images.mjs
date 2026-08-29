@@ -2,6 +2,15 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const executeFile = promisify(execFile);
+try {
+  await executeFile('docker', ['version'], { windowsHide: true, timeout: 5_000 });
+} catch (error) {
+  const detail = [error instanceof Error ? error.message : String(error), error?.stderr]
+    .filter(Boolean)
+    .join('\n');
+  throw new Error(`Docker is unavailable; provider image isolation could not be verified:\n${detail}`);
+}
+
 const images = [
   {
     role: 'evidence',

@@ -41,7 +41,8 @@ dkb version
 ```
 
 `dkb --version` reports the CLI version. `dkb version` reports the independently
-versioned protocol, compiler, Runtime, and provider bundle.
+versioned protocol, compiler, Runtime, and provider packages selected by the
+default distribution.
 
 ## First Library
 

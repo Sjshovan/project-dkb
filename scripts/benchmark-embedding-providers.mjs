@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
+import { containsSensitiveCorpusContent, isSensitiveCorpusPath } from './lib/corpus-sanitizer.mjs';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { readEvidenceBuild, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
@@ -262,15 +263,6 @@ async function copySanitizedCorpus(source, destination) {
   const roots = [path.join('app', 'Providers'), path.join('app', 'Services', 'Module'), 'routes', 'config'];
   const topLevel = ['composer.json'];
   const extensions = new Set(['.php', '.json', '.js', '.ts', '.vue', '.xml', '.yml', '.yaml', '.ini', '.conf']);
-  const secretPath = /(^|\/)(?:\.env(?:\.|$)|auth\.json$|[^/]*(?:credential|private[-_]?key|oauth[-_]?key)[^/]*$)|\.(?:pem|p12|pfx|key|crt|cer)$/iu;
-  const secretContent = [
-    /-----BEGIN [^-]*PRIVATE KEY-----/u,
-    /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/u,
-    /\bAIza[0-9A-Za-z_-]{30,}\b/u,
-    /\bgh[pousr]_[0-9A-Za-z]{30,}\b/u,
-    /\bsk_(?:live|test)_[0-9A-Za-z]{16,}\b/u,
-    /\b(?:token|secret|password|api[_-]?key|client[_-]?secret)\b\s*(?:=>|=|:)\s*["'][^"'$\s][^"']{11,}["']/iu,
-  ];
   const candidates = [
     ...await Promise.all(roots.map((relative) => listFiles(path.join(source, relative)))),
     ...topLevel.map((relative) => path.join(source, relative)),
@@ -279,11 +271,11 @@ async function copySanitizedCorpus(source, destination) {
 
   for (const candidate of candidates) {
     const relative = path.relative(source, candidate).replace(/\\/gu, '/');
-    if (secretPath.test(relative) || !extensions.has(path.extname(candidate).toLowerCase())) continue;
+    if (isSensitiveCorpusPath(relative) || !extensions.has(path.extname(candidate).toLowerCase())) continue;
     const contents = await fs.readFile(candidate);
     if (contents.length > 512 * 1024) continue;
     const text = contents.toString('utf8');
-    if (text.includes('\uFFFD') || secretContent.some((pattern) => pattern.test(text))) continue;
+    if (containsSensitiveCorpusContent(text)) continue;
     eligible.push({
       candidate,
       relative,

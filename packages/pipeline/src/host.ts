@@ -37,6 +37,7 @@ export interface DkbDistributionService {
   healthPath?: string;
   stack?: {
     composeProfile?: string;
+    composeService?: string;
     imageEnvironment: string;
     build?: {
       context: string;
@@ -212,22 +213,25 @@ export class DkbProviderHost {
     };
   }
 
-  async health(): Promise<Array<{ id: string; kind: DkbProviderKind; ok: boolean; detail?: string }>> {
+  async health(kinds?: readonly DkbProviderKind[]): Promise<Array<{ id: string; kind: DkbProviderKind; ok: boolean; detail?: string }>> {
     this.assertActive();
+    const selectedKinds = kinds ? new Set(kinds) : null;
 
-    return Promise.all([...this.providers.entries()].map(async ([kind, registration]) => {
-      try {
-        const result = await registration.provider.health?.() ?? { ok: true };
-        return { id: registration.id, kind, ...result };
-      } catch (error) {
-        return {
-          id: registration.id,
-          kind,
-          ok: false,
-          detail: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }));
+    return Promise.all([...this.providers.entries()]
+      .filter(([kind]) => !selectedKinds || selectedKinds.has(kind))
+      .map(async ([kind, registration]) => {
+        try {
+          const result = await registration.provider.health?.() ?? { ok: true };
+          return { id: registration.id, kind, ...result };
+        } catch (error) {
+          return {
+            id: registration.id,
+            kind,
+            ok: false,
+            detail: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }));
   }
 
   async dispose(): Promise<void> {

@@ -1,9 +1,9 @@
 # Deployment Guidance
 
 This directory owns the versioned single-host developer-preview distribution.
-The architecture decision in
-[`docs/decisions/0004-monorepo-release-units-and-local-stack.md`](../docs/decisions/0004-monorepo-release-units-and-local-stack.md)
-is authoritative.
+The canonical [provider architecture](../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+are authoritative.
 
 - Compose consumes versioned service images and never requires a sibling source
   checkout at runtime.

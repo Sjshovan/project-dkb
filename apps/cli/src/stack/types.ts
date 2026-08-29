@@ -6,6 +6,7 @@ export interface DkbStackContext {
   name: string;
   projectName: string;
   target: DkbStackTarget;
+  runtimeTarget: DkbStackTarget;
   root: string;
   composeFile: string;
   envFile: string;
@@ -16,6 +17,7 @@ export interface DkbStackContext {
   requiredServices: DkbDistributionService[];
   profiles: string[];
   allProfiles: string[];
+  inactiveComposeServices: string[];
   servicePorts: Record<string, number>;
   version?: string;
 }
@@ -23,6 +25,7 @@ export interface DkbStackContext {
 export interface DkbStackStatus {
   name: string;
   target: DkbStackTarget;
+  runtimeTarget: DkbStackTarget;
   stateRoot: string;
   composeFile: string;
   registryUrl: string;

@@ -138,7 +138,10 @@ export async function summarizeBuildStorage(
     sumUniqueDirectories(buildSets.flatMap((builds) => builds.evidence.filter((build) => build.active).map((build) => build.path))),
     sumUniqueDirectories(buildSets.flatMap((builds) => builds.retrieval.filter((build) => build.active).map((build) => build.path))),
   ]);
-  const totalDerivedBytes = artifactBytes + evidenceBuildBytes + retrievalBuildBytes;
+  // Provider artifacts live inside their immutable Retrieval Build. Report
+  // their byte count as a useful subset without adding it twice to total disk
+  // use.
+  const totalDerivedBytes = totalDerivedBuildBytes(evidenceBuildBytes, retrievalBuildBytes);
 
   return {
     artifactFiles: files.length,
@@ -152,6 +155,10 @@ export async function summarizeBuildStorage(
       .slice(0, 8)
       .map((file) => ({ path: file.path, bytes: file.size })),
   };
+}
+
+export function totalDerivedBuildBytes(evidenceBuildBytes: number, retrievalBuildBytes: number): number {
+  return evidenceBuildBytes + retrievalBuildBytes;
 }
 
 async function sumUniqueDirectories(paths: readonly string[]): Promise<number> {

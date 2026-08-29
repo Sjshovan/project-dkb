@@ -4,11 +4,13 @@
 
 This directory owns the shared compilation runner, staging and rollback, source analysis, Evidence IR production, artifact locks, and the trusted Registry-facing compiler HTTP service.
 
-The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).
+The canonical [provider architecture](../../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+are authoritative.
 
 ## Dependency direction
 
-- Depend on protocol, Library transactions, pipeline contracts, Registry archive transport, and explicitly supplied provider bundles.
+- Depend on protocol, Library transactions, pipeline contracts, Registry archive transport, and an explicitly supplied distribution at the composition root.
 - Local and HTTP compilation must call the same job runner.
 - Keep provider-specific work behind `@sjshovan/dkb-pipeline` contracts.
 

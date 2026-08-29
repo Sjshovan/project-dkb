@@ -7,9 +7,25 @@ import { readEnvironmentFileSync } from './context.js';
 import type { DkbStackContext, DkbStackStatus } from './types.js';
 
 export function assertDockerAvailable(): void {
-  const result = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' });
-  if (result.error || result.status !== 0) {
-    throw new DkbError('Docker Compose is unavailable. Start Docker Desktop, then retry: dkb stack up');
+  const engine = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (engine.error || engine.status !== 0 || !String(engine.stdout ?? '').trim()) {
+    const reason = engine.error?.message.includes('ETIMEDOUT')
+      ? 'Docker did not respond within 5 seconds.'
+      : 'The Docker engine is not available.';
+    throw new DkbError(`${reason} Start or restart Docker Desktop, then retry: dkb stack up`);
+  }
+
+  const compose = spawnSync('docker', ['compose', 'version'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (compose.error || compose.status !== 0) {
+    throw new DkbError('Docker Compose is unavailable. Install or enable Docker Compose, then retry: dkb stack up');
   }
 }
 
@@ -134,8 +150,9 @@ export function runCompose(
   args: string[],
   inherit = false,
   allowFailure = false,
+  profileScope: 'active' | 'all' = 'active',
 ): { stdout: string; stderr: string } {
-  const result = spawnSync('docker', composeArguments(context, args), {
+  const result = spawnSync('docker', composeArguments(context, args, profileScope), {
     cwd: path.dirname(context.composeFile),
     encoding: 'utf8',
     stdio: inherit ? 'inherit' : 'pipe',
@@ -148,8 +165,12 @@ export function runCompose(
   return { stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') };
 }
 
-export function composeArguments(context: DkbStackContext, args: string[]): string[] {
-  const profiles = args.includes('down') ? context.allProfiles : context.profiles;
+export function composeArguments(
+  context: DkbStackContext,
+  args: string[],
+  profileScope: 'active' | 'all' = 'active',
+): string[] {
+  const profiles = args.includes('down') || profileScope === 'all' ? context.allProfiles : context.profiles;
   return [
     'compose',
     '--env-file', context.envFile,

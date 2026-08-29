@@ -119,6 +119,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       requiredBy: ['fastembed-faiss', 'fastembed-faiss-768'],
       stack: {
         composeProfile: 'fastembed',
+        composeService: 'dkb-embedder',
         imageEnvironment: 'DKB_FASTEMBED_IMAGE',
         optionEnvironment: { model: 'DKB_FASTEMBED_MODEL' },
         build: {
@@ -136,6 +137,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       requiredBy: ['default', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'],
       stack: {
         composeProfile: 'tei',
+        composeService: 'dkb-tei',
         imageEnvironment: 'DKB_TEI_IMAGE',
         optionEnvironment: {
           model: 'DKB_TEI_MODEL',
@@ -160,6 +162,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       requiredBy: ['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768'],
       stack: {
         composeProfile: 'faiss',
+        composeService: 'dkb-faiss',
         imageEnvironment: 'DKB_FAISS_IMAGE',
         build: {
           context: 'providers/index-faiss/python',
@@ -176,6 +179,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       requiredBy: ['tei-meilisearch'],
       stack: {
         composeProfile: 'meilisearch',
+        composeService: 'meilisearch',
         imageEnvironment: 'DKB_MEILISEARCH_IMAGE',
         stateDirectory: 'meilisearch',
         secretEnvironment: ['DKB_MEILI_MASTER_KEY'],

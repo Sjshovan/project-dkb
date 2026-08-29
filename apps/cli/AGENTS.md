@@ -1,10 +1,10 @@
 # CLI Guidance
 
 This directory owns the global `dkb` command, human and JSON presentation,
-host inventory, context selection, and service orchestration. The architecture
-decision in
-[`docs/decisions/0004-monorepo-release-units-and-local-stack.md`](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md)
-is authoritative.
+host inventory, context selection, and service orchestration. The canonical
+[provider architecture](../../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+are authoritative.
 
 - Keep domain behavior in its owning workspace; CLI handlers validate input,
   resolve context, invoke public APIs, and present results.

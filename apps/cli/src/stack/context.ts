@@ -20,7 +20,10 @@ export async function prepareDkbStack(
   const recipe = targetRecipe(distribution, target);
   const composeFile = await resolveComposeFile();
   const envFile = path.join(root, 'stack.env');
-  const requiredServices = requiredStackServices(distribution, target);
+  const runtimeRoot = path.join(root, 'runtime');
+  const activeRuntimeBuild = await maybeReadRuntimeLock(runtimeRoot);
+  const runtimeTarget = parseStoredTarget(distribution, activeRuntimeBuild?.target ?? target);
+  const requiredServices = requiredStackServices(distribution, [target, runtimeTarget]);
 
   await Promise.all([
     fs.mkdir(path.join(root, 'registry', 'data'), { recursive: true }),
@@ -34,8 +37,6 @@ export async function prepareDkbStack(
   ]);
 
   const existing = await readEnvironmentFile(envFile);
-  const runtimeRoot = path.join(root, 'runtime');
-  const activeRuntimeBuild = await maybeReadRuntimeLock(runtimeRoot);
   const values: Record<string, string> = {
     ...existing,
     DKB_STACK_NAME: normalizedName,
@@ -79,7 +80,7 @@ export async function prepareDkbStack(
     parseStoredTarget(distribution, activeRuntimeBuild?.target ?? target),
   );
 
-  return contextFrom(distribution, root, composeFile, envFile, values);
+  return contextFrom(distribution, root, composeFile, envFile, values, runtimeTarget);
 }
 
 export async function readDkbStack(distribution: DkbDistribution, name: string): Promise<DkbStackContext> {
@@ -89,7 +90,11 @@ export async function readDkbStack(distribution: DkbDistribution, name: string):
   if (Object.keys(values).length === 0) {
     throw new DkbError(`Unknown DKB stack ${name}. Create it with: dkb stack up ${name}`);
   }
-  return contextFrom(distribution, root, await resolveComposeFile(), envFile, values);
+  const runtimeTarget = parseStoredTarget(
+    distribution,
+    (await maybeReadRuntimeLock(path.join(root, 'runtime')))?.target ?? values.DKB_PIPELINE_TARGET,
+  );
+  return contextFrom(distribution, root, await resolveComposeFile(), envFile, values, runtimeTarget);
 }
 
 export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<string | undefined> {
@@ -180,10 +185,11 @@ function contextFrom(
   composeFile: string,
   envFile: string,
   values: Record<string, string>,
+  runtimeTarget: DkbStackTarget,
 ): DkbStackContext {
   const target = parseStoredTarget(distribution, values.DKB_PIPELINE_TARGET);
   const name = stackName(values.DKB_STACK_NAME ?? path.basename(root));
-  const requiredServices = requiredStackServices(distribution, target);
+  const requiredServices = requiredStackServices(distribution, [target, runtimeTarget]);
   const servicePorts = Object.fromEntries(distribution.services.flatMap((service) => {
     const health = service.stack?.health;
     return health ? [[service.id, positivePort(values[health.portEnvironment], health.component)]] : [];
@@ -195,6 +201,7 @@ function contextFrom(
     name,
     projectName: `dkb-${name}`,
     target,
+    runtimeTarget,
     root,
     composeFile,
     envFile,
@@ -205,6 +212,11 @@ function contextFrom(
     requiredServices,
     profiles: serviceProfiles(requiredServices),
     allProfiles: serviceProfiles(distribution.services),
+    inactiveComposeServices: distribution.services.flatMap((service) => (
+      service.stack?.composeProfile && !requiredServices.includes(service)
+        ? [service.stack.composeService ?? service.id]
+        : []
+    )),
     servicePorts,
     ...(values.DKB_STACK_VERSION ? { version: values.DKB_STACK_VERSION } : {}),
   };
@@ -245,9 +257,10 @@ function targetRecipe(distribution: DkbDistribution, target: DkbStackTarget) {
   return recipe;
 }
 
-function requiredStackServices(distribution: DkbDistribution, target: DkbStackTarget): DkbDistributionService[] {
-  targetRecipe(distribution, target);
-  return distribution.services.filter((service) => service.requiredBy.includes(target));
+function requiredStackServices(distribution: DkbDistribution, targets: readonly DkbStackTarget[]): DkbDistributionService[] {
+  const resolvedTargets = [...new Set(targets)];
+  for (const target of resolvedTargets) targetRecipe(distribution, target);
+  return distribution.services.filter((service) => resolvedTargets.some((target) => service.requiredBy.includes(target)));
 }
 
 function serviceProfiles(services: readonly DkbDistributionService[]): string[] {

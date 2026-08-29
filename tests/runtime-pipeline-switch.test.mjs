@@ -84,6 +84,19 @@ test('Runtime switches retained Registry package builds atomically without conta
     packages: { [packageId]: fast.packages[packageId] },
   });
 
+  const beforeUnhealthySwitch = await fs.readFile(path.join(root, '.dkb', 'runtime.lock.json'));
+  await assert.rejects(
+    switchRuntimePipelineFromRegistry({
+      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
+      stateRoot: root,
+      target: 'unhealthy',
+      registryUrl: 'http://127.0.0.1:1',
+      timeoutMs: 50,
+    }),
+    /required providers are unhealthy.*test-only outage/iu,
+  );
+  assert.deepEqual(await fs.readFile(path.join(root, '.dkb', 'runtime.lock.json')), beforeUnhealthySwitch);
+
   const switched = await switchRuntimePipelineFromRegistry({
     runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
     stateRoot: root,
@@ -151,6 +164,12 @@ async function writePipelinePlugins(root) {
         index: '@test/core',
         retrieval: '@test/core',
       },
+      unhealthy: {
+        evidence: '@test/core',
+        embedding: '@test/unhealthy',
+        index: '@test/core',
+        retrieval: '@test/core',
+      },
     },
   });
   await writePlugin(root, '@test', 'core', `
@@ -198,9 +217,10 @@ export function setup(context) {
 `);
   await writePlugin(root, '@test', 'fast', embeddingPlugin('@test/fast', 'fast-space', 0.25));
   await writePlugin(root, '@test', 'tei', embeddingPlugin('@test/tei', 'tei-space', 0.75));
+  await writePlugin(root, '@test', 'unhealthy', embeddingPlugin('@test/unhealthy', 'unhealthy-space', 0.5, false));
 }
 
-function embeddingPlugin(id, space, value) {
+function embeddingPlugin(id, space, value, healthy = true) {
   return `
 export const apiVersion = 2;
 export const id = '${id}';
@@ -211,6 +231,7 @@ export function setup(context) {
     async embedDocuments({ texts }) { return texts.map(() => [${value}]); },
     async embedQuery() { return [${value}]; },
     compatibility() { return { embeddingSpace: '${space}', dimensions: 1, metric: 'cosine', normalized: true }; },
+    health() { return { ok: ${healthy}, detail: ${healthy ? "'ready'" : "'test-only outage'"} }; },
   });
 }
 `;

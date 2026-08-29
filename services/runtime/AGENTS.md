@@ -1,9 +1,9 @@
 # Runtime Guidance
 
 This directory owns installed-state activation, retrieval, evidence resolution,
-tracing, Runtime HTTP, and MCP. The architecture decision in
-[`docs/decisions/0004-monorepo-release-units-and-local-stack.md`](../../docs/decisions/0004-monorepo-release-units-and-local-stack.md)
-and [`docs/decisions/0005-evidence-and-retrieval-build-graph.md`](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md)
+tracing, Runtime HTTP, and MCP. The canonical
+[provider architecture](../../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
 are authoritative.
 
 - Depend only on protocol, Library, pipeline contracts, Registry client, and

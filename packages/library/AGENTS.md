@@ -4,7 +4,9 @@
 
 This directory owns local Library discovery, Collection membership resolution, Library locks, applied-state records, artifact snapshots, source adapters, compiled-artifact verification, signing, and filesystem-safe Library transactions.
 
-The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidence-and-retrieval-build-graph.md).
+The canonical [provider architecture](../../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+are authoritative.
 
 ## Dependency direction
 

@@ -4,6 +4,7 @@ import {
   distribution,
   summarizeCompilerDeliveryStatistics,
   summarizeEvidenceCorpus,
+  totalDerivedBuildBytes,
 } from '@sjshovan/dkb-compiler/buildStatistics.js';
 import {
   estimateIngestionWorkingBytes,
@@ -105,6 +106,10 @@ test('Registry delivery statistics omit unbounded source and artifact rankings',
   assert.equal('textBytesPerRecord' in result.corpus, false);
   assert.equal('largestArtifacts' in result.storage, false);
   assert.doesNotMatch(JSON.stringify(result), /private|large\.file/u);
+});
+
+test('derived storage totals do not count Retrieval Build artifacts twice', () => {
+  assert.equal(totalDerivedBuildBytes(5_387_017, 1_215_125), 6_602_142);
 });
 
 function record(id, assetId, sourcePath, text) {

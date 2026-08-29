@@ -41,7 +41,7 @@ export function createDkbReadOnlyMcpServer(options: {
         context,
       );
       const coverage = searchEvidenceCoverage(query, result.results);
-      const visibleResults = coverage >= 0.5 ? result.results : [];
+      const visibleResults = hasSufficientSearchCoverage(query, result.results) ? result.results : [];
       const results = visibleResults.map((item) => ({
         ...item,
         citationId: item.evidenceId ?? item.id,
@@ -112,7 +112,7 @@ const readOnlyAnnotations = {
   openWorldHint: false,
 } as const;
 
-function searchEvidenceCoverage(query: string, results: Array<{ matchedTokens?: string[] }>): number {
+export function searchEvidenceCoverage(query: string, results: Array<{ matchedTokens?: string[] }>): number {
   const queryTokens = [...new Set(tokenize(query)
     .filter((token) => token.length > 2 && !REMOTE_SEARCH_STOPWORDS.has(token)))];
 
@@ -120,6 +120,10 @@ function searchEvidenceCoverage(query: string, results: Array<{ matchedTokens?: 
   const matchedTokens = new Set(results.flatMap((result) => result.matchedTokens ?? []));
 
   return Math.round((queryTokens.filter((token) => matchedTokens.has(token)).length / queryTokens.length) * 10_000) / 10_000;
+}
+
+export function hasSufficientSearchCoverage(query: string, results: Array<{ matchedTokens?: string[] }>): boolean {
+  return searchEvidenceCoverage(query, results) > 0.5;
 }
 
 function tokenize(value: string): string[] {

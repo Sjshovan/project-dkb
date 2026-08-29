@@ -70,8 +70,8 @@
         "artifactBytes": 1209454,
         "evidenceBuildBytes": 5387017,
         "retrievalBuildBytes": 1215125,
-        "totalDerivedBytes": 7811596,
-        "sourceToDerivedRatio": 7.355,
+        "totalDerivedBytes": 6602142,
+        "sourceToDerivedRatio": 6.216,
         "largestArtifacts": [
           {
             "path": "faiss/chunks.faiss",

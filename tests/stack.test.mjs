@@ -7,9 +7,13 @@ import test from 'node:test';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { backupDkbStack, composeArguments, prepareDkbStack, restoreDkbStack } from '../apps/cli/dist/stack/manager.js';
-import { localImageMetadataIssue } from '../apps/cli/dist/stack/docker.js';
+import { assertDockerAvailable, localImageMetadataIssue } from '../apps/cli/dist/stack/docker.js';
 
-const dockerAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
+const dockerAvailable = spawnSync('docker', ['version'], {
+  encoding: 'utf8',
+  timeout: 5_000,
+  windowsHide: true,
+}).status === 0;
 
 test('stack image checks reject stale version and revision labels', () => {
   const current = {
@@ -21,6 +25,12 @@ test('stack image checks reject stale version and revision labels', () => {
   assert.match(localImageMetadataIssue(current, '0.3.0', 'abc123'), /version is 0\.2\.0; expected 0\.3\.0/u);
   assert.match(localImageMetadataIssue(current, '0.2.0', 'def456'), /revision is abc123; expected def456/u);
   assert.match(localImageMetadataIssue({}, '0.2.0', 'development'), /version is missing/u);
+});
+
+test('stack Docker preflight fails quickly when the engine is unavailable', { skip: dockerAvailable }, () => {
+  const started = Date.now();
+  assert.throws(assertDockerAvailable, /Docker did not respond|Docker engine is not available/iu);
+  assert.ok(Date.now() - started < 10_000, 'Docker preflight exceeded its bounded timeout');
 });
 
 test('stack preparation generates reusable local secrets without returning them', async () => {
@@ -44,6 +54,11 @@ test('stack preparation generates reusable local secrets without returning them'
     assert.deepEqual(
       composeArguments(first, ['up']).slice(-5),
       ['--profile', 'tei', '--profile', 'faiss', 'up'],
+    );
+    assert.deepEqual(first.inactiveComposeServices, ['dkb-embedder', 'meilisearch']);
+    assert.deepEqual(
+      composeArguments(first, ['rm', '--force', '--stop', ...first.inactiveComposeServices], 'all').slice(-13),
+      ['--profile', 'fastembed', '--profile', 'tei', '--profile', 'faiss', '--profile', 'meilisearch', 'rm', '--force', '--stop', 'dkb-embedder', 'meilisearch'],
     );
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
@@ -169,6 +184,9 @@ test('changing the compiler target preserves a populated Runtime target until pi
     );
     assert.equal(compiler.activeTarget, 'tei-faiss');
     assert.equal(runtime.activeTarget, 'fastembed-faiss');
+    assert.equal(switchedCompiler.runtimeTarget, 'fastembed-faiss');
+    assert.deepEqual(switchedCompiler.profiles, ['fastembed', 'tei', 'faiss']);
+    assert.deepEqual(switchedCompiler.inactiveComposeServices, ['meilisearch']);
     assert.match(environment, /^DKB_PIPELINE_TARGET=tei-faiss$/mu);
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;

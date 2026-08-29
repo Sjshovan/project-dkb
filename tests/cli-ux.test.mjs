@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { humanSummary } from '../apps/cli/dist/cli/presentation.js';
+import { summarizeStackStatus } from '../apps/cli/dist/cli/summaries.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient, writeArchiveFileFromPath } from '@sjshovan/dkb-registry-client/client.js';
 import { prepareServeLibrary } from '../apps/cli/dist/cli/serve.js';
@@ -54,6 +55,22 @@ test('health-check tables describe operational impact instead of raw booleans', 
     'public signing keys  OK      BLOCKING  200   -',
     'package listing API  FAILED  BLOCKING  503   HTTP 503',
   ]);
+});
+
+test('stack diagnostics use product names for bundled provider services', () => {
+  const summary = summarizeStackStatus({
+    name: 'proof',
+    checks: [
+      { component: 'dkb-tei', status: 'ok', message: 'ready' },
+      { component: 'dkb-embedder', status: 'failed', message: 'offline' },
+      { component: 'dkb-faiss', status: 'ok', message: 'ready' },
+    ],
+  }).join('\n');
+
+  assert.match(summary, /TEI\s+OK\s+ready/u);
+  assert.match(summary, /FastEmbed\s+FAILED\s+offline/u);
+  assert.match(summary, /FAISS\s+OK\s+ready/u);
+  assert.doesNotMatch(summary, /Dkb Tei/u);
 });
 
 test('pasted Markdown registry links produce an actionable URL error', () => {
@@ -1154,11 +1171,27 @@ test('runtime import removes its staged copy after a successful activation', asy
   try {
     await writePackageManifest(packageRoot, 'Staged Demo', '0.1.0');
     await fs.writeFile(path.join(packageRoot, 'notes.md'), 'Staged source.\n');
-    await fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index'), { recursive: true });
+    await Promise.all([
+      fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'embedding'), { recursive: true }),
+      fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index'), { recursive: true }),
+    ]);
     await fs.writeFile(path.join(packageRoot, '.dkb', 'config.json'), JSON.stringify({
       format: 'dkb.config.v2',
-      targets: { default: { index: '@test/index' } },
+      targets: { default: { embedding: '@test/embedding', index: '@test/index' } },
     }));
+    await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'embedding', 'plugin.mjs'), `
+export const apiVersion = 2;
+export const id = '@test/embedding';
+export const version = '1.0.0';
+export function setup(context) {
+  context.registerProvider({
+    kind: 'embedding',
+    async embedDocuments({ texts }) { return texts.map(() => [1]); },
+    async embedQuery() { return [1]; },
+    compatibility() { return { embeddingSpace: 'test-space', dimensions: 1, metric: 'cosine', normalized: true }; },
+  });
+}
+`);
     await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index', 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -1196,7 +1229,6 @@ export function setup(context) {
       '--container-import-root',
       '/imports',
     ], {
-      DKB_QUERY_EMBEDDER_URL: `http://127.0.0.1:${address.port}/embed`,
       DKB_LLAMA_COMPILER_SERVICE_URL: `http://127.0.0.1:${address.port}`,
       DKB_LLAMA_COMPILER_SERVICE_ROOT: path.join(tempRoot, 'compiler-service'),
     });

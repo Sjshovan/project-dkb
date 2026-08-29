@@ -1,9 +1,10 @@
 # Cross-Package Test Guidance
 
 This directory owns contract, security, packaging, CLI, and full-lifecycle
-proofs across workspaces. The architecture decision in
-[`docs/decisions/0004-monorepo-release-units-and-local-stack.md`](../docs/decisions/0004-monorepo-release-units-and-local-stack.md)
-defines the required release gate.
+proofs across workspaces. The canonical
+[provider architecture](../docs/architecture/final-provider-architecture.md)
+and [ADR 0006](../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+define the required release gate.
 
 - Test public workspace exports and executable behavior, not private source
   paths.
