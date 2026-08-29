@@ -17,4 +17,5 @@ is authoritative.
   explicit destructive command is added later.
 
 Verify rendered Compose configuration, image labels, health checks, clean-start
-migrations, service failure messages, and both default and Meilisearch targets.
+migrations, service failure messages, provider-image isolation with
+`npm run images:check`, and both default and Meilisearch targets.

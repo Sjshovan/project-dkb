@@ -26,3 +26,6 @@ container-local temporary directory.
 
 Never mount the Docker socket into the compiler or accept provider plugins from
 uploaded packages.
+
+After building the Python provider images, run `npm run images:check` to verify
+that Evidence, embedding, and FAISS dependencies are physically isolated.

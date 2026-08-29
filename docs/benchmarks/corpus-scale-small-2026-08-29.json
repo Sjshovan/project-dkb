@@ -1,0 +1,126 @@
+{
+  "format": "dkb.corpus-scale-benchmark.v1",
+  "generatedAt": "2026-08-29T10:21:01.860Z",
+  "target": "tei-faiss",
+  "boundaries": {
+    "maxProjectedMs": 900000,
+    "maxWorkingBytes": 8589934592,
+    "generatedCorpusRetained": false
+  },
+  "results": [
+    {
+      "tier": "small",
+      "status": "completed",
+      "target": "tei-faiss",
+      "wallMs": 167811.0286,
+      "corpus": {
+        "sourceFiles": 24,
+        "sourceBytes": 1062058,
+        "sourceAssets": 24,
+        "evidenceRecords": 682,
+        "evidenceChunks": 682,
+        "evidenceCharacters": 1162072,
+        "evidenceTextBytes": 1162072,
+        "textBytesPerRecord": {
+          "count": 682,
+          "min": 871,
+          "p50": 1674,
+          "p95": 1785,
+          "max": 1785,
+          "mean": 1703.92
+        },
+        "recordsPerSource": {
+          "count": 24,
+          "min": 28,
+          "p50": 28,
+          "p95": 29,
+          "max": 29,
+          "mean": 28.42
+        },
+        "densestSources": [
+          {
+            "source": "sources/document-0002.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0006.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0007.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0009.md",
+            "records": 29,
+            "textBytes": 50149
+          },
+          {
+            "source": "sources/document-0010.md",
+            "records": 29,
+            "textBytes": 50149
+          }
+        ]
+      },
+      "storage": {
+        "artifactFiles": 3,
+        "artifactBytes": 1209454,
+        "evidenceBuildBytes": 5387017,
+        "retrievalBuildBytes": 1215125,
+        "totalDerivedBytes": 7811596,
+        "sourceToDerivedRatio": 7.355,
+        "largestArtifacts": [
+          {
+            "path": "faiss/chunks.faiss",
+            "bytes": 1053098
+          },
+          {
+            "path": "faiss/chunks.sqlite",
+            "bytes": 155648
+          },
+          {
+            "path": "faiss/manifest.json",
+            "bytes": 708
+          }
+        ]
+      },
+      "timingsMs": {
+        "sourceSnapshot": 2.834,
+        "cacheLookup": 0.533,
+        "collectState": 165302.693,
+        "aggregateArtifacts": 2346.632,
+        "compileCacheWrite": 8.394,
+        "total": 167797.506
+      },
+      "aggregateTimingsMs": {
+        "stagePrepare": 3.124,
+        "retrievalArtifacts": 1996.619,
+        "lock": 0.419,
+        "buildGraph": 273.523,
+        "validation": 56.055,
+        "promotion": 10.807,
+        "cleanup": 5.62,
+        "total": 2340.67
+      },
+      "diskCapacity": {
+        "ingestion": {
+          "freeBytes": 560345280512,
+          "reserveBytes": 536870912,
+          "estimatedWorkingBytes": 268435456,
+          "requiredFreeBytes": 805306368
+        },
+        "retrieval": [
+          {
+            "freeBytes": 560343175168,
+            "reserveBytes": 536870912,
+            "estimatedWorkingBytes": 268435456,
+            "requiredFreeBytes": 805306368
+          }
+        ]
+      }
+    }
+  ]
+}
