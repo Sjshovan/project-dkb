@@ -1,6 +1,7 @@
 import path from 'node:path';
-import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import { loadCollection, loadDkb, loadLibrary, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 
 export type AlignmentTargetType = 'library' | 'collection' | 'dkb';
 export type AlignmentAuditStatus = 'aligned' | 'issues';
@@ -61,23 +62,34 @@ export async function auditKnowledgeAlignment(targetPath: string): Promise<Knowl
     : manifest.type === 'collection'
       ? await collectionTarget(resolvedPath)
       : await libraryTarget(resolvedPath);
-  const sourceIndex = await readSourceIndex(resolvedPath).catch(() => ({ assets: [], units: [], edges: [] }));
-  const chunks = sourceIndex.units.map((unit): KnowledgeAlignmentAuditChunk => {
+  const dkbs = manifest.type === 'dkb'
+    ? [await loadDkb(resolvedPath)]
+    : manifest.type === 'collection'
+      ? (await loadCollection(resolvedPath)).dkbs
+      : uniqueLoadedDkbs([...(await loadLibrary(resolvedPath)).collections.flatMap((collection) => collection.dkbs), ...(await loadLibrary(resolvedPath)).dkbs]);
+  const catalogs = await Promise.all(dkbs.map(async (dkb) => {
+    try {
+      return readEvidenceCatalog((await validatePackageBuildGraph(dkb.root)).evidencePath);
+    } catch {
+      return null;
+    }
+  }));
+  const chunks = catalogs.flatMap((catalog) => catalog?.records ?? []).map((unit): KnowledgeAlignmentAuditChunk => {
     const issues = [
       unit.text.trim().length === 0 ? 'missing_text' : null,
-      unit.hash.length === 0 ? 'missing_chunk_hash' : null,
+      unit.textHash.length === 0 ? 'missing_chunk_hash' : null,
       Object.keys(unit.locator).length === 0 ? 'missing_locator' : null,
       unit.assetId.length === 0 ? 'missing_asset_id' : null,
     ].filter((issue): issue is string => Boolean(issue));
 
     return {
-      sourceId: unit.id,
-      dkbId: unit.dkbId,
+      sourceId: unit.evidenceId,
+      dkbId: unit.packageId,
       assetId: unit.assetId,
       title: unit.title,
       searchEligible: issues.length === 0,
       issues,
-      sourceContentHash: unit.hash,
+      sourceContentHash: unit.textHash,
       updatedAt: unit.updatedAt,
     };
   }).sort((left, right) => left.dkbId.localeCompare(right.dkbId) || left.sourceId.localeCompare(right.sourceId));

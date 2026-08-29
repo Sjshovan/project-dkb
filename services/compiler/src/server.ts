@@ -10,10 +10,11 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR, manifestPath, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
-import { DKB_ARTIFACT_MANIFEST_PATH } from '@sjshovan/dkb-library/artifacts.js';
+import { manifestPath } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_ARTIFACT_MANIFEST_FILENAME } from '@sjshovan/dkb-protocol/artifacts.js';
+import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
-import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
+import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { DKB_RETRIEVAL_PROFILE_LOCK_PATH, readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
@@ -213,7 +214,8 @@ async function compileRegistryPackage(
 
     await createDkbPackageArchive(buildRoot, archivePath);
 
-    const artifactManifestPath = resolveFrom(buildRoot, DKB_ARTIFACT_MANIFEST_PATH);
+    const buildGraph = await validatePackageBuildGraph(buildRoot);
+    const artifactManifestPath = path.join(buildGraph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
     const artifactManifest = await fs.readFile(artifactManifestPath);
     const archiveHash = `sha256:${await hashFile(archivePath)}`;
     const archiveSize = (await fs.stat(archivePath)).size;
@@ -239,7 +241,7 @@ async function compileRegistryPackage(
         bytes: archiveSize,
       },
       artifactManifest: {
-        fileName: 'dkb-artifact.json',
+        fileName: DKB_ARTIFACT_MANIFEST_FILENAME,
         hash: `sha256:${createHash('sha256').update(artifactManifest).digest('hex')}`,
         contents: artifactManifest.toString('base64'),
       },

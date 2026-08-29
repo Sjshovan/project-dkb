@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@sjshovan/dkb-library/signing.js';
-import { inspectDkbArtifactManifest, validateDkbArtifactManifest, type ValidateDkbArtifactManifestResult } from '@sjshovan/dkb-library/artifacts.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { closeQueryContext, getQueryContext, invalidateQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import { retrieveKnowledge, type DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
@@ -13,11 +12,17 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbPackageReceipt, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { DKB_ARTIFACTS_DIR } from '@sjshovan/dkb-protocol/paths.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
 import { snapshotLibraryArtifacts } from '@sjshovan/dkb-library/artifactSnapshot.js';
-import { maybeReadRuntimeLock, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import {
+  maybeReadRuntimeLock,
+  validateCompiledPackage,
+  validatePackageBuildGraph,
+  writeRuntimeLock,
+  type ValidatePackageBuildResult,
+} from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { DKB_RUNTIME_LOCK_PATH } from '@sjshovan/dkb-protocol/paths.js';
 import { DKB_RUNTIME_LOCK_FORMAT, type DkbRuntimeLock } from '@sjshovan/dkb-protocol/builds.js';
 import {
@@ -85,7 +90,7 @@ export interface ImportCompiledDkbArtifactResult {
   id: string;
   libraryPath: string;
   packagePath: string;
-  validation: ValidateDkbArtifactManifestResult;
+  validation: ValidatePackageBuildResult;
   catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>>;
   search: {
     upsert: DkbIndexMutationResult;
@@ -204,7 +209,9 @@ export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntim
     const stateEntry = state.entries[id];
     const kind = stateEntry?.kind ?? (manifest.type === 'collection' ? 'collection' as const : 'dkb' as const);
     const recordCount = kind === 'dkb'
-      ? await inspectDkbArtifactManifest(packagePath).then((artifact) => artifact.counts.records).catch(() => undefined)
+      ? await validatePackageBuildGraph(packagePath)
+        .then((graph) => readEvidenceCatalog(graph.evidencePath).records.length)
+        .catch(() => undefined)
       : undefined;
 
     return {
@@ -259,9 +266,9 @@ export async function importCompiledDkbArtifactIntoRuntime(
     throw new DkbError(`Compiled artifact source does not exist: ${sourceRoot}`);
   }
 
-  const sourceValidation = await validateDkbArtifactManifest(sourceRoot, { progress: options.progress });
+  const sourceValidation = await validateCompiledPackage(sourceRoot);
 
-  if (!sourceValidation.ok || !sourceValidation.manifest) {
+  if (!sourceValidation.ok || !sourceValidation.manifest || !sourceValidation.graph) {
     throw new DkbError(`Compiled artifact validation failed at ${sourceRoot}`);
   }
   await validatePackageBuildGraph(sourceRoot);
@@ -299,9 +306,9 @@ export async function importCompiledDkbArtifactIntoRuntime(
   let indexCommitted = false;
 
   try {
-    const tempValidation = await validateDkbArtifactManifest(tempPath, { progress: options.progress });
+    const tempValidation = await validateCompiledPackage(tempPath);
 
-    if (!tempValidation.ok) {
+    if (!tempValidation.ok || !tempValidation.graph) {
       throw new DkbError(`Copied compiled artifact validation failed at ${tempPath}`);
     }
 
@@ -327,13 +334,14 @@ export async function importCompiledDkbArtifactIntoRuntime(
     }
     const sameVersionReplacement = existing?.dkb.manifest.version === stagedDkb.manifest.version;
 
-    if (sameVersionReplacement && existing.validation?.manifest?.hashes.artifactTree !== tempValidation.manifest?.hashes.artifactTree) {
+    if (sameVersionReplacement
+      && existing.validation?.graph?.retrieval.artifactTreeDigest !== tempValidation.graph.retrieval.artifactTreeDigest) {
       throw new DkbError(`Cannot atomically replace ${id}@${stagedDkb.manifest.version} with different compiled content. Bump the DKB version before updating.`);
     }
 
     const registryId = await runtimeRegistryId(paths);
     preparedIndex = await prepareRuntimeIndexPackage({ libraryRoot: paths.stateRoot, libraryId: registryId, dkb: stagedDkb });
-    let finalValidation: ValidateDkbArtifactManifestResult | undefined;
+    let finalValidation: ValidatePackageBuildResult | undefined;
     let catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>> | undefined;
     let searchUpsert: DkbIndexMutationResult | undefined;
     let removedPrevious: DkbIndexMutationResult | undefined;
@@ -355,7 +363,7 @@ export async function importCompiledDkbArtifactIntoRuntime(
         total: activationTotal,
         unit: 'steps',
       }));
-      finalValidation = await validateDkbArtifactManifest(packagePath);
+      finalValidation = await validateCompiledPackage(packagePath);
 
       if (!finalValidation.ok) {
         throw new DkbError(`Installed compiled artifact validation failed at ${packagePath}`);
@@ -755,14 +763,14 @@ async function installedDkbs(paths: DkbRuntimePaths): Promise<LoadedDkb[]> {
 
 async function maybeInstalledPackage(packagePath: string, id: string): Promise<{
   dkb: LoadedDkb;
-  validation: ValidateDkbArtifactManifestResult | null;
+  validation: ValidatePackageBuildResult | null;
 } | null> {
   if (!(await exists(packagePath))) {
     return null;
   }
 
   const dkb = await loadDkbPackage(packagePath, id);
-  const validation = await validateDkbArtifactManifest(packagePath).catch(() => null);
+  const validation = await validateCompiledPackage(packagePath).catch(() => null);
 
   return { dkb, validation };
 }

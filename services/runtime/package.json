@@ -32,7 +32,6 @@
     "@sjshovan/dkb-library": "0.1.0",
     "@sjshovan/dkb-pipeline": "0.1.0",
     "@sjshovan/dkb-protocol": "1.0.0",
-    "@sjshovan/dkb-providers-bundled": "0.1.0",
     "@sjshovan/dkb-registry-client": "0.1.0",
     "zod": "^4.4.3"
   },

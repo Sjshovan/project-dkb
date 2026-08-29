@@ -10,7 +10,7 @@ import type { DkbLibraryLockManifest, DkbSourceManifest } from '@sjshovan/dkb-pr
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
 import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@sjshovan/dkb-library/artifactSnapshot.js';
-import { DKB_PACKAGE_EXTENSION } from '@sjshovan/dkb-registry-client/archive.js';
+import { DKB_PACKAGE_EXTENSION } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient, type DkbRegistryCollectionRevision } from '@sjshovan/dkb-registry-client/client.js';
 import { installDkbArchiveIntoRuntime, preflightDkbInstall } from './registryInstall.js';
 import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';

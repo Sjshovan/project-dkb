@@ -1,9 +1,10 @@
 import { DKB_CONFIG_FORMAT, type DkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
 import { EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN } from '@sjshovan/dkb-evidence-docling-llamaindex/plugin.js';
 import { FASTEMBED_PLUGIN } from '@sjshovan/dkb-embedding-fastembed/plugin.js';
 import { TEI_PLUGIN } from '@sjshovan/dkb-embedding-tei/plugin.js';
+import { FAISS_PLUGIN } from '@sjshovan/dkb-index-faiss/plugin.js';
+import { MEILISEARCH_PLUGIN } from '@sjshovan/dkb-index-meilisearch/plugin.js';
 import { HYBRID_RETRIEVAL_PLUGIN } from '@sjshovan/dkb-retrieval-hybrid/plugin.js';
 
 const SMALL_MODEL = 'BAAI/bge-small-en-v1.5';
@@ -41,7 +42,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
   id: '@dkb/distribution-default',
   version: '0.1.0',
   defaults: DEFAULT_TARGETS,
-  plugins: [EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN, ...BUNDLED_PROVIDER_PLUGINS, FASTEMBED_PLUGIN, TEI_PLUGIN, HYBRID_RETRIEVAL_PLUGIN],
+  plugins: [EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN, FASTEMBED_PLUGIN, TEI_PLUGIN, FAISS_PLUGIN, MEILISEARCH_PLUGIN, HYBRID_RETRIEVAL_PLUGIN],
   services: [
     { id: 'evidence-docling-llamaindex', kind: 'docker', requiredBy: ['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'] },
     { id: 'embedding-fastembed', kind: 'docker', requiredBy: ['fastembed-faiss', 'fastembed-faiss-768'] },

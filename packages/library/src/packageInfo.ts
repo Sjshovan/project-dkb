@@ -4,8 +4,8 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
-import { inspectDkbArtifactManifest } from './artifacts.js';
-import { maybeReadRuntimeLock } from './builds.js';
+import { maybeReadRuntimeLock, validatePackageBuildGraph } from './builds.js';
+import { readEvidenceCatalog } from './evidenceCatalog.js';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from './signing.js';
 import { readLibraryState } from './state.js';
 
@@ -68,10 +68,11 @@ export async function inspectInstalledPackage(
 
   if (entry.kind === 'dkb') {
     try {
-      const artifact = await inspectDkbArtifactManifest(packageRoot);
+      const graph = await validatePackageBuildGraph(packageRoot);
+      const catalog = readEvidenceCatalog(graph.evidencePath);
       artifactStatus = 'ready';
-      records = artifact.counts.records;
-      sources = artifact.counts.sourceAssets ?? undefined;
+      records = catalog.records.length;
+      sources = catalog.assets.length;
     } catch (error) {
       artifactStatus = missingFileError(error) ? 'missing' : 'invalid';
     }

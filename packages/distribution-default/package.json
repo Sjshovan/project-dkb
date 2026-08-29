@@ -22,8 +22,9 @@
     "@sjshovan/dkb-embedding-fastembed": "0.1.0",
     "@sjshovan/dkb-embedding-tei": "0.1.0",
     "@sjshovan/dkb-evidence-docling-llamaindex": "0.1.0",
+    "@sjshovan/dkb-index-faiss": "0.1.0",
+    "@sjshovan/dkb-index-meilisearch": "0.1.0",
     "@sjshovan/dkb-pipeline": "0.1.0",
-    "@sjshovan/dkb-providers-bundled": "0.1.0",
     "@sjshovan/dkb-retrieval-hybrid": "0.1.0"
   },
   "engines": {

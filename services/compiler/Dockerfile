@@ -9,7 +9,14 @@ COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/library/package.json packages/library/package.json
 COPY packages/pipeline/package.json packages/pipeline/package.json
 COPY packages/registry-client/package.json packages/registry-client/package.json
+COPY packages/distribution-default/package.json packages/distribution-default/package.json
 COPY providers/bundled/package.json providers/bundled/package.json
+COPY providers/evidence-docling-llamaindex/package.json providers/evidence-docling-llamaindex/package.json
+COPY providers/embedding-fastembed/package.json providers/embedding-fastembed/package.json
+COPY providers/embedding-tei/package.json providers/embedding-tei/package.json
+COPY providers/index-faiss/package.json providers/index-faiss/package.json
+COPY providers/index-meilisearch/package.json providers/index-meilisearch/package.json
+COPY providers/retrieval-hybrid/package.json providers/retrieval-hybrid/package.json
 RUN npm ci
 COPY packages packages
 COPY providers providers
@@ -39,15 +46,29 @@ COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/library/package.json packages/library/package.json
 COPY packages/pipeline/package.json packages/pipeline/package.json
 COPY packages/registry-client/package.json packages/registry-client/package.json
+COPY packages/distribution-default/package.json packages/distribution-default/package.json
 COPY providers/bundled/package.json providers/bundled/package.json
+COPY providers/evidence-docling-llamaindex/package.json providers/evidence-docling-llamaindex/package.json
+COPY providers/embedding-fastembed/package.json providers/embedding-fastembed/package.json
+COPY providers/embedding-tei/package.json providers/embedding-tei/package.json
+COPY providers/index-faiss/package.json providers/index-faiss/package.json
+COPY providers/index-meilisearch/package.json providers/index-meilisearch/package.json
+COPY providers/retrieval-hybrid/package.json providers/retrieval-hybrid/package.json
 RUN npm ci --omit=dev --workspace @sjshovan/dkb-compiler --include-workspace-root=false
 COPY --from=build /workspace/packages/protocol/dist packages/protocol/dist
 COPY packages/protocol/schemas packages/protocol/schemas
 COPY --from=build /workspace/packages/library/dist packages/library/dist
 COPY --from=build /workspace/packages/pipeline/dist packages/pipeline/dist
 COPY --from=build /workspace/packages/registry-client/dist packages/registry-client/dist
+COPY --from=build /workspace/packages/distribution-default/dist packages/distribution-default/dist
 COPY --from=build /workspace/providers/bundled/dist providers/bundled/dist
-COPY providers/bundled/python/faiss providers/bundled/python/faiss
+COPY --from=build /workspace/providers/evidence-docling-llamaindex/dist providers/evidence-docling-llamaindex/dist
+COPY --from=build /workspace/providers/embedding-fastembed/dist providers/embedding-fastembed/dist
+COPY --from=build /workspace/providers/embedding-tei/dist providers/embedding-tei/dist
+COPY --from=build /workspace/providers/index-faiss/dist providers/index-faiss/dist
+COPY providers/index-faiss/python/faiss providers/index-faiss/python/faiss
+COPY --from=build /workspace/providers/index-meilisearch/dist providers/index-meilisearch/dist
+COPY --from=build /workspace/providers/retrieval-hybrid/dist providers/retrieval-hybrid/dist
 COPY --from=build /workspace/services/compiler/dist services/compiler/dist
 
 ENV NODE_ENV=production \

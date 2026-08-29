@@ -9,10 +9,11 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../pipeline" },
-    { "path": "../../providers/bundled" },
     { "path": "../../providers/evidence-docling-llamaindex" },
     { "path": "../../providers/embedding-fastembed" },
     { "path": "../../providers/embedding-tei" },
+    { "path": "../../providers/index-faiss" },
+    { "path": "../../providers/index-meilisearch" },
     { "path": "../../providers/retrieval-hybrid" }
   ]
 }

@@ -11,6 +11,8 @@ for (const target of [
   'packages/pipeline/dist',
   'packages/registry-client/dist',
   'providers/bundled/dist',
+  'providers/index-faiss/dist',
+  'providers/index-meilisearch/dist',
 ]) {
   await fs.rm(path.resolve(target), { recursive: true, force: true });
 }

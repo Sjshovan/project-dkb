@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { humanSummary } from '../apps/cli/dist/cli/presentation.js';
-import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
+import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient, writeArchiveFileFromPath } from '@sjshovan/dkb-registry-client/client.js';
 import { prepareServeLibrary } from '../apps/cli/dist/cli/serve.js';
 import {

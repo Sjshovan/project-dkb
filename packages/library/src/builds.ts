@@ -52,6 +52,19 @@ export interface DkbPackageBuildGraph {
   retrievalPath: string;
 }
 
+export interface ValidatePackageBuildResult {
+  ok: boolean;
+  root: string;
+  manifestPath: string;
+  manifest?: DkbArtifactManifest;
+  graph?: DkbPackageBuildGraph;
+  checks: Array<{
+    name: string;
+    ok: boolean;
+    detail: string;
+  }>;
+}
+
 export interface DkbBuildList {
   root: string;
   active: DkbRuntimeLock | null;
@@ -377,6 +390,56 @@ export async function validatePackageBuildGraph(root: string, runtimeLock?: DkbR
   assertEvidenceLayer(evidence, evidenceIr);
 
   return { evidence, retrieval, runtime, evidencePath, retrievalPath };
+}
+
+/**
+ * Validate the active, immutable Evidence/Retrieval Build chain for a package.
+ * This is the provider-neutral package verification boundary used by the CLI,
+ * Runtime, and archive transport.
+ */
+export async function validateCompiledPackage(root: string): Promise<ValidatePackageBuildResult> {
+  const resolvedRoot = path.resolve(root);
+  let graph: DkbPackageBuildGraph;
+
+  try {
+    graph = await validatePackageBuildGraph(resolvedRoot);
+  } catch (error) {
+    return {
+      ok: false,
+      root: resolvedRoot,
+      manifestPath: '',
+      checks: [{
+        name: 'build.graph',
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      }],
+    };
+  }
+
+  const manifestPath = path.join(graph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
+  const manifest = validateArtifactManifest(
+    JSON.parse(await fs.readFile(manifestPath, 'utf8')),
+    manifestPath,
+  );
+  const checks = [
+    {
+      name: 'build.graph',
+      ok: true,
+      detail: `${graph.evidence.evidenceDigest} -> ${graph.retrieval.retrievalBuildDigest}`,
+    },
+    {
+      name: 'evidence.catalog',
+      ok: true,
+      detail: `${graph.evidence.recordCount} records, ${graph.evidence.chunkCount} chunks`,
+    },
+    {
+      name: 'retrieval.artifacts',
+      ok: true,
+      detail: `${manifest.files.length} files (${graph.retrieval.artifactTreeDigest})`,
+    },
+  ];
+
+  return { ok: true, root: resolvedRoot, manifestPath, manifest, graph, checks };
 }
 
 export async function readRuntimeLock(root: string): Promise<DkbRuntimeLock> {

@@ -1,11 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
-import { artifactLockPath } from '@sjshovan/dkb-protocol/paths.js';
 import { deriveKnowledgeSpace } from '@sjshovan/dkb-protocol/space.js';
 import type { DkbManifest, DkbSourceManifest, DkcManifest, DkrManifest, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 
 export async function inspectTarget(root: string) {
   const resolvedRoot = path.resolve(root);
@@ -29,8 +28,8 @@ export async function inspectTarget(root: string) {
     manifest = dkb.manifest;
     dkbs = [dkb];
   }
-  const sourceIndex = await maybeReadSourceIndex(resolvedRoot);
-  const verification = await maybeVerify(resolvedRoot, sourceManifest.type);
+  const compiled = await compiledCatalogs(dkbs);
+  const verification = await maybeVerify(dkbs);
 
   return {
     type: sourceManifest.type,
@@ -73,29 +72,41 @@ export async function inspectTarget(root: string) {
       write: dkb.manifest.write ?? null,
     })),
     indexes: {
-      chunkCount: sourceIndex.units.length,
-      sourceAssetCount: sourceIndex.assets.length,
-      compiled: await exists(artifactLockPath(resolvedRoot)),
+      chunkCount: compiled.records,
+      sourceAssetCount: compiled.assets,
+      compiled: verification?.ok ?? false,
     },
     verification,
-    warnings: warningsFor(dkbs, sourceIndex.units.length),
+    warnings: warningsFor(dkbs, compiled.records),
   };
 }
 
-async function maybeVerify(root: string, manifestType: string) {
-  if (manifestType !== 'library' || !(await exists(artifactLockPath(root)))) {
-    return null;
-  }
-
-  return verifyComposeProject(root);
+async function maybeVerify(dkbs: LoadedDkb[]) {
+  if (dkbs.length === 0) return null;
+  const checks = await Promise.all(dkbs.map(async (dkb) => {
+    try {
+      const graph = await validatePackageBuildGraph(dkb.root);
+      return { name: dkb.manifest.id, ok: true, detail: graph.retrieval.retrievalBuildDigest };
+    } catch (error) {
+      return { name: dkb.manifest.id, ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
+  }));
+  return { ok: checks.every((check) => check.ok), checks };
 }
 
-async function maybeReadSourceIndex(root: string) {
-  try {
-    return await readSourceIndex(root);
-  } catch {
-    return { assets: [], units: [], edges: [] };
-  }
+async function compiledCatalogs(dkbs: LoadedDkb[]): Promise<{ assets: number; records: number }> {
+  const catalogs = await Promise.all(dkbs.map(async (dkb) => {
+    try {
+      const graph = await validatePackageBuildGraph(dkb.root);
+      return readEvidenceCatalog(graph.evidencePath);
+    } catch {
+      return null;
+    }
+  }));
+  return {
+    assets: catalogs.reduce((total, catalog) => total + (catalog?.assets.length ?? 0), 0),
+    records: catalogs.reduce((total, catalog) => total + (catalog?.records.length ?? 0), 0),
+  };
 }
 
 function warningsFor(dkbs: LoadedDkb[], chunkCount: number): string[] {
@@ -136,14 +147,4 @@ function safeId(value: string): string {
   const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 
   return id || 'dkb';
-}
-
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-
-    return true;
-  } catch {
-    return false;
-  }
 }

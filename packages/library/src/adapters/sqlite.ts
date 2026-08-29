@@ -1,44 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { DkbEvidence, DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { chunkSourceUnit } from '@sjshovan/dkb-providers-bundled/chunking.js';
-import { capabilitiesForSourceType, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';
+import type { DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult, DkbWriter } from './adapter.js';
 import { blocked, boundedLimit, complete, fieldsForColumns, quoteIdentifier, returnFields, sqliteType, sqlParam, validateDkbReadQuery, whereClause } from './sqlShared.js';
 
 export class SqliteAdapter implements DkbReader, DkbWriter {
   async readRecords(_dkb: LoadedDkb): Promise<DkbRecord[]> {
     return [];
-  }
-
-  async compileSourceUnits({ dkb, store }: DkbCompileSourceUnitsInput): Promise<IndexedSourceUnit[]> {
-    if (!store.path) {
-      throw new DkbError(`SQLite store ${store.id} requires path`);
-    }
-
-    const databasePath = resolveFrom(dkb.root, store.path);
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-
-    try {
-      const entries = database
-        .prepare("select name, type from sqlite_master where type in ('table', 'view') and name not like 'sqlite_%' order by name")
-        .all() as Array<{ name: string; type: 'table' | 'view' }>;
-
-      return entries.flatMap((entry) => {
-        const columns = database.prepare(`pragma table_info(${quoteIdentifier(entry.name)})`).all() as Array<{ name: string; type: string; pk?: number }>;
-
-        return rowChunks(database, entry.name, columns, {
-          dkbId: dkb.manifest.id,
-          storeId: store.id,
-          databasePath: path.relative(dkb.root, databasePath).replace(/\\/g, '/'),
-        });
-      }).sort((left, right) => left.id.localeCompare(right.id));
-    } finally {
-      database.close();
-    }
   }
 
   async executeReadPlan({ dkb, store, record, query, sourceUnits }: DkbExecuteReadPlanInput): Promise<DkbReadPlanResult> {
@@ -130,84 +100,10 @@ export class SqliteAdapter implements DkbReader, DkbWriter {
   }
 }
 
-function rowChunks(
-  database: DatabaseSync,
-  table: string,
-  columns: Array<{ name: string; type: string; pk?: number }>,
-  input: { dkbId: string; storeId: string; databasePath: string },
-): IndexedSourceUnit[] {
-  const scalarColumns = columns
-    .filter((column) => sqliteType(column.type) !== 'unknown')
-    .filter((column) => isModelVisibleSourceColumn(column.name))
-    .map((column) => column.name)
-    .slice(0, 32);
-
-  if (scalarColumns.length === 0) {
-    return [];
-  }
-
-  const primaryKey = columns
-    .filter((column) => typeof column.pk === 'number' && column.pk > 0)
-    .sort((left, right) => (left.pk ?? 0) - (right.pk ?? 0))[0]?.name;
-  const selectFields = ['rowid as __dkb_rowid', ...scalarColumns.map(quoteIdentifier)].join(', ');
-  const rows = database.prepare(`select ${selectFields} from ${quoteIdentifier(table)}`).all() as Array<Record<string, unknown>>;
-
-  return rows.flatMap((row, index) => {
-    const rowid = row.__dkb_rowid;
-    const pkValue = primaryKey ? row[primaryKey] : undefined;
-    const locator = {
-      path: input.databasePath,
-      table,
-      type: 'row',
-      ...(typeof rowid === 'number' || typeof rowid === 'bigint' ? { rowid: Number(rowid) } : {}),
-      ...(primaryKey && pkValue !== undefined ? { primaryKey: { field: primaryKey, value: pkValue } } : {}),
-      ordinal: index,
-    };
-    const text = scalarColumns
-      .map((column) => {
-        const value = row[column];
-
-        return value === null || value === undefined ? null : `${table}.${column}: ${String(value).replace(/\s+/g, ' ').slice(0, 500)}`;
-      })
-      .filter((value): value is string => Boolean(value))
-      .join(' ');
-    const title = `${table} row ${primaryKey && pkValue !== undefined ? String(pkValue) : index + 1}`;
-    const updatedAt = stableHash({ dkbId: input.dkbId, storeId: input.storeId, table, locator, text });
-
-    return chunkSourceUnit({
-      dkbId: input.dkbId,
-      storeId: input.storeId,
-      type: 'sqlite',
-      unit: {
-        locator,
-        title,
-        text,
-        hash: updatedAt,
-        updatedAt,
-      },
-      fallbackTitle: title,
-      fallbackUpdatedAt: updatedAt,
-    }).map((chunk) => ({
-      ...chunk,
-      dkbId: input.dkbId,
-      storeId: input.storeId,
-      type: 'sqlite' as const,
-      assetLocator: { path: input.databasePath, table },
-      capabilities: capabilitiesForSourceType('sqlite'),
-      queryable: {
-        operations: ['lookup', 'search', 'aggregate'],
-        fields: fieldsForColumns(columns),
-        defaultLimit: 20,
-        maxLimit: 100,
-      },
-    }));
-  });
-}
-
 function selectedRowEvidence(
   database: DatabaseSync,
   query: DkbExecuteReadPlanInput['query'],
-  sourceUnits: IndexedSourceUnit[],
+  sourceUnits: NonNullable<DkbExecuteReadPlanInput['sourceUnits']>,
 ): { rows: Array<Record<string, unknown>>; tables: string[] } {
   const result: Array<Record<string, unknown>> = [];
   const tables = new Set<string>();
@@ -265,17 +161,4 @@ function rowSelector(locator: Record<string, unknown>, columns: Array<{ name: st
   }
 
   return null;
-}
-
-function isModelVisibleSourceColumn(column: string): boolean {
-  const normalized = column.toLowerCase();
-
-  return normalized !== 'source'
-    && normalized !== 'metadata'
-    && normalized !== 'metadata_json'
-    && normalized !== 'locator'
-    && normalized !== 'path'
-    && !normalized.endsWith('_path')
-    && !normalized.endsWith('_locator')
-    && !normalized.startsWith('__dkb_');
 }

@@ -12,7 +12,7 @@ import { compileDkbWithProviderHost } from '@sjshovan/dkb-compiler/pipelineRunne
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-providers-bundled/meilisearchProvider.js';
+import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
 import { readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { listPackageBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';

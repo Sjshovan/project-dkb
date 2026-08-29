@@ -2,7 +2,6 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod/v4';
 import { DKB_PROTOCOL_VERSION } from '@sjshovan/dkb-protocol/version.js';
 import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
-import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
 import { getQueryContext } from '../indexes/queryContext.js';
 import { readDkb } from '../read/runtime.js';
 import { semanticSearch } from '../read/navigation.js';
@@ -119,6 +118,11 @@ function searchEvidenceCoverage(query: string, results: Array<{ matchedTokens?: 
   const matchedTokens = new Set(results.flatMap((result) => result.matchedTokens ?? []));
 
   return Math.round((queryTokens.filter((token) => matchedTokens.has(token)).length / queryTokens.length) * 10_000) / 10_000;
+}
+
+function tokenize(value: string): string[] {
+  return (value.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) ?? [])
+    .flatMap((token) => token.includes('-') ? [token, ...token.split('-')] : [token]);
 }
 
 function citationUrl(publicBaseUrl: string | undefined, id: string): string | null {

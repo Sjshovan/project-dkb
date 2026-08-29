@@ -12,7 +12,7 @@ import { validateInstallPlan, type DkbInstallPlan, type DkbInstallPlanArtifact }
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
-import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE } from './archive.js';
+import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE } from '@sjshovan/dkb-library/archive.js';
 import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from './config.js';
 import { loadRegistryCredentialSync } from './credentials.js';
 

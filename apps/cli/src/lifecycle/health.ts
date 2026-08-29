@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { COMPILE_CACHE_PATH, compileComposeProject, verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { COMPILE_CACHE_PATH, compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { invalidateQueryContext } from '@sjshovan/dkb-runtime/indexes/queryContext.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_ARTIFACT_LOCK_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_BUILDS_DIR, DKB_RUNTIME_LOCK_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { deriveKnowledgeSpace } from '@sjshovan/dkb-protocol/space.js';
 import type { DkbManifest, DkbSourceManifest, DkbStore, DkcManifest, DkrManifest, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { defaultWriteQueueRoot, listQueuedWrites } from '../writes/queue.js';
@@ -47,10 +47,8 @@ export interface RestoreIndexesResult {
 }
 
 const ARTIFACTS = [
-  SOURCE_INDEX_PATH,
-  SOURCE_GRAPH_PATH,
-  SOURCE_VECTOR_PATH,
-  DKB_ARTIFACT_LOCK_PATH,
+  DKB_BUILDS_DIR,
+  DKB_RUNTIME_LOCK_PATH,
   COMPILE_CACHE_PATH,
 ];
 
@@ -95,25 +93,28 @@ export async function healthReport(root: string, queueRoot?: string): Promise<Dk
   });
 
   const artifacts = await Promise.all(ARTIFACTS.map((artifact) => artifactStatus(resolvedRoot, artifact)));
-  const lockExists = artifacts.find((artifact) => artifact.path === DKB_ARTIFACT_LOCK_PATH)?.exists ?? false;
-
   checks.push(...await sourceChecks(dkbs));
-
-  if (lockExists) {
-    const verification = await verifyComposeProject(resolvedRoot);
-
-    checks.push({
-      name: 'verify',
-      ok: verification.ok,
-      status: verification.ok ? 'ready' : 'degraded',
-      detail: verification.ok ? 'lockfile and artifacts verify' : 'lockfile or generated artifacts are stale',
-    });
-  } else {
+  if (dkbs.length === 0) {
     checks.push({
       name: 'verify',
       ok: false,
       status: 'degraded',
-      detail: 'compiled artifact lock is missing; run dkb restore or dkb build',
+      detail: 'no active DKB packages are available to verify',
+    });
+  } else {
+    const builds = await Promise.all(dkbs.map(async (dkb) => {
+      try {
+        const graph = await validatePackageBuildGraph(dkb.root);
+        return { ok: true, detail: `${dkb.manifest.id}@${dkb.manifest.version}: ${graph.retrieval.retrievalBuildDigest}` };
+      } catch (error) {
+        return { ok: false, detail: `${dkb.manifest.id}@${dkb.manifest.version}: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }));
+    checks.push({
+      name: 'verify',
+      ok: builds.every((build) => build.ok),
+      status: builds.every((build) => build.ok) ? 'ready' : 'degraded',
+      detail: builds.map((build) => build.detail).join('; '),
     });
   }
 

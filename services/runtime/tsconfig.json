@@ -11,8 +11,7 @@
     { "path": "../../packages/pipeline" },
     { "path": "../../packages/library" },
     { "path": "../../packages/distribution-default" },
-    { "path": "../../packages/registry-client" },
-    { "path": "../../providers/bundled" }
+    { "path": "../../packages/registry-client" }
   ],
   "include": ["src/**/*.ts"]
 }

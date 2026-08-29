@@ -1,5 +1,4 @@
-import { canCompileSourceUnits } from '@sjshovan/dkb-library/adapters/adapter.js';
-import { adapterFor, adapterForStore } from '@sjshovan/dkb-library/adapters/index.js';
+import { adapterFor } from '@sjshovan/dkb-library/adapters/index.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,7 +46,6 @@ import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { sourceUnitFromPipelineRecord } from '@sjshovan/dkb-providers-bundled/records.js';
 import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
 import type { DkbCompiledPipeline, DkbIndexProvider, DkbPipelineRecord } from '@sjshovan/dkb-pipeline/types.js';
-import { loadFaissPackageArtifact } from '@sjshovan/dkb-providers-bundled/faissStore.js';
 import {
   summarizeBuildStorage,
   summarizeEvidenceCorpus,
@@ -1542,11 +1540,10 @@ async function buildSourceUnitsForDkb(
       diskCapacity,
     };
   }
-  const batches = await Promise.all(storesForDkb(dkb).map((store) => buildSourceUnitsForStore(dkb, store)));
-
-  return {
-    units: batches.flat().sort((a, b) => a.id.localeCompare(b.id)),
-  };
+  throw new DkbError(
+    `Compilation for ${dkb.manifest.id} requires a selected Evidence provider. `
+    + 'Library adapters never parse or chunk source content.',
+  );
 }
 
 function annotateEvidenceIds(
@@ -1663,20 +1660,6 @@ function llamaIndexResult(value: unknown): LlamaIndexCompilerResult | null {
     return null;
   }
   return value as unknown as LlamaIndexCompilerResult;
-}
-
-async function buildSourceUnitsForStore(dkb: LoadedDkb, store: DkbStore): Promise<IndexedSourceUnit[]> {
-  if (store.permissions?.read === false) {
-    return [];
-  }
-
-  const adapter = await adapterForStore(store.type);
-
-  if (canCompileSourceUnits(adapter)) {
-    return adapter.compileSourceUnits({ dkb, store });
-  }
-
-  throw new DkbError(`Store type ${store.type} does not support direct chunk compilation`);
 }
 
 function countSourceUnitsByStore(units: IndexedSourceUnit[]): Map<string, number> {

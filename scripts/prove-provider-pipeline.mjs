@@ -7,13 +7,13 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@sjshovan/dkb-providers-bundled/faissStore.js';
-import { validateMeilisearchPackageArtifact } from '@sjshovan/dkb-providers-bundled/meilisearchProvider.js';
+import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@sjshovan/dkb-index-faiss/faissStore.js';
+import { validateMeilisearchPackageArtifact } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
 import { getQueryContext, closeQueryContext } from '../services/runtime/dist/indexes/queryContext.js';
 import { readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { semanticSearch } from '../services/runtime/dist/read/navigation.js';
 import { loadDkb, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
-import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
+import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
 import { serveDkbRegistryCompiler } from '@sjshovan/dkb-compiler/server.js';
 

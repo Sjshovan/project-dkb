@@ -1,16 +1,10 @@
-import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbEvidence, DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import type { IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import type { DkbCompileSourceUnitsInput, DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult } from './adapter.js';
+import type { DkbExecuteReadPlanInput, DkbReader, DkbReadPlanResult } from './adapter.js';
 import { blocked, complete } from './sqlShared.js';
 
 export class PostgresAdapter implements DkbReader {
   async readRecords(_dkb: LoadedDkb): Promise<DkbRecord[]> {
     return [];
-  }
-
-  async compileSourceUnits(_input: DkbCompileSourceUnitsInput): Promise<IndexedSourceUnit[]> {
-    throw new DkbError('Postgres direct chunk compilation is not implemented; use a compiler adapter that emits compiled chunks.');
   }
 
   async executeReadPlan({ query, sourceUnits }: DkbExecuteReadPlanInput): Promise<DkbReadPlanResult> {

@@ -12,6 +12,12 @@ const required = [
   'packages/pipeline/AGENTS.md',
   'packages/registry-client/AGENTS.md',
   'providers/bundled/AGENTS.md',
+  'providers/evidence-docling-llamaindex/AGENTS.md',
+  'providers/embedding-fastembed/AGENTS.md',
+  'providers/embedding-tei/AGENTS.md',
+  'providers/index-faiss/AGENTS.md',
+  'providers/index-meilisearch/AGENTS.md',
+  'providers/retrieval-hybrid/AGENTS.md',
   'deploy/AGENTS.md',
   'tests/AGENTS.md',
 ];

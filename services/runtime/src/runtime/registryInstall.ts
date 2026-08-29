@@ -11,7 +11,7 @@ import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js'
 import { evidenceBuildPath, retrievalBuildPath } from '@sjshovan/dkb-protocol/paths.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { validateDkbArtifactManifest } from '@sjshovan/dkb-library/artifacts.js';
+import { validateCompiledPackage } from '@sjshovan/dkb-library/builds.js';
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
   DKB_PACKAGE_RECEIPT_PATH,
@@ -22,7 +22,7 @@ import {
 } from '@sjshovan/dkb-library/signing.js';
 import { activateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
-import { extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
+import { extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { ensureRuntimeState, importCompiledDkbArtifactIntoRuntime } from './state.js';
 
@@ -417,7 +417,7 @@ async function verifyExtractedPackage(
   const payloadMatchesLock = stableHash(packageReceiptPayloadForLock(receipt.payload.lock, receipt.payload.packageTreeHash)) === receipt.payloadHash;
   const sourceTree = receipt.payload.packageTreeHash ? await hashPortablePackageTree(root) : null;
   const packageTreeMatches = !receipt.payload.packageTreeHash || sourceTree?.hash === receipt.payload.packageTreeHash;
-  const artifact = await validateDkbArtifactManifest(root, { progress });
+  const artifact = await validateCompiledPackage(root);
   // A portable source receipt may have been published with a Registry-default
   // compiled chain. Layered installs authenticate the selected Evidence and
   // Retrieval Builds through their own signed child receipts, so applying the

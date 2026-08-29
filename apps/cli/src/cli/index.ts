@@ -63,17 +63,18 @@ program
   .command('version')
   .description('Show independently versioned DKB components and compatibility')
   .action(async () => {
-    const [{ DKB_COMPILER_VERSION }, { DKB_RUNTIME_VERSION }, { DKB_BUNDLED_PROVIDERS_VERSION }] = await Promise.all([
+    const [{ DKB_COMPILER_VERSION }, { DKB_RUNTIME_VERSION }, { DEFAULT_DKB_DISTRIBUTION }] = await Promise.all([
       import('@sjshovan/dkb-compiler/version.js'),
       import('@sjshovan/dkb-runtime/version.js'),
-      import('@sjshovan/dkb-providers-bundled/version.js'),
+      import('@sjshovan/dkb-distribution-default'),
     ]);
     const result = {
       cli: DKB_CLI_VERSION,
       protocol: DKB_PROTOCOL_VERSION,
       runtime: DKB_RUNTIME_VERSION,
       compiler: DKB_COMPILER_VERSION,
-      providers: DKB_BUNDLED_PROVIDERS_VERSION,
+      distribution: `${DEFAULT_DKB_DISTRIBUTION.id}@${DEFAULT_DKB_DISTRIBUTION.version}`,
+      providers: DEFAULT_DKB_DISTRIBUTION.plugins.map((plugin) => `${plugin.id}@${plugin.version}`),
       buildCommit: process.env.DKB_BUILD_COMMIT ?? 'development',
       compatibility: DKB_PROTOCOL_COMPATIBILITY,
     };
@@ -85,7 +86,8 @@ program
         `protocol: ${versions.protocol} (${versions.compatibility})`,
         `Runtime: ${versions.runtime}`,
         `compiler: ${versions.compiler}`,
-        `providers: ${versions.providers}`,
+        `distribution: ${versions.distribution}`,
+        `providers: ${versions.providers.join(', ')}`,
         `build: ${versions.buildCommit}`,
       ];
     });
@@ -1163,7 +1165,7 @@ registry
   .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
   .action(async (packageId: string, options: { version?: string; url?: string; token?: string }) => {
     const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
-    const { DKB_PACKAGE_EXTENSION } = await import('@sjshovan/dkb-registry-client/archive.js');
+    const { DKB_PACKAGE_EXTENSION } = await import('@sjshovan/dkb-library/archive.js');
     const { verifyDkbArchiveFile } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
     const { configuredRegistry } = await import('./registryConfig.js');
     const registryConfig = await configuredRegistry({ url: options.url });
@@ -1670,34 +1672,34 @@ program
 
 program
   .command('artifact')
-  .description('Inspect, validate, and package compiled DKB artifacts')
+  .description('Inspect, validate, and package immutable DKB Builds')
   .addCommand(new Command('inspect')
-    .description('Inspect .dkb/artifacts/dkb-artifact.json')
-    .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
+    .description('Inspect the active Evidence and Retrieval Build graph')
+    .argument('<path>', 'Compiled DKB package directory')
     .action(async (target: string) => {
-      const { inspectDkbArtifactManifest } = await import('@sjshovan/dkb-library/artifacts.js');
+      const { validateCompiledPackage } = await import('@sjshovan/dkb-library/builds.js');
 
-      printJson(await inspectDkbArtifactManifest(path.resolve(target)));
+      printJson(await validateCompiledPackage(path.resolve(target)));
     }))
   .addCommand(new Command('validate')
-    .description('Validate a compiled DKB artifact manifest and listed files')
-    .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
+    .description('Validate the immutable Evidence and Retrieval Build chain')
+    .argument('<path>', 'Compiled DKB package directory')
     .action(async (target: string) => {
-      const { validateDkbArtifactManifest } = await import('@sjshovan/dkb-library/artifacts.js');
-      const result = await presenter().check('Compiled artifact validation', async (progress) => validateDkbArtifactManifest(path.resolve(target), { progress }), (value) => value.ok);
+      const { validateCompiledPackage } = await import('@sjshovan/dkb-library/builds.js');
+      const result = await presenter().check('Compiled Build validation', async () => validateCompiledPackage(path.resolve(target)), (value) => value.ok);
 
       if (!result.ok) {
         process.exitCode = 1;
       }
     }))
   .addCommand(new Command('pack')
-    .description('Create a deterministic .dkbpkg archive from a validated compiled artifact')
-    .argument('<path>', 'Directory containing a compiled DKB artifact manifest')
+    .description('Create a deterministic .dkbpkg archive from a validated Build graph')
+    .argument('<path>', 'Compiled DKB package directory')
     .requiredOption('--out <path>', 'Archive path to write')
     .action(async (target: string, options: { out: string }) => {
-      const { packDkbArtifact } = await import('@sjshovan/dkb-library/artifacts.js');
+      const { packCompiledPackage } = await import('@sjshovan/dkb-library/archive.js');
 
-      await presenter().run('Packing compiled artifact', async () => packDkbArtifact(path.resolve(target), path.resolve(options.out)), summarizeArtifactTransport);
+      await presenter().run('Packing compiled package', async () => packCompiledPackage(path.resolve(target), path.resolve(options.out)), summarizeArtifactTransport);
     }))
   .addCommand(new Command('install')
     .description('Install a validated extracted compiled artifact into a runtime without recompiling source')

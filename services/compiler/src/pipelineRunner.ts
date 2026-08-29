@@ -2,7 +2,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import { pipelineRecordMetadata, refreshMutatedRecordHashes } from '@sjshovan/dkb-providers-bundled/records.js';
+import { pipelineRecordMetadata, refreshMutatedRecordHashes } from './records.js';
 import type {
   DkbChunkerProvider,
   DkbCompiledPipeline,
