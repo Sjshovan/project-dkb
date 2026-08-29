@@ -204,10 +204,16 @@ try {
     await assertRuntimeMarker('SYSTEMS-RETRY-83', true);
     await assertRuntimeMarker('SYSTEMS-UPDATE-62', false);
     await assertRuntimeMarker('WHALE-BUBBLE-73', true);
-    // One index per active package release and compatibility space. A
-    // multi-space proof retains the marine package's inactive alternate index,
-    // while replacing the systems release removes every old-version index.
-    await assertMeilisearchIndexCount(multiSpace ? 3 : 2);
+    // One index per active package release and Meilisearch compatibility
+    // space. A FAISS alternate retains a Retrieval Build but creates no
+    // managed index. Replacing the systems release removes every old-version
+    // index from all spaces.
+    const retainedMarineMeilisearchSpaces = 1 + Number(
+      alternateTarget
+      && alternateTarget !== initialTarget
+      && usesMeilisearch(alternateTarget),
+    );
+    await assertMeilisearchIndexCount(retainedMarineMeilisearchSpaces + 1);
     failureRollback = true;
     retryAfterFailure = true;
   }
