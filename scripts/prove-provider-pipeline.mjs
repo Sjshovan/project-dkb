@@ -1,32 +1,27 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@sjshovan/dkb-index-faiss/faissStore.js';
-import { validateMeilisearchPackageArtifact } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { getQueryContext, closeQueryContext } from '../services/runtime/dist/indexes/queryContext.js';
 import { semanticSearch } from '../services/runtime/dist/read/navigation.js';
 import { loadDkb, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { DKB_ARTIFACT_MANIFEST_FILENAME, validateArtifactManifest } from '@sjshovan/dkb-protocol/artifacts.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
-import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
+import { prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
 import { serveDkbRegistryCompiler } from '@sjshovan/dkb-compiler/server.js';
 import { readEvidenceBuild, readRetrievalBuildProfile, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
 
-const executeFile = promisify(execFile);
-
 const configuredCompilerUrl = process.env.DKB_PROOF_COMPILER_URL?.replace(/\/+$/, '');
 const target = process.env.DKB_PROOF_TARGET ?? 'default';
-const embeddingModel = process.env.DKB_PROOF_MODEL ?? 'BAAI/bge-small-en-v1.5';
-const embeddingDimensions = Number.parseInt(process.env.DKB_PROOF_DIMENSIONS ?? '384', 10);
-
-if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
-  throw new Error('DKB_PROOF_DIMENSIONS must be a positive integer');
-}
+const targetRecipe = DEFAULT_DKB_DISTRIBUTION.defaults.targets[target];
+if (!targetRecipe) throw new Error(`Unknown DKB_PROOF_TARGET ${target}`);
+const embeddingOptions = targetRecipe.options?.[targetRecipe.embedding] ?? {};
+const embeddingModel = typeof embeddingOptions.model === 'string' ? embeddingOptions.model : 'provider-defined';
+const embeddingDimensions = Number.isInteger(embeddingOptions.dimensions) ? embeddingOptions.dimensions : null;
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-proof-'));
 const sourceRoot = path.join(proofRoot, 'source');
 const localRoot = path.join(proofRoot, 'local');
@@ -36,19 +31,12 @@ const sourceArchive = path.join(proofRoot, 'source.dkbpkg');
 const remoteArchive = path.join(proofRoot, 'remote.dkbpkg');
 const compilerContextRoot = path.join(proofRoot, 'compiler-context');
 const previousContextRoot = process.env.DKB_CONTEXT_ROOT;
-const previousQueryEmbedderUrl = process.env.DKB_QUERY_EMBEDDER_URL;
 let compilerServer;
 let compilerUrl = configuredCompilerUrl;
-let embedderContainer;
 
 try {
   await fs.mkdir(compilerContextRoot, { recursive: true });
   await writePipelineConfig(compilerContextRoot);
-  if (!process.env.DKB_QUERY_EMBEDDER_URL) {
-    const embedder = await startQueryEmbedder();
-    embedderContainer = embedder.container;
-    process.env.DKB_QUERY_EMBEDDER_URL = embedder.url;
-  }
   if (!compilerUrl) {
     process.env.DKB_CONTEXT_ROOT = compilerContextRoot;
     compilerServer = await serveDkbRegistryCompiler({ host: '127.0.0.1', port: 0 });
@@ -111,18 +99,12 @@ try {
   assert.equal(localLock.buildDigest, remoteLock.buildDigest, 'local and remote build digests differ');
   assert.equal(localLock.compatibilityDigest, remoteLock.compatibilityDigest, 'local and remote compatibility digests differ');
   assert.deepEqual(normalizeEvidence(localIr), normalizeEvidence(remoteIr), 'Evidence IR identity differs');
-  const [localDkb, remoteDkb] = await Promise.all([loadDkb(localRoot), loadDkb(remoteRoot)]);
-  const [localArtifact, remoteArtifact] = target === 'meilisearch'
-    ? await Promise.all([validateMeilisearchPackageArtifact(localDkb), validateMeilisearchPackageArtifact(remoteDkb)])
-    : await Promise.all([loadFaissPackageArtifact(localDkb), loadFaissPackageArtifact(remoteDkb)]);
-  if (target === 'meilisearch') {
-    assert.equal(localArtifact.manifest.releaseDigest, remoteArtifact.manifest.releaseDigest, 'compiled Meilisearch import differs');
-  } else {
-    assert.equal(localArtifact.manifest.files.segment.hash, remoteArtifact.manifest.files.segment.hash, 'compiled vector index differs');
-  }
-  const localUnits = target === 'meilisearch' ? localArtifact.records.map((record) => record.unit) : localArtifact.units;
-  const remoteUnits = target === 'meilisearch' ? remoteArtifact.records.map((record) => record.unit) : remoteArtifact.units;
-  assert.deepEqual(normalizeUnits(localUnits), normalizeUnits(remoteUnits), 'compiled vector catalog contents differ');
+  const [localArtifact, remoteArtifact] = await Promise.all([
+    readArtifactManifest(localGraph.retrievalPath),
+    readArtifactManifest(remoteGraph.retrievalPath),
+  ]);
+  assert.deepEqual(normalizeArtifactManifest(localArtifact), normalizeArtifactManifest(remoteArtifact), 'generic retrieval artifact manifests differ');
+  assert.equal(localGraph.retrieval.artifactTreeDigest, remoteGraph.retrieval.artifactTreeDigest, 'generic retrieval artifact trees differ');
   await assert.rejects(fs.access(path.join(remoteRoot, '.dkb/plugins')), (error) => error?.code === 'ENOENT');
   await assert.rejects(fs.access(path.join(remoteRoot, '.dkb/config.json')), (error) => error?.code === 'ENOENT');
 
@@ -153,29 +135,20 @@ try {
     }
   } finally {
     await closeQueryContext(queryRoot);
-    if (target === 'meilisearch') {
-      await cleanupRuntimeIndexPackage({
-        runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-        libraryRoot: queryRoot,
-        libraryId: queryLibraryId,
-        packageId: '@proof/comparative-corpus',
-        packageVersion: '1.0.0',
-      });
-    } else {
-      await prepared.rollback();
-    }
+    await prepared.rollback();
   }
 
   console.log(JSON.stringify({
     ok: true,
     target,
-    embedding: { model: embeddingModel, dimensions: embeddingDimensions },
+    embedding: { provider: targetRecipe.embedding, model: embeddingModel, dimensions: embeddingDimensions },
+    index: localArtifact.index,
     proofRoot,
     local: { recordCount: local.recordCount, buildDigest: localLock.buildDigest },
     remote: { recordCount: remote.recordCount, buildDigest: remoteLock.buildDigest },
     compatibilityDigest: localLock.compatibilityDigest,
     evidenceCount: localIr.evidence.length,
-    vectorCount: target === 'meilisearch' ? localArtifact.manifest.recordCount : localArtifact.manifest.chunkCount,
+    artifactCount: localArtifact.files.length,
     searches,
   }, null, 2));
 } catch (error) {
@@ -192,58 +165,9 @@ try {
   }
   if (previousContextRoot === undefined) delete process.env.DKB_CONTEXT_ROOT;
   else process.env.DKB_CONTEXT_ROOT = previousContextRoot;
-  if (previousQueryEmbedderUrl === undefined) delete process.env.DKB_QUERY_EMBEDDER_URL;
-  else process.env.DKB_QUERY_EMBEDDER_URL = previousQueryEmbedderUrl;
-  if (embedderContainer) {
-    await executeFile('docker', ['rm', '-f', embedderContainer], { windowsHide: true }).catch(() => undefined);
+  if (process.env.DKB_KEEP_PROOF_ROOT !== '1') {
+    await fs.rm(proofRoot, { recursive: true, force: true });
   }
-  await fs.rm(proofRoot, { recursive: true, force: true });
-}
-
-async function startQueryEmbedder() {
-  const container = `dkb-provider-proof-embedder-${process.pid}-${Date.now().toString(36)}`;
-  const port = await availablePort();
-  const image = process.env.DKB_EVIDENCE_IMAGE ?? 'dkb-evidence-docling-llamaindex:0.1.0';
-  await executeFile('docker', [
-    'run', '--detach', '--rm', '--name', container,
-    '--publish', `127.0.0.1:${port}:8090`,
-    '--env', `DKB_FASTEMBED_MODEL=${embeddingModel}`,
-    image,
-    'python', '-m', 'uvicorn', 'embedder:app', '--host', '0.0.0.0', '--port', '8090',
-  ], { windowsHide: true });
-  embedderContainer = container;
-  const url = `http://127.0.0.1:${port}/embed`;
-  const deadline = Date.now() + 180_000;
-
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(3_000) });
-      const body = await response.json();
-      if (response.ok && body.ok === true && body.model === embeddingModel) return { container, url };
-    } catch {
-      // Importing FastEmbed and warming its model can take a moment on a clean host.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-
-  const { stdout = '', stderr = '' } = await executeFile('docker', ['logs', container], {
-    windowsHide: true,
-    maxBuffer: 4 * 1024 * 1024,
-  }).catch((error) => ({ stdout: error.stdout, stderr: error.stderr }));
-  throw new Error(`Query embedder did not become healthy from ${image}. ${stdout}${stderr}`.trim());
-}
-
-async function availablePort() {
-  const { createServer } = await import('node:net');
-  const server = createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  assert.notEqual(typeof address, 'string');
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return address.port;
 }
 
 function normalizeEvidence(ir) {
@@ -255,17 +179,17 @@ function normalizeEvidence(ir) {
   };
 }
 
-function normalizeUnits(units) {
-  return units.map((unit) => ({
-    id: unit.id,
-    dkbId: unit.dkbId,
-    storeId: unit.storeId,
-    assetId: unit.assetId,
-    title: unit.title,
-    text: unit.text,
-    hash: unit.hash,
-    locator: unit.locator,
-  })).sort((left, right) => left.id.localeCompare(right.id));
+async function readArtifactManifest(retrievalRoot) {
+  const manifestPath = path.join(retrievalRoot, DKB_ARTIFACT_MANIFEST_FILENAME);
+  return validateArtifactManifest(JSON.parse(await fs.readFile(manifestPath, 'utf8')), manifestPath);
+}
+
+function normalizeArtifactManifest(manifest) {
+  const { generatedAt: _generatedAt, ...identity } = manifest;
+  return {
+    ...identity,
+    files: manifest.files.map((file) => ({ ...file })).sort((left, right) => left.path.localeCompare(right.path)),
+  };
 }
 
 function sha256(contents) {
@@ -292,24 +216,9 @@ async function writeCorpus(root) {
 }
 
 async function writePipelineConfig(root) {
-  if (target === 'default' && embeddingModel === 'BAAI/bge-small-en-v1.5' && embeddingDimensions === 384) return;
-  const managed = target === 'meilisearch';
   await fs.mkdir(path.join(root, '.dkb'), { recursive: true });
   await fs.writeFile(path.join(root, '.dkb/config.json'), `${JSON.stringify({
     format: 'dkb.config.v2',
     activeTarget: target,
-    targets: {
-      [target]: {
-        evidence: '@dkb/evidence-docling-llamaindex',
-        embedding: '@dkb/embedding-fastembed',
-        index: managed ? '@dkb/index-meilisearch' : '@dkb/index-faiss',
-        retrieval: '@dkb/retrieval-hybrid',
-        processors: [],
-        options: {
-          '@dkb/embedding-fastembed': { model: embeddingModel, dimensions: embeddingDimensions },
-          ...(managed ? { '@dkb/index-meilisearch': { urlEnv: 'MEILI_URL', apiKeyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 } } : {}),
-        },
-      },
-    },
   }, null, 2)}\n`, 'utf8');
 }

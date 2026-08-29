@@ -6,7 +6,6 @@ import json
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +28,7 @@ DOCLING_ENABLED = os.environ.get("DKB_DOCLING_RICH_FILES", "1").lower() not in {
 DOCLING_FALLBACK = os.environ.get("DKB_DOCLING_FALLBACK", "1").lower() not in {"0", "false", "no", "off"}
 DEFAULT_DOCLING_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
 EXCLUDED_FILES = {"dkb.json", "dkb-lock.json", "dkb-profile.lock.json", "dkb-release.json", ".dkb-package.json"}
+SOURCE_UPDATED_AT = "1970-01-01T00:00:00.000Z"
 
 _DOCLING_CONVERTER: Any | None = None
 _DOCLING_CHUNKER: Any | None = None
@@ -343,7 +343,10 @@ def docling_chunk_record_base(
         "title": target.name,
         "text": text,
         "hash": digest_text(text),
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        # Compilation time is not source provenance and would make identical
+        # inputs produce different Evidence IR. Until a source adapter supplies
+        # a durable source timestamp, use the protocol's deterministic epoch.
+        "updatedAt": SOURCE_UPDATED_AT,
         "chunkOrdinal": ordinal,
         "chunkStart": 0,
         "chunkEnd": len(text),
@@ -472,7 +475,7 @@ def node_record(node: Any) -> dict[str, Any]:
         "title": metadata.get("file_name") or metadata.get("dkb_table") or metadata["dkb_source_id"],
         "text": content,
         "hash": digest_text(content),
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "updatedAt": SOURCE_UPDATED_AT,
         "chunkOrdinal": node.metadata.get("dkb_chunk_ordinal", 0),
         "chunkStart": start,
         "chunkEnd": end,

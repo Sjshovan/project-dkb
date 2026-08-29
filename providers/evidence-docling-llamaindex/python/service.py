@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 import compile as compiler
 
-SERVICE_VERSION = "3"
+SERVICE_VERSION = "4"
 DEFAULT_MODEL = os.environ.get("DKB_COMPILER_MODEL", "BAAI/bge-small-en-v1.5")
 JOBS_ROOT = Path(os.environ.get("DKB_COMPILER_JOBS_ROOT", "/jobs"))
 JOB_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")

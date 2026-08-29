@@ -74,6 +74,9 @@ data and cannot provide plugin code or configuration.
 | Plugin resolution and contracts | `packages/pipeline/src` |
 | Build graph, archive, and catalog operations | `packages/library/src` |
 | Default targets and service requirements | `packages/distribution-default/src/index.ts` |
+| Docling/LlamaIndex execution and worker lifecycle | `providers/evidence-docling-llamaindex/src/compiler.ts` and `compilerService.ts` |
+| FAISS artifacts and helper transport | `providers/index-faiss/src/faissStore.ts` and `faissHelperClient.ts` |
+| Meilisearch artifacts and transport | `providers/index-meilisearch/src/meilisearchProvider.ts` and `meilisearchClient.ts` |
 | Evidence compilation and processors | `services/compiler/src/compilationState.ts` |
 | Retrieval orchestration | `services/compiler/src/compilerCore.ts` |
 | Build promotion and validation | `services/compiler/src/buildStorage.ts` and `packages/library/src/builds.ts` |
@@ -83,6 +86,7 @@ data and cannot provide plugin code or configuration.
 | Runtime provider coordination | `services/runtime/src/providers` |
 | HTTP and read-only MCP | `services/runtime/src/runtime/server.ts` and `services/runtime/src/mcp` |
 | CLI command composition | `apps/cli/src/cli` |
+| Stack orchestration | `apps/cli/src/stack/manager.ts`, with Docker, release, backup, and context ownership in adjacent focused modules |
 | Cross-package enforcement | `scripts/check-package-boundaries.mjs` and `scripts/workspace-graph.mjs` |
 
 The generated dependency graph is

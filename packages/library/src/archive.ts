@@ -92,6 +92,10 @@ export async function extractDkbPackageArchive(
 function isOperatorControlledPath(entryPath: string): boolean {
   const normalized = entryPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
   if (normalized !== '.dkb' && !normalized.startsWith('.dkb/')) return false;
+  // Keep the container directory traversable so tar can reach the two
+  // allowlisted immutable build paths below. Filtering the directory itself
+  // prevents tar from visiting any of its descendants.
+  if (normalized === '.dkb') return false;
   return normalized !== '.dkb/builds'
     && !normalized.startsWith('.dkb/builds/')
     && normalized !== '.dkb/runtime.lock.json';

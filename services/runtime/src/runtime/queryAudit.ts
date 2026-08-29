@@ -364,7 +364,7 @@ async function writeQueryAuditEvents(
 async function openQueryAuditDatabase(root: string): Promise<DatabaseSync> {
   const databasePath = queryAuditDatabasePath(root);
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
+  const database = new DatabaseSync(path.toNamespacedPath(databasePath));
 
   database.exec(`
     create table if not exists query_audit (

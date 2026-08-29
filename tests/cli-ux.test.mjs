@@ -677,7 +677,7 @@ test('archive extraction reports a single indeterminate pass with an explicit co
   }
 });
 
-test('package archives exclude operator-controlled plugins, pipeline configuration, and retired artifacts', async () => {
+test('package archives retain immutable builds while excluding operator-controlled state and retired artifacts', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-archive-boundary-'));
   const sourceRoot = path.join(tempRoot, 'source');
   const outputRoot = path.join(tempRoot, 'output');
@@ -686,9 +686,12 @@ test('package archives exclude operator-controlled plugins, pipeline configurati
   try {
     await fs.mkdir(path.join(sourceRoot, '.dkb/plugins/@host/provider'), { recursive: true });
     await fs.mkdir(path.join(sourceRoot, '.dkb/artifacts'), { recursive: true });
+    await fs.mkdir(path.join(sourceRoot, '.dkb/builds/evidence/profile/digest'), { recursive: true });
     await fs.writeFile(path.join(sourceRoot, '.dkb/config.json'), '{"activeTarget":"host-only"}\n');
     await fs.writeFile(path.join(sourceRoot, '.dkb/plugins/@host/provider/plugin.mjs'), 'throw new Error("must not install")\n');
     await fs.writeFile(path.join(sourceRoot, '.dkb/artifacts/evidence.json'), '{"portable":true}\n');
+    await fs.writeFile(path.join(sourceRoot, '.dkb/builds/evidence/profile/digest/evidence.ir.json'), '{"portable":true}\n');
+    await fs.writeFile(path.join(sourceRoot, '.dkb/runtime.lock.json'), '{"format":"dkb.runtime.lock.v2"}\n');
     await fs.writeFile(path.join(sourceRoot, 'dkb.json'), '{"type":"dkb"}\n');
     await createDkbPackageArchive(sourceRoot, archivePath);
     await extractDkbPackageArchive(archivePath, outputRoot);
@@ -696,6 +699,8 @@ test('package archives exclude operator-controlled plugins, pipeline configurati
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/config.json')), (error) => error?.code === 'ENOENT');
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/plugins/@host/provider/plugin.mjs')), (error) => error?.code === 'ENOENT');
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/artifacts/evidence.json')), (error) => error?.code === 'ENOENT');
+    assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/builds/evidence/profile/digest/evidence.ir.json'), 'utf8'), '{"portable":true}\n');
+    assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/runtime.lock.json'), 'utf8'), '{"format":"dkb.runtime.lock.v2"}\n');
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

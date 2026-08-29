@@ -79,7 +79,7 @@ function assertVector(vector: readonly number[], label: string): void {
 async function openRecoverableDatabase(target: string): Promise<DatabaseSync> {
   let database: DatabaseSync | null = null;
   try {
-    database = new DatabaseSync(target);
+    database = new DatabaseSync(path.toNamespacedPath(target));
     initializeDatabase(database);
     return database;
   } catch (error) {
@@ -97,7 +97,7 @@ async function openRecoverableDatabase(target: string): Promise<DatabaseSync> {
       fs.rm(`${target}-shm`, { force: true }),
     ]);
     try {
-      const replacement = new DatabaseSync(target);
+      const replacement = new DatabaseSync(path.toNamespacedPath(target));
       initializeDatabase(replacement);
       return replacement;
     } catch (retryError) {

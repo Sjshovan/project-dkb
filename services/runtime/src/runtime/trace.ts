@@ -236,7 +236,7 @@ async function openTraceDatabase(root: string): Promise<DatabaseSync> {
 
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
 
-  const database = new DatabaseSync(databasePath);
+  const database = new DatabaseSync(path.toNamespacedPath(databasePath));
 
   migrateTraceDatabase(database);
 

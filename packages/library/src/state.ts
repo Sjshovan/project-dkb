@@ -182,7 +182,7 @@ export async function assertLibraryStateConsistent(libraryRoot: string): Promise
 }
 
 function openLibraryState(databasePath: string): DatabaseSync {
-  const database = new DatabaseSync(databasePath);
+  const database = new DatabaseSync(path.toNamespacedPath(databasePath));
   database.exec('PRAGMA journal_mode = WAL');
   database.exec('PRAGMA foreign_keys = ON');
   database.exec(`
