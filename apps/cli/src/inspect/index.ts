@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import { deriveKnowledgeSpace } from '@sjshovan/dkb-protocol/space.js';
