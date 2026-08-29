@@ -74,7 +74,9 @@ data and cannot provide plugin code or configuration.
 | Plugin resolution and contracts | `packages/pipeline/src` |
 | Build graph, archive, and catalog operations | `packages/library/src` |
 | Default targets and service requirements | `packages/distribution-default/src/index.ts` |
-| Docling/LlamaIndex execution and worker lifecycle | `providers/evidence-docling-llamaindex/src/compiler.ts` and `compilerService.ts` |
+| Docling/LlamaIndex orchestration | `providers/evidence-docling-llamaindex/src/compiler.ts` |
+| Evidence source planning and incremental cache | `providers/evidence-docling-llamaindex/src/compilerSource.ts` and `compilerCache.ts` |
+| Evidence worker transport and lifecycle | `providers/evidence-docling-llamaindex/src/compilerTransport.ts` and `compilerService.ts` |
 | FAISS artifacts and helper transport | `providers/index-faiss/src/faissStore.ts` and `faissHelperClient.ts` |
 | Meilisearch artifacts and transport | `providers/index-meilisearch/src/meilisearchProvider.ts` and `meilisearchClient.ts` |
 | Evidence compilation and processors | `services/compiler/src/compilationState.ts` |
@@ -84,8 +86,9 @@ data and cannot provide plugin code or configuration.
 | Registry compilation delivery | `services/compiler/src/registryCompilation.ts` |
 | Runtime activation and snapshots | `services/runtime/src/runtime` |
 | Runtime provider coordination | `services/runtime/src/providers` |
+| Search/target discovery and direct Evidence fetch | `services/runtime/src/read/retrieval.ts` and `services/runtime/src/read/read.ts` |
 | HTTP and read-only MCP | `services/runtime/src/runtime/server.ts` and `services/runtime/src/mcp` |
-| CLI command composition | `apps/cli/src/cli` |
+| CLI command composition and family-specific summaries | `apps/cli/src/cli` and `apps/cli/src/cli/summaries` |
 | Stack orchestration | `apps/cli/src/stack/manager.ts`, with Docker, release, backup, and context ownership in adjacent focused modules |
 | Cross-package enforcement | `scripts/check-package-boundaries.mjs` and `scripts/workspace-graph.mjs` |
 

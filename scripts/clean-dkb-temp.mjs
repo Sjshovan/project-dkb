@@ -25,6 +25,7 @@ const ownedDirectoryPatterns = [
   /^dkb-library-artifact-refresh-[A-Za-z\d_-]+$/u,
   /^dkb-profile-source-hash-[A-Za-z\d_-]+$/u,
   /^dkb-provider-compatible-promote-[A-Za-z\d_-]+$/u,
+  /^dkb-provider-proof-[A-Za-z\d_-]+$/u,
   /^dkb-publish-upload-[A-Za-z\d_-]+$/u,
   /^dkb-real-corpus-[A-Za-z\d_-]+$/u,
   /^dkb-real-proof-[A-Za-z\d_-]+$/u,
