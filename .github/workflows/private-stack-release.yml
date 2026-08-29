@@ -6,30 +6,10 @@ on:
       version:
         description: Stack developer-preview version
         required: true
-        default: 0.1.0
+        default: 0.2.0
         type: string
-      registry:
-        description: ghcr.io/sjshovan/dkb-registry@sha256:...
-        required: true
-        type: string
-      compiler:
-        description: ghcr.io/sjshovan/dkb-compiler@sha256:...
-        required: true
-        type: string
-      runtime:
-        description: ghcr.io/sjshovan/dkb-runtime@sha256:...
-        required: true
-        type: string
-      evidence:
-        description: ghcr.io/sjshovan/dkb-evidence-docling-llamaindex@sha256:...
-        required: true
-        type: string
-      fastembed:
-        description: ghcr.io/sjshovan/dkb-embedding-fastembed@sha256:...
-        required: true
-        type: string
-      faiss:
-        description: ghcr.io/sjshovan/dkb-index-faiss@sha256:...
+      images:
+        description: JSON object mapping distribution service IDs to digest-pinned images
         required: true
         type: string
       release:
@@ -60,16 +40,15 @@ jobs:
         with:
           node-version: 22
 
+      - run: npm ci
+      - run: npm run build --workspace @sjshovan/dkb-distribution-default
+
       - name: Assemble digest-pinned stack lock
+        env:
+          DKB_STACK_IMAGES_JSON: ${{ inputs.images }}
         run: >-
           node scripts/create-stack-lock.mjs
           --version "${{ inputs.version }}"
-          --registry "${{ inputs.registry }}"
-          --compiler "${{ inputs.compiler }}"
-          --runtime "${{ inputs.runtime }}"
-          --evidence "${{ inputs.evidence }}"
-          --fastembed "${{ inputs.fastembed }}"
-          --faiss "${{ inputs.faiss }}"
           --output "release/dkb-stack-${{ inputs.version }}.lock.json"
 
       - uses: actions/upload-artifact@v4

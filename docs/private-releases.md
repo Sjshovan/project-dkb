@@ -11,16 +11,21 @@ releases must remain private until a separate public-release decision.
 | CLI and TypeScript workspaces | GitHub Packages under `@sjshovan` | each workspace `package.json` |
 | Compiler image | `ghcr.io/sjshovan/dkb-compiler` | `@sjshovan/dkb-compiler` |
 | Runtime image | `ghcr.io/sjshovan/dkb-runtime` | `@sjshovan/dkb-runtime` |
-| Provider sidecar image | `ghcr.io/sjshovan/dkb-provider-sidecar` | `@sjshovan/dkb-providers-bundled` |
+| Evidence image | `ghcr.io/sjshovan/dkb-evidence-docling-llamaindex` | `@sjshovan/dkb-evidence-docling-llamaindex` |
+| FastEmbed image | `ghcr.io/sjshovan/dkb-embedding-fastembed` | `@sjshovan/dkb-embedding-fastembed` |
+| FAISS helper image | `ghcr.io/sjshovan/dkb-index-faiss` | `@sjshovan/dkb-index-faiss` |
 | Laravel Registry image | private GHCR package owned by the Registry repository | Registry application version |
 
 The protocol version, implementation package versions, provider compatibility
 digests, image digests, and stack version are separate identifiers. Do not use
 one as a substitute for another.
 
-The stack assembly workflow combines the exact digest of each independently
-built private image into `dkb.stack-lock.v1`. A stack upgrade never resolves a
-floating tag.
+The stack assembly workflow accepts one JSON map from distribution service IDs
+to exact image digests and writes `dkb.stack-lock.v2`. The generator loads the
+default distribution catalog, rejects missing or unknown services, and binds
+the lock to the distribution ID and version. This includes pinned external
+services as well as independently built private images. A stack upgrade never
+resolves a floating tag.
 
 ## Safety model
 
@@ -53,7 +58,7 @@ configuration, never in this repository:
 Then install the exact developer-preview version:
 
 ```powershell
-npm install --global @sjshovan/dkb-cli@0.1.0
+npm install --global @sjshovan/dkb-cli@0.2.0
 dkb --version
 dkb version
 ```

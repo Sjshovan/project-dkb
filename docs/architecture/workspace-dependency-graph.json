@@ -3,17 +3,17 @@
   "packages": [
     {
       "name": "@sjshovan/dkb-cli",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "apps/cli"
     },
     {
       "name": "@sjshovan/dkb-compiler",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "services/compiler"
     },
     {
       "name": "@sjshovan/dkb-distribution-default",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "packages/distribution-default"
     },
     {
@@ -43,27 +43,22 @@
     },
     {
       "name": "@sjshovan/dkb-library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "packages/library"
     },
     {
       "name": "@sjshovan/dkb-pipeline",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "packages/pipeline"
     },
     {
       "name": "@sjshovan/dkb-protocol",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "root": "packages/protocol"
     },
     {
-      "name": "@sjshovan/dkb-providers-bundled",
-      "version": "0.1.0",
-      "root": "providers/bundled"
-    },
-    {
       "name": "@sjshovan/dkb-registry-client",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "packages/registry-client"
     },
     {
@@ -73,7 +68,7 @@
     },
     {
       "name": "@sjshovan/dkb-runtime",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "root": "services/runtime"
     }
   ],
@@ -89,11 +84,9 @@
     ],
     "@sjshovan/dkb-compiler": [
       "@sjshovan/dkb-distribution-default",
-      "@sjshovan/dkb-evidence-docling-llamaindex",
       "@sjshovan/dkb-library",
       "@sjshovan/dkb-pipeline",
       "@sjshovan/dkb-protocol",
-      "@sjshovan/dkb-providers-bundled",
       "@sjshovan/dkb-registry-client"
     ],
     "@sjshovan/dkb-distribution-default": [
@@ -126,19 +119,12 @@
       "@sjshovan/dkb-protocol"
     ],
     "@sjshovan/dkb-library": [
-      "@sjshovan/dkb-pipeline",
-      "@sjshovan/dkb-protocol",
-      "@sjshovan/dkb-providers-bundled"
+      "@sjshovan/dkb-protocol"
     ],
     "@sjshovan/dkb-pipeline": [
       "@sjshovan/dkb-protocol"
     ],
     "@sjshovan/dkb-protocol": [],
-    "@sjshovan/dkb-providers-bundled": [
-      "@sjshovan/dkb-evidence-docling-llamaindex",
-      "@sjshovan/dkb-pipeline",
-      "@sjshovan/dkb-protocol"
-    ],
     "@sjshovan/dkb-registry-client": [
       "@sjshovan/dkb-library",
       "@sjshovan/dkb-protocol"

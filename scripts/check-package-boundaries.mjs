@@ -65,12 +65,9 @@ const genericCoreRoots = [
   'packages/protocol/src',
   'packages/pipeline/src',
   'packages/library/src',
-  'services/compiler/src/compilerCore.ts',
-  'services/runtime/src/indexes',
-  'services/runtime/src/providers',
-  'services/runtime/src/read',
-  'services/runtime/src/router',
-  'services/runtime/src/runtime',
+  'services/compiler/src',
+  'services/runtime/src',
+  'apps/cli/src/stack',
 ];
 const concreteProviderPattern = /docling|llamaindex|fastembed|faiss|meilisearch|retrieval-hybrid|providers-bundled|@dkb\/(?:evidence|embedding|index|retrieval)-/iu;
 const legacyArtifactPattern = /\.dkb[\\/]artifacts|source\.index(?:\.graph|\.vector\.json)?|nativeResult/iu;

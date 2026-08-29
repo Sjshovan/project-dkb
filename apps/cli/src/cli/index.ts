@@ -105,7 +105,7 @@ const runtime = registerRuntimeCommands(program, {
   currentRuntimeUrl,
   parsePositiveInteger,
   parseRuntimeKind,
-  parseStackTarget,
+  defaultDistribution,
   runtimeCatalogUrl,
   runDockerCompose,
   jsonRequested,
@@ -218,13 +218,6 @@ function parseRuntimeKind(value: string): 'process' | 'docker' | 'remote' {
   }
 
   throw new DkbError('Runtime kind must be process, docker, or remote.');
-}
-
-function parseStackTarget(value: string): import('../stack/manager.js').DkbStackTarget {
-  if (['default', 'meilisearch', 'fastembed-faiss', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'].includes(value)) {
-    return value as import('../stack/manager.js').DkbStackTarget;
-  }
-  throw new DkbError('Stack target must be default, fastembed-faiss, tei-faiss, tei-faiss-768, or tei-meilisearch.');
 }
 
 function runtimeCatalogUrl(host: string, port: number): string {

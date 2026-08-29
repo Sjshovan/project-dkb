@@ -12,3 +12,5 @@ target catalog, selected plugin modules, and target service requirements.
   to load plugins or credentials.
 
 Verify with the workspace boundary check and provider-host tests.
+The authoritative boundary map is
+[`docs/architecture/final-provider-architecture.md`](../../docs/architecture/final-provider-architecture.md).

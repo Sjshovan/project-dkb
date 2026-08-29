@@ -10,6 +10,7 @@ const required = [
   'packages/protocol/AGENTS.md',
   'packages/library/AGENTS.md',
   'packages/pipeline/AGENTS.md',
+  'packages/distribution-default/AGENTS.md',
   'packages/registry-client/AGENTS.md',
   'providers/evidence-docling-llamaindex/AGENTS.md',
   'providers/embedding-fastembed/AGENTS.md',

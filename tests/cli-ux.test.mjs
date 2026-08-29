@@ -677,7 +677,7 @@ test('archive extraction reports a single indeterminate pass with an explicit co
   }
 });
 
-test('package archives exclude operator-controlled plugins and pipeline configuration', async () => {
+test('package archives exclude operator-controlled plugins, pipeline configuration, and retired artifacts', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-archive-boundary-'));
   const sourceRoot = path.join(tempRoot, 'source');
   const outputRoot = path.join(tempRoot, 'output');
@@ -695,7 +695,7 @@ test('package archives exclude operator-controlled plugins and pipeline configur
 
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/config.json')), (error) => error?.code === 'ENOENT');
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/plugins/@host/provider/plugin.mjs')), (error) => error?.code === 'ENOENT');
-    assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/artifacts/evidence.json'), 'utf8'), '{"portable":true}\n');
+    await assert.rejects(fs.access(path.join(outputRoot, '.dkb/artifacts/evidence.json')), (error) => error?.code === 'ENOENT');
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

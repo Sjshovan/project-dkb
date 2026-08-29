@@ -35,6 +35,26 @@ export interface DkbDistributionService {
   image?: string;
   version?: string;
   healthPath?: string;
+  stack?: {
+    composeProfile?: string;
+    imageEnvironment: string;
+    build?: {
+      context: string;
+      dockerfile: string;
+    };
+    recovery?: string;
+    stateDirectory?: string;
+    optionEnvironment?: Record<string, string>;
+    secretEnvironment?: string[];
+    health?: {
+      component: string;
+      portEnvironment: string;
+      defaultHostPort: number;
+      namedPortBase: number;
+      path: string;
+      expectation: 'http-ok' | 'json-ok' | 'status-available';
+    };
+  };
 }
 
 export interface DkbDistribution {

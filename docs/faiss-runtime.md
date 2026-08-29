@@ -9,12 +9,17 @@ not read raw sources, rechunk documents, or embed documents.
 
 Each FAISS Retrieval Build includes:
 
-- `.dkb/artifacts/faiss/chunks.sqlite`
-- `.dkb/artifacts/faiss/chunks.faiss`
-- `.dkb/artifacts/faiss/manifest.json`
-- LlamaIndex compiler record shards under `.dkb/artifacts/llamaindex.records/`
+- `.dkb/builds/retrieval/<profile>/<digest>/artifacts/faiss/chunks.sqlite`
+- `.dkb/builds/retrieval/<profile>/<digest>/artifacts/faiss/chunks.faiss`
+- `.dkb/builds/retrieval/<profile>/<digest>/artifacts/faiss/manifest.json`
+- `.dkb/builds/retrieval/<profile>/<digest>/artifacts.manifest.json`
 
-The SQLite catalog is DKB-owned canonical runtime data for chunk text and provenance. It also contains a derived `lexical_tokens` table for exact-token navigation. The FAISS file is a derived dense vector segment. The manifest records package ID, package version, model, vector dimensions, metric, index type, file hashes, and chunk count.
+The FAISS SQLite file is provider-owned search data, including derived lexical
+tokens. Canonical text and provenance live in the DKB-owned
+`.dkb/builds/evidence/<profile>/<digest>/evidence.catalog.sqlite`. The FAISS file
+is a derived dense vector segment. The provider manifest records package ID,
+package version, model, vector dimensions, metric, index type, file hashes, and
+chunk count; the generic artifact manifest binds the complete Retrieval tree.
 
 ## Install And Update
 
@@ -23,7 +28,7 @@ Install/update order:
 1. Verify the PackageVersion, Evidence, Retrieval, and install-plan receipt chain.
 2. Validate package-local FAISS catalog and segment.
 3. Promote the source and exact build chain into `vendor/@namespace/name`.
-4. Refresh the local aggregate catalog without rebuilding a global search index.
+4. Point the staged Runtime snapshot at the immutable Evidence and Retrieval paths.
 5. Load active package segments into one in-memory FAISS `IndexShards` view.
 6. Mark the runtime query snapshot active only after the expected package/version is present.
 
@@ -36,7 +41,7 @@ HTTP and MCP retrieval share the same query path:
 1. Embed the query through the provider recorded by the active Retrieval Profile.
 2. Search the active FAISS `IndexShards` view.
 3. Map FAISS numeric IDs back to deterministic DKB chunk IDs.
-4. Resolve evidence text and provenance from the package-local SQLite catalogs.
+4. Resolve evidence text and provenance from the package-local Evidence catalog.
 5. Return model-facing evidence while keeping metadata/provenance available in the response metadata channel.
 
 FAISS never embeds text and does not own provenance. It only stores/searches vectors. Agent navigation also exposes exact-token search over the derived lexical tables and direct read by stable chunk reference; neither path invokes a source adapter during normal retrieval.

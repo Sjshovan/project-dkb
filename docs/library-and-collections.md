@@ -51,8 +51,8 @@ my-library/
 │   └── @vendor/reference/
 │       ├── dkb.json             # Registry-managed DKB
 │       ├── .dkb-package.json    # signed release receipt
-│       └── .dkb/artifacts/      # compiled release
-└── .dkb/                        # applied-state DB, aggregate indexes, staging
+│       └── .dkb/builds/         # immutable Evidence/Retrieval Builds
+└── .dkb/                        # applied state, Runtime lock, staging, cache
 ```
 
 Discovery is deliberately flat. Only direct child folders are editable Library entries. DKB never recursively searches arbitrary folder trees for manifests, and it never treats `vendor/` as authoring source.

@@ -5,7 +5,7 @@ identified by the `type` in `dkb.json`, and source assets remain the source of
 truth. Runtime
 retrieval reads compiled chunks, not raw files.
 
-## Current Contracts To Preserve
+## Active Contracts
 
 - Source asset provenance is canonical. A retrieved chunk must still identify
   the DKB, store, asset locator, chunk ordinal, offsets, and hashes needed to
@@ -172,22 +172,22 @@ and both disk-capacity preflights.
 
 Set `DKB_LLAMA_COMPILER_SERVICE=0` to use the one-shot compiler container path.
 If the pinned image is missing or lacks the current service label, DKB rebuilds
-it from `providers/bundled/python/llamaindex` before starting the service.
+it from `providers/evidence-docling-llamaindex/python` before starting the service.
 
-## First Vertical Slice
+## Build artifacts and packaging
 
-This slice introduces an artifact layer without removing the existing compiler
-or direct source flows:
+The content-addressed build graph is the only compiled package representation:
 
-- `.dkb/artifacts/dkb-artifact.json` records the artifact layout, hashes,
-  compiler adapter, source/chunk counts, and generated files.
-- `dkb artifact inspect <path>` prints the artifact manifest if present.
-- `dkb artifact validate <path>` checks that all listed artifact files still
-  match their hashes.
+- `.dkb/builds/evidence/<profile>/<digest>` stores Evidence IR, its DKB-owned
+  Evidence catalog, and the Evidence lock.
+- `.dkb/builds/retrieval/<profile>/<digest>` stores the generic artifact
+  manifest, provider-native artifacts, and the Retrieval/profile locks.
+- `.dkb/runtime.lock.json` points at one exact build chain per installed
+  package. It does not copy active artifacts.
+- `dkb artifact inspect <path>` and `dkb artifact validate <path>` inspect and
+  verify the generic build graph.
 - `dkb artifact pack <path> --out <file>` creates a deterministic `.dkbpkg`
-  archive from the source and compiled artifact tree.
-- The compiler can use Docling for rich filesystem documents while keeping
-  LlamaIndex/database routes as the stable fallback and tabular source paths.
+  archive from source and one selected build chain.
 - `dkb artifact oci-push <archive> <ref>` and `dkb artifact oci-pull <ref>`
   move `.dkbpkg` archives through an OCI registry using ORAS.
 - `dkb artifact cosign-keypair`, `cosign-sign`, and `cosign-verify` provide
@@ -197,17 +197,17 @@ The current local vertical slice supports source, Evidence, and Retrieval
 layers. OCI transport remains available for a composed package artifact, while
 the Laravel Registry distributes the layers through a signed install plan.
 
-Compiled artifact install is not a source import. After verification and
-extraction, the runtime validates `.dkb/artifacts/dkb-artifact.json`, promotes
-the package through a temporary install directory, preserves `.dkb/artifacts/`,
-and refreshes its aggregate catalog from the installed compiled indexes. It must
-not recompile raw source as part of that install path.
+Compiled package install is not a source import. After receipt, manifest, and
+hash verification, the Runtime stages the source, Evidence, and Retrieval
+layers, promotes them through a temporary install directory, writes an atomic
+Runtime lock, and opens the immutable build paths directly. It never recompiles
+raw source during install.
 
 Uninstall removes the promoted package and refreshes the active aggregate
 catalog. Reinstalling the same verified `.dkbpkg` restores its compiled
 artifacts without parsing, chunking, or embedding its source again.
 
-ORAS and Cosign remain adapters against the artifact manifest. They should not
+ORAS and Cosign remain adapters against the package and build receipts. They do not
 change source discovery, compiled retrieval, provenance, or model-facing
 evidence behavior.
 

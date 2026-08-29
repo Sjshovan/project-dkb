@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { c as createTar, t as listTar, x as extractTar } from 'tar';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import type { DkbDistribution, DkbDistributionService } from '@sjshovan/dkb-pipeline/host.js';
 import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime } from '../host/inventory.js';
 
-export type DkbStackTarget = 'default' | 'fastembed-faiss' | 'fastembed-faiss-768' | 'tei-faiss' | 'tei-faiss-768' | 'tei-meilisearch';
+export type DkbStackTarget = string;
 
 export interface DkbStackContext {
   name: string;
@@ -24,8 +25,10 @@ export interface DkbStackContext {
   runtimeUrl: string;
   registryPort: number;
   runtimePort: number;
-  meilisearchPort: number;
-  teiPort: number;
+  requiredServices: DkbDistributionService[];
+  profiles: string[];
+  allProfiles: string[];
+  servicePorts: Record<string, number>;
   version?: string;
 }
 
@@ -70,14 +73,14 @@ export interface DkbStackUpgrade {
   services: DkbStackStatus['services'];
 }
 
-export async function upDkbStack(name = 'local', target: DkbStackTarget = 'default'): Promise<DkbStackStatus & {
+export async function upDkbStack(distribution: DkbDistribution, name = 'local', target?: DkbStackTarget): Promise<DkbStackStatus & {
   status: 'ready';
   registryName: string;
   runtimeName: string;
   libraryName: string;
   legacyRegistryVolume?: { status: 'copied'; volume: string; preserved: true };
 }> {
-  const context = await prepareDkbStack(name, target);
+  const context = await prepareDkbStack(distribution, name, target);
   assertDockerAvailable();
   assertRequiredImages(context);
   const legacyRegistryVolume = await migrateLegacyRegistryVolume(context);
@@ -85,8 +88,10 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
   if ((await composeContainerIds(context)).length === 0) {
     await assertPortAvailable(context.registryPort, 'Registry');
     await assertPortAvailable(context.runtimePort, 'Runtime');
-    if (usesMeilisearch(target)) await assertPortAvailable(context.meilisearchPort, 'Meilisearch');
-    if (usesTei(target)) await assertPortAvailable(context.teiPort, 'TEI');
+    for (const service of context.requiredServices) {
+      const port = context.servicePorts[service.id];
+      if (port !== undefined) await assertPortAvailable(port, service.stack?.health?.component ?? service.id);
+    }
   }
 
   runCompose(context, ['up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240']);
@@ -121,7 +126,7 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
   });
 
   return {
-    ...await statusDkbStack(context.name, true),
+    ...await statusDkbStack(distribution, context.name, true),
     status: 'ready',
     registryName: registry.name,
     runtimeName: runtime.name,
@@ -130,8 +135,8 @@ export async function upDkbStack(name = 'local', target: DkbStackTarget = 'defau
   };
 }
 
-export async function downDkbStack(name = 'local'): Promise<{ status: 'stopped'; name: string; stateRoot: string; preserved: string[] }> {
-  const context = await readDkbStack(name);
+export async function downDkbStack(distribution: DkbDistribution, name = 'local'): Promise<{ status: 'stopped'; name: string; stateRoot: string; preserved: string[] }> {
+  const context = await readDkbStack(distribution, name);
   assertDockerAvailable();
   runCompose(context, ['down', '--remove-orphans']);
 
@@ -143,8 +148,8 @@ export async function downDkbStack(name = 'local'): Promise<{ status: 'stopped';
   };
 }
 
-export async function statusDkbStack(name = 'local', check = false): Promise<DkbStackStatus> {
-  const context = await readDkbStack(name);
+export async function statusDkbStack(distribution: DkbDistribution, name = 'local', check = false): Promise<DkbStackStatus> {
+  const context = await readDkbStack(distribution, name);
   assertDockerAvailable();
   const services = composeServices(context);
 
@@ -161,8 +166,8 @@ export async function statusDkbStack(name = 'local', check = false): Promise<Dkb
   };
 }
 
-export async function doctorDkbStack(name = 'local'): Promise<DkbStackStatus & { ok: boolean; checks: Array<{ component: string; status: 'ok' | 'failed'; message: string }> }> {
-  const context = await readDkbStack(name);
+export async function doctorDkbStack(distribution: DkbDistribution, name = 'local'): Promise<DkbStackStatus & { ok: boolean; checks: Array<{ component: string; status: 'ok' | 'failed'; message: string }> }> {
+  const context = await readDkbStack(distribution, name);
   const checks: Array<{ component: string; status: 'ok' | 'failed'; message: string }> = [];
 
   try {
@@ -174,7 +179,7 @@ export async function doctorDkbStack(name = 'local'): Promise<DkbStackStatus & {
   checks.push({ component: 'compose', status: await exists(context.composeFile) ? 'ok' : 'failed', message: context.composeFile });
   checks.push({ component: 'secrets', status: await exists(context.envFile) ? 'ok' : 'failed', message: context.envFile });
   checks.push(...await probeStack(context));
-  const status = await statusDkbStack(context.name, false).catch(() => ({
+  const status = await statusDkbStack(distribution, context.name, false).catch(() => ({
     name: context.name,
     target: context.target,
     stateRoot: context.root,
@@ -187,14 +192,14 @@ export async function doctorDkbStack(name = 'local'): Promise<DkbStackStatus & {
   return { ...status, ok: checks.every((item) => item.status === 'ok'), checks };
 }
 
-export async function logsDkbStack(name = 'local', service?: string, follow = false): Promise<void> {
-  const context = await readDkbStack(name);
+export async function logsDkbStack(distribution: DkbDistribution, name = 'local', service?: string, follow = false): Promise<void> {
+  const context = await readDkbStack(distribution, name);
   assertDockerAvailable();
   runCompose(context, ['logs', ...(follow ? ['--follow'] : []), '--tail', follow ? '100' : '200', ...(service ? [service] : [])], true);
 }
 
-export async function backupDkbStack(name = 'local', output?: string): Promise<DkbStackBackup> {
-  const context = await readDkbStack(name);
+export async function backupDkbStack(distribution: DkbDistribution, name = 'local', output?: string): Promise<DkbStackBackup> {
+  const context = await readDkbStack(distribution, name);
   assertDockerAvailable();
   await requireStoppedStack(context, 'back up');
 
@@ -237,7 +242,7 @@ export async function backupDkbStack(name = 'local', output?: string): Promise<D
   };
 }
 
-export async function restoreDkbStack(archivePath: string, replace = false): Promise<DkbStackRestore> {
+export async function restoreDkbStack(distribution: DkbDistribution, archivePath: string, replace = false): Promise<DkbStackRestore> {
   const archive = path.resolve(archivePath);
   const checksumFile = `${archive}.sha256`;
   const expectedHash = await readChecksum(checksumFile);
@@ -257,7 +262,7 @@ export async function restoreDkbStack(archivePath: string, replace = false): Pro
   }
 
   if (existing) {
-    const context = await readDkbStack(name);
+    const context = await readDkbStack(distribution, name);
     assertDockerAvailable();
     await requireStoppedStack(context, 'replace from backup');
   }
@@ -305,13 +310,13 @@ export async function restoreDkbStack(archivePath: string, replace = false): Pro
   };
 }
 
-export async function upgradeDkbStack(name: string, lockPath: string): Promise<DkbStackUpgrade> {
-  const context = await readDkbStack(name);
+export async function upgradeDkbStack(distribution: DkbDistribution, name: string, lockPath: string): Promise<DkbStackUpgrade> {
+  const context = await readDkbStack(distribution, name);
   assertDockerAvailable();
   await requireStoppedStack(context, 'upgrade');
   const lockFile = path.resolve(lockPath);
-  const lock = await readStackLock(lockFile);
-  const backup = await backupDkbStack(name);
+  const lock = await readStackLock(lockFile, distribution);
+  const backup = await backupDkbStack(distribution, name);
   const originalEnvironment = await fs.readFile(context.envFile, 'utf8');
 
   for (const image of Object.values(lock.images)) {
@@ -323,21 +328,16 @@ export async function upgradeDkbStack(name: string, lockPath: string): Promise<D
   }
 
   const values = parseEnvironmentFile(originalEnvironment);
-  const updated = {
-    ...values,
-    DKB_STACK_VERSION: lock.version,
-    DKB_REGISTRY_IMAGE: lock.images.registry,
-    DKB_COMPILER_IMAGE: lock.images.compiler,
-    DKB_RUNTIME_IMAGE: lock.images.runtime,
-    DKB_EVIDENCE_IMAGE: lock.images.evidence,
-    DKB_FASTEMBED_IMAGE: lock.images.fastembed,
-    DKB_FAISS_IMAGE: lock.images.faiss,
-  };
+  const updated: Record<string, string> = { ...values, DKB_STACK_VERSION: lock.version };
+  for (const service of distribution.services) {
+    const image = lock.images[service.id];
+    if (image && service.stack) updated[service.stack.imageEnvironment] = image;
+  }
   await writeEnvironmentFile(context.envFile, updated);
   await writeAtomic(path.join(context.root, 'release.lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
 
   try {
-    const ready = await upDkbStack(name, context.target);
+    const ready = await upDkbStack(distribution, name, context.target);
     return {
       status: 'upgraded',
       name,
@@ -348,12 +348,12 @@ export async function upgradeDkbStack(name: string, lockPath: string): Promise<D
       services: ready.services,
     };
   } catch (error) {
-    const failedContext = await readDkbStack(name);
+    const failedContext = await readDkbStack(distribution, name);
     runCompose(failedContext, ['down', '--remove-orphans'], false, true);
-    await restoreDkbStack(backup.archive, true);
+    await restoreDkbStack(distribution, backup.archive, true);
     let rollbackMessage = 'Previous state restored but left stopped.';
     try {
-      await upDkbStack(name, context.target);
+      await upDkbStack(distribution, name, context.target);
       rollbackMessage = 'Previous state restored and restarted.';
     } catch (rollbackError) {
       rollbackMessage = `Previous state restored but restart failed: ${errorMessage(rollbackError)}`;
@@ -362,12 +362,14 @@ export async function upgradeDkbStack(name: string, lockPath: string): Promise<D
   }
 }
 
-export async function prepareDkbStack(name = 'local', target: DkbStackTarget = 'default'): Promise<DkbStackContext> {
+export async function prepareDkbStack(distribution: DkbDistribution, name = 'local', requestedTarget?: DkbStackTarget): Promise<DkbStackContext> {
   const normalizedName = stackName(name);
   const root = path.join(stackStateRoot(), normalizedName);
-  const ports = portsFor(normalizedName);
+  const target = requestedTarget ?? distributionDefaultTarget(distribution);
+  const recipe = targetRecipe(distribution, target);
   const composeFile = await resolveComposeFile();
   const envFile = path.join(root, 'stack.env');
+  const requiredServices = requiredStackServices(distribution, target);
 
   await Promise.all([
     fs.mkdir(path.join(root, 'registry', 'data'), { recursive: true }),
@@ -375,38 +377,45 @@ export async function prepareDkbStack(name = 'local', target: DkbStackTarget = '
     fs.mkdir(path.join(root, 'compiler-context', '.dkb'), { recursive: true }),
     fs.mkdir(path.join(root, 'compiler-jobs'), { recursive: true }),
     fs.mkdir(path.join(root, 'runtime', '.dkb'), { recursive: true }),
-    fs.mkdir(path.join(root, 'meilisearch'), { recursive: true }),
+    ...distribution.services.flatMap((service) => service.stack?.stateDirectory
+      ? [fs.mkdir(path.join(root, service.stack.stateDirectory), { recursive: true })]
+      : []),
   ]);
 
   const existing = await readEnvironmentFile(envFile);
   const runtimeRoot = path.join(root, 'runtime');
   const activeRuntimeBuild = await maybeReadRuntimeLock(runtimeRoot);
-  const values = {
+  const values: Record<string, string> = {
     ...existing,
     DKB_STACK_NAME: normalizedName,
     DKB_STACK_STATE: root.replace(/\\/gu, '/'),
     DKB_PIPELINE_TARGET: target,
-    DKB_REGISTRY_PORT: existing.DKB_REGISTRY_PORT ?? String(ports.registry),
-    DKB_RUNTIME_PORT: existing.DKB_RUNTIME_PORT ?? String(ports.runtime),
-    DKB_MEILI_PORT: existing.DKB_MEILI_PORT ?? String(ports.meilisearch),
-    DKB_TEI_PORT: existing.DKB_TEI_PORT ?? String(ports.tei),
-    DKB_TEI_IMAGE: existing.DKB_TEI_IMAGE ?? 'ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07',
-    DKB_TEI_MODEL: target === 'tei-faiss-768' ? 'BAAI/bge-base-en-v1.5' : 'BAAI/bge-small-en-v1.5',
-    DKB_TEI_MODEL_REVISION: target === 'tei-faiss-768' ? 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a' : '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
-    DKB_REGISTRY_IMAGE: existing.DKB_REGISTRY_IMAGE ?? 'dkb-registry:0.1.0',
-    DKB_COMPILER_IMAGE: existing.DKB_COMPILER_IMAGE ?? 'dkb-compiler:0.1.0',
-    DKB_RUNTIME_IMAGE: existing.DKB_RUNTIME_IMAGE ?? 'dkb-runtime:0.1.0',
-    DKB_EVIDENCE_IMAGE: existing.DKB_EVIDENCE_IMAGE ?? 'dkb-evidence-docling-llamaindex:0.1.0',
-    DKB_FASTEMBED_IMAGE: existing.DKB_FASTEMBED_IMAGE ?? 'dkb-embedding-fastembed:0.1.0',
-    DKB_FAISS_IMAGE: existing.DKB_FAISS_IMAGE ?? 'dkb-index-faiss:0.1.0',
     DKB_BUILD_COMMIT: existing.DKB_BUILD_COMMIT ?? process.env.DKB_BUILD_COMMIT ?? 'development',
     DKB_REGISTRY_APP_KEY: existing.DKB_REGISTRY_APP_KEY ?? `base64:${randomBytes(32).toString('base64')}`,
     DKB_REGISTRY_BOOTSTRAP_NAMESPACE: existing.DKB_REGISTRY_BOOTSTRAP_NAMESPACE ?? namespaceForStack(normalizedName),
     DKB_REGISTRY_BOOTSTRAP_TOKEN: existing.DKB_REGISTRY_BOOTSTRAP_TOKEN ?? `dkb_${randomBytes(48).toString('base64url')}`,
     DKB_MCP_BEARER_TOKEN: existing.DKB_MCP_BEARER_TOKEN ?? randomBytes(32).toString('base64url'),
     DKB_RUNTIME_ADMIN_TOKEN: existing.DKB_RUNTIME_ADMIN_TOKEN ?? randomBytes(32).toString('base64url'),
-    DKB_MEILI_MASTER_KEY: existing.DKB_MEILI_MASTER_KEY ?? randomBytes(32).toString('base64url'),
   };
+
+  for (const service of distribution.services) {
+    const stack = service.stack;
+    if (!stack) continue;
+    if (service.image) values[stack.imageEnvironment] = existing[stack.imageEnvironment] ?? service.image;
+    if (stack.health) {
+      values[stack.health.portEnvironment] = existing[stack.health.portEnvironment]
+        ?? String(hostPortFor(normalizedName, stack.health.defaultHostPort, stack.health.namedPortBase));
+    }
+    for (const environment of stack.secretEnvironment ?? []) {
+      values[environment] = existing[environment] ?? randomBytes(32).toString('base64url');
+    }
+    if (!requiredServices.some((candidate) => candidate.id === service.id) || !service.providerId) continue;
+    const providerOptions = recipe.options?.[service.providerId] ?? {};
+    for (const [option, environment] of Object.entries(stack.optionEnvironment ?? {})) {
+      const value = providerOptions[option];
+      if (value !== undefined) values[environment] = environmentValue(value, service.id, option);
+    }
+  }
 
   await writeEnvironmentFile(envFile, values);
   await writePipelineConfig(path.join(root, 'compiler-context', '.dkb', 'config.json'), target);
@@ -416,10 +425,10 @@ export async function prepareDkbStack(name = 'local', target: DkbStackTarget = '
   // every package build has been staged and verified.
   await writePipelineConfig(
     path.join(runtimeRoot, '.dkb', 'config.json'),
-    parseStoredTarget(activeRuntimeBuild?.target ?? target),
+    parseStoredTarget(distribution, activeRuntimeBuild?.target ?? target),
   );
 
-  return contextFrom(root, composeFile, envFile, values);
+  return contextFrom(distribution, root, composeFile, envFile, values);
 }
 
 export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<string | undefined> {
@@ -446,7 +455,7 @@ export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<strin
   return undefined;
 }
 
-async function readDkbStack(name: string): Promise<DkbStackContext> {
+async function readDkbStack(distribution: DkbDistribution, name: string): Promise<DkbStackContext> {
   const root = path.join(stackStateRoot(), stackName(name));
   const envFile = path.join(root, 'stack.env');
   const values = await readEnvironmentFile(envFile);
@@ -455,16 +464,19 @@ async function readDkbStack(name: string): Promise<DkbStackContext> {
     throw new DkbError(`Unknown DKB stack ${name}. Create it with: dkb stack up ${name}`);
   }
 
-  return contextFrom(root, await resolveComposeFile(), envFile, values);
+  return contextFrom(distribution, root, await resolveComposeFile(), envFile, values);
 }
 
-function contextFrom(root: string, composeFile: string, envFile: string, values: Record<string, string>): DkbStackContext {
-  const target = parseStoredTarget(values.DKB_PIPELINE_TARGET);
-  const registryPort = positivePort(values.DKB_REGISTRY_PORT, 'Registry');
-  const runtimePort = positivePort(values.DKB_RUNTIME_PORT, 'Runtime');
-  const meilisearchPort = positivePort(values.DKB_MEILI_PORT, 'Meilisearch');
-  const teiPort = positivePort(values.DKB_TEI_PORT ?? '8080', 'TEI');
+function contextFrom(distribution: DkbDistribution, root: string, composeFile: string, envFile: string, values: Record<string, string>): DkbStackContext {
+  const target = parseStoredTarget(distribution, values.DKB_PIPELINE_TARGET);
   const name = stackName(values.DKB_STACK_NAME ?? path.basename(root));
+  const requiredServices = requiredStackServices(distribution, target);
+  const servicePorts = Object.fromEntries(distribution.services.flatMap((service) => {
+    const health = service.stack?.health;
+    return health ? [[service.id, positivePort(values[health.portEnvironment], health.component)]] : [];
+  }));
+  const registryPort = requiredServicePort(distribution, servicePorts, 'registry');
+  const runtimePort = requiredServicePort(distribution, servicePorts, 'runtime');
 
   return {
     name,
@@ -477,8 +489,10 @@ function contextFrom(root: string, composeFile: string, envFile: string, values:
     runtimeUrl: `http://127.0.0.1:${runtimePort}`,
     registryPort,
     runtimePort,
-    meilisearchPort,
-    teiPort,
+    requiredServices,
+    profiles: serviceProfiles(requiredServices),
+    allProfiles: serviceProfiles(distribution.services),
+    servicePorts,
     ...(values.DKB_STACK_VERSION ? { version: values.DKB_STACK_VERSION } : {}),
   };
 }
@@ -489,37 +503,34 @@ async function writePipelineConfig(targetPath: string, target: DkbStackTarget): 
 }
 
 async function probeStack(context: DkbStackContext): Promise<Array<{ component: string; status: 'ok' | 'failed'; message: string }>> {
-  return Promise.all([
-    probe('registry-web', `${context.registryUrl}/health`),
-    probe('dkb-runtime', `${context.runtimeUrl}/health`),
-    ...(usesTei(context.target)
-      ? [probe('dkb-tei', `http://127.0.0.1:${context.teiPort}/health`, () => true, 'HTTP 2xx')]
-      : []),
-    ...(usesMeilisearch(context.target)
-      ? [probe(
-          'meilisearch',
-          `http://127.0.0.1:${context.meilisearchPort}/health`,
-          (body) => body.status === 'available',
-          'status=available',
-        )]
-      : []),
-  ]);
+  return Promise.all(context.requiredServices.flatMap((service) => {
+    const health = service.stack?.health;
+    const port = context.servicePorts[service.id];
+    if (!health || port === undefined) return [];
+    return [probe(
+      health.component,
+      `http://127.0.0.1:${port}${health.path}`,
+      health.expectation,
+    )];
+  }));
 }
 
 async function probe(
   component: string,
   url: string,
-  isHealthy: (body: Record<string, unknown>) => boolean = (body) => body.ok === true,
-  expectation = 'ok=true',
+  expectation: 'http-ok' | 'json-ok' | 'status-available',
 ): Promise<{ component: string; status: 'ok' | 'failed'; message: string }> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) return { component, status: 'failed', message: `HTTP ${response.status} from ${url}` };
+    if (expectation === 'http-ok') return { component, status: 'ok', message: url };
     const text = await response.text();
     const body = text ? JSON.parse(text) as Record<string, unknown> : {};
-    return isHealthy(body)
+    const healthy = expectation === 'json-ok' ? body.ok === true : body.status === 'available';
+    const expected = expectation === 'json-ok' ? 'ok=true' : 'status=available';
+    return healthy
       ? { component, status: 'ok', message: url }
-      : { component, status: 'failed', message: `Health response did not report ${expectation} at ${url}` };
+      : { component, status: 'failed', message: `Health response did not report ${expected} at ${url}` };
   } catch (error) {
     return { component, status: 'failed', message: `${url}: ${errorMessage(error)}` };
   }
@@ -576,14 +587,7 @@ function runCompose(
 }
 
 export function composeArguments(context: DkbStackContext, args: string[]): string[] {
-  const profiles = args.includes('down')
-    ? ['fastembed', 'tei', 'faiss', 'meilisearch']
-    : [
-        ...(usesFastEmbed(context.target) ? ['fastembed'] : []),
-        ...(usesTei(context.target) ? ['tei'] : []),
-        ...(usesFaiss(context.target) ? ['faiss'] : []),
-        ...(usesMeilisearch(context.target) ? ['meilisearch'] : []),
-      ];
+  const profiles = args.includes('down') ? context.allProfiles : context.profiles;
   return [
     'compose',
     '--env-file', context.envFile,
@@ -603,38 +607,21 @@ function assertDockerAvailable(): void {
 
 function assertRequiredImages(context: DkbStackContext): void {
   const values = readEnvironmentFileSync(context.envFile);
-  const required = [
-    {
-      image: values.DKB_REGISTRY_IMAGE ?? 'dkb-registry:0.1.0',
-      recovery: 'From the dkb-registry checkout run: docker build -f deploy/Dockerfile -t dkb-registry:0.1.0 .',
-    },
-    {
-      image: values.DKB_COMPILER_IMAGE ?? 'dkb-compiler:0.1.0',
-      recovery: 'From the project-dkb checkout run: docker build -f services/compiler/Dockerfile -t dkb-compiler:0.1.0 .',
-    },
-    {
-      image: values.DKB_RUNTIME_IMAGE ?? 'dkb-runtime:0.1.0',
-      recovery: 'From the project-dkb checkout run: docker build -f services/runtime/Dockerfile -t dkb-runtime:0.1.0 .',
-    },
-    {
-      image: values.DKB_EVIDENCE_IMAGE ?? 'dkb-evidence-docling-llamaindex:0.1.0',
-      recovery: 'Run: docker build -f providers/evidence-docling-llamaindex/python/Dockerfile -t dkb-evidence-docling-llamaindex:0.1.0 providers/evidence-docling-llamaindex/python',
-    },
-    ...(usesFastEmbed(context.target) ? [{
-      image: values.DKB_FASTEMBED_IMAGE ?? 'dkb-embedding-fastembed:0.1.0',
-      recovery: 'Run: docker build -f providers/embedding-fastembed/python/Dockerfile -t dkb-embedding-fastembed:0.1.0 providers/embedding-fastembed/python',
-    }] : []),
-    ...(usesFaiss(context.target) ? [{
-      image: values.DKB_FAISS_IMAGE ?? 'dkb-index-faiss:0.1.0',
-      recovery: 'Run: docker build -f providers/index-faiss/python/Dockerfile -t dkb-index-faiss:0.1.0 providers/index-faiss/python',
-    }] : []),
-  ];
-
-  for (const requirement of required) {
-    const result = spawnSync('docker', ['image', 'inspect', requirement.image], { encoding: 'utf8' });
+  for (const service of context.requiredServices) {
+    if (!service.stack) continue;
+    const image = values[service.stack.imageEnvironment] ?? service.image;
+    if (!image) throw new DkbError(`Stack service ${service.id} does not declare an image.`);
+    let result = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8' });
+    if (result.status !== 0 && !service.stack.build && !service.stack.recovery) {
+      result = spawnSync('docker', ['pull', image], { encoding: 'utf8' });
+    }
     if (result.status !== 0) {
+      const recovery = service.stack.recovery
+        ?? (service.stack.build
+          ? `Run: docker build -f ${service.stack.build.dockerfile} -t ${image} ${service.stack.build.context}.`
+          : `Run: docker pull ${image}.`);
       throw new DkbError(
-        `Required stack image ${requirement.image} is not installed. ${requirement.recovery} Then retry: dkb stack up ${context.name}`,
+        `Required stack image ${image} for ${service.id} is unavailable. ${recovery} Then retry: dkb stack up ${context.name}`,
       );
     }
   }
@@ -652,7 +639,11 @@ async function migrateLegacyRegistryVolume(
   if (inspected.status !== 0) return null;
 
   const values = readEnvironmentFileSync(context.envFile);
-  const image = values.DKB_REGISTRY_IMAGE ?? 'dkb-registry:0.1.0';
+  const registry = context.requiredServices.find((service) => service.id === 'registry');
+  const image = registry?.stack
+    ? values[registry.stack.imageEnvironment] ?? registry.image
+    : undefined;
+  if (!image) throw new DkbError('The active distribution does not define the Registry image needed for state migration.');
   const copied = spawnSync('docker', [
     'run', '--rm',
     '--mount', `type=volume,src=${volume},dst=/from,readonly`,
@@ -710,34 +701,51 @@ function namespaceForStack(name: string): string {
   return name.replace(/[._]+/gu, '-').replace(/-+/gu, '-');
 }
 
-function portsFor(name: string): { registry: number; runtime: number; meilisearch: number; tei: number } {
-  if (name === 'local') return { registry: 8018, runtime: 7331, meilisearch: 7700, tei: 8080 };
+function hostPortFor(name: string, defaultPort: number, namedPortBase: number): number {
+  if (name === 'local') return defaultPort;
   const offset = [...name].reduce((total, character) => (total * 31 + character.charCodeAt(0)) % 500, 0);
-  return { registry: 8100 + offset, runtime: 8600 + offset, meilisearch: 9100 + offset, tei: 9600 + offset };
+  return namedPortBase + offset;
 }
 
-function usesTei(target: DkbStackTarget): boolean {
-  return target === 'default' || target === 'tei-faiss' || target === 'tei-faiss-768' || target === 'tei-meilisearch';
-}
-
-function usesFastEmbed(target: DkbStackTarget): boolean {
-  return target === 'fastembed-faiss' || target === 'fastembed-faiss-768';
-}
-
-function usesFaiss(target: DkbStackTarget): boolean {
-  return target !== 'tei-meilisearch';
-}
-
-function usesMeilisearch(target: DkbStackTarget): boolean {
-  return target === 'tei-meilisearch';
-}
-
-function parseStoredTarget(value: string | undefined): DkbStackTarget {
-  const target = value ?? 'default';
-  if (['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'].includes(target)) {
-    return target as DkbStackTarget;
+function targetRecipe(distribution: DkbDistribution, target: DkbStackTarget) {
+  const recipe = distribution.defaults.targets?.[target];
+  if (!recipe) {
+    const available = Object.keys(distribution.defaults.targets ?? {}).sort().join(', ');
+    throw new DkbError(`Pipeline target ${target} is not available in ${distribution.id}. Available targets: ${available || 'none'}.`);
   }
-  throw new DkbError(`Stack state contains unsupported pipeline target: ${target}`);
+  return recipe;
+}
+
+function requiredStackServices(distribution: DkbDistribution, target: DkbStackTarget): DkbDistributionService[] {
+  targetRecipe(distribution, target);
+  return distribution.services.filter((service) => service.requiredBy.includes(target));
+}
+
+function serviceProfiles(services: readonly DkbDistributionService[]): string[] {
+  return [...new Set(services.flatMap((service) => service.stack?.composeProfile ? [service.stack.composeProfile] : []))];
+}
+
+function requiredServicePort(distribution: DkbDistribution, ports: Record<string, number>, id: string): number {
+  const port = ports[id];
+  if (port === undefined) throw new DkbError(`Distribution ${distribution.id} does not define a health port for required service ${id}.`);
+  return port;
+}
+
+function parseStoredTarget(distribution: DkbDistribution, value: string | undefined): DkbStackTarget {
+  const target = value ?? distributionDefaultTarget(distribution);
+  targetRecipe(distribution, target);
+  return target;
+}
+
+function distributionDefaultTarget(distribution: DkbDistribution): string {
+  const target = distribution.defaults.activeTarget;
+  if (!target) throw new DkbError(`Distribution ${distribution.id} does not define a default pipeline target.`);
+  return target;
+}
+
+function environmentValue(value: unknown, serviceId: string, option: string): string {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  throw new DkbError(`Stack option ${serviceId}.${option} must be a string, number, or boolean to map into a service environment variable.`);
 }
 
 async function readEnvironmentFile(target: string): Promise<Record<string, string>> {
@@ -859,10 +867,11 @@ async function validateStackArchive(target: string): Promise<string> {
   return [...roots][0]!;
 }
 
-async function readStackLock(target: string): Promise<{
+async function readStackLock(target: string, distribution: DkbDistribution): Promise<{
   format: 'dkb.stack-lock.v2';
   version: string;
-  images: { registry: string; compiler: string; runtime: string; evidence: string; fastembed: string; faiss: string };
+  distribution: string;
+  images: Record<string, string>;
 }> {
   let value: unknown;
   try {
@@ -870,19 +879,30 @@ async function readStackLock(target: string): Promise<{
   } catch (error) {
     throw new DkbError(`Unable to read stack release lock ${target}: ${errorMessage(error)}`);
   }
-  if (!isRecord(value) || value.format !== 'dkb.stack-lock.v2' || typeof value.version !== 'string' || !isRecord(value.images)) {
+  if (!isRecord(value)
+    || value.format !== 'dkb.stack-lock.v2'
+    || typeof value.version !== 'string'
+    || typeof value.distribution !== 'string'
+    || !isRecord(value.images)) {
     throw new DkbError(`Invalid DKB stack release lock: ${target}`);
   }
-  const expected = ['registry', 'compiler', 'runtime', 'evidence', 'fastembed', 'faiss'] as const;
-  const images = {} as { registry: string; compiler: string; runtime: string; evidence: string; fastembed: string; faiss: string };
-  for (const name of expected) {
-    const image = value.images[name];
-    if (typeof image !== 'string' || !/^ghcr\.io\/sjshovan\/dkb-[a-z-]+@sha256:[a-f0-9]{64}$/u.test(image)) {
-      throw new DkbError(`Stack release lock has an invalid or unpinned ${name} image.`);
-    }
-    images[name] = image;
+  const expectedDistribution = `${distribution.id}@${distribution.version}`;
+  if (value.distribution !== expectedDistribution) {
+    throw new DkbError(`Stack release lock targets ${value.distribution}; this CLI loaded ${expectedDistribution}.`);
   }
-  return { format: 'dkb.stack-lock.v2', version: value.version, images };
+  const images: Record<string, string> = {};
+  const expected = distribution.services.filter((service) => service.stack && service.image).map((service) => service.id);
+  for (const id of expected) {
+    const image = value.images[id];
+    if (typeof image !== 'string' || !/^\S+@sha256:[a-f0-9]{64}$/u.test(image)) {
+      throw new DkbError(`Stack release lock has an invalid or unpinned ${id} image.`);
+    }
+    images[id] = image;
+  }
+  for (const id of Object.keys(value.images)) {
+    if (!expected.includes(id)) throw new DkbError(`Stack release lock declares unknown service image ${id}.`);
+  }
+  return { format: 'dkb.stack-lock.v2', version: value.version, distribution: value.distribution, images };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

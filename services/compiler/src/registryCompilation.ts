@@ -14,7 +14,6 @@ import { validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { validateEvidenceBuildLock } from '@sjshovan/dkb-protocol/builds.js';
 import {
   DKB_RETRIEVAL_BUILD_PROFILE_LOCK,
-  readRetrievalBuildProfile,
   validatePackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
@@ -86,10 +85,6 @@ export async function compileRegistryPackage(
   if (target !== contextConfig.activeTarget) {
     throw new DkbError(`Registry compiler accepts only its active target "${contextConfig.activeTarget}", not "${target}"`);
   }
-  const compilerImage = options.distribution.services.find((service) => (
-    service.providerId === contextConfig.target.evidence && service.requiredBy.includes(target)
-  ))?.image;
-
   try {
     await fs.writeFile(uploadPath, sourceArchive);
     await extractDkbPackageArchive(uploadPath, extractedRoot);
@@ -121,7 +116,6 @@ export async function compileRegistryPackage(
           contextRoot: options.contextRoot,
         });
     const graph = await validatePackageBuildGraph(buildRoot);
-    const retrievalProfile = await readRetrievalBuildProfile(graph.retrievalPath);
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
     const packageTreeHash = await hashPackageTree(buildRoot);
     await createDkbPackageArchive(buildRoot, archivePath);
@@ -132,16 +126,13 @@ export async function compileRegistryPackage(
     const archiveSize = (await fs.stat(archivePath)).size;
     const archiveFileName = packageArchiveFileName(packageId, version);
     const payload: Record<string, unknown> = {
-      compiler: {
-        id: 'dkb.registry.package',
-        ...(compilerImage ? { image: compilerImage } : {}),
-        model: retrievalProfile.profile.embedding.model,
+      build: {
         target,
-        profile: target,
-        buildDigest: retrievalProfile.buildDigest,
-        compatibilityDigest: retrievalProfile.compatibilityDigest,
-        profileDigest: retrievalProfile.profileDigest,
-        providers: retrievalProfile.profile.providers,
+        evidenceProfileDigest: graph.evidence.evidenceProfileDigest,
+        evidenceDigest: graph.evidence.evidenceDigest,
+        retrievalProfileDigest: graph.retrieval.retrievalProfileDigest,
+        compatibilityDigest: graph.retrieval.compatibilityDigest,
+        retrievalBuildDigest: graph.retrieval.retrievalBuildDigest,
       },
       lock: compiled.lock,
       sourceTreeHash,

@@ -1,8 +1,7 @@
 # Final Provider Architecture
 
 The authoritative decision is [ADR 0006](../decisions/0006-final-provider-architecture-and-storage-cutover.md).
-This document is the navigation map for the active cutover and must match the
-source before ADR 0006 is marked implemented.
+This document is the canonical navigation map for the provider architecture.
 
 ## Ownership
 
@@ -53,3 +52,40 @@ text, source anchors, locators, and provenance from the Evidence catalog.
 ```
 
 There is no durable active `.dkb/artifacts` mirror. Cache content is disposable.
+
+## Composition roots
+
+`packages/distribution-default/src/index.ts` is the sole bundled provider and
+target catalog. `services/compiler/src/server.ts`, Runtime bootstrap, and
+`apps/cli/src/cli/index.ts` may import that distribution to assemble an
+executable application. Their domain modules receive a distribution or
+context-local `DkbProviderHost`; they do not select concrete providers.
+
+Filesystem plugins are discovered by `packages/pipeline` from the active
+Library context, then the user-global context, then the supplied distribution.
+A broken higher-precedence implementation fails closed. Knowledge packages are
+data and cannot provide plugin code or configuration.
+
+## Where to find behavior
+
+| Behavior | Authoritative source |
+| --- | --- |
+| Formats and validators | `packages/protocol/src` and `packages/protocol/schemas` |
+| Plugin resolution and contracts | `packages/pipeline/src` |
+| Build graph, archive, and catalog operations | `packages/library/src` |
+| Default targets and service requirements | `packages/distribution-default/src/index.ts` |
+| Evidence compilation and processors | `services/compiler/src/compilationState.ts` |
+| Retrieval orchestration | `services/compiler/src/compilerCore.ts` |
+| Build promotion and validation | `services/compiler/src/buildStorage.ts` and `packages/library/src/builds.ts` |
+| Compilation caching and capacity | `services/compiler/src/compileCache.ts`, `embeddingCache.ts`, and `diskCapacity.ts` |
+| Registry compilation delivery | `services/compiler/src/registryCompilation.ts` |
+| Runtime activation and snapshots | `services/runtime/src/runtime` |
+| Runtime provider coordination | `services/runtime/src/providers` |
+| HTTP and read-only MCP | `services/runtime/src/runtime/server.ts` and `services/runtime/src/mcp` |
+| CLI command composition | `apps/cli/src/cli` |
+| Cross-package enforcement | `scripts/check-package-boundaries.mjs` and `scripts/workspace-graph.mjs` |
+
+The generated dependency graph is
+[`workspace-dependency-graph.md`](workspace-dependency-graph.md). Operational
+details live in [`../operations.md`](../operations.md); artifact and receipt
+details live in [`../artifact-architecture.md`](../artifact-architecture.md).

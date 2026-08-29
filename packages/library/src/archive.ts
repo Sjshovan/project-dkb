@@ -91,9 +91,10 @@ export async function extractDkbPackageArchive(
 
 function isOperatorControlledPath(entryPath: string): boolean {
   const normalized = entryPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
-  return normalized === '.dkb/config.json'
-    || normalized === '.dkb/plugins'
-    || normalized.startsWith('.dkb/plugins/');
+  if (normalized !== '.dkb' && !normalized.startsWith('.dkb/')) return false;
+  return normalized !== '.dkb/builds'
+    && !normalized.startsWith('.dkb/builds/')
+    && normalized !== '.dkb/runtime.lock.json';
 }
 
 function isSafeTarEntry(entryPath: string, entry: unknown): boolean {

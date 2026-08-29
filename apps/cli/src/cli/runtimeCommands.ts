@@ -3,6 +3,7 @@ import type { Command } from 'commander';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { CliPresenter } from './presentation.js';
 import { formatBytes } from './presentation.js';
+import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import {
   summarizeHostMutation,
   summarizeHostRuntimes,
@@ -16,7 +17,7 @@ export interface RuntimeCommandContext {
   currentRuntimeUrl(explicit?: string): Promise<string>;
   parsePositiveInteger(value: string): number;
   parseRuntimeKind(value: string): 'process' | 'docker' | 'remote';
-  parseStackTarget(value: string): DkbStackTarget;
+  defaultDistribution(): Promise<DkbDistribution>;
   runtimeCatalogUrl(host: string, port: number): string;
   runDockerCompose(composeFile: string, args: string[]): void;
   jsonRequested: boolean;
@@ -208,10 +209,11 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .command('up')
     .description('Start or update a named local DKB stack')
     .argument('[name]', 'Stack name', 'local')
-    .option('--target <target>', 'Pipeline target from the active DKB distribution', context.parseStackTarget, 'default')
-    .action(async (name: string, options: { target: DkbStackTarget }) => {
+    .option('--target <target>', 'Pipeline target from the active DKB distribution')
+    .action(async (name: string, options: { target?: DkbStackTarget }) => {
       const { upDkbStack } = await import('../stack/manager.js');
-      await context.presenter().run('Starting DKB stack', async () => upDkbStack(name, options.target), summarizeStackStatus);
+      const distribution = await context.defaultDistribution();
+      await context.presenter().run('Starting DKB stack', async () => upDkbStack(distribution, name, options.target), summarizeStackStatus);
     });
 
   stack
@@ -220,7 +222,7 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .argument('[name]', 'Stack name', 'local')
     .action(async (name: string) => {
       const { downDkbStack } = await import('../stack/manager.js');
-      await context.presenter().run('Stopping DKB stack', async () => downDkbStack(name));
+      await context.presenter().run('Stopping DKB stack', async () => downDkbStack(await context.defaultDistribution(), name));
     });
 
   stack
@@ -230,7 +232,7 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .option('--check', 'Probe Registry, Runtime, and selected managed-index endpoints')
     .action(async (name: string, options: { check?: boolean }) => {
       const { statusDkbStack } = await import('../stack/manager.js');
-      context.presenter().print(await statusDkbStack(name, Boolean(options.check)), summarizeStackStatus);
+      context.presenter().print(await statusDkbStack(await context.defaultDistribution(), name, Boolean(options.check)), summarizeStackStatus);
     });
 
   stack
@@ -242,7 +244,7 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .action(async (name: string, service: string | undefined, options: { follow?: boolean }) => {
       if (context.jsonRequested) throw new DkbError('dkb stack logs is a streaming command and does not support --json.');
       const { logsDkbStack } = await import('../stack/manager.js');
-      await logsDkbStack(name, service, Boolean(options.follow));
+      await logsDkbStack(await context.defaultDistribution(), name, service, Boolean(options.follow));
     });
 
   stack
@@ -251,7 +253,7 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .argument('[name]', 'Stack name', 'local')
     .action(async (name: string) => {
       const { doctorDkbStack } = await import('../stack/manager.js');
-      const result = await context.presenter().check('Stack diagnostics', async () => doctorDkbStack(name), (value) => value.ok, summarizeStackStatus);
+      const result = await context.presenter().check('Stack diagnostics', async () => doctorDkbStack(await context.defaultDistribution(), name), (value) => value.ok, summarizeStackStatus);
       if (!result.ok) process.exitCode = 1;
     });
 
@@ -262,7 +264,7 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .option('--output <path>', 'Backup .tar.gz path')
     .action(async (name: string, options: { output?: string }) => {
       const { backupDkbStack } = await import('../stack/manager.js');
-      await context.presenter().run('Backing up DKB stack', async () => backupDkbStack(name, options.output), (value) => {
+      await context.presenter().run('Backing up DKB stack', async () => backupDkbStack(await context.defaultDistribution(), name, options.output), (value) => {
         const result = value as { archive: string; sha256: string; bytes: number };
         return [
           `Archive: ${result.archive}`,
@@ -280,7 +282,7 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .option('--replace', 'Atomically replace existing stopped stack state')
     .action(async (archive: string, options: { replace?: boolean }) => {
       const { restoreDkbStack } = await import('../stack/manager.js');
-      await context.presenter().run('Restoring DKB stack', async () => restoreDkbStack(archive, Boolean(options.replace)));
+      await context.presenter().run('Restoring DKB stack', async () => restoreDkbStack(await context.defaultDistribution(), archive, Boolean(options.replace)));
     });
 
   stack
@@ -290,6 +292,6 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .requiredOption('--lock <path>', 'Digest-pinned dkb.stack-lock.v2 file')
     .action(async (name: string, options: { lock: string }) => {
       const { upgradeDkbStack } = await import('../stack/manager.js');
-      await context.presenter().run('Upgrading DKB stack', async () => upgradeDkbStack(name, options.lock));
+      await context.presenter().run('Upgrading DKB stack', async () => upgradeDkbStack(await context.defaultDistribution(), name, options.lock));
     });
 }

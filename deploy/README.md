@@ -6,9 +6,9 @@ pipeline context, secrets, and managed-index data under the named stack state
 root so backup and restore have a complete ownership boundary.
 
 Release images are independently versioned. A releasable stack is defined by a
-`dkb.stack-lock.v1` file containing exact private GHCR digests for the Registry,
-compiler, Runtime, and provider sidecar. Floating image tags are not stack
-locks.
+`dkb.stack-lock.v2` file containing an exact digest for every service declared
+by the selected DKB distribution. The lock is bound to the distribution ID and
+version; floating image tags are not stack locks.
 
 The local profile is intentionally not presented as production. A remote
 Registry can use the production environment contract in the separate

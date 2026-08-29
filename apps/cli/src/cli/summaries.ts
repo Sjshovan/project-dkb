@@ -674,11 +674,13 @@ function stackComponentLabel(value: unknown): string {
   switch (String(value)) {
     case 'registry-web': return 'Registry';
     case 'dkb-runtime': return 'Runtime';
-    case 'meilisearch': return 'Meilisearch';
     case 'docker': return 'Docker';
     case 'compose': return 'Compose';
     case 'secrets': return 'Secrets';
-    default: return String(value ?? '-');
+    default: return String(value ?? '-').split(/[-_]/u)
+      .filter(Boolean)
+      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+      .join(' ');
   }
 }
 
@@ -714,21 +716,6 @@ export function summarizeCompilerStatus(value: unknown): string[] {
     typeof actual.serviceVersion === 'string' ? `service version: ${actual.serviceVersion}` : '',
     drift.length > 0 ? `drift: ${drift.join(', ')}` : 'drift: none',
     ...actions.map((item) => `action: ${String(item)}`),
-  ];
-}
-
-export function summarizeCompilerCompileResult(value: unknown): string[] {
-  const result = value as {
-    compiler?: { id?: unknown; model?: unknown };
-    recordCount?: unknown;
-    outputPath?: unknown;
-  };
-
-  return [
-    `compiler: ${String(result.compiler?.id ?? 'unknown')}`,
-    typeof result.compiler?.model === 'string' ? `model: ${result.compiler.model}` : '',
-    countLabel(result.recordCount, 'record') ?? '',
-    typeof result.outputPath === 'string' ? `output: ${result.outputPath}` : '',
   ];
 }
 
@@ -825,4 +812,3 @@ export function summarizeArtifactTransport(value: unknown): string[] {
 function humanStatus(value: unknown): string {
   return String(value).replace(/_/g, ' ');
 }
-

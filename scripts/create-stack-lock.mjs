@@ -1,40 +1,49 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { DEFAULT_DKB_DISTRIBUTION } from '../packages/distribution-default/dist/index.js';
 
 const options = parseArguments(process.argv.slice(2));
-const required = ['version', 'registry', 'compiler', 'runtime', 'evidence', 'fastembed', 'faiss', 'output'];
-for (const key of required) {
+for (const key of ['version', 'output']) {
   if (!options[key]) throw new Error(`Missing --${key}`);
 }
 
-const images = {
-  registry: verifiedImage(options.registry, 'dkb-registry'),
-  compiler: verifiedImage(options.compiler, 'dkb-compiler'),
-  runtime: verifiedImage(options.runtime, 'dkb-runtime'),
-  evidence: verifiedImage(options.evidence, 'dkb-evidence-docling-llamaindex'),
-  fastembed: verifiedImage(options.fastembed, 'dkb-embedding-fastembed'),
-  faiss: verifiedImage(options.faiss, 'dkb-index-faiss'),
-};
+let supplied;
+try {
+  supplied = JSON.parse(process.env.DKB_STACK_IMAGES_JSON ?? '{}');
+} catch (error) {
+  throw new Error(`DKB_STACK_IMAGES_JSON must be a JSON object: ${error instanceof Error ? error.message : String(error)}`);
+}
+if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied)) {
+  throw new Error('DKB_STACK_IMAGES_JSON must be a JSON object keyed by distribution service ID');
+}
+
+const expected = DEFAULT_DKB_DISTRIBUTION.services
+  .filter((service) => service.stack && service.image)
+  .map((service) => service.id);
+const images = {};
+for (const id of expected) images[id] = verifiedImage(supplied[id], id);
+for (const id of Object.keys(supplied)) {
+  if (!expected.includes(id)) throw new Error(`Unknown distribution service image: ${id}`);
+}
 
 const lock = {
   format: 'dkb.stack-lock.v2',
   version: options.version,
   protocol: '2.0',
+  distribution: `${DEFAULT_DKB_DISTRIBUTION.id}@${DEFAULT_DKB_DISTRIBUTION.version}`,
   createdAt: new Date().toISOString(),
   sourceCommit: process.env.GITHUB_SHA ?? process.env.DKB_BUILD_COMMIT ?? 'development',
   images,
-  externalImages: {
-    tei: 'ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07',
-  },
 };
 
 await fs.mkdir(path.dirname(path.resolve(options.output)), { recursive: true });
 await fs.writeFile(path.resolve(options.output), `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
 console.log(path.resolve(options.output));
 
-function verifiedImage(value, expectedName) {
-  const pattern = new RegExp(`^ghcr\\.io/sjshovan/${expectedName}@sha256:[a-f0-9]{64}$`, 'u');
-  if (!pattern.test(value)) throw new Error(`${expectedName} must be a private GHCR reference pinned by sha256 digest`);
+function verifiedImage(value, serviceId) {
+  if (typeof value !== 'string' || !/^\S+@sha256:[a-f0-9]{64}$/u.test(value)) {
+    throw new Error(`${serviceId} must be an image reference pinned by sha256 digest`);
+  }
   return value;
 }
 

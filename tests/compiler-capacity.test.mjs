@@ -13,7 +13,7 @@ import {
 
 test('corpus statistics measure chunk density and text volume instead of treating file count as scale', () => {
   const evidence = {
-    format: 'dkb.evidence.ir.v3',
+    format: 'dkb.evidence.ir.v4',
     evidenceProfileDigest: 'sha256:profile',
     evidenceDigest: 'sha256:evidence',
     evidence: [
@@ -89,7 +89,7 @@ test('Registry delivery statistics omit unbounded source and artifact rankings',
       retrievalBuildBytes: 8192,
       totalDerivedBytes: 14336,
       sourceToDerivedRatio: 14,
-      largestArtifacts: [{ path: '.dkb/artifacts/large.file', bytes: 8192 }],
+      largestArtifacts: [{ path: '.dkb/builds/retrieval/profile/build/artifacts/large.file', bytes: 8192 }],
     },
     timingsMs: {
       collectState: 3,
