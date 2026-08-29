@@ -20,6 +20,7 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 - Preserve stable source anchors and enforce exact Evidence/Retrieval parent digests.
 - Validate all artifacts before atomic promotion; rollback leaves the previous complete build intact.
 - Enforce cancellation, timeouts, target compatibility, and trusted context-root containment.
+- Stage service-visible jobs beneath the absolute `DKB_COMPILER_WORK_ROOT`; every selected provider must see that same root.
 
 ## Prohibited coupling
 

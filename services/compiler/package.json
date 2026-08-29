@@ -17,7 +17,8 @@
     "./pipelineRunner.js": { "types": "./dist/pipelineRunner.d.ts", "import": "./dist/pipelineRunner.js" },
     "./records.js": { "types": "./dist/records.d.ts", "import": "./dist/records.js" },
     "./server.js": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
-    "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" }
+    "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" },
+    "./workRoot.js": { "types": "./dist/workRoot.d.ts", "import": "./dist/workRoot.js" }
   },
   "bin": {
     "dkb-compiler": "./dist/bin.js"

@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { adapterFor } from '@sjshovan/dkb-library/adapters/index.js';
@@ -34,6 +33,7 @@ import {
 } from './compileCache.js';
 import { writeAtomicCompileArtifacts } from './buildStorage.js';
 import type { CompilerArtifactState, RegistryCompileState } from './compilerState.js';
+import { createCompilerWorkDirectory } from './workRoot.js';
 import {
   collectRegistryState,
   lockPackageForDkb,
@@ -344,7 +344,7 @@ export async function ensurePackageBuildForTarget(
     : undefined;
   const profileEvidence = builds.evidence.filter((build) => build.profileDigest === profile.evidenceProfileDigest);
   const unambiguousEvidence = exactEvidence ?? (profileEvidence.length === 1 ? profileEvidence[0] : undefined);
-  const stagingParent = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-package-build-'));
+  const stagingParent = await createCompilerWorkDirectory('dkb-package-build-');
   const stagingRoot = path.join(stagingParent, 'package');
 
   try {

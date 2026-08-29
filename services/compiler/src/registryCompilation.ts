@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { compileComposeProject, compileRetrievalFromEvidence } from './compilerCore.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
@@ -21,6 +20,7 @@ import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchiv
 import { resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { summarizeCompilerDeliveryStatistics } from './buildStatistics.js';
+import { createCompilerWorkDirectory } from './workRoot.js';
 
 export interface RegistryCompileRequest {
   jobId: string;
@@ -72,7 +72,7 @@ export async function compileRegistryPackage(
     throw new DkbError(`Source archive hash mismatch: expected ${expectedHash}, got ${actualHash}`);
   }
 
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), `dkb-registry-compile-${input.jobId}-`));
+  const scratch = await createCompilerWorkDirectory(`dkb-registry-compile-${input.jobId}-`);
   const uploadPath = path.join(scratch, input.sourceArchive.fileName ?? 'source.dkbpkg');
   const evidenceUploadPath = path.join(scratch, input.evidenceArchive?.fileName ?? 'evidence.dkbevidence');
   const evidenceExtractedRoot = path.join(scratch, 'evidence');

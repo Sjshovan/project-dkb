@@ -17,5 +17,12 @@ HTTP layer, PostgreSQL, Redis, private object storage, backup/monitoring, and
 secret management. The Runtime and compiler can be deployed independently
 behind their existing health and authentication contracts.
 
+Registry compilation and provider sidecars exchange staged inputs only through
+the shared compiler jobs volume. Compose sets `DKB_COMPILER_WORK_ROOT` to
+`/jobs/api`; operators deploying the compiler separately must provide an
+absolute work root that is visible at the same path to every selected provider
+service. Provider path allowlists remain narrow and must not be widened to a
+container-local temporary directory.
+
 Never mount the Docker socket into the compiler or accept provider plugins from
 uploaded packages.
