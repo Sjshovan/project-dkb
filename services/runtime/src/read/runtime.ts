@@ -1,16 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import type { QueryContext } from '../indexes/queryContext.js';
-import {
-  queryEvidenceForSourceUnits,
-  querySourceChunks,
-  readSourceIndex,
-  type IndexedSourceAsset,
-  type IndexedSourceUnit,
-  type SourceUnitMatch,
-  type SourceUnitQueryEvidence,
-} from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
+import { getQueryContext, type QueryContext } from '../indexes/queryContext.js';
+import type { DkbEvidenceCatalogAsset, DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { validateDkbReadRequest } from '@sjshovan/dkb-protocol/validation.js';
 import type {
   DkbEvidence,
@@ -20,7 +11,6 @@ import type {
   DkbReadResult,
   DkbReadStatus,
 } from '@sjshovan/dkb-protocol/types.js';
-import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
 import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 import { readNavigationChunks, semanticSearch } from './navigation.js';
 
@@ -99,13 +89,56 @@ export interface DkbQueryTargetResponse {
   trace: unknown[];
 }
 
+type RuntimeEvidenceUnit = {
+  id: string;
+  evidenceId: string;
+  sourceId: string;
+  assetId: string;
+  dkbId: string;
+  packageVersion: string;
+  storeId: string;
+  type: DkbEvidenceCatalogRecord['sourceType'];
+  locator: Record<string, unknown>;
+  assetLocator: Record<string, unknown>;
+  title: string;
+  text: string;
+  keywords: string[];
+  capabilities: DkbEvidenceCatalogRecord['capabilities'];
+  queryable?: DkbEvidenceCatalogRecord['queryable'];
+  hash: string;
+  sourceHash: string;
+  provenance: Record<string, unknown>;
+  updatedAt: string;
+  chunkOrdinal: number;
+  chunkStart: number;
+  chunkEnd: number;
+  heading?: string;
+};
+
+type RuntimeEvidenceAsset = {
+  id: string;
+  dkbId: string;
+  storeId: string;
+  type: DkbEvidenceCatalogAsset['type'];
+  locator: Record<string, unknown>;
+  title: string;
+  hash: string;
+  updatedAt: string;
+};
+
+type SourceUnitQueryEvidence = { tokens: string[]; phrases: string[]; identifiers: string[] };
+type SourceUnitMatch = {
+  unit: RuntimeEvidenceUnit;
+  evidence: { phrases: string[]; identifiers: string[]; keywords: string[]; tokens: string[] };
+};
+
 export async function describeQueryTargets(root: string, query: string, limit = 10, queryContext?: QueryContext): Promise<DkbQueryTargetResponse> {
-  const sourceIndex = queryContext ? { units: queryContext.sourceUnits } : await maybeReadSourceIndexData(root);
-  const result = await semanticSearch(root, query, limit, undefined, queryContext);
-  const unitsById = new Map(sourceIndex.units.map((unit) => [unit.id, unit]));
+  const context = queryContext ?? await contextFor(root);
+  const result = await semanticSearch(root, query, limit, undefined, context);
+  const unitsById = new Map(context.evidenceRecords.map(runtimeEvidenceUnit).map((unit) => [unit.id, unit]));
   const targets = result.results
     .map((hit) => unitsById.get(hit.id))
-    .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
+    .filter((unit): unit is RuntimeEvidenceUnit => Boolean(unit))
     .map((unit, index) => ({
       target: `${unit.dkbId}/${unit.id}`,
       dkbId: unit.dkbId,
@@ -135,46 +168,32 @@ export async function retrieveKnowledge(
   request: DkbRetrieveKnowledgeRequest,
   queryContext?: QueryContext,
 ): Promise<DkbRetrieveKnowledgeResponse> {
+  const context = queryContext ?? await contextFor(root);
   const query = retrievalQueryText(request);
   const limit = Math.max(1, Math.min(request.limit ?? 8, 100));
-  const sourceIndex = queryContext
-    ? { assets: queryContext.sourceAssets, units: queryContext.sourceUnits }
-    : await maybeReadSourceIndexData(root);
+  const sourceIndex = {
+    assets: context.evidenceAssets.map(runtimeEvidenceAsset),
+    units: context.evidenceRecords.map(runtimeEvidenceUnit),
+  };
   const sourceUnits = sourceIndex.units;
   const sourceIndexQuery = sourceIndexRetrievalQuery(query, request);
-  const queryEvidence = queryEvidenceForSourceUnits(sourceIndexQuery);
+  const queryEvidence = queryEvidenceForRequest(sourceIndexQuery);
 
   if (sourceUnits.length === 0) {
     return blockedRetrievalResponse(request, query);
   }
 
   const candidateLimit = Math.max(limit * 3, 20);
-  const sourceUnitsById = queryContext?.sourceUnitsById ?? new Map(sourceUnits.map((unit) => [unit.id, unit]));
-  const lexicalStart = performance.now();
-  const lexicalMatches = queryContext?.lexical
-    ? queryContext.lexical.search(query, candidateLimit)
-      .map((hit) => sourceUnitsById.get(hit.unitId))
-      .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
-      .map((unit) => querySourceChunks([unit], sourceIndexQuery, 1)[0] ?? emptyMatch(unit))
-    : querySourceChunks(sourceUnits, sourceIndexQuery, candidateLimit);
-  const lexicalQueryMs = performance.now() - lexicalStart;
+  const sourceUnitsById = new Map(sourceUnits.map((unit) => [unit.id, unit]));
   const vectorStart = performance.now();
-  const vectorResult = queryContext
-    ? await queryContext.retrieval.search({ query, limit: candidateLimit })
-    : await querySearchDocuments(
-      'compose-index',
-      vectorDocumentsForSourceUnits(sourceUnits),
-      query,
-      candidateLimit,
-      undefined,
-      request.phrases ?? [],
-    );
+  const vectorResult = await context.retrieval.search({ query, limit: candidateLimit });
   const vectorQueryMs = performance.now() - vectorStart;
   const vectorMatches = vectorResult.hits
-    .map((hit) => sourceUnitsById.get('evidenceId' in hit ? hit.evidenceId : hit.id))
-    .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
-    .map((unit) => querySourceChunks([unit], sourceIndexQuery, 1)[0] ?? emptyMatch(unit));
-  const candidateChunkMatches = fuseChunkMatches(lexicalMatches, vectorMatches, candidateLimit);
+    .flatMap((hit) => {
+      const unit = sourceUnitsById.get(hit.evidenceId);
+      return unit ? [matchForUnit(unit, queryEvidence, hit.matchedTokens ?? [])] : [];
+    });
+  const candidateChunkMatches = vectorMatches.slice(0, candidateLimit);
   const exactMatchRequired = requiresExactCompiledMatch(request, queryEvidence);
   const chunkMatchesForRead = (exactMatchRequired
     ? candidateChunkMatches.filter((match) => satisfiesExactCompiledMatch(match, request, queryEvidence))
@@ -183,11 +202,11 @@ export async function retrieveKnowledge(
   const directChunkMatches = chunkMatchesForRead.filter((match) => hasCompiledMatchEvidence(match.evidence));
   const profile = request.profile ? {
     timingsMs: {
-      total: roundMs(lexicalQueryMs + vectorQueryMs),
+      total: roundMs(vectorQueryMs),
       artifactContext: 0,
       dkbFilter: 0,
       tokenize: 0,
-      lexicalScore: roundMs(lexicalQueryMs),
+      lexicalScore: 0,
       vectorQuery: roundMs(vectorQueryMs),
       graphExpansion: 0,
       fusion: 0,
@@ -196,13 +215,13 @@ export async function retrieveKnowledge(
     counts: {
       totalRecords: sourceUnits.length,
       filteredRecords: sourceUnits.length,
-      lexicalHits: lexicalMatches.filter((match) => hasCompiledMatchEvidence(match.evidence)).length,
+      lexicalHits: vectorResult.hits.filter((hit) => hit.channels.includes('lexical')).length,
       vectorHits: vectorResult.hits.length,
       graphHits: 0,
       fusedHits: candidateChunkMatches.length,
       returnedHits: chunkMatchesForRead.length,
     },
-    passes: ['lexical', 'vector'],
+    passes: ['retrieval-provider'],
   } : undefined;
 
   if (chunkMatchesForRead.length === 0) {
@@ -230,7 +249,7 @@ export async function retrieveKnowledge(
       sourceUnitsMatched: directChunkMatches.length,
       sourceUnitsRead: chunkMatchesForRead.length,
       adapterGroups: adapterGroupsForSourceMatches(chunkMatchesForRead),
-      sourceUnitMatches: sourceUnitMatchesForMatches(chunkMatchesForRead, sourceIndex.assets, queryContext?.sourceAssetsByKey),
+      sourceUnitMatches: sourceUnitMatchesForMatches(chunkMatchesForRead, sourceIndex.assets),
       retrievalProfile: profile,
     },
   };
@@ -384,7 +403,7 @@ function compiledChunkEvidence(match: SourceUnitMatch): DkbEvidence {
   };
 }
 
-function compiledChunkLabel(unit: IndexedSourceUnit): string {
+function compiledChunkLabel(unit: RuntimeEvidenceUnit): string {
   const pathLabel = typeof unit.assetLocator.path === 'string'
     ? compactPathLabel(unit.assetLocator.path)
     : typeof unit.locator.path === 'string'
@@ -455,45 +474,12 @@ function satisfiesExactCompiledMatch(
   return hasCompiledMatchEvidence(match.evidence);
 }
 
-function fuseChunkMatches(
-  lexicalMatches: SourceUnitMatch[],
-  vectorMatches: SourceUnitMatch[],
-  limit: number,
-): SourceUnitMatch[] {
-  const fused = new Map<string, { match: SourceUnitMatch; score: number }>();
-  const add = (matches: SourceUnitMatch[], weight: number): void => {
-    matches.forEach((match, index) => {
-      const current = fused.get(match.unit.id);
-
-      fused.set(match.unit.id, {
-        match: current && hasCompiledMatchEvidence(current.match.evidence) ? current.match : match,
-        score: (current?.score ?? 0) + (weight / (index + 1)),
-      });
-    });
-  };
-
-  add(lexicalMatches, 0.65);
-  add(vectorMatches, 0.35);
-
-  return [...fused.values()]
-    .sort((left, right) => right.score - left.score || left.match.unit.id.localeCompare(right.match.unit.id))
-    .slice(0, limit)
-    .map((entry) => entry.match);
-}
-
 function requiresExactCompiledMatch(
   request: DkbRetrieveKnowledgeRequest,
   evidence: SourceUnitQueryEvidence,
 ): boolean {
   return Boolean(request.phrases?.some((phrase) => phrase.trim().length > 0))
     || evidence.identifiers.length > 0;
-}
-
-function emptyMatch(unit: IndexedSourceUnit): SourceUnitMatch {
-  return {
-    unit,
-    evidence: { phrases: [], identifiers: [], keywords: [], tokens: [] },
-  };
 }
 
 function adapterGroupsForSourceMatches(matches: SourceUnitMatch[]): DkbRetrieveKnowledgeResponse['metadata']['adapterGroups'] {
@@ -521,10 +507,9 @@ function adapterGroupsForSourceMatches(matches: SourceUnitMatch[]): DkbRetrieveK
 
 function sourceUnitMatchesForMatches(
   matches: SourceUnitMatch[],
-  assets: IndexedSourceAsset[],
-  existingAssetsByKey?: Map<string, IndexedSourceAsset>,
+  assets: RuntimeEvidenceAsset[],
 ): DkbRetrieveKnowledgeResponse['metadata']['sourceUnitMatches'] {
-  const assetsByKey = existingAssetsByKey ?? new Map(assets.map((asset) => [`${asset.dkbId}/${asset.id}`, asset]));
+  const assetsByKey = new Map(assets.map((asset) => [`${asset.dkbId}/${asset.id}`, asset]));
 
   return matches.map((match) => {
     const asset = assetsByKey.get(`${match.unit.dkbId}/${match.unit.assetId}`);
@@ -584,17 +569,6 @@ function redactEvidenceSource(evidence: DkbEvidence): DkbEvidence {
       packageVersion: evidence.source.packageVersion,
     },
   };
-}
-
-async function maybeReadSourceIndexData(root: string): Promise<{ assets: IndexedSourceAsset[]; units: IndexedSourceUnit[] }> {
-  try {
-    return await readSourceIndex(root);
-  } catch {
-    return {
-      assets: [],
-      units: [],
-    };
-  }
 }
 
 function sourceIndexRetrievalQuery(queryText: string, request: DkbRetrieveKnowledgeRequest): DkbReadQuery {
@@ -696,13 +670,13 @@ function evidenceToText(evidence: DkbEvidence): string {
   return evidence.label;
 }
 
-function registryIdForSourceUnit(unit: IndexedSourceUnit): string | undefined {
+function registryIdForSourceUnit(unit: RuntimeEvidenceUnit): string | undefined {
   return unit.dkbId.endsWith('.local') || /\.local-[a-f0-9]{8}$/.test(unit.dkbId)
     ? unit.dkbId.replace(/\.local(?:-[a-f0-9]{8})?$/, '')
     : undefined;
 }
 
-function sourceOriginForSourceUnit(unit: IndexedSourceUnit): string | undefined {
+function sourceOriginForSourceUnit(unit: RuntimeEvidenceUnit): string | undefined {
   return registryIdForSourceUnit(unit) ? 'registry-local' : undefined;
 }
 
@@ -720,6 +694,83 @@ function roundConfidence(value: number): number {
 
 function roundMs(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function runtimeEvidenceUnit(record: DkbEvidenceCatalogRecord): RuntimeEvidenceUnit {
+  return {
+    id: record.evidenceId,
+    evidenceId: record.evidenceId,
+    sourceId: record.sourceId,
+    assetId: record.assetId,
+    dkbId: record.packageId,
+    packageVersion: record.packageVersion,
+    storeId: record.storeId,
+    type: record.sourceType,
+    locator: record.locator,
+    assetLocator: record.assetLocator,
+    title: record.title,
+    text: record.text,
+    keywords: record.keywords,
+    capabilities: record.capabilities,
+    ...(record.queryable ? { queryable: record.queryable } : {}),
+    hash: record.textHash,
+    sourceHash: record.sourceHash,
+    provenance: record.provenance,
+    updatedAt: record.updatedAt,
+    chunkOrdinal: record.chunkOrdinal,
+    chunkStart: record.chunkStart,
+    chunkEnd: record.chunkEnd,
+    ...(record.heading ? { heading: record.heading } : {}),
+  };
+}
+
+function runtimeEvidenceAsset(asset: DkbEvidenceCatalogAsset): RuntimeEvidenceAsset {
+  return {
+    id: asset.id,
+    dkbId: asset.packageId,
+    storeId: asset.storeId,
+    type: asset.type,
+    locator: asset.locator,
+    title: asset.title,
+    hash: asset.sourceHash,
+    updatedAt: asset.updatedAt,
+  };
+}
+
+function queryEvidenceForRequest(query: DkbReadQuery): SourceUnitQueryEvidence {
+  const phrases = (query.filters ?? [])
+    .filter((filter) => filter.field === 'content' && filter.op === 'contains' && typeof filter.value === 'string')
+    .map((filter) => String(filter.value).toLowerCase().replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const tokens = [...new Set(tokenize(phrases.join(' ')))];
+  const identifiers = [...new Set(phrases.flatMap((phrase) => phrase.match(/\b[A-Za-z0-9][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\b/g) ?? []))]
+    .map((value) => value.toLowerCase());
+  return { phrases, tokens, identifiers };
+}
+
+function matchForUnit(unit: RuntimeEvidenceUnit, query: SourceUnitQueryEvidence, matchedTokens: string[]): SourceUnitMatch {
+  const normalized = `${unit.title}\n${unit.text}\n${unit.keywords.join(' ')}`.toLowerCase();
+  const tokens = [...new Set(matchedTokens.filter(Boolean).map((token) => token.toLowerCase()))];
+  return {
+    unit,
+    evidence: {
+      phrases: query.phrases.filter((phrase) => normalized.includes(phrase)),
+      identifiers: query.identifiers.filter((identifier) => normalized.includes(identifier)),
+      keywords: unit.keywords.filter((keyword) => tokens.includes(keyword.toLowerCase())),
+      tokens,
+    },
+  };
+}
+
+async function contextFor(root: string): Promise<QueryContext> {
+  const { loadLibrary } = await import('@sjshovan/dkb-protocol/manifest.js');
+  const library = await loadLibrary(root);
+  return getQueryContext(library.root, library.manifest.id);
+}
+
+function tokenize(value: string): string[] {
+  return (value.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/gu) ?? [])
+    .flatMap((token) => token.includes('-') ? [token, ...token.split('-')] : [token]);
 }
 
 const SUFFICIENCY_STOPWORDS = new Set([

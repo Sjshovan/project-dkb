@@ -23,6 +23,9 @@ import {
   writePackageBuildGraph,
   type DkbPackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
+import type { DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
+import { DKB_ARTIFACT_MANIFEST_FILENAME, validateArtifactManifest } from '@sjshovan/dkb-protocol/artifacts.js';
 import type { LlamaIndexCompilerResult } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 import {
   readLlamaIndexCompilerRecords,
@@ -38,7 +41,7 @@ import {
   type DkbResolvedRetrievalProfile,
   type DkbRetrievalProfileLock,
 } from '@sjshovan/dkb-pipeline/profile.js';
-import { buildEvidenceIr, evidenceIdentityForRecord, DKB_EVIDENCE_IR_PATH, readEvidenceIr, validateEvidenceIr, writeEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { buildEvidenceIr, evidenceIdentityForRecord, DKB_EVIDENCE_IR_FORMAT, DKB_EVIDENCE_IR_PATH, readEvidenceIr, validateEvidenceIr, writeEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { sourceUnitFromPipelineRecord } from '@sjshovan/dkb-providers-bundled/records.js';
@@ -61,6 +64,7 @@ import {
 
 export const COMPILE_LOCK_PATH = `${DKB_LOCKS_DIR}/compile.lock`;
 export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;
+export const COMPILE_RECEIPT_PATH = `${DKB_CACHE_DIR}/compiler/compile.receipt.json`;
 const COMPILE_CACHE_VERSION = 1;
 const COMPILE_LOCK_TIMEOUT_MS = 30_000;
 const COMPILE_LOCK_STALE_MS = 10 * 60_000;
@@ -276,7 +280,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
     const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
     const desiredProfile = await resolvedProviderProfile(contextRoot, options.target);
     const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
-    const lockPath = artifactLockPath(resolvedRoot);
+    const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
     const sourceSnapshotStart = performance.now();
     const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
     const sourceStatistics = sourceStatisticsForSnapshot(sourceSnapshot);
@@ -332,6 +336,7 @@ export async function compileComposeProject(root: string, options: CompileCompos
       const aggregateArtifactsMs = elapsedMs(aggregateStart);
       const cacheWriteStart = performance.now();
       const lock = written.lock;
+      await writeCompileReceipt(lockPath, lock);
       await writeCompileCache(resolvedRoot, registry, sourceSnapshot, lockPath);
       const compileCacheWriteMs = elapsedMs(cacheWriteStart);
       const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
@@ -439,6 +444,8 @@ export async function compileRetrievalFromEvidence(
         providerHost,
       };
       const written = await writeAtomicCompileArtifacts(resolvedRoot, registry, state, allDkbs, 'faiss-package');
+      const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
+      await writeCompileReceipt(lockPath, written.lock);
       const chunkIndexPath = resolveFrom(resolvedRoot, SOURCE_INDEX_PATH);
       const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
 
@@ -448,7 +455,7 @@ export async function compileRetrievalFromEvidence(
         databasePath: chunkIndexPath,
         chunkIndexPath,
         artifactManifestPath: resolveFrom(resolvedRoot, DKB_ARTIFACT_MANIFEST_PATH),
-        lockPath: artifactLockPath(resolvedRoot),
+        lockPath,
         lock: written.lock,
         cacheHit: false,
         profile: {
@@ -623,10 +630,6 @@ async function writeAtomicCompileArtifacts(
   };
   const stageParent = resolveFrom(root, `${DKB_CACHE_DIR}/compile-stage-${process.pid}-${Date.now().toString(36)}`);
   const stageRoot = path.join(stageParent, 'root');
-  const artifactDir = resolveFrom(root, DKB_ARTIFACTS_DIR);
-  const artifactBackup = `${artifactDir}.replace-${process.pid}-${Date.now().toString(36)}`;
-  const profilePath = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
-  const profileBackup = `${profilePath}.replace-${process.pid}-${Date.now().toString(36)}`;
   const runtimeLockPath = resolveFrom(root, DKB_RUNTIME_LOCK_PATH);
   const runtimeLockBackup = `${runtimeLockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
 
@@ -681,15 +684,9 @@ async function writeAtomicCompileArtifacts(
     }
 
     const promotionStart = performance.now();
-    await fs.mkdir(path.dirname(artifactDir), { recursive: true });
-    await moveIfExists(artifactDir, artifactBackup);
-    if (state.retrievalProfileLock) {
-      await moveIfExists(profilePath, profileBackup);
-    }
     if (buildGraph) await moveIfExists(runtimeLockPath, runtimeLockBackup);
 
     const promotedBuilds: string[] = [];
-    const supersededBuilds: Array<{ original: string; staged: string }> = [];
 
     try {
       if (buildGraph) {
@@ -697,32 +694,12 @@ async function writeAtomicCompileArtifacts(
           const target = path.join(root, path.relative(stageRoot, source));
           if (await promoteBuildDirectory(source, target)) promotedBuilds.push(target);
         }
-        const activeRetrievalTarget = path.join(root, path.relative(stageRoot, buildGraph.retrievalPath));
-        supersededBuilds.push(...await stageSupersededRetrievalBuilds(activeRetrievalTarget, stageParent));
-      }
-      await fs.rename(resolveFrom(stageRoot, DKB_ARTIFACTS_DIR), artifactDir);
-      if (state.retrievalProfileLock) {
-        await fs.rename(resolveFrom(stageRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), profilePath);
       }
       if (buildGraph) await fs.rename(resolveFrom(stageRoot, DKB_RUNTIME_LOCK_PATH), runtimeLockPath);
-      await fs.rm(artifactBackup, { recursive: true, force: true });
-      await fs.rm(profileBackup, { force: true });
       await fs.rm(runtimeLockBackup, { force: true });
     } catch (error) {
-      await fs.rm(artifactDir, { recursive: true, force: true });
-      if (state.retrievalProfileLock) {
-        await fs.rm(profilePath, { force: true });
-      }
       if (buildGraph) await fs.rm(runtimeLockPath, { force: true });
       await Promise.all(promotedBuilds.map((target) => fs.rm(target, { recursive: true, force: true })));
-      for (const build of [...supersededBuilds].reverse()) {
-        await fs.mkdir(path.dirname(build.original), { recursive: true });
-        await fs.rename(build.staged, build.original).catch(() => undefined);
-      }
-      await moveIfExists(artifactBackup, artifactDir);
-      if (state.retrievalProfileLock) {
-        await moveIfExists(profileBackup, profilePath);
-      }
       if (buildGraph) await moveIfExists(runtimeLockBackup, runtimeLockPath);
       throw error;
     }
@@ -763,6 +740,7 @@ async function writeBuildGraph(
     },
     evidence: await readEvidenceIr(stageRoot),
     retrievalProfile: state.retrievalProfileLock,
+    artifactsRoot: resolveFrom(stageRoot, DKB_ARTIFACTS_DIR),
     target: state.resolvedProfile.target,
     generation: (previous?.generation ?? 0) + 1,
   });
@@ -784,37 +762,6 @@ async function promoteBuildDirectory(source: string, target: string): Promise<bo
     if (code === 'EEXIST' || code === 'ENOTEMPTY') return false;
     throw error;
   }
-}
-
-async function stageSupersededRetrievalBuilds(
-  activeTarget: string,
-  stageParent: string,
-): Promise<Array<{ original: string; staged: string }>> {
-  const profileRoot = path.dirname(activeTarget);
-  const activeName = path.basename(activeTarget);
-  const entries = await fs.readdir(profileRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  });
-  const moved: Array<{ original: string; staged: string }> = [];
-
-  try {
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (!entry.isDirectory() || entry.name === activeName) continue;
-      const original = path.join(profileRoot, entry.name);
-      const staged = path.join(stageParent, 'superseded-retrieval', entry.name);
-      await fs.mkdir(path.dirname(staged), { recursive: true });
-      await fs.rename(original, staged);
-      moved.push({ original, staged });
-    }
-  } catch (error) {
-    for (const build of [...moved].reverse()) {
-      await fs.rename(build.staged, build.original).catch(() => undefined);
-    }
-    throw error;
-  }
-
-  return moved;
 }
 
 async function writeCompilerBundles(
@@ -907,11 +854,26 @@ async function moveIfExists(source: string, target: string): Promise<void> {
 
 export async function verifyComposeProject(root: string): Promise<VerifyComposeProjectResult> {
   const resolvedRoot = path.resolve(root);
-  const lockPath = artifactLockPath(resolvedRoot);
+  const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
   const registry = await loadCompose(resolvedRoot);
   const current = await collectRegistryStateForVerification(registry);
   const lock = validateDkbLockManifest(parseLock(await fs.readFile(lockPath, 'utf8'), lockPath), lockPath);
   const expected = await lockForState(resolvedRoot, registry, current, lock.compiled?.compiledAt ?? new Date().toISOString());
+  const buildChecks = await Promise.all(uniqueDkbs([
+    ...registry.collections.flatMap((collection) => collection.dkbs),
+    ...registry.dkbs,
+  ]).map(async (dkb) => {
+    try {
+      const graph = await validatePackageBuildGraph(dkb.root);
+      return {
+        name: `build.${dkb.manifest.id}`,
+        ok: graph.evidence.package.id === dkb.manifest.id && graph.evidence.package.version === dkb.manifest.version,
+        detail: `${graph.evidence.evidenceDigest} -> ${graph.retrieval.retrievalBuildDigest}`,
+      };
+    } catch (error) {
+      return { name: `build.${dkb.manifest.id}`, ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
+  }));
   const checks = [
     {
       name: 'registry',
@@ -923,21 +885,7 @@ export async function verifyComposeProject(root: string): Promise<VerifyComposeP
       ok: stableHash(lock.packages) === stableHash(expected.packages),
       detail: packageVerificationDetail(lock.packages, expected.packages),
     },
-    {
-      name: 'artifacts.sourceIndex',
-      ok: sameArtifact(lock.artifacts.sourceIndex, expected.artifacts.sourceIndex),
-      detail: `${lock.artifacts.sourceIndex.hash ?? 'null'} expected ${expected.artifacts.sourceIndex.hash ?? 'null'}`,
-    },
-    {
-      name: 'artifacts.sourceGraph',
-      ok: sameArtifact(lock.artifacts.sourceGraph, expected.artifacts.sourceGraph),
-      detail: `${lock.artifacts.sourceGraph.hash ?? 'null'} expected ${expected.artifacts.sourceGraph.hash ?? 'null'}`,
-    },
-    {
-      name: 'artifacts.sourceVector',
-      ok: sameArtifact(lock.artifacts.sourceVector, expected.artifacts.sourceVector),
-      detail: `${lock.artifacts.sourceVector.hash ?? 'null'} expected ${expected.artifacts.sourceVector.hash ?? 'null'}`,
-    },
+    ...buildChecks,
   ];
 
   return {
@@ -965,7 +913,7 @@ function packageVerificationDetail(
 
     for (const field of Object.keys(lockedPackage) as Array<keyof typeof lockedPackage>) {
       if (stableHash(lockedPackage[field]) !== stableHash(currentPackage[field])) {
-        differences.push(`${packageId}:${String(field)}`);
+        differences.push(`${packageId}:${String(field)} (${String(lockedPackage[field])} != ${String(currentPackage[field])})`);
       }
     }
   }
@@ -1090,6 +1038,14 @@ async function writeCompileCache(
   await fs.writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
 }
 
+async function writeCompileReceipt(target: string, lock: DkbLockManifest): Promise<void> {
+  const temporary = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(temporary, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+  await fs.rm(target, { force: true });
+  await fs.rename(temporary, target);
+}
+
 async function quickSourceSnapshotForRegistry(registry: LoadedLibrary): Promise<QuickSourceSnapshot> {
   const dkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
@@ -1145,14 +1101,32 @@ async function readCompileStatistics(
   source: DkbSourceStatistics,
 ): Promise<{ corpus: DkbCorpusStatistics; storage: DkbBuildStorageStatistics } | null> {
   try {
-    const [evidence, manifest] = await Promise.all([
-      readEvidenceIr(root),
-      inspectDkbArtifactManifest(root),
+    const compose = await loadCompose(root);
+    const dkbs = uniqueDkbs([
+      ...compose.collections.flatMap((collection) => collection.dkbs),
+      ...compose.dkbs,
     ]);
+    const layers = await Promise.all(dkbs.map(async (dkb) => {
+      const graph = await validatePackageBuildGraph(dkb.root);
+      const evidencePath = path.join(graph.evidencePath, DKB_EVIDENCE_BUILD_IR);
+      const manifestPath = path.join(graph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
+      return {
+        evidence: validateEvidenceIr(JSON.parse(await fs.readFile(evidencePath, 'utf8')), evidencePath),
+        manifest: validateArtifactManifest(JSON.parse(await fs.readFile(manifestPath, 'utf8')), manifestPath),
+        root: dkb.root,
+      };
+    }));
+    const evidence = {
+      format: layers[0]?.evidence.format ?? DKB_EVIDENCE_IR_FORMAT,
+      evidenceProfileDigest: layers[0]?.evidence.evidenceProfileDigest ?? stableHash({ empty: true }),
+      evidenceDigest: stableHash(layers.map((layer) => layer.evidence.evidenceDigest)),
+      evidence: layers.flatMap((layer) => layer.evidence.evidence),
+      chunks: layers.flatMap((layer) => layer.evidence.chunks),
+    } as DkbEvidenceIr;
 
     return {
       corpus: summarizeEvidenceCorpus(evidence, source),
-      storage: await summarizeBuildStorage(root, manifest, source.bytes),
+      storage: await summarizeBuildStorage(root, layers.map((layer) => layer.manifest), source.bytes, layers.map((layer) => layer.root)),
     };
   } catch {
     return null;
@@ -1433,13 +1407,11 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
   sourceAnalysis: ReturnType<typeof analyzeSourceUnits>;
 }> {
   try {
-    const sourceIndex = await readSourceIndex(dkb.root);
+    const graph = await validatePackageBuildGraph(dkb.root);
+    const catalog = readEvidenceCatalog(graph.evidencePath);
 
-    if (sourceIndex.units.length > 0) {
-      const sourceAnalysis = {
-        sourceUnits: sourceIndex.units,
-        sourceEdges: sourceIndex.edges,
-      };
+    if (catalog.records.length > 0) {
+      const sourceAnalysis = analyzeSourceUnits(catalog.records.map(sourceUnitFromEvidenceCatalog));
 
       return {
         package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
@@ -1447,44 +1419,7 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
       };
     }
   } catch {
-    // Packages without a portable source index verify against another compiled artifact.
-  }
-
-  try {
-    const compilerRecords = await readLlamaIndexCompilerRecords(dkb.root);
-
-    if (compilerRecords.length > 0) {
-      const unique = new Map<string, IndexedSourceUnit>();
-
-      for (const record of compilerRecords) {
-        const unit = sourceUnitFromLlamaIndexRecord(dkb, record);
-        unique.set(unit.id, unit);
-      }
-
-      const sourceAnalysis = analyzeSourceUnits([...unique.values()].sort((a, b) => a.id.localeCompare(b.id)));
-
-      return {
-        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
-        sourceAnalysis,
-      };
-    }
-  } catch {
-    // Packages without a compiler bundle verify against direct source adapters.
-  }
-
-  try {
-    const artifact = await loadFaissPackageArtifact(dkb, resolveFrom(dkb.root, DKB_ARTIFACTS_DIR));
-
-    if (artifact.units.length > 0) {
-      const sourceAnalysis = analyzeSourceUnits(artifact.units);
-
-      return {
-        package: await lockPackageForDkb(dkb, sourceAnalysis.sourceUnits, artifactRoot),
-        sourceAnalysis,
-      };
-    }
-  } catch {
-    // Packages without a FAISS catalog verify against direct source adapters.
+    // Editable packages without a complete Build graph verify from source.
   }
 
   const state = await collectDkbState(dkb, undefined, artifactRoot);
@@ -1634,6 +1569,7 @@ function annotateEvidenceIds(
 
       return {
         ...record,
+        id: evidenceId,
         metadata: {
           ...record.metadata,
           sourceMetadata: {
@@ -1643,6 +1579,31 @@ function annotateEvidenceIds(
         },
       };
     }),
+  };
+}
+
+function sourceUnitFromEvidenceCatalog(record: DkbEvidenceCatalogRecord): IndexedSourceUnit {
+  return {
+    id: record.evidenceId,
+    evidenceId: record.evidenceId,
+    assetId: record.assetId,
+    dkbId: record.packageId,
+    packageVersion: record.packageVersion,
+    storeId: record.storeId,
+    type: record.sourceType,
+    locator: record.locator,
+    assetLocator: record.assetLocator,
+    title: record.title,
+    text: record.text,
+    keywords: record.keywords,
+    capabilities: record.capabilities,
+    ...(record.queryable ? { queryable: record.queryable } : {}),
+    hash: record.textHash,
+    updatedAt: record.updatedAt,
+    chunkOrdinal: record.chunkOrdinal,
+    chunkStart: record.chunkStart,
+    chunkEnd: record.chunkEnd,
+    ...(record.heading ? { heading: record.heading } : {}),
   };
 }
 

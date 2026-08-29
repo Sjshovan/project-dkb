@@ -17,9 +17,9 @@ import { inspectTarget } from '../apps/cli/dist/inspect/index.js';
 import { resolveKnowledgeTarget } from '../apps/cli/dist/knowledge/target.js';
 import { healthReport } from '../apps/cli/dist/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
-import { compileComposeProject, verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { inspectDkbArtifactManifest } from '@sjshovan/dkb-library/artifacts.js';
+import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { snapshotLibraryArtifacts } from '@sjshovan/dkb-library/artifactSnapshot.js';
+import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
   const root = await tempDirectory(t, 'dkb-manifest-cutover-');
@@ -156,20 +156,20 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   await writeDkb(dkbRoot, '@test/core', '1.0.0');
   await writeTestPipeline(dkbRoot);
   await compileComposeProject(dkbRoot, { force: true, mode: 'package' });
-  const packageLockPath = path.join(dkbRoot, '.dkb', 'artifacts', 'dkb-artifact.lock.json');
+  const graph = await validatePackageBuildGraph(dkbRoot);
+  const packageLockPath = path.join(graph.retrievalPath, 'retrieval.lock.json');
   const packageLock = await fs.readFile(packageLockPath, 'utf8');
 
   const activated = await refreshRuntimeCatalogFromInstalledArtifacts(root);
   assert.equal(activated.recordCount, 1);
+  assert.equal(activated.packageCount, 1);
   assert.equal(await fs.readFile(packageLockPath, 'utf8'), packageLock);
-  assert.equal((await verifyComposeProject(root)).ok, true);
-  assert.equal((await inspectDkbArtifactManifest(root)).counts.packages, 1);
+  await validatePackageBuildGraph(dkbRoot);
 
   await writeLibrary(root, {});
   const removed = await refreshRuntimeCatalogFromInstalledArtifacts(root);
   assert.equal(removed.recordCount, 0);
-  assert.equal((await verifyComposeProject(root)).ok, true);
-  assert.equal((await inspectDkbArtifactManifest(root)).counts.packages, 0);
+  assert.equal(removed.packageCount, 0);
 });
 
 test('failed Library mutations restore aggregate artifacts byte for byte', async (t) => {

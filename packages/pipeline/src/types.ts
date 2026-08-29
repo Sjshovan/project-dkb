@@ -1,4 +1,8 @@
 import type {
+  DkbEvidenceCatalogAsset,
+  DkbEvidenceCatalogRecord,
+} from '@sjshovan/dkb-protocol/evidence/catalog.js';
+import type {
   DkbStoreType,
   KnowledgeCapabilityProfile,
   KnowledgeQueryable,
@@ -209,6 +213,10 @@ export interface DkbRetrievalProvider {
   protocol: string;
   openRuntime(input: {
     index: DkbIndexRuntime | null;
+    evidence: {
+      assets: readonly DkbEvidenceCatalogAsset[];
+      records: readonly DkbEvidenceCatalogRecord[];
+    };
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;
   }): Promise<DkbRetrievalRuntime> | DkbRetrievalRuntime;
@@ -255,9 +263,6 @@ export interface DkbIndexRuntime {
   mode: DkbIndexProvider['mode'];
   format: string;
   packages: Array<{ id: string; version: string; indexId: string; documentCount: number }>;
-  assets: IndexedSourceAsset[];
-  units: IndexedSourceUnit[];
-  lexicalSearch?(query: string, limit: number, scope?: DkbRetrievalScope): Array<{ unitId: string; score: number; matchedTokens: string[] }>;
   search(query: string, limit: number, signal?: AbortSignal): Promise<{
     hits: Array<{ id: string; score: number }>;
     trace: Record<string, unknown>;

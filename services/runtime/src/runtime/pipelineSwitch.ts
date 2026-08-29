@@ -11,7 +11,7 @@ import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 import { DKB_CONFIG_FORMAT, DKB_CONFIG_PATH, readDkbContextConfig, writeDkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import { resolveProviderRetrievalProfile, writeRetrievalProfileLock, maybeReadRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
+import { resolveProviderRetrievalProfile, maybeReadRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { materializeDkbInstallPlan } from './registryInstall.js';
@@ -46,6 +46,7 @@ interface PreparedPackage {
   stagedRoot: string;
   preparation: 'retained' | 'downloaded';
   runtimeEntry: DkbRuntimeLockEntry;
+  retrievalRelativePath: string;
   index: PreparedRuntimeIndexPackage;
 }
 
@@ -134,6 +135,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
         stagedRoot,
         preparation,
         runtimeEntry,
+        retrievalRelativePath: path.relative(stagedRoot, graph.retrievalPath),
         index,
       });
     }
@@ -163,11 +165,13 @@ export async function switchRuntimePipelineFromRegistry(options: {
       generation: (previousRuntime?.generation ?? 0) + 1,
       generatedAt: new Date().toISOString(),
     });
-    const firstProfile = await maybeReadRetrievalProfileLock(prepared[0]!.currentRoot);
+    const firstProfile = await maybeReadRetrievalProfileLock(path.join(
+      prepared[0]!.currentRoot,
+      prepared[0]!.retrievalRelativePath,
+    ));
     if (!firstProfile || firstProfile.profileDigest !== profile.retrievalProfileDigest) {
       throw new DkbError(`Prepared packages do not contain the exact retrieval profile for ${target}`);
     }
-    await writeRetrievalProfileLock(runtime.stateRoot, firstProfile);
     await writeRuntimeLock(runtime.stateRoot, runtimeLock);
     await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot);
     for (const item of prepared) {

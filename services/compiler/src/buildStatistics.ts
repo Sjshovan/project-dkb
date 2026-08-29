@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import type { DkbArtifactManifest } from '@sjshovan/dkb-library/artifacts.js';
+import type { DkbArtifactManifest } from '@sjshovan/dkb-protocol/artifacts.js';
 import { listPackageBuilds } from '@sjshovan/dkb-library/builds.js';
 
 export interface DkbDistributionStatistics {
@@ -126,25 +126,28 @@ export function summarizeEvidenceCorpus(
 
 export async function summarizeBuildStorage(
   root: string,
-  manifest: DkbArtifactManifest,
+  manifest: DkbArtifactManifest | readonly DkbArtifactManifest[],
   sourceBytes: number,
+  packageRoots: readonly string[] = [root],
 ): Promise<DkbBuildStorageStatistics> {
-  const artifactBytes = manifest.files.reduce((total, file) => total + file.size, 0);
-  const builds = await listPackageBuilds(root);
+  const manifests = Array.isArray(manifest) ? manifest : [manifest];
+  const files = manifests.flatMap((item) => item.files);
+  const artifactBytes = files.reduce((total, file) => total + file.size, 0);
+  const buildSets = await Promise.all([...new Set(packageRoots)].map((packageRoot) => listPackageBuilds(packageRoot)));
   const [evidenceBuildBytes, retrievalBuildBytes] = await Promise.all([
-    sumUniqueDirectories(builds.evidence.filter((build) => build.active).map((build) => build.path)),
-    sumUniqueDirectories(builds.retrieval.filter((build) => build.active).map((build) => build.path)),
+    sumUniqueDirectories(buildSets.flatMap((builds) => builds.evidence.filter((build) => build.active).map((build) => build.path))),
+    sumUniqueDirectories(buildSets.flatMap((builds) => builds.retrieval.filter((build) => build.active).map((build) => build.path))),
   ]);
   const totalDerivedBytes = artifactBytes + evidenceBuildBytes + retrievalBuildBytes;
 
   return {
-    artifactFiles: manifest.files.length,
+    artifactFiles: files.length,
     artifactBytes,
     evidenceBuildBytes,
     retrievalBuildBytes,
     totalDerivedBytes,
     sourceToDerivedRatio: sourceBytes > 0 ? round(totalDerivedBytes / sourceBytes, 3) : null,
-    largestArtifacts: [...manifest.files]
+    largestArtifacts: [...files]
       .sort((left, right) => right.size - left.size || left.path.localeCompare(right.path))
       .slice(0, 8)
       .map((file) => ({ path: file.path, bytes: file.size })),

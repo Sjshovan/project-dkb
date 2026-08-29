@@ -17,6 +17,7 @@ export interface DkbEvidenceSourceRecord {
   title: string;
   text: string;
   hash: string;
+  updatedAt: string;
   chunkOrdinal: number;
   chunkStart: number;
   chunkEnd: number;
@@ -122,7 +123,10 @@ export function buildEvidenceIr(
         title: record.title,
         text: record.text,
         textHash: record.hash,
-        provenance: provenanceFor(record.metadata),
+        provenance: {
+          ...provenanceFor(record.metadata),
+          dkb_updated_at: record.metadata.dkb_updated_at ?? record.updatedAt,
+        },
       });
       chunks.push({
         chunkId: stableHash({
@@ -224,7 +228,10 @@ function stringMetadata(record: DkbEvidenceSourceRecord, key: string): string {
 }
 
 function provenanceFor(metadata: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(metadata)
+  const provenance = Object.fromEntries(Object.entries(metadata)
     .filter(([key]) => key.startsWith('dkb_') || key === 'docling')
     .sort(([left], [right]) => left.localeCompare(right)));
+  if (typeof metadata.updatedAt === 'string') provenance.dkb_updated_at = metadata.updatedAt;
+  if (typeof metadata.heading === 'string') provenance.dkb_heading = metadata.heading;
+  return provenance;
 }

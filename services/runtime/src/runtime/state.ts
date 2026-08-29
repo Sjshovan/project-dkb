@@ -698,7 +698,7 @@ export async function closeRuntimeQuerySnapshot(stateRoot: string): Promise<numb
   const residentClosed = await closeQueryContext(root);
 
   if (context && residentClosed === 0) {
-    context.lexical?.close();
+    await context.retrieval.close();
     await context.index?.close();
     await context.providerHost.dispose();
   }

@@ -300,8 +300,6 @@ export async function openMeilisearchRuntime(input: {
     mode: 'managed',
     format: MEILISEARCH_INDEX_FORMAT,
     packages,
-    units,
-    assets: sourceAssetsFromChunks(units),
     async search(query, limit, signal) {
       throwIfAborted(signal ?? input.signal);
       const vector = await input.embedQuery(query, signal ?? input.signal);

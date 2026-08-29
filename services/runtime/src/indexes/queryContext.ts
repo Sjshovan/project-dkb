@@ -1,15 +1,12 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { artifactLockPath, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
-import { vectorDocumentsForSourceUnits, type VectorDocument } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
-import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import type { LexicalRuntimeSnapshot } from '@sjshovan/dkb-providers-bundled/lexicalStore.js';
+import type { DkbEvidenceCatalogAsset, DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime, DkbRetrievalProvider, DkbRetrievalRuntime } from '@sjshovan/dkb-pipeline/types.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { maybeReadRuntimeLock, resolveLibraryRuntimeBuilds } from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 export interface QueryContext {
@@ -17,19 +14,14 @@ export interface QueryContext {
   collectionId: string;
   cacheKey: string;
   artifactHash: string;
-  sourceAssets: IndexedSourceAsset[];
-  sourceUnits: IndexedSourceUnit[];
-  sourceUnitsById: Map<string, IndexedSourceUnit>;
-  sourceAssetsByKey: Map<string, IndexedSourceAsset>;
-  sourceUnitsByIdentifier: Map<string, IndexedSourceUnit[]>;
-  vectorDocuments: VectorDocument[];
-  vectorArtifactRoot: string;
-  searchRegistryId: string;
+  evidenceAssets: DkbEvidenceCatalogAsset[];
+  evidenceRecords: DkbEvidenceCatalogRecord[];
+  evidenceById: Map<string, DkbEvidenceCatalogRecord>;
+  evidenceAssetsByKey: Map<string, DkbEvidenceCatalogAsset>;
+  evidenceByIdentifier: Map<string, DkbEvidenceCatalogRecord[]>;
   index?: DkbIndexRuntime;
   retrieval: DkbRetrievalRuntime;
-  lexical?: Pick<LexicalRuntimeSnapshot, 'search' | 'close'>;
   providerHost: DkbProviderHost;
-  embedQuery(query: string): Promise<number[]>;
   createdAt: string;
   lastUsedAt: string;
 }
@@ -39,8 +31,6 @@ const residentContexts = new Map<string, QueryContext>();
 export async function createQueryContext(root: string, collectionId: string): Promise<QueryContext> {
   const resolvedRoot = path.resolve(root);
   const artifactHash = await queryArtifactHash(resolvedRoot);
-  const sourceIndex = await maybeReadSourceIndex(resolvedRoot);
-  const searchRegistryId = await searchRegistryIdFor(resolvedRoot, collectionId);
   const providerHost = await DkbProviderHost.create({ root: resolvedRoot, distribution: DEFAULT_DKB_DISTRIBUTION });
   let indexRuntime: DkbIndexRuntime | null = null;
   let retrievalRuntime: DkbRetrievalRuntime | null = null;
@@ -53,6 +43,11 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     const resolvedProfile = await resolveProviderRetrievalProfile(providerHost);
     const compatibility = resolvedProfile.compatibility;
     const packages = await resolveLibraryRuntimeBuilds(resolvedRoot);
+    const catalogs = packages.map((item) => readEvidenceCatalog(item.evidenceRoot));
+    const evidenceAssets = catalogs.flatMap((catalog) => catalog.assets)
+      .sort((left, right) => `${left.packageId}/${left.id}`.localeCompare(`${right.packageId}/${right.id}`));
+    const evidenceRecords = catalogs.flatMap((catalog) => catalog.records)
+      .sort((left, right) => left.evidenceId.localeCompare(right.evidenceId));
     const runtimeLock = await maybeReadRuntimeLock(resolvedRoot);
     if (runtimeLock && (
       runtimeLock.evidenceProfileDigest !== resolvedProfile.evidenceProfileDigest
@@ -65,7 +60,7 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     }
     indexRuntime = await indexProvider.openRuntime({
       libraryRoot: resolvedRoot,
-      libraryId: searchRegistryId,
+      libraryId: collectionId,
       packages,
       compatibility,
       embedQuery: (text, signal) => embeddingProvider.embedQuery({ text, options: embeddingOptions, ...(signal ? { signal } : {}) }),
@@ -74,32 +69,23 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     const retrievalProvider = providerHost.provider<DkbRetrievalProvider>('retrieval');
     retrievalRuntime = await retrievalProvider.openRuntime({
       index: indexRuntime,
+      evidence: { assets: evidenceAssets, records: evidenceRecords },
       options: providerHost.optionsFor(providerHost.config.target.retrieval),
     });
-    const activeAssets = indexRuntime?.assets ?? sourceIndex.assets;
-    const activeUnits = indexRuntime?.units ?? sourceIndex.units;
-    const lexical = indexRuntime?.lexicalSearch
-      ? { search: indexRuntime.lexicalSearch, close() {} }
-      : undefined;
 
     return {
       root: resolvedRoot,
       collectionId,
       cacheKey: queryContextCacheKey(resolvedRoot, collectionId, artifactHash),
       artifactHash,
-      sourceAssets: activeAssets,
-      sourceUnits: activeUnits,
-      sourceUnitsById: new Map(activeUnits.map((unit) => [unit.id, unit])),
-      sourceAssetsByKey: new Map(activeAssets.map((asset) => [`${asset.dkbId}/${asset.id}`, asset])),
-      sourceUnitsByIdentifier: sourceUnitIdentifierIndex(activeUnits),
-      vectorDocuments: vectorDocumentsForSourceUnits(activeUnits),
-      vectorArtifactRoot: path.dirname(resolveFrom(resolvedRoot, SOURCE_VECTOR_PATH)),
-      searchRegistryId,
+      evidenceAssets,
+      evidenceRecords,
+      evidenceById: new Map(evidenceRecords.map((record) => [record.evidenceId, record])),
+      evidenceAssetsByKey: new Map(evidenceAssets.map((asset) => [`${asset.packageId}/${asset.id}`, asset])),
+      evidenceByIdentifier: evidenceIdentifierIndex(evidenceRecords),
       providerHost,
       retrieval: retrievalRuntime,
-      embedQuery: (query) => embeddingProvider.embedQuery({ text: query, options: embeddingOptions }),
       ...(indexRuntime ? { index: indexRuntime } : {}),
-      ...(lexical ? { lexical } : {}),
       createdAt: new Date().toISOString(),
       lastUsedAt: new Date().toISOString(),
     };
@@ -111,16 +97,16 @@ export async function createQueryContext(root: string, collectionId: string): Pr
   }
 }
 
-function sourceUnitIdentifierIndex(units: IndexedSourceUnit[]): Map<string, IndexedSourceUnit[]> {
-  const result = new Map<string, IndexedSourceUnit[]>();
+function evidenceIdentifierIndex(records: DkbEvidenceCatalogRecord[]): Map<string, DkbEvidenceCatalogRecord[]> {
+  const result = new Map<string, DkbEvidenceCatalogRecord[]>();
 
-  for (const unit of units) {
-    const identifiers = identifiersForSourceUnit(unit);
+  for (const record of records) {
+    const identifiers = identifiersForEvidence(record);
 
     for (const identifier of identifiers) {
       const list = result.get(identifier) ?? [];
 
-      list.push(unit);
+      list.push(record);
       result.set(identifier, list);
     }
   }
@@ -128,8 +114,8 @@ function sourceUnitIdentifierIndex(units: IndexedSourceUnit[]): Map<string, Inde
   return result;
 }
 
-function identifiersForSourceUnit(unit: IndexedSourceUnit): string[] {
-  return [...new Set(`${unit.title}\n${unit.text}\n${unit.keywords.join(' ')}`
+function identifiersForEvidence(record: DkbEvidenceCatalogRecord): string[] {
+  return [...new Set(`${record.title}\n${record.text}\n${record.keywords.join(' ')}`
     .match(/\b[A-Za-z0-9][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\b/g)
     ?.map((identifier) => identifier.trim().toLowerCase())
     .filter(Boolean) ?? [])];
@@ -194,7 +180,6 @@ export async function closeQueryContext(root?: string): Promise<number> {
   }
 
   await Promise.all(contexts.map(async ([, context]) => {
-    context.lexical?.close();
     await context.retrieval.close();
     await context.index?.close();
     await context.providerHost.dispose();
@@ -205,35 +190,7 @@ export async function closeQueryContext(root?: string): Promise<number> {
 
 export async function queryArtifactHash(root: string): Promise<string> {
   const runtimeLock = await maybeReadRuntimeLock(root);
-  if (runtimeLock) return stableHash(runtimeLock);
-  const lockPath = artifactLockPath(root);
-  const lock = await maybeReadFile(lockPath);
-
-  if (lock) {
-    return stableHash({
-      lockPath,
-      lock,
-    });
-  }
-
-  const artifacts = await Promise.all([
-    artifactSnapshot(resolveFrom(root, SOURCE_INDEX_PATH)),
-    artifactSnapshot(resolveFrom(root, SOURCE_GRAPH_PATH)),
-    artifactSnapshot(resolveFrom(root, SOURCE_VECTOR_PATH)),
-  ]);
-
-  return stableHash({
-    root,
-    artifacts,
-  });
-}
-
-async function maybeReadSourceIndex(root: string): Promise<{ assets: IndexedSourceAsset[]; units: IndexedSourceUnit[] }> {
-  try {
-    return await readSourceIndex(root);
-  } catch {
-    return { assets: [], units: [] };
-  }
+  return stableHash(runtimeLock ?? { root: path.resolve(root), status: 'uncompiled' });
 }
 
 function queryContextCacheKey(root: string, collectionId: string, artifactHash: string): string {
@@ -242,40 +199,4 @@ function queryContextCacheKey(root: string, collectionId: string, artifactHash: 
     collectionId,
     artifactHash,
   });
-}
-
-async function artifactSnapshot(target: string): Promise<{ path: string; mtimeMs: number | null; size: number | null }> {
-  try {
-    const stat = await fs.stat(target);
-
-    return {
-      path: target,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-    };
-  } catch {
-    return {
-      path: target,
-      mtimeMs: null,
-      size: null,
-    };
-  }
-}
-
-async function searchRegistryIdFor(root: string, fallback: string): Promise<string> {
-  try {
-    const manifest = JSON.parse(await fs.readFile(resolveFrom(root, SOURCE_VECTOR_PATH), 'utf8')) as { registryId?: unknown };
-
-    return typeof manifest.registryId === 'string' && manifest.registryId.length > 0 ? manifest.registryId : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-async function maybeReadFile(target: string): Promise<string | null> {
-  try {
-    return await fs.readFile(target, 'utf8');
-  } catch {
-    return null;
-  }
 }

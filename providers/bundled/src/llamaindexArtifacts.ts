@@ -143,10 +143,13 @@ export async function readLlamaIndexCompilerBundleManifest(root: string): Promis
 export function sourceUnitFromLlamaIndexRecord(dkb: LoadedDkb, record: LlamaIndexCompilerRecord): IndexedSourceUnit {
   const keywords = [...new Set(tokenize(`${record.title} ${record.text}`))].slice(0, 24);
   const identity = evidenceIdentityForRecord(record);
+  const evidenceId = typeof record.metadata.dkb_evidence_id === 'string'
+    ? record.metadata.dkb_evidence_id
+    : identity.evidenceId;
 
   return {
-    id: record.id,
-    evidenceId: identity.evidenceId,
+    id: evidenceId,
+    evidenceId,
     assetId: record.assetId,
     dkbId: dkb.manifest.id,
     storeId: record.storeId,

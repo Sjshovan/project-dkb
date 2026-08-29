@@ -1,21 +1,16 @@
-import type { QueryContext } from '../indexes/queryContext.js';
-import {
-  readSourceIndex,
-  sourceAssetsFromChunks,
-  type IndexedSourceUnit,
-} from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
-import type { LexicalSearchScope } from '@sjshovan/dkb-providers-bundled/lexicalStore.js';
-import { tokenize } from '@sjshovan/dkb-providers-bundled/scoring.js';
+import type { DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
+import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import type { DkbRetrievalScope } from '@sjshovan/dkb-pipeline/types.js';
 import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '@sjshovan/dkb-protocol/security/sourceContent.js';
+import { getQueryContext, type QueryContext } from '../indexes/queryContext.js';
 
-export interface DkbNavigationScope extends LexicalSearchScope {}
+export interface DkbNavigationScope extends DkbRetrievalScope {}
 
 export interface DkbNavigationReference {
   id: string;
-  evidenceId?: string;
+  evidenceId: string;
   dkbId: string;
-  packageVersion?: string;
+  packageVersion: string;
   sourceId: string;
   assetId: string;
   storeId: string;
@@ -39,12 +34,7 @@ export interface DkbSemanticSearchResponse {
   trace: Record<string, unknown>;
 }
 
-export interface DkbLexicalSearchResponse {
-  status: 'ready' | 'empty';
-  query: string;
-  results: DkbNavigationReference[];
-  trace: Record<string, unknown>;
-}
+export interface DkbLexicalSearchResponse extends DkbSemanticSearchResponse {}
 
 export interface DkbReadNavigationChunk {
   reference: DkbNavigationReference;
@@ -78,60 +68,18 @@ export async function semanticSearch(
   scope?: DkbNavigationScope,
   queryContext?: QueryContext,
 ): Promise<DkbSemanticSearchResponse> {
-  const units = activeUnits(queryContext, await maybeReadSourceUnits(root));
-  const scopedUnits = units.filter((unit) => unitMatchesScope(unit, scope));
-
-  if (scopedUnits.length === 0) {
-    return {
-      status: 'empty',
-      query,
-      results: [],
-      trace: { engine: queryContext?.index?.providerId ?? 'unavailable', status: 'empty' },
-    };
-  }
-
-  const scopedIds = new Set(scopedUnits.map((unit) => unit.id));
-  const unitsById = new Map(scopedUnits.map((unit) => [unit.id, unit]));
-  const searchLimit = Math.min(Math.max(clampLimit(limit) * 5, 50), 1_000);
-  const lexicalResults = queryContext?.lexical
-    ? queryContext.lexical.search(query, searchLimit, scope)
-      .map((hit) => {
-        const unit = unitsById.get(hit.unitId);
-
-        return unit ? navigationReference(unit, hit.score, hit.matchedTokens) : null;
-      })
-      .filter((reference): reference is DkbNavigationReference => Boolean(reference))
-    : memoryLexicalSearch(scopedUnits, query, searchLimit);
-  const result = queryContext
-    ? await queryContext.retrieval.search({ query, limit: searchLimit, ...(scope ? { scope } : {}) })
-    : await querySearchDocuments(
-      'compose-index',
-      vectorDocumentsForSourceUnits(scopedUnits),
-      query,
-      searchLimit,
-      undefined,
-    );
-  const vectorResults = result.hits
-    .filter((hit) => scopedIds.has('evidenceId' in hit ? hit.evidenceId : hit.id))
-    .map((hit) => {
-      const unit = unitsById.get('evidenceId' in hit ? hit.evidenceId : hit.id);
-
-      return unit ? navigationReference(unit, hit.score) : null;
-    })
-    .filter((reference): reference is DkbNavigationReference => Boolean(reference));
-  const results = fuseNavigationReferences(lexicalResults, vectorResults, clampLimit(limit));
+  const context = queryContext ?? await contextFor(root);
+  const result = await context.retrieval.search({ query, limit: clampLimit(limit), ...(scope ? { scope } : {}) });
+  const references = result.hits.flatMap((hit) => {
+    const record = context.evidenceById.get(hit.evidenceId);
+    return record ? [navigationReference(record, hit.score, hit.matchedTokens ?? [])] : [];
+  });
 
   return {
-    status: results.length > 0 ? 'ready' : 'empty',
+    status: references.length > 0 ? 'ready' : 'empty',
     query,
-    results,
-    trace: {
-      engine: 'hybrid',
-      navigation: 'reference_first',
-      lexicalHits: lexicalResults.length,
-      vectorHits: vectorResults.length,
-      vector: result.trace,
-    },
+    results: references,
+    trace: { engine: context.retrieval.providerId, navigation: 'evidence-reference-first', ...result.trace },
   };
 }
 
@@ -142,34 +90,21 @@ export async function lexicalSearch(
   scope?: DkbNavigationScope,
   queryContext?: QueryContext,
 ): Promise<DkbLexicalSearchResponse> {
-  const units = activeUnits(queryContext, await maybeReadSourceUnits(root));
-  const unitsById = new Map(units.map((unit) => [unit.id, unit]));
-  let results: DkbNavigationReference[];
-  let engine: 'sqlite-token' | 'memory-token' = 'memory-token';
-
-  if (queryContext?.lexical) {
-    results = queryContext.lexical.search(query, clampLimit(limit), scope)
-      .map((hit) => {
-        const unit = unitsById.get(hit.unitId);
-
-        return unit ? navigationReference(unit, hit.score, hit.matchedTokens) : null;
-      })
-      .filter((reference): reference is DkbNavigationReference => Boolean(reference));
-    engine = 'sqlite-token';
-  } else {
-    results = memoryLexicalSearch(units.filter((unit) => unitMatchesScope(unit, scope)), query, limit);
-  }
+  const context = queryContext ?? await contextFor(root);
+  const result = await context.retrieval.search({ query, limit: Math.min(clampLimit(limit) * 5, 500), ...(scope ? { scope } : {}) });
+  const references = result.hits
+    .filter((hit) => hit.channels.includes('lexical'))
+    .flatMap((hit) => {
+      const record = context.evidenceById.get(hit.evidenceId);
+      return record ? [navigationReference(record, hit.score, hit.matchedTokens ?? [])] : [];
+    })
+    .slice(0, clampLimit(limit));
 
   return {
-    status: results.length > 0 ? 'ready' : 'empty',
+    status: references.length > 0 ? 'ready' : 'empty',
     query,
-    results,
-    trace: {
-      engine,
-      status: results.length > 0 ? 'ready' : 'empty',
-      navigation: 'reference_first',
-      packages: new Set(units.map((unit) => unit.dkbId)).size,
-    },
+    results: references,
+    trace: { engine: context.retrieval.providerId, channel: 'lexical', navigation: 'evidence-reference-first', ...result.trace },
   };
 }
 
@@ -178,28 +113,24 @@ export async function readNavigationChunks(
   targets: string[],
   queryContext?: QueryContext,
 ): Promise<DkbReadNavigationResponse> {
-  const units = activeUnits(queryContext, await maybeReadSourceUnits(root));
-  const byTarget = new Map<string, IndexedSourceUnit>();
-
-  for (const unit of units) {
-    byTarget.set(unit.id, unit);
-    byTarget.set(`${unit.dkbId}/${unit.id}`, unit);
+  const context = queryContext ?? await contextFor(root);
+  const byTarget = new Map<string, DkbEvidenceCatalogRecord>();
+  for (const record of context.evidenceRecords) {
+    byTarget.set(record.evidenceId, record);
+    byTarget.set(`${record.packageId}/${record.evidenceId}`, record);
   }
 
   const chunks: DkbReadNavigationChunk[] = [];
   const missing: string[] = [];
-
   for (const target of [...new Set(targets)]) {
-    const unit = byTarget.get(target);
-
-    if (!unit) {
+    const record = byTarget.get(target);
+    if (!record) {
       missing.push(target);
       continue;
     }
-
     chunks.push({
-      reference: navigationReference(unit, 1),
-      text: renderUntrustedSourceBlock(unit.text),
+      reference: navigationReference(record, 1),
+      text: renderUntrustedSourceBlock(record.text),
       sourcePolicy: SOURCE_DATA_POLICY_LINE,
     });
   }
@@ -208,129 +139,52 @@ export async function readNavigationChunks(
     status: chunks.length === 0 ? 'empty' : missing.length > 0 ? 'partial' : 'complete',
     chunks,
     missing,
-    trace: {
-      retrievalMode: 'compiled_chunk_direct',
-      chunksRead: chunks.length,
-      sourceCompilation: false,
-      adapterRead: false,
-    },
+    trace: { retrievalMode: 'evidence_catalog_direct', chunksRead: chunks.length, sourceCompilation: false, adapterRead: false },
   };
 }
 
 export async function describeSources(root: string, queryContext?: QueryContext): Promise<DkbSourceDescription[]> {
-  const units = activeUnits(queryContext, await maybeReadSourceUnits(root));
-  const assets = sourceAssetsFromChunks(units);
-
-  return [...assets.values()]
-    .map((asset) => ({
-      id: asset.id,
-      dkbId: asset.dkbId,
-      storeId: asset.storeId,
-      type: asset.type,
-      title: asset.title,
-      locator: asset.locator,
-      sourceHash: asset.hash,
-      updatedAt: asset.updatedAt,
-      chunkCount: units.filter((unit) => unit.dkbId === asset.dkbId && unit.assetId === asset.id).length,
-    }))
-    .sort((left, right) => `${left.dkbId}/${left.id}`.localeCompare(`${right.dkbId}/${right.id}`));
+  const context = queryContext ?? await contextFor(root);
+  return context.evidenceAssets.map((asset) => ({
+    id: asset.id,
+    dkbId: asset.packageId,
+    storeId: asset.storeId,
+    type: asset.type,
+    title: asset.title,
+    locator: asset.locator,
+    sourceHash: asset.sourceHash,
+    updatedAt: asset.updatedAt,
+    chunkCount: context.evidenceRecords.filter((record) => record.packageId === asset.packageId && record.assetId === asset.id).length,
+  })).sort((left, right) => `${left.dkbId}/${left.id}`.localeCompare(`${right.dkbId}/${right.id}`));
 }
 
-function activeUnits(queryContext: QueryContext | undefined, fallback: IndexedSourceUnit[]): IndexedSourceUnit[] {
-  return queryContext?.sourceUnits ?? fallback;
-}
-
-async function maybeReadSourceUnits(root: string): Promise<IndexedSourceUnit[]> {
-  try {
-    return (await readSourceIndex(root)).units;
-  } catch {
-    return [];
-  }
-}
-
-function navigationReference(unit: IndexedSourceUnit, score: number, matchedTokens: string[] = []): DkbNavigationReference {
-  const preview = unit.text.length > 280 ? `${unit.text.slice(0, 277)}...` : unit.text;
-
+function navigationReference(record: DkbEvidenceCatalogRecord, score: number, matchedTokens: string[] = []): DkbNavigationReference {
+  const preview = record.text.length > 280 ? `${record.text.slice(0, 277)}...` : record.text;
   return {
-    id: unit.id,
-    evidenceId: unit.evidenceId,
-    dkbId: unit.dkbId,
-    packageVersion: unit.packageVersion,
-    sourceId: unit.id,
-    assetId: unit.assetId,
-    storeId: unit.storeId,
-    title: unit.title,
+    id: record.evidenceId,
+    evidenceId: record.evidenceId,
+    dkbId: record.packageId,
+    packageVersion: record.packageVersion,
+    sourceId: record.sourceId,
+    assetId: record.assetId,
+    storeId: record.storeId,
+    title: record.title,
     preview: renderUntrustedSourceInline(preview),
     score,
     ...(matchedTokens.length > 0 ? { matchedTokens } : {}),
-    sourceType: unit.type,
-    locator: unit.locator,
-    assetLocator: unit.assetLocator,
-    sourceHash: unit.hash,
-    chunkOrdinal: unit.chunkOrdinal,
-    chunkStart: unit.chunkStart,
-    chunkEnd: unit.chunkEnd,
+    sourceType: record.sourceType,
+    locator: record.locator,
+    assetLocator: record.assetLocator,
+    sourceHash: record.sourceHash,
+    chunkOrdinal: record.chunkOrdinal,
+    chunkStart: record.chunkStart,
+    chunkEnd: record.chunkEnd,
   };
 }
 
-function memoryLexicalSearch(units: IndexedSourceUnit[], query: string, limit: number): DkbNavigationReference[] {
-  const queryTokens = [...new Set(tokenize(query, { keepStopwords: true }))];
-
-  return units
-    .map((unit) => {
-      const titleTokens = new Set(tokenize(unit.title, { keepStopwords: true }));
-      const keywordTokens = new Set(tokenize(unit.keywords.join(' '), { keepStopwords: true }));
-      const textTokens = new Set(tokenize(unit.text, { keepStopwords: true }));
-      const matchedTokens = queryTokens.filter((token) => titleTokens.has(token) || keywordTokens.has(token) || textTokens.has(token));
-      const score = matchedTokens.reduce((total, token) => total + (titleTokens.has(token) ? 3 : keywordTokens.has(token) ? 2 : 1), 0);
-
-      return { unit, score, matchedTokens };
-    })
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.unit.id.localeCompare(right.unit.id))
-    .slice(0, clampLimit(limit))
-    .map((item) => navigationReference(item.unit, item.score, item.matchedTokens));
-}
-
-function fuseNavigationReferences(
-  lexicalResults: DkbNavigationReference[],
-  vectorResults: DkbNavigationReference[],
-  limit: number,
-): DkbNavigationReference[] {
-  const fused = new Map<string, { reference: DkbNavigationReference; score: number }>();
-  const add = (results: DkbNavigationReference[], weight: number): void => {
-    results.forEach((reference, index) => {
-      const current = fused.get(reference.id);
-      const preferred = current?.reference.matchedTokens?.length ? current.reference : reference;
-
-      fused.set(reference.id, {
-        reference: preferred,
-        score: (current?.score ?? 0) + (weight / (index + 1)),
-      });
-    });
-  };
-
-  add(lexicalResults, 0.65);
-  add(vectorResults, 0.35);
-
-  return [...fused.values()]
-    .sort((left, right) => longestMatchedToken(right.reference) - longestMatchedToken(left.reference)
-      || (right.reference.matchedTokens?.length ?? 0) - (left.reference.matchedTokens?.length ?? 0)
-      || right.score - left.score
-      || left.reference.id.localeCompare(right.reference.id))
-    .slice(0, limit)
-    .map(({ reference, score }) => ({ ...reference, score }));
-}
-
-function longestMatchedToken(reference: DkbNavigationReference): number {
-  return Math.max(0, ...(reference.matchedTokens ?? []).map((token) => token.length));
-}
-
-function unitMatchesScope(unit: IndexedSourceUnit, scope?: DkbNavigationScope): boolean {
-  return (!scope?.dkbId || scope.dkbId === unit.dkbId)
-    && (!scope?.packageVersion || scope.packageVersion === unit.packageVersion)
-    && (!scope?.assetId || scope.assetId === unit.assetId)
-    && (!scope?.sourceType || scope.sourceType === unit.type);
+async function contextFor(root: string): Promise<QueryContext> {
+  const library = await loadLibrary(root);
+  return getQueryContext(library.root, library.manifest.id);
 }
 
 function clampLimit(limit: number): number {

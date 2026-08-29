@@ -1,7 +1,4 @@
-import path from 'node:path';
-import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import { querySearchDocuments, vectorDocumentsForSourceUnits } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
-import type { QueryContext } from '../indexes/queryContext.js';
+import { getQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import type { LoadedCollection, QueryHit, QueryResponse } from '@sjshovan/dkb-protocol/types.js';
 
 export interface QueryOptions {
@@ -18,66 +15,54 @@ export async function queryCollection(
   options: QueryOptions = {},
 ): Promise<QueryResponse> {
   const limit = options.limit ?? 10;
-  const sourceIndex = options.queryContext
-    ? { units: options.queryContext.sourceUnits }
-    : await readSourceIndex(collection.root);
+  const context = options.queryContext ?? await getQueryContext(collection.root, collection.manifest.id);
   const includedDkbs = new Set(collection.dkbs.map((dkb) => dkb.manifest.id));
-  const sourceUnits = sourceIndex.units.filter((unit) => includedDkbs.has(unit.dkbId));
-  const documents = vectorDocumentsForSourceUnits(sourceUnits);
-  const result = options.queryContext
-    ? await options.queryContext.retrieval.search({ query, limit })
-    : await querySearchDocuments(
-      collection.manifest.id,
-      documents,
-      query,
-      limit,
-      path.join(collection.root, '.dkb', 'artifacts'),
-    );
-  const unitsById = new Map(sourceUnits.map((unit) => [unit.id, unit]));
+  const records = context.evidenceRecords.filter((record) => includedDkbs.has(record.packageId));
+  const result = await context.retrieval.search({ query, limit });
+  const recordsById = new Map(records.map((record) => [record.evidenceId, record]));
   const results = result.hits
     .map((hit): QueryHit | null => {
-      const id = 'evidenceId' in hit ? hit.evidenceId : hit.id;
-      const unit = unitsById.get(id);
+      const record = recordsById.get(hit.evidenceId);
 
-      if (!unit) {
+      if (!record) {
         return null;
       }
 
       return {
-        id: unit.id,
-        dkbId: unit.dkbId,
+        id: record.evidenceId,
+        dkbId: record.packageId,
         adapter: 'compose',
         score: Math.round(hit.score * 1000) / 1000,
-        title: unit.title,
-        content: unit.text,
-        source: unit.id,
-        topics: unit.keywords,
-        keywords: unit.keywords,
-        entities: [unit.assetId],
-        updatedAt: unit.updatedAt,
+        title: record.title,
+        content: record.text,
+        source: record.evidenceId,
+        topics: record.keywords,
+        keywords: record.keywords,
+        entities: [record.assetId],
+        updatedAt: record.updatedAt,
         sourceRef: {
-          storeId: unit.storeId,
-          type: unit.type,
-          locator: unit.locator,
-          hash: unit.hash,
+          storeId: record.storeId,
+          type: record.sourceType,
+          locator: record.locator,
+          hash: record.textHash,
         },
-        queryable: unit.queryable,
+        queryable: record.queryable,
         sourceUnits: [{
-          id: unit.id,
-          assetId: unit.assetId,
-          storeId: unit.storeId,
-          type: unit.type,
-          locator: unit.locator,
-          assetLocator: unit.assetLocator,
-          title: unit.title,
-          text: unit.text,
-          keywords: unit.keywords,
-          hash: unit.hash,
-          updatedAt: unit.updatedAt,
-          chunkOrdinal: unit.chunkOrdinal,
-          chunkStart: unit.chunkStart,
-          chunkEnd: unit.chunkEnd,
-          heading: unit.heading,
+          id: record.evidenceId,
+          assetId: record.assetId,
+          storeId: record.storeId,
+          type: record.sourceType,
+          locator: record.locator,
+          assetLocator: record.assetLocator,
+          title: record.title,
+          text: record.text,
+          keywords: record.keywords,
+          hash: record.textHash,
+          updatedAt: record.updatedAt,
+          chunkOrdinal: record.chunkOrdinal,
+          chunkStart: record.chunkStart,
+          chunkEnd: record.chunkEnd,
+          heading: record.heading,
         }],
       };
     })
@@ -90,7 +75,7 @@ export async function queryCollection(
     trace: [{
       dkbId: collection.manifest.id,
       adapter: 'compose',
-      recordsScanned: sourceUnits.length,
+      recordsScanned: records.length,
       hits: results.length,
     }],
   };

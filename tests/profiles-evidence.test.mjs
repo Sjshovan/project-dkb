@@ -107,6 +107,7 @@ test('Evidence IR is reusable across retrieval profiles and changes only with it
     dkb_package_version: '1.0.0',
     dkb_path: 'facts.md',
     dkb_source_hash: 'sha256:source',
+    dkb_updated_at: '2026-08-25T00:00:00.000Z',
   });
 
   const broken = structuredClone(smallIr);
@@ -169,6 +170,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     package: packageIdentity,
     evidence,
     retrievalProfile: smallLock,
+    artifactsRoot: artifacts,
     target: 'fastembed-small',
   });
 
@@ -178,6 +180,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     package: packageIdentity,
     evidence,
     retrievalProfile: baseLock,
+    artifactsRoot: artifacts,
     target: 'fastembed-base',
   });
   const builds = await listPackageBuilds(root);
@@ -187,6 +190,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     fs.access(path.join(smallGraph.retrievalPath, 'artifacts', 'evidence.ir.json')),
     /ENOENT/,
   );
+  await fs.rm(artifacts, { recursive: true, force: true });
 
   const activated = await activateStoredPackageBuild({
     root,
@@ -195,10 +199,10 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     retrievalProfileDigest: smallLock.profileDigest,
     compatibilityDigest: smallLock.compatibilityDigest,
   });
-  assert.equal(await fs.readFile(path.join(artifacts, 'selected.index'), 'utf8'), 'small\n');
+  await assert.rejects(fs.access(artifacts), /ENOENT/);
   assert.equal(activated.runtime.packages[packageIdentity.id].retrievalBuildDigest, smallGraph.retrieval.retrievalBuildDigest);
   assert.deepEqual(
-    JSON.parse(await fs.readFile(path.join(artifacts, 'evidence.ir.json'), 'utf8')),
+    JSON.parse(await fs.readFile(path.join(smallGraph.evidencePath, 'evidence.ir.json'), 'utf8')),
     evidence,
   );
 
@@ -213,7 +217,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     }),
     /artifact tree is corrupt/i,
   );
-  assert.equal(await fs.readFile(path.join(artifacts, 'selected.index'), 'utf8'), 'small\n');
+  await assert.rejects(fs.access(artifacts), /ENOENT/);
   assert.equal((await validatePackageBuildGraph(root)).runtime.target, 'fastembed-small');
 });
 
@@ -248,6 +252,7 @@ test('downloaded package layers retain existing compatible builds and reject dig
       package: packageIdentity,
       evidence,
       retrievalProfile: smallLock,
+      artifactsRoot: artifacts,
       target: 'fastembed-small',
       generatedAt,
     });
@@ -260,6 +265,7 @@ test('downloaded package layers retain existing compatible builds and reject dig
     package: packageIdentity,
     evidence,
     retrievalProfile: baseLock,
+    artifactsRoot: sourceArtifacts,
     target: 'fastembed-base',
     generatedAt,
   });
@@ -300,7 +306,7 @@ test('generated retrieval profile locks do not invalidate package source hashes'
   assert.equal(graph.runtime.packages['@test/profile-hash-proof'].evidenceDigest, graph.evidence.evidenceDigest);
   assert.equal(graph.runtime.packages['@test/profile-hash-proof'].retrievalBuildDigest, graph.retrieval.retrievalBuildDigest);
 
-  const copiedManifest = path.join(graph.retrievalPath, 'artifacts', 'dkb-artifact.json');
+  const copiedManifest = path.join(graph.retrievalPath, 'artifacts', 'test-index.json');
   const originalCopiedManifest = await fs.readFile(copiedManifest);
   await fs.appendFile(copiedManifest, '\n');
   await assert.rejects(validatePackageBuildGraph(root), /artifact tree mismatch/i);

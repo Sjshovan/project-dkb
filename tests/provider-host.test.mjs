@@ -11,11 +11,11 @@ import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } f
 import { compileDkbWithProviderHost } from '@sjshovan/dkb-compiler/pipelineRunner.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
-import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import { readSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
+import { validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-providers-bundled/meilisearchProvider.js';
 import { readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
-import { listPackageBuilds } from '@sjshovan/dkb-library/builds.js';
+import { listPackageBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 
 const allPlugin = {
   id: '@test/all',
@@ -354,11 +354,12 @@ export function setup(context) {
   await writeJson(path.join(root, '.dkb/config.json'), config);
 
   const result = await compileComposeProject(root, { force: true, mode: 'package' });
-  const [sourceIndex, evidence, profile, indexRecords] = await Promise.all([
-    readSourceIndex(root),
-    readEvidenceIr(root),
-    readRetrievalProfileLock(root),
-    fs.readFile(path.join(root, '.dkb/artifacts/test-index.json'), 'utf8').then(JSON.parse),
+  const graph = await validatePackageBuildGraph(root);
+  const [catalog, evidence, profile, indexRecords] = await Promise.all([
+    Promise.resolve(readEvidenceCatalog(graph.evidencePath)),
+    fs.readFile(path.join(graph.evidencePath, 'evidence.ir.json'), 'utf8').then(JSON.parse).then(validateEvidenceIr),
+    readRetrievalProfileLock(graph.retrievalPath),
+    fs.readFile(path.join(graph.retrievalPath, 'artifacts', 'test-index.json'), 'utf8').then(JSON.parse),
   ]);
 
   assert.equal(result.recordCount, 1);
@@ -367,7 +368,7 @@ export function setup(context) {
   assert.equal(result.profile.statistics.corpus.recordsPerSource.max, 1);
   assert.ok(result.profile.statistics.storage.totalDerivedBytes > 0);
   assert.ok(result.profile.statistics.diskCapacity.retrieval[0].requiredFreeBytes > 0);
-  assert.match(sourceIndex.units[0].text, /SOURCE-PROOF-14-MUTATED/);
+  assert.match(catalog.records[0].text, /SOURCE-PROOF-14-MUTATED/);
   assert.equal(evidence.evidence[0].text, 'SOURCE-PROOF-14-MUTATED');
   assert.equal(indexRecords[0].text, 'SOURCE-PROOF-14-MUTATED');
   assert.equal(profile.profile.compiler.id, '@test/separate');
@@ -376,9 +377,10 @@ export function setup(context) {
   assert.equal(await fs.readFile(path.join(root, '.dkb/parse-count.txt'), 'utf8'), '1');
 
   await compileRetrievalFromEvidence(root, evidence, { target: 'alternate' });
-  const alternateEvidence = await readEvidenceIr(root);
-  const alternateProfile = await readRetrievalProfileLock(root);
-  const alternateIndex = JSON.parse(await fs.readFile(path.join(root, '.dkb/artifacts/test-index.json'), 'utf8'));
+  const alternateGraph = await validatePackageBuildGraph(root);
+  const alternateEvidence = validateEvidenceIr(JSON.parse(await fs.readFile(path.join(alternateGraph.evidencePath, 'evidence.ir.json'), 'utf8')));
+  const alternateProfile = await readRetrievalProfileLock(alternateGraph.retrievalPath);
+  const alternateIndex = JSON.parse(await fs.readFile(path.join(alternateGraph.retrievalPath, 'artifacts', 'test-index.json'), 'utf8'));
 
   assert.equal(await fs.readFile(path.join(root, '.dkb/parse-count.txt'), 'utf8'), '1');
   assert.equal(alternateEvidence.evidenceDigest, evidence.evidenceDigest);

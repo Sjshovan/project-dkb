@@ -1,86 +1,25 @@
 import path from 'node:path';
-import { readSourceIndex, sourceAssetsFromChunks, writeSourceIndex } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
-import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { readLlamaIndexCompilerRecords, sourceUnitFromLlamaIndexRecord } from '@sjshovan/dkb-providers-bundled/llamaindexArtifacts.js';
-import { refreshInstalledLibraryArtifactMetadata } from '@sjshovan/dkb-library/artifactMetadata.js';
-import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
+import { resolveLibraryRuntimeBuilds } from '@sjshovan/dkb-library/builds.js';
 
 export interface RuntimeCatalogRefreshResult {
   recordCount: number;
   packageCount: number;
 }
 
+/**
+ * Validate the exact immutable builds selected by installed packages. Runtime
+ * keeps no second aggregate evidence or artifact tree; query contexts open the
+ * same build roots directly.
+ */
 export async function refreshRuntimeCatalogFromInstalledArtifacts(
   stateRoot: string,
 ): Promise<RuntimeCatalogRefreshResult> {
-  const resolvedRoot = path.resolve(stateRoot);
-  const loaded = await installedDkbsForRuntimeRoot(resolvedRoot);
-  const sourceIndexes = await Promise.all(loaded.dkbs.map((dkb) => sourceIndexForInstalledDkb(dkb)));
-  const sourceUnits = sourceIndexes.flatMap((index) => index.units);
-  const sourceEdges = sourceIndexes.flatMap((index) => index.edges);
-
-  await writeSourceIndex(resolvedRoot, sourceUnits, sourceEdges);
-  await refreshInstalledLibraryArtifactMetadata(resolvedRoot);
+  const packages = await resolveLibraryRuntimeBuilds(path.resolve(stateRoot));
+  const catalogs = packages.map((item) => readEvidenceCatalog(item.evidenceRoot));
 
   return {
-    recordCount: sourceUnits.length,
-    packageCount: loaded.dkbs.length,
+    recordCount: catalogs.reduce((total, catalog) => total + catalog.records.length, 0),
+    packageCount: packages.length,
   };
-}
-
-export async function sourceIndexForInstalledDkb(dkb: LoadedDkb): Promise<Awaited<ReturnType<typeof readSourceIndex>>> {
-  await validatePackageBuildGraph(dkb.root);
-  try {
-    const compilerRecords = await readLlamaIndexCompilerRecords(dkb.root);
-
-    if (compilerRecords.length > 0) {
-      const units = compilerRecords
-        .map((record) => sourceUnitFromLlamaIndexRecord(dkb, record))
-        .sort((left, right) => left.id.localeCompare(right.id));
-
-      return {
-        assets: sourceAssetsFromChunks(units),
-        units,
-        edges: [],
-      };
-    }
-  } catch {
-    // Legacy packages compiled without a LlamaIndex bundle still use source.index.
-  }
-
-  try {
-    return await readSourceIndex(dkb.root);
-  } catch {
-    return {
-      assets: [],
-      units: [],
-      edges: [],
-    };
-  }
-}
-
-async function installedDkbsForRuntimeRoot(root: string): Promise<{ registryId: string; dkbs: LoadedDkb[] }> {
-  try {
-    const library = await loadLibrary(root);
-
-    return {
-      registryId: library.manifest.id,
-      dkbs: uniqueLoadedDkbs([
-        ...library.collections.flatMap((collection) => collection.dkbs),
-        ...library.dkbs,
-      ]),
-    };
-  } catch {
-    return {
-      registryId: safeId(path.basename(root) || 'runtime'),
-      dkbs: [],
-    };
-  }
-}
-
-function safeId(value: string): string {
-  const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-
-  return id || 'runtime';
 }

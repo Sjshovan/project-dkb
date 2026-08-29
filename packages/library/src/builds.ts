@@ -14,17 +14,22 @@ import {
   type DkbRuntimeLock,
 } from '@sjshovan/dkb-protocol/builds.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { DKB_EVIDENCE_IR_PATH, validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import {
+  DKB_ARTIFACT_MANIFEST_FILENAME,
+  DKB_ARTIFACT_MANIFEST_FORMAT,
+  validateArtifactManifest,
+  type DkbArtifactManifest,
+} from '@sjshovan/dkb-protocol/artifacts.js';
+import { validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import { materializeEvidenceCatalog } from './evidenceCatalog.js';
 import {
-  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   validateRetrievalProfileLock,
   type DkbRetrievalProfileLock,
 } from '@sjshovan/dkb-pipeline/profile.js';
 import {
-  DKB_ARTIFACTS_DIR,
   DKB_EVIDENCE_BUILDS_DIR,
   DKB_RETRIEVAL_BUILDS_DIR,
   DKB_RUNTIME_LOCK_PATH,
@@ -38,7 +43,6 @@ export const DKB_EVIDENCE_BUILD_LOCK = 'evidence.lock.json';
 export const DKB_RETRIEVAL_BUILD_LOCK = 'retrieval.lock.json';
 export const DKB_RETRIEVAL_BUILD_ARTIFACTS = 'artifacts';
 export const DKB_RETRIEVAL_BUILD_PROFILE_LOCK = 'dkb-profile.lock.json';
-const EVIDENCE_ARTIFACT_NAME = path.basename(DKB_EVIDENCE_IR_PATH);
 
 export interface DkbPackageBuildGraph {
   evidence: DkbEvidenceBuildLock;
@@ -196,6 +200,7 @@ export async function writePackageBuildGraph(input: {
   package: { id: string; version: string; sourceDigest: string };
   evidence: DkbEvidenceIr;
   retrievalProfile: DkbRetrievalProfileLock;
+  artifactsRoot: string;
   target: string;
   generation?: number;
   generatedAt?: string;
@@ -217,11 +222,11 @@ export async function writePackageBuildGraph(input: {
   await fs.rm(stagedEvidence, { recursive: true, force: true });
   await fs.mkdir(stagedEvidence, { recursive: true });
   await writeJson(path.join(stagedEvidence, DKB_EVIDENCE_BUILD_IR), evidence);
+  await materializeEvidenceCatalog(stagedEvidence, evidence);
   await writeJson(path.join(stagedEvidence, DKB_EVIDENCE_BUILD_LOCK), evidenceLock);
   await promoteImmutableDirectory(stagedEvidence, evidencePath, DKB_EVIDENCE_BUILD_LOCK, validateEvidenceBuildLock);
 
-  const activeArtifacts = resolveFrom(root, DKB_ARTIFACTS_DIR);
-  const artifactTree = await treeReceipt(activeArtifacts, (relativePath) => relativePath !== EVIDENCE_ARTIFACT_NAME);
+  const artifactTree = await treeReceipt(input.artifactsRoot, isRetrievalArtifact);
   const partialRetrieval = {
     package: { id: input.package.id, version: input.package.version },
     evidenceProfileDigest: evidence.evidenceProfileDigest,
@@ -237,7 +242,18 @@ export async function writePackageBuildGraph(input: {
 
   await fs.rm(stagedRetrieval, { recursive: true, force: true });
   await fs.mkdir(stagedRetrieval, { recursive: true });
-  await cloneTree(activeArtifacts, path.join(stagedRetrieval, DKB_RETRIEVAL_BUILD_ARTIFACTS), (relativePath) => relativePath !== EVIDENCE_ARTIFACT_NAME);
+  await cloneTree(input.artifactsRoot, path.join(stagedRetrieval, DKB_RETRIEVAL_BUILD_ARTIFACTS), isRetrievalArtifact);
+  const artifactManifest: DkbArtifactManifest = validateArtifactManifest({
+    format: DKB_ARTIFACT_MANIFEST_FORMAT,
+    package: { id: input.package.id, version: input.package.version },
+    evidenceDigest: evidence.evidenceDigest,
+    retrievalProfileDigest: input.retrievalProfile.profileDigest,
+    compatibilityDigest: input.retrievalProfile.compatibilityDigest,
+    index: input.retrievalProfile.profile.index,
+    files: artifactTree,
+    generatedAt,
+  });
+  await writeJson(path.join(stagedRetrieval, DKB_ARTIFACT_MANIFEST_FILENAME), artifactManifest);
   await writeJson(path.join(stagedRetrieval, DKB_RETRIEVAL_BUILD_LOCK), retrievalLock);
   await writeJson(path.join(stagedRetrieval, DKB_RETRIEVAL_BUILD_PROFILE_LOCK), input.retrievalProfile);
   await promoteImmutableDirectory(stagedRetrieval, retrievalPath, DKB_RETRIEVAL_BUILD_LOCK, validateRetrievalBuildLock);
@@ -318,44 +334,7 @@ export async function activateStoredPackageBuild(input: {
     generatedAt: new Date().toISOString(),
   });
 
-  const stageRoot = resolveFrom(root, `.dkb/activate-${process.pid}-${Date.now().toString(36)}`);
-  const stageArtifacts = path.join(stageRoot, DKB_ARTIFACTS_DIR);
-  const activeArtifacts = resolveFrom(root, DKB_ARTIFACTS_DIR);
-  const activeProfile = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
-  const activeRuntime = resolveFrom(root, DKB_RUNTIME_LOCK_PATH);
-  const backupArtifacts = `${activeArtifacts}.replace-${process.pid}`;
-  const backupProfile = `${activeProfile}.replace-${process.pid}`;
-  const backupRuntime = `${activeRuntime}.replace-${process.pid}`;
-
-  await fs.rm(stageRoot, { recursive: true, force: true });
-  await cloneTree(path.join(retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS), stageArtifacts);
-  await fs.copyFile(evidenceIrPath, path.join(stageArtifacts, EVIDENCE_ARTIFACT_NAME));
-  await writeJson(path.join(stageRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), profile);
-  await writeJson(path.join(stageRoot, DKB_RUNTIME_LOCK_PATH), runtime);
-
-  try {
-    await moveOptional(activeArtifacts, backupArtifacts);
-    await moveOptional(activeProfile, backupProfile);
-    await moveOptional(activeRuntime, backupRuntime);
-    try {
-      await fs.rename(stageArtifacts, activeArtifacts);
-      await fs.rename(path.join(stageRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), activeProfile);
-      await fs.rename(path.join(stageRoot, DKB_RUNTIME_LOCK_PATH), activeRuntime);
-      await fs.rm(backupArtifacts, { recursive: true, force: true });
-      await fs.rm(backupProfile, { force: true });
-      await fs.rm(backupRuntime, { force: true });
-    } catch (error) {
-      await fs.rm(activeArtifacts, { recursive: true, force: true });
-      await fs.rm(activeProfile, { force: true });
-      await fs.rm(activeRuntime, { force: true });
-      await moveOptional(backupArtifacts, activeArtifacts);
-      await moveOptional(backupProfile, activeProfile);
-      await moveOptional(backupRuntime, activeRuntime);
-      throw error;
-    }
-  } finally {
-    await fs.rm(stageRoot, { recursive: true, force: true });
-  }
+  await writeRuntimeLock(root, runtime);
 
   return { evidence, retrieval, runtime, evidencePath, retrievalPath };
 }
@@ -378,9 +357,19 @@ export async function validatePackageBuildGraph(root: string, runtimeLock?: DkbR
     path.join(retrievalPath, DKB_RETRIEVAL_BUILD_LOCK),
   );
   const artifactTreeDigest = stableHash(await treeReceipt(path.join(retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS)));
+  const artifactManifestPath = path.join(retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
+  const artifactManifest = validateArtifactManifest(JSON.parse(await fs.readFile(artifactManifestPath, 'utf8')), artifactManifestPath);
 
   if (artifactTreeDigest !== retrieval.artifactTreeDigest) {
     throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} artifact tree mismatch: expected ${retrieval.artifactTreeDigest}, got ${artifactTreeDigest}`);
+  }
+  if (artifactManifest.package.id !== retrieval.package.id
+    || artifactManifest.package.version !== retrieval.package.version
+    || artifactManifest.evidenceDigest !== retrieval.evidenceDigest
+    || artifactManifest.retrievalProfileDigest !== retrieval.retrievalProfileDigest
+    || artifactManifest.compatibilityDigest !== retrieval.compatibilityDigest
+    || stableHash(artifactManifest.files) !== artifactTreeDigest) {
+    throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} generic artifact manifest does not match its lock`);
   }
   if (evidence.evidenceDigest !== retrieval.evidenceDigest || evidence.evidenceProfileDigest !== retrieval.evidenceProfileDigest) {
     throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} is attached to the wrong Evidence Build`);
@@ -556,16 +545,20 @@ async function scanDigestBuilds<T>(root: string, map: (profile: string, build: s
   return results;
 }
 
-async function moveOptional(source: string, target: string): Promise<void> {
-  try {
-    await fs.rename(source, target);
-  } catch (error) {
-    if (!error || typeof error !== 'object' || !('code' in error) || String((error as { code?: unknown }).code) !== 'ENOENT') throw error;
-  }
-}
-
 function normalizeDigest(value: string): string {
   const normalized = value.startsWith('sha256:') ? value.toLowerCase() : `sha256:${value.toLowerCase()}`;
   if (!/^sha256:[a-f0-9]{64}$/u.test(normalized)) throw new DkbError(`Build digest must be sha256:<64 hex characters>`);
   return normalized;
+}
+
+function isRetrievalArtifact(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  return normalized !== DKB_EVIDENCE_BUILD_IR
+    && normalized !== 'dkb-artifact.json'
+    && normalized !== 'dkb-artifact.lock.json'
+    && normalized !== 'dkb-artifact.manifest.json'
+    && normalized !== 'source.index'
+    && normalized !== 'source.index.graph'
+    && normalized !== 'source.index.vector.json'
+    && !normalized.startsWith('llamaindex/');
 }

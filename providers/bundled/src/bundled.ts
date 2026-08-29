@@ -21,7 +21,6 @@ import {
   verifyMeilisearchRuntime,
   writeMeilisearchPackageArtifacts,
 } from './meilisearchProvider.js';
-import { buildLexicalRuntimeSnapshot } from './lexicalStore.js';
 
 export const DKB_FAISS_PLUGIN_ID = '@dkb/index-faiss';
 export const DKB_MEILISEARCH_PLUGIN_ID = MEILISEARCH_PROVIDER_ID;
@@ -67,25 +66,16 @@ export const BUNDLED_PROVIDER_PLUGINS: readonly DkbBundledPlugin[] = [
             await closeFaissSnapshot(snapshot);
             throw new DkbError(`Selected embedding provider is incompatible with installed FAISS packages: expected ${snapshot.embedding.model}/${snapshot.embedding.dimensions}, got ${String(compatibility.embeddingSpace)}/${String(compatibility.dimensions)}`);
           }
-          const lexical = buildLexicalRuntimeSnapshot({
-            packages: snapshot.packages,
-            numericIdToUnitId: snapshot.numericIdToUnitId,
-            unitsById: snapshot.unitsById,
-          }) ?? undefined;
           let closed = false;
           const runtime: DkbIndexRuntime = {
             providerId: DKB_FAISS_PLUGIN_ID,
             mode: 'packaged',
             format: 'IndexIDMap2(IndexFlatIP)',
             packages: snapshot.packages.map((item) => ({ id: item.id, version: item.version, indexId: item.segmentPath, documentCount: item.chunkCount })),
-            assets: snapshot.assets,
-            units: snapshot.units,
-            ...(lexical ? { lexicalSearch: (query, limit, scope) => lexical.search(query, limit, scope) } : {}),
             search: (query, limit) => searchFaissSnapshot(snapshot, query, limit, embedQuery),
             async close() {
               if (closed) return;
               closed = true;
-              lexical?.close();
               await closeFaissSnapshot(snapshot);
             },
           };
