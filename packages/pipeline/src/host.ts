@@ -4,7 +4,12 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { isPluginId, resolveContextConfig, type DkbResolvedContextConfig } from './config.js';
+import {
+  isPluginId,
+  resolveContextConfig,
+  type DkbContextConfig,
+  type DkbResolvedContextConfig,
+} from './config.js';
 import type {
   DkbPluginModule,
   DkbProcessor,
@@ -21,11 +26,27 @@ export interface DkbBundledPlugin {
   setup: DkbPluginModule['setup'];
 }
 
+export interface DkbDistributionService {
+  id: string;
+  kind: 'process' | 'docker' | 'remote';
+  requiredBy: string[];
+  image?: string;
+  healthPath?: string;
+}
+
+export interface DkbDistribution {
+  id: string;
+  version: string;
+  defaults: DkbContextConfig;
+  plugins: readonly DkbBundledPlugin[];
+  services: readonly DkbDistributionService[];
+}
+
 export interface DkbProviderHostOptions {
   root: string;
+  distribution: DkbDistribution;
   globalRoot?: string;
   target?: string;
-  bundled?: readonly DkbBundledPlugin[];
 }
 
 export interface DkbProviderHostDescription {
@@ -68,15 +89,16 @@ export class DkbProviderHost {
 
   static async create(options: DkbProviderHostOptions): Promise<DkbProviderHost> {
     const config = await resolveContextConfig(options.root, {
+      defaults: options.distribution.defaults,
       ...(options.globalRoot ? { globalRoot: options.globalRoot } : {}),
       ...(options.target ? { target: options.target } : {}),
     });
-    return DkbProviderHost.createFromConfig(config, options.bundled ?? []);
+    return DkbProviderHost.createFromConfig(config, options.distribution);
   }
 
-  static async createFromConfig(config: DkbResolvedContextConfig, bundledPlugins: readonly DkbBundledPlugin[] = []): Promise<DkbProviderHost> {
+  static async createFromConfig(config: DkbResolvedContextConfig, distribution: DkbDistribution): Promise<DkbProviderHost> {
     const host = new DkbProviderHost(config);
-    const bundled = new Map(bundledPlugins.map((plugin) => [plugin.id, plugin]));
+    const bundled = new Map(distribution.plugins.map((plugin) => [plugin.id, plugin]));
 
     for (const id of selectedPluginIds(config)) {
       await host.loadSelectedPlugin(id, bundled);
@@ -276,7 +298,7 @@ export class DkbProviderHost {
   private validateSelections(): void {
     const target = this.config.target;
     const required: DkbProviderKind[] = [
-      ...(target.ingestion ? ['ingestion' as const] : ['parser' as const, 'chunker' as const]),
+      ...(target.evidence ? ['evidence' as const] : ['parser' as const, 'chunker' as const]),
       'embedding',
       'index',
       'retrieval',
@@ -303,7 +325,7 @@ function selectedPluginIds(config: DkbResolvedContextConfig): string[] {
   const target = config.target;
 
   return [...new Set([
-    target.ingestion,
+    target.evidence,
     target.parser,
     target.chunker,
     target.embedding,
@@ -340,11 +362,11 @@ function validatePluginModule(plugin: DkbPluginModule, selectedId: string, sourc
 }
 
 function validateProvider(provider: DkbProvider, pluginId: string): void {
-  if (!provider || !['ingestion', 'parser', 'chunker', 'embedding', 'index', 'retrieval'].includes(provider.kind)) {
+  if (!provider || !['evidence', 'parser', 'chunker', 'embedding', 'index', 'retrieval'].includes(provider.kind)) {
     throw new DkbError(`Plugin ${pluginId} registered an invalid provider`);
   }
-  if (provider.kind === 'ingestion' && typeof provider.compile !== 'function') {
-    throw new DkbError(`Plugin ${pluginId} ingestion provider must implement compile()`);
+  if (provider.kind === 'evidence' && typeof provider.compile !== 'function') {
+    throw new DkbError(`Plugin ${pluginId} Evidence provider must implement compile()`);
   }
   if (provider.kind === 'parser' && typeof provider.parse !== 'function') {
     throw new DkbError(`Plugin ${pluginId} parser provider must implement parse()`);
@@ -360,8 +382,9 @@ function validateProvider(provider: DkbProvider, pluginId: string): void {
     && (!['packaged', 'managed'].includes(provider.mode) || typeof provider.format !== 'string' || provider.format.length === 0 || typeof provider.openRuntime !== 'function')) {
     throw new DkbError(`Plugin ${pluginId} index provider must declare mode/format and implement openRuntime()`);
   }
-  if (provider.kind === 'retrieval' && (typeof provider.protocol !== 'string' || provider.protocol.length === 0)) {
-    throw new DkbError(`Plugin ${pluginId} retrieval provider must declare its stable evidence protocol`);
+  if (provider.kind === 'retrieval'
+    && (typeof provider.protocol !== 'string' || provider.protocol.length === 0 || typeof provider.openRuntime !== 'function')) {
+    throw new DkbError(`Plugin ${pluginId} retrieval provider must declare its stable evidence protocol and implement openRuntime()`);
   }
 }
 

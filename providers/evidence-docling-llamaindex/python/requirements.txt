@@ -1,12 +1,9 @@
 llama-index-core==0.14.23
 llama-index-readers-file==0.6.0
 llama-index-readers-database==0.6.0
-llama-index-embeddings-fastembed==0.6.0
-fastembed==0.8.0
 SQLAlchemy==2.0.52
 pypdf==6.16.1
 docling==2.120.1
 docling-core[chunking]==2.91.0
 fastapi==0.115.14
 uvicorn==0.34.3
-faiss-cpu==1.15.0

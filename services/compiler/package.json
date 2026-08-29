@@ -26,6 +26,8 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@sjshovan/dkb-distribution-default": "0.1.0",
+    "@sjshovan/dkb-evidence-docling-llamaindex": "0.1.0",
     "@sjshovan/dkb-library": "0.1.0",
     "@sjshovan/dkb-pipeline": "0.1.0",
     "@sjshovan/dkb-protocol": "1.0.0",

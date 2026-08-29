@@ -1,6 +1,6 @@
 # 0004 - Monorepo Release Units And Local Stack
 
-- **Status:** Accepted direction; implementation in progress
+- **Status:** Partially superseded by 0006; release-unit decisions retained
 - **Date:** 2026-08-27
 - **Scope:** TypeScript package boundaries, implementation versions, Docker images,
   local stack orchestration, and repository guidance

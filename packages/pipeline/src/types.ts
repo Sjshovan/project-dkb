@@ -5,7 +5,7 @@ import type {
   LoadedDkb,
 } from '@sjshovan/dkb-protocol/types.js';
 
-export type DkbProviderKind = 'ingestion' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
+export type DkbProviderKind = 'evidence' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
 export type DkbProcessorStage = 'document' | 'chunk' | 'record';
 
 export interface DkbPipelineDocument {
@@ -80,8 +80,8 @@ export interface IndexedSourceUnit {
   heading?: string;
 }
 
-export interface DkbIngestionProvider {
-  kind: 'ingestion';
+export interface DkbEvidenceProvider {
+  kind: 'evidence';
   lifecycle?: DkbProviderLifecycle;
   compile(input: {
     dkb: LoadedDkb;
@@ -143,7 +143,7 @@ export interface DkbIndexProvider {
   mode: 'packaged' | 'managed';
   format: string;
   compilePackage?(input: {
-    root: string;
+    artifactsRoot: string;
     dkb: LoadedDkb;
     compiled: DkbCompiledPipeline;
     compatibility: Record<string, unknown>;
@@ -152,6 +152,7 @@ export interface DkbIndexProvider {
   }): Promise<DkbProviderBuildReceipt | null>;
   validatePackage?(input: {
     dkb: LoadedDkb;
+    artifactsRoot: string;
     compatibility: Record<string, unknown>;
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;
@@ -160,6 +161,7 @@ export interface DkbIndexProvider {
     libraryRoot: string;
     libraryId: string;
     dkb: LoadedDkb;
+    artifactsRoot: string;
     compatibility: Record<string, unknown>;
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;
@@ -175,6 +177,7 @@ export interface DkbIndexProvider {
   verifyRuntime?(input: {
     libraryRoot: string;
     libraryId: string;
+    packages: readonly DkbRuntimePackageBuild[];
     packageId?: string;
     packageVersion?: string;
     compatibility: Record<string, unknown>;
@@ -184,6 +187,7 @@ export interface DkbIndexProvider {
   openRuntime(input: {
     libraryRoot: string;
     libraryId: string;
+    packages: readonly DkbRuntimePackageBuild[];
     compatibility: Record<string, unknown>;
     embedQuery(text: string, signal?: AbortSignal): Promise<number[]>;
     options: Readonly<Record<string, unknown>>;
@@ -193,11 +197,49 @@ export interface DkbIndexProvider {
   dispose?(): Promise<void> | void;
 }
 
+export interface DkbRuntimePackageBuild {
+  dkb: LoadedDkb;
+  evidenceRoot: string;
+  retrievalRoot: string;
+  artifactsRoot: string;
+}
+
 export interface DkbRetrievalProvider {
   kind: 'retrieval';
   protocol: string;
+  openRuntime(input: {
+    index: DkbIndexRuntime | null;
+    options: Readonly<Record<string, unknown>>;
+    signal?: AbortSignal;
+  }): Promise<DkbRetrievalRuntime> | DkbRetrievalRuntime;
   health?(): Promise<DkbProviderHealth>;
   dispose?(): Promise<void> | void;
+}
+
+export interface DkbRetrievalScope {
+  dkbId?: string;
+  packageVersion?: string;
+  assetId?: string;
+  sourceType?: string;
+}
+
+export interface DkbRetrievalHit {
+  evidenceId: string;
+  score: number;
+  channels: string[];
+  matchedTokens?: string[];
+}
+
+export interface DkbRetrievalRuntime {
+  providerId: string;
+  protocol: string;
+  search(input: {
+    query: string;
+    limit: number;
+    scope?: DkbRetrievalScope;
+    signal?: AbortSignal;
+  }): Promise<{ hits: DkbRetrievalHit[]; trace: Record<string, unknown> }>;
+  close(): Promise<void> | void;
 }
 
 export interface DkbIndexMutationResult {
@@ -215,12 +257,7 @@ export interface DkbIndexRuntime {
   packages: Array<{ id: string; version: string; indexId: string; documentCount: number }>;
   assets: IndexedSourceAsset[];
   units: IndexedSourceUnit[];
-  lexicalSearch?(query: string, limit: number, scope?: {
-    dkbId?: string;
-    packageVersion?: string;
-    assetId?: string;
-    sourceType?: string;
-  }): Array<{ unitId: string; score: number; matchedTokens: string[] }>;
+  lexicalSearch?(query: string, limit: number, scope?: DkbRetrievalScope): Array<{ unitId: string; score: number; matchedTokens: string[] }>;
   search(query: string, limit: number, signal?: AbortSignal): Promise<{
     hits: Array<{ id: string; score: number }>;
     trace: Record<string, unknown>;
@@ -229,7 +266,7 @@ export interface DkbIndexRuntime {
 }
 
 export type DkbProvider =
-  | DkbIngestionProvider
+  | DkbEvidenceProvider
   | DkbParserProvider
   | DkbChunkerProvider
   | DkbEmbeddingProvider

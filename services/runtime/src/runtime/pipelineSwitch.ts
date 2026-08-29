@@ -12,7 +12,7 @@ import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 import { DKB_CONFIG_FORMAT, DKB_CONFIG_PATH, readDkbContextConfig, writeDkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { resolveProviderRetrievalProfile, writeRetrievalProfileLock, maybeReadRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { materializeDkbInstallPlan } from './registryInstall.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
@@ -76,7 +76,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
   let configWritten = false;
 
   try {
-    host = await DkbProviderHost.create({ root: runtime.stateRoot, target, bundled: BUNDLED_PROVIDER_PLUGINS });
+    host = await DkbProviderHost.create({ root: runtime.stateRoot, target, distribution: DEFAULT_DKB_DISTRIBUTION });
     artifactSnapshot = await snapshotLibraryArtifacts(runtime.stateRoot);
     previousRuntime = await maybeReadRuntimeLock(runtime.stateRoot);
     previousConfigBytes = await fs.readFile(configPath).catch((error: NodeJS.ErrnoException) => {

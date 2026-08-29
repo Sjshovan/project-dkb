@@ -11,6 +11,7 @@
     { "path": "../../packages/pipeline" },
     { "path": "../../packages/library" },
     { "path": "../../packages/registry-client" },
+    { "path": "../../packages/distribution-default" },
     { "path": "../../providers/bundled" },
     { "path": "../../services/compiler" },
     { "path": "../../services/runtime" }

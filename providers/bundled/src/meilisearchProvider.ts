@@ -7,21 +7,22 @@ import { pipeline } from 'node:stream/promises';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type {
   DkbCompiledPipeline,
   DkbIndexMutationResult,
   DkbIndexRuntime,
   DkbProviderBuildReceipt,
+  DkbRuntimePackageBuild,
 } from '@sjshovan/dkb-pipeline/types.js';
 import { sourceUnitFromPipelineRecord } from './records.js';
 import { sourceAssetsFromChunks, type IndexedSourceUnit } from './sourceIndex.js';
 
-export const MEILISEARCH_PROVIDER_ID = '@dkb/meilisearch';
+export const MEILISEARCH_PROVIDER_ID = '@dkb/index-meilisearch';
 export const MEILISEARCH_IMPORT_FORMAT = 'dkb.meilisearch.import.v1';
 export const MEILISEARCH_INDEX_FORMAT = 'meilisearch.userProvided.v1';
-export const MEILISEARCH_ARTIFACT_DIR = `${DKB_ARTIFACTS_DIR}/providers/meilisearch`;
+export const MEILISEARCH_ARTIFACT_DIR = 'meilisearch';
 export const MEILISEARCH_RECORDS_PATH = `${MEILISEARCH_ARTIFACT_DIR}/records.jsonl`;
 export const MEILISEARCH_MANIFEST_PATH = `${MEILISEARCH_ARTIFACT_DIR}/manifest.json`;
 const MEILI_EMBEDDER = 'dkb';
@@ -72,7 +73,7 @@ interface MeilisearchDocument {
 }
 
 export async function writeMeilisearchPackageArtifacts(input: {
-  root: string;
+  artifactsRoot: string;
   dkb: LoadedDkb;
   compiled: DkbCompiledPipeline;
   compatibility: Record<string, unknown>;
@@ -86,7 +87,7 @@ export async function writeMeilisearchPackageArtifacts(input: {
   const dimensions = assertUniformDimensions(records, input.dkb.manifest.id);
   const compatibilityDigest = stableHash(input.compatibility);
   const releaseDigest = stableHash(records.map(stableImportRecord));
-  const recordsPath = resolveFrom(input.root, MEILISEARCH_RECORDS_PATH);
+  const recordsPath = resolveFrom(input.artifactsRoot, MEILISEARCH_RECORDS_PATH);
 
   await fs.mkdir(path.dirname(recordsPath), { recursive: true });
   await pipeline(
@@ -114,7 +115,7 @@ export async function writeMeilisearchPackageArtifacts(input: {
     generatedAt: new Date().toISOString(),
   };
 
-  await writeJsonAtomic(resolveFrom(input.root, MEILISEARCH_MANIFEST_PATH), manifest);
+  await writeJsonAtomic(resolveFrom(input.artifactsRoot, MEILISEARCH_MANIFEST_PATH), manifest);
 
   return {
     providerId: MEILISEARCH_PROVIDER_ID,
@@ -132,8 +133,9 @@ export async function writeMeilisearchPackageArtifacts(input: {
 export async function validateMeilisearchPackageArtifact(
   dkb: LoadedDkb,
   compatibility?: Record<string, unknown>,
+  artifactsRoot = dkb.root,
 ): Promise<{ manifest: MeilisearchImportManifest; records: MeilisearchImportRecord[] }> {
-  const manifestPath = resolveFrom(dkb.root, MEILISEARCH_MANIFEST_PATH);
+  const manifestPath = resolveFrom(artifactsRoot, MEILISEARCH_MANIFEST_PATH);
   const parsed = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown;
   const manifest = parseManifest(parsed, manifestPath);
 
@@ -143,7 +145,7 @@ export async function validateMeilisearchPackageArtifact(
   if (compatibility && manifest.compatibilityDigest !== stableHash(compatibility)) {
     throw new DkbError(`Meilisearch compatibility mismatch for ${dkb.manifest.id}@${dkb.manifest.version}`);
   }
-  const recordsPath = resolveFrom(dkb.root, manifest.files.records.path);
+  const recordsPath = resolveFrom(artifactsRoot, manifest.files.records.path);
   const digest = await fileDigest(recordsPath);
 
   if (digest.hash !== manifest.files.records.hash || digest.size !== manifest.files.records.size) {
@@ -168,12 +170,13 @@ export async function installMeilisearchPackage(input: {
   libraryRoot: string;
   libraryId: string;
   dkb: LoadedDkb;
+  artifactsRoot: string;
   compatibility: Record<string, unknown>;
   options: Readonly<Record<string, unknown>>;
   signal?: AbortSignal;
 }): Promise<DkbIndexMutationResult> {
   throwIfAborted(input.signal);
-  const { manifest, records } = await validateMeilisearchPackageArtifact(input.dkb, input.compatibility);
+  const { manifest, records } = await validateMeilisearchPackageArtifact(input.dkb, input.compatibility, input.artifactsRoot);
   const client = await createClient(input.options);
   const indexId = meilisearchIndexId(
     input.libraryRoot,
@@ -262,17 +265,16 @@ export async function uninstallMeilisearchPackage(input: {
 export async function openMeilisearchRuntime(input: {
   libraryRoot: string;
   libraryId: string;
+  packages: readonly DkbRuntimePackageBuild[];
   compatibility: Record<string, unknown>;
   embedQuery(text: string, signal?: AbortSignal): Promise<number[]>;
   options: Readonly<Record<string, unknown>>;
   signal?: AbortSignal;
 }): Promise<DkbIndexRuntime | null> {
-  const library = await loadLibrary(input.libraryRoot);
-  const dkbs = uniqueLoadedDkbs([
-    ...library.collections.flatMap((collection) => collection.dkbs),
-    ...library.dkbs,
-  ]);
-  const loaded = await Promise.all(dkbs.map(async (dkb) => ({ dkb, ...await validateMeilisearchPackageArtifact(dkb, input.compatibility) })));
+  const loaded = await Promise.all(input.packages.map(async ({ dkb, artifactsRoot }) => ({
+    dkb,
+    ...await validateMeilisearchPackageArtifact(dkb, input.compatibility, artifactsRoot),
+  })));
 
   if (loaded.length === 0) {
     return null;
@@ -345,6 +347,7 @@ export async function openMeilisearchRuntime(input: {
 export async function verifyMeilisearchRuntime(input: {
   libraryRoot: string;
   libraryId: string;
+  packages: readonly DkbRuntimePackageBuild[];
   packageId?: string;
   packageVersion?: string;
   compatibility: Record<string, unknown>;
@@ -352,9 +355,8 @@ export async function verifyMeilisearchRuntime(input: {
   signal?: AbortSignal;
 }): Promise<DkbIndexMutationResult> {
   throwIfAborted(input.signal);
-  const library = await loadLibrary(input.libraryRoot);
-  const active = uniqueLoadedDkbs([...library.collections.flatMap((collection) => collection.dkbs), ...library.dkbs])
-    .filter((dkb) => !input.packageId || (dkb.manifest.id === input.packageId && (!input.packageVersion || dkb.manifest.version === input.packageVersion)));
+  const active = input.packages
+    .filter(({ dkb }) => !input.packageId || (dkb.manifest.id === input.packageId && (!input.packageVersion || dkb.manifest.version === input.packageVersion)));
 
   if (input.packageId && active.length === 0) {
     throw new DkbError(`Meilisearch runtime did not activate ${input.packageId}${input.packageVersion ? `@${input.packageVersion}` : ''}`);
@@ -363,8 +365,8 @@ export async function verifyMeilisearchRuntime(input: {
   let documentCount = 0;
   let lastIndexId = '';
 
-  for (const dkb of active) {
-    const { manifest } = await validateMeilisearchPackageArtifact(dkb, input.compatibility);
+  for (const { dkb, artifactsRoot } of active) {
+    const { manifest } = await validateMeilisearchPackageArtifact(dkb, input.compatibility, artifactsRoot);
     const indexId = meilisearchIndexId(
       input.libraryRoot,
       input.libraryId,

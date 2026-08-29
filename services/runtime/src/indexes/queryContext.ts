@@ -5,11 +5,11 @@ import { artifactLockPath, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { vectorDocumentsForSourceUnits, type VectorDocument } from '@sjshovan/dkb-providers-bundled/vectorStore.js';
 import { SOURCE_GRAPH_PATH, SOURCE_INDEX_PATH, SOURCE_VECTOR_PATH, readSourceIndex, type IndexedSourceAsset, type IndexedSourceUnit } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 import type { LexicalRuntimeSnapshot } from '@sjshovan/dkb-providers-bundled/lexicalStore.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime, DkbRetrievalProvider, DkbRetrievalRuntime } from '@sjshovan/dkb-pipeline/types.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import { maybeReadRuntimeLock, resolveLibraryRuntimeBuilds } from '@sjshovan/dkb-library/builds.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 export interface QueryContext {
@@ -26,6 +26,7 @@ export interface QueryContext {
   vectorArtifactRoot: string;
   searchRegistryId: string;
   index?: DkbIndexRuntime;
+  retrieval: DkbRetrievalRuntime;
   lexical?: Pick<LexicalRuntimeSnapshot, 'search' | 'close'>;
   providerHost: DkbProviderHost;
   embedQuery(query: string): Promise<number[]>;
@@ -40,8 +41,9 @@ export async function createQueryContext(root: string, collectionId: string): Pr
   const artifactHash = await queryArtifactHash(resolvedRoot);
   const sourceIndex = await maybeReadSourceIndex(resolvedRoot);
   const searchRegistryId = await searchRegistryIdFor(resolvedRoot, collectionId);
-  const providerHost = await DkbProviderHost.create({ root: resolvedRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+  const providerHost = await DkbProviderHost.create({ root: resolvedRoot, distribution: DEFAULT_DKB_DISTRIBUTION });
   let indexRuntime: DkbIndexRuntime | null = null;
+  let retrievalRuntime: DkbRetrievalRuntime | null = null;
 
   try {
     const embeddingProvider = providerHost.provider<DkbEmbeddingProvider>('embedding');
@@ -50,6 +52,7 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     const indexOptions = providerHost.optionsFor(providerHost.config.target.index);
     const resolvedProfile = await resolveProviderRetrievalProfile(providerHost);
     const compatibility = resolvedProfile.compatibility;
+    const packages = await resolveLibraryRuntimeBuilds(resolvedRoot);
     const runtimeLock = await maybeReadRuntimeLock(resolvedRoot);
     if (runtimeLock && (
       runtimeLock.evidenceProfileDigest !== resolvedProfile.evidenceProfileDigest
@@ -63,9 +66,15 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     indexRuntime = await indexProvider.openRuntime({
       libraryRoot: resolvedRoot,
       libraryId: searchRegistryId,
+      packages,
       compatibility,
       embedQuery: (text, signal) => embeddingProvider.embedQuery({ text, options: embeddingOptions, ...(signal ? { signal } : {}) }),
       options: indexOptions,
+    });
+    const retrievalProvider = providerHost.provider<DkbRetrievalProvider>('retrieval');
+    retrievalRuntime = await retrievalProvider.openRuntime({
+      index: indexRuntime,
+      options: providerHost.optionsFor(providerHost.config.target.retrieval),
     });
     const activeAssets = indexRuntime?.assets ?? sourceIndex.assets;
     const activeUnits = indexRuntime?.units ?? sourceIndex.units;
@@ -87,6 +96,7 @@ export async function createQueryContext(root: string, collectionId: string): Pr
       vectorArtifactRoot: path.dirname(resolveFrom(resolvedRoot, SOURCE_VECTOR_PATH)),
       searchRegistryId,
       providerHost,
+      retrieval: retrievalRuntime,
       embedQuery: (query) => embeddingProvider.embedQuery({ text: query, options: embeddingOptions }),
       ...(indexRuntime ? { index: indexRuntime } : {}),
       ...(lexical ? { lexical } : {}),
@@ -94,6 +104,7 @@ export async function createQueryContext(root: string, collectionId: string): Pr
       lastUsedAt: new Date().toISOString(),
     };
   } catch (error) {
+    await retrievalRuntime?.close();
     await indexRuntime?.close();
     await providerHost.dispose();
     throw error;
@@ -149,6 +160,7 @@ export function invalidateQueryContext(root?: string): number {
 
     for (const context of residentContexts.values()) {
       void context.index?.close();
+      void context.retrieval.close();
       void context.providerHost.dispose();
     }
     residentContexts.clear();
@@ -162,6 +174,7 @@ export function invalidateQueryContext(root?: string): number {
   for (const [key, context] of residentContexts.entries()) {
     if (context.root === resolvedRoot) {
       void context.index?.close();
+      void context.retrieval.close();
       void context.providerHost.dispose();
       residentContexts.delete(key);
       removed += 1;
@@ -182,6 +195,7 @@ export async function closeQueryContext(root?: string): Promise<number> {
 
   await Promise.all(contexts.map(async ([, context]) => {
     context.lexical?.close();
+    await context.retrieval.close();
     await context.index?.close();
     await context.providerHost.dispose();
   }));

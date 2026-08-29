@@ -16,6 +16,8 @@ import {
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DKB_EVIDENCE_IR_PATH, validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import {
   DKB_RETRIEVAL_PROFILE_LOCK_PATH,
   validateRetrievalProfileLock,
@@ -51,6 +53,32 @@ export interface DkbBuildList {
   active: DkbRuntimeLock | null;
   evidence: Array<{ profileDigest: string; evidenceDigest: string; path: string; active: boolean }>;
   retrieval: Array<{ profileDigest: string; buildDigest: string; path: string; active: boolean }>;
+}
+
+export interface DkbResolvedPackageBuild {
+  dkb: LoadedDkb;
+  evidenceRoot: string;
+  retrievalRoot: string;
+  artifactsRoot: string;
+}
+
+export async function resolveLibraryRuntimeBuilds(root: string): Promise<DkbResolvedPackageBuild[]> {
+  const library = await loadLibrary(root);
+  const dkbs = uniqueLoadedDkbs([
+    ...library.collections.flatMap((collection) => collection.dkbs),
+    ...library.dkbs,
+  ]);
+
+  return Promise.all(dkbs.map(async (dkb) => {
+    const graph = await validatePackageBuildGraph(dkb.root);
+
+    return {
+      dkb,
+      evidenceRoot: graph.evidencePath,
+      retrievalRoot: graph.retrievalPath,
+      artifactsRoot: path.join(graph.retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS),
+    };
+  }));
 }
 
 export async function listPackageBuilds(root: string): Promise<DkbBuildList> {

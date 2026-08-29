@@ -104,12 +104,12 @@ and records stage, order, version, and source-code digest in build receipts.
 
 | ID | Role | Behavior |
 | --- | --- | --- |
-| `@dkb/llamaindex` | ingestion | Docling rich-file parsing plus LlamaIndex fallbacks |
-| `@dkb/fastembed` | embedding | native FastEmbed document/query vectors through the bounded sidecar |
-| `@dkb/tei` | embedding | TEI document/query vectors through its HTTP contract |
-| `@dkb/faiss` | packaged index | immutable package-local FAISS and SQLite artifacts |
-| `@dkb/meilisearch` | managed index | package vector import into immutable server-side indexes |
-| `@dkb/hybrid` | retrieval | stable DKB evidence protocol and fusion behavior |
+| `@dkb/evidence-docling-llamaindex` | ingestion | Docling rich-file parsing plus LlamaIndex fallbacks |
+| `@dkb/embedding-fastembed` | embedding | native FastEmbed document/query vectors through the bounded sidecar |
+| `@dkb/embedding-tei` | embedding | TEI document/query vectors through its HTTP contract |
+| `@dkb/index-faiss` | packaged index | immutable package-local FAISS and SQLite artifacts |
+| `@dkb/index-meilisearch` | managed index | package vector import into immutable server-side indexes |
+| `@dkb/retrieval-hybrid` | retrieval | stable DKB evidence protocol and fusion behavior |
 
 FAISS artifacts travel inside the release. Meilisearch server state never does.
 A Meilisearch release instead carries chunks, compiler vectors, provenance, and
@@ -123,9 +123,9 @@ Meilisearch secrets remain in environment variables. A typical target uses:
 
 ```json
 {
-  "index": "@dkb/meilisearch",
+  "index": "@dkb/index-meilisearch",
   "options": {
-    "@dkb/meilisearch": {
+    "@dkb/index-meilisearch": {
       "urlEnv": "MEILI_URL",
       "apiKeyEnv": "MEILI_MASTER_KEY",
       "timeoutMs": 60000,
@@ -146,11 +146,11 @@ dkb plugin remove @team/provider --root ./Library
 dkb pipeline show ./Library
 dkb pipeline verify ./Library
 dkb pipeline set meili --root ./Library \
-  --ingestion @dkb/llamaindex \
-  --embedding @dkb/fastembed \
-  --index @dkb/meilisearch \
-  --retrieval @dkb/hybrid \
-  --provider-options '{"@dkb/meilisearch":{"urlEnv":"MEILI_URL","apiKeyEnv":"MEILI_MASTER_KEY"}}'
+  --ingestion @dkb/evidence-docling-llamaindex \
+  --embedding @dkb/embedding-fastembed \
+  --index @dkb/index-meilisearch \
+  --retrieval @dkb/retrieval-hybrid \
+  --provider-options '{"@dkb/index-meilisearch":{"urlEnv":"MEILI_URL","apiKeyEnv":"MEILI_MASTER_KEY"}}'
 ```
 
 Use `--global` with plugin add, link, or remove for current-user storage.

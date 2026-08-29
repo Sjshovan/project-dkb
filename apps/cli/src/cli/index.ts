@@ -1897,11 +1897,11 @@ pipeline
   .argument('[path]', 'Library or Runtime root', '.')
   .option('--target <name>', 'Show a configured target other than the active target')
   .action(async (target: string, options: { target?: string }) => {
-    const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
+    const [{ DkbProviderHost }, { DEFAULT_DKB_DISTRIBUTION }] = await Promise.all([
       import('@sjshovan/dkb-pipeline/host.js'),
-      import('@sjshovan/dkb-providers-bundled/bundled.js'),
+      import('@sjshovan/dkb-distribution-default'),
     ]);
-    const host = await DkbProviderHost.create({ root: path.resolve(target), target: options.target, bundled: BUNDLED_PROVIDER_PLUGINS });
+    const host = await DkbProviderHost.create({ root: path.resolve(target), target: options.target, distribution: DEFAULT_DKB_DISTRIBUTION });
 
     try {
       presenter().print(host.describe(), summarizePipeline);
@@ -1924,13 +1924,13 @@ pipeline
 
     await presenter().run(`Activating pipeline ${name}`, async () => {
       if (manifest.type === 'dkb') {
-        const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }, { resolveProviderRetrievalProfile }, { activateStoredPackageBuild }] = await Promise.all([
+        const [{ DkbProviderHost }, { DEFAULT_DKB_DISTRIBUTION }, { resolveProviderRetrievalProfile }, { activateStoredPackageBuild }] = await Promise.all([
           import('@sjshovan/dkb-pipeline/host.js'),
-          import('@sjshovan/dkb-providers-bundled/bundled.js'),
+          import('@sjshovan/dkb-distribution-default'),
           import('@sjshovan/dkb-pipeline/profile.js'),
           import('@sjshovan/dkb-library/builds.js'),
         ]);
-        const host = await DkbProviderHost.create({ root, target: name, bundled: BUNDLED_PROVIDER_PLUGINS });
+        const host = await DkbProviderHost.create({ root, target: name, distribution: DEFAULT_DKB_DISTRIBUTION });
         try {
           const resolved = await resolveProviderRetrievalProfile(host);
           try {
@@ -1992,7 +1992,7 @@ pipeline
   .description('Validate and atomically save a complete pipeline target')
   .argument('<name>', 'Target name')
   .option('--root <path>', 'Library or Runtime root', '.')
-  .option('--ingestion <id>', 'Fused ingestion provider')
+  .option('--evidence <id>', 'Fused Evidence provider')
   .option('--parser <id>', 'Parser provider; requires --chunker')
   .option('--chunker <id>', 'Chunker provider; requires --parser')
   .requiredOption('--embedding <id>', 'Document and query embedding provider')
@@ -2003,7 +2003,7 @@ pipeline
   .option('--no-activate', 'Save the target without making it active')
   .action(async (name: string, options: {
     root: string;
-    ingestion?: string;
+    evidence?: string;
     parser?: string;
     chunker?: string;
     embedding: string;
@@ -2013,10 +2013,10 @@ pipeline
     providerOptions?: string;
     activate: boolean;
   }) => {
-    if (Boolean(options.ingestion) === Boolean(options.parser || options.chunker)) {
-      throw new DkbError('Select either --ingestion or both --parser and --chunker.');
+    if (Boolean(options.evidence) === Boolean(options.parser || options.chunker)) {
+      throw new DkbError('Select either --evidence or both --parser and --chunker.');
     }
-    if (!options.ingestion && (!options.parser || !options.chunker)) {
+    if (!options.evidence && (!options.parser || !options.chunker)) {
       throw new DkbError('--parser and --chunker must be selected together.');
     }
     const providerOptions = options.providerOptions
@@ -2028,7 +2028,7 @@ pipeline
       name,
       activate: options.activate,
       patch: {
-        ...(options.ingestion ? { ingestion: options.ingestion } : { parser: options.parser, chunker: options.chunker }),
+        ...(options.evidence ? { evidence: options.evidence } : { parser: options.parser, chunker: options.chunker }),
         embedding: options.embedding,
         index: options.index,
         retrieval: options.retrieval,
@@ -2122,42 +2122,42 @@ build
 
 program
   .command('compiler')
-  .description('Manage the selected ingestion provider service')
+  .description('Manage the selected Evidence provider service')
   .addCommand(new Command('inspect')
-    .description('Inspect the selected ingestion provider')
+    .description('Inspect the selected Evidence provider')
     .option('--root <path>', 'Library or Runtime root', '.')
     .option('--target <name>', 'Configured pipeline target')
     .action(async (options: { root: string; target?: string }) => {
-      presenter().print(await runIngestionLifecycle(options.root, options.target, 'inspect'), summarizeCompilerStatus);
+      presenter().print(await runEvidenceLifecycle(options.root, options.target, 'inspect'), summarizeCompilerStatus);
     }))
   .addCommand(new Command('start')
-    .description('Start or reuse the selected ingestion provider service')
+    .description('Start or reuse the selected Evidence provider service')
     .option('--root <path>', 'Library or Runtime root', '.')
     .option('--target <name>', 'Configured pipeline target')
     .option('--restart', 'Replace any existing provider service')
     .action(async (options: { root: string; target?: string; restart?: boolean }) => {
-      await presenter().run('Starting ingestion service', async () => runIngestionLifecycle(options.root, options.target, 'start', { restart: Boolean(options.restart) }), summarizeCompilerStatus);
+      await presenter().run('Starting Evidence service', async () => runEvidenceLifecycle(options.root, options.target, 'start', { restart: Boolean(options.restart) }), summarizeCompilerStatus);
     }))
   .addCommand(new Command('status')
-    .description('Show selected ingestion provider service status')
+    .description('Show selected Evidence provider service status')
     .option('--root <path>', 'Library or Runtime root', '.')
     .option('--target <name>', 'Configured pipeline target')
     .action(async (options: { root: string; target?: string }) => {
-      presenter().print(await runIngestionLifecycle(options.root, options.target, 'status'), summarizeCompilerStatus);
+      presenter().print(await runEvidenceLifecycle(options.root, options.target, 'status'), summarizeCompilerStatus);
     }))
   .addCommand(new Command('stop')
-    .description('Stop the selected ingestion provider service')
+    .description('Stop the selected Evidence provider service')
     .option('--root <path>', 'Library or Runtime root', '.')
     .option('--target <name>', 'Configured pipeline target')
     .action(async (options: { root: string; target?: string }) => {
-      await presenter().run('Stopping ingestion service', async () => runIngestionLifecycle(options.root, options.target, 'stop'), summarizeCompilerStatus);
+      await presenter().run('Stopping Evidence service', async () => runEvidenceLifecycle(options.root, options.target, 'stop'), summarizeCompilerStatus);
     }))
   .addCommand(new Command('doctor')
-    .description('Diagnose selected ingestion provider readiness')
+    .description('Diagnose selected Evidence provider readiness')
     .option('--root <path>', 'Library or Runtime root', '.')
     .option('--target <name>', 'Configured pipeline target')
     .action(async (options: { root: string; target?: string }) => {
-      const result = await runIngestionLifecycle(options.root, options.target, 'doctor') as { ok?: unknown };
+      const result = await runEvidenceLifecycle(options.root, options.target, 'doctor') as { ok?: unknown };
       presenter().print(result, summarizeCompilerStatus);
 
       if (!result.ok) {
@@ -3323,24 +3323,24 @@ function parseLimit(value: string): number {
   return limit;
 }
 
-async function runIngestionLifecycle(
+async function runEvidenceLifecycle(
   root: string,
   target: string | undefined,
   operation: 'inspect' | 'start' | 'status' | 'stop' | 'doctor',
   options?: { restart?: boolean },
 ): Promise<unknown> {
-  const [{ DkbProviderHost }, { BUNDLED_PROVIDER_PLUGINS }] = await Promise.all([
+  const [{ DkbProviderHost }, { DEFAULT_DKB_DISTRIBUTION }] = await Promise.all([
     import('@sjshovan/dkb-pipeline/host.js'),
-    import('@sjshovan/dkb-providers-bundled/bundled.js'),
+    import('@sjshovan/dkb-distribution-default'),
   ]);
-  const host = await DkbProviderHost.create({ root: path.resolve(root), ...(target ? { target } : {}), bundled: BUNDLED_PROVIDER_PLUGINS });
+  const host = await DkbProviderHost.create({ root: path.resolve(root), ...(target ? { target } : {}), distribution: DEFAULT_DKB_DISTRIBUTION });
 
   try {
-    const provider = host.provider<import('@sjshovan/dkb-pipeline/types.js').DkbIngestionProvider>('ingestion');
+    const provider = host.provider<import('@sjshovan/dkb-pipeline/types.js').DkbEvidenceProvider>('evidence');
     const action = provider.lifecycle?.[operation];
 
     if (!action) {
-      throw new DkbError(`Selected ingestion provider ${host.config.target.ingestion} does not support compiler ${operation}`);
+      throw new DkbError(`Selected Evidence provider ${host.config.target.evidence} does not support compiler ${operation}`);
     }
     return operation === 'start'
       ? await (action as NonNullable<import('@sjshovan/dkb-pipeline/types.js').DkbProviderLifecycle['start']>)(options)

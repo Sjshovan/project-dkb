@@ -16,8 +16,8 @@ import { DKB_PACKAGE_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@sjshovan/dkb-registry-client/archive.js';
 import { DKB_RETRIEVAL_PROFILE_LOCK_PATH, readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
-import { LLAMAINDEX_COMPILER_IMAGE } from '@sjshovan/dkb-providers-bundled/llamaindex.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
+import { LLAMAINDEX_COMPILER_IMAGE } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 import { resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { DKB_COMPILER_VERSION } from './version.js';
@@ -175,7 +175,7 @@ async function compileRegistryPackage(
   const buildRoot = path.join(scratch, safeId(requestedPackageId ?? 'build'));
   const archivePath = path.join(scratch, 'compiled.dkbpkg');
   const contextRoot = registryCompilerContextRoot();
-  const contextConfig = await resolveContextConfig(contextRoot);
+  const contextConfig = await resolveContextConfig(contextRoot, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults });
   const target = input.request.target ?? contextConfig.activeTarget;
 
   if (target !== contextConfig.activeTarget) {
@@ -336,7 +336,7 @@ export async function registryCompilerCapabilities(): Promise<{
   compatibilityDigest: string;
 }> {
   const contextRoot = registryCompilerContextRoot();
-  const host = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+  const host = await DkbProviderHost.create({ root: contextRoot, distribution: DEFAULT_DKB_DISTRIBUTION });
 
   try {
     const description = host.describe();

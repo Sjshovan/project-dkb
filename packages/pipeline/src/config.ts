@@ -4,12 +4,12 @@ import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
-export const DKB_CONFIG_FORMAT = 'dkb.config.v1';
+export const DKB_CONFIG_FORMAT = 'dkb.config.v2';
 export const DKB_CONFIG_PATH = '.dkb/config.json';
 export const DEFAULT_PIPELINE_TARGET = 'default';
 
 export interface DkbPipelineTargetConfig {
-  ingestion?: string;
+  evidence?: string;
   parser?: string;
   chunker?: string;
   embedding: string;
@@ -42,107 +42,13 @@ export interface DkbResolvedContextConfig {
   local: DkbContextConfig;
 }
 
-export const BUNDLED_DEFAULT_CONFIG: DkbContextConfig = {
-  format: DKB_CONFIG_FORMAT,
-  activeTarget: DEFAULT_PIPELINE_TARGET,
-  targets: {
-    [DEFAULT_PIPELINE_TARGET]: {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/tei',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
-      processors: [],
-      options: {
-        '@dkb/llamaindex': {
-          tokenizerModel: 'BAAI/bge-small-en-v1.5',
-        },
-        '@dkb/tei': {
-          model: 'BAAI/bge-small-en-v1.5',
-          modelRevision: '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
-          dimensions: 384,
-        },
-      },
-    },
-    'fastembed-faiss': {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/fastembed',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
-      processors: [],
-      options: {
-        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-        '@dkb/fastembed': { model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
-      },
-    },
-    'fastembed-faiss-768': {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/fastembed',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
-      processors: [],
-      options: {
-        // Chunking is intentionally independent from the selected embedding
-        // space so 384- and 768-dimensional builds can reuse Evidence IR.
-        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-        '@dkb/fastembed': { model: 'BAAI/bge-base-en-v1.5', dimensions: 768 },
-      },
-    },
-    'tei-faiss': {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/tei',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
-      processors: [],
-      options: {
-        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-        '@dkb/tei': {
-          model: 'BAAI/bge-small-en-v1.5',
-          modelRevision: '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
-          dimensions: 384,
-        },
-      },
-    },
-    'tei-faiss-768': {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/tei',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
-      processors: [],
-      options: {
-        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-        '@dkb/tei': {
-          model: 'BAAI/bge-base-en-v1.5',
-          modelRevision: 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a',
-          dimensions: 768,
-        },
-      },
-    },
-    'tei-meilisearch': {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/tei',
-      index: '@dkb/meilisearch',
-      retrieval: '@dkb/hybrid',
-      processors: [],
-      options: {
-        '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-        '@dkb/tei': {
-          model: 'BAAI/bge-small-en-v1.5',
-          modelRevision: '5c38ec7c405ec4b44b94cc5a9bb96e735b38267a',
-          dimensions: 384,
-        },
-        '@dkb/meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY' },
-      },
-    },
-  },
-};
-
 export function defaultDkbGlobalRoot(): string {
   return path.join(os.homedir(), '.dkb');
 }
 
 export async function resolveContextConfig(
   root: string,
-  options: { globalRoot?: string; target?: string } = {},
+  options: { defaults: DkbContextConfig; globalRoot?: string; target?: string },
 ): Promise<DkbResolvedContextConfig> {
   const resolvedRoot = path.resolve(root);
   const globalRoot = path.resolve(options.globalRoot ?? defaultDkbGlobalRoot());
@@ -150,12 +56,13 @@ export async function resolveContextConfig(
     readDkbContextConfig(path.join(globalRoot, 'config.json')),
     readDkbContextConfig(path.join(resolvedRoot, DKB_CONFIG_PATH)),
   ]);
-  return resolveContextConfigDocuments(resolvedRoot, globalRoot, global, local, options.target);
+  return resolveContextConfigDocuments(resolvedRoot, globalRoot, options.defaults, global, local, options.target);
 }
 
 export function resolveContextConfigDocuments(
   resolvedRoot: string,
   globalRoot: string,
+  defaults: DkbContextConfig,
   global: DkbContextConfig,
   local: DkbContextConfig,
   selectedTarget?: string,
@@ -163,10 +70,10 @@ export function resolveContextConfigDocuments(
   const activeTarget = selectedTarget?.trim()
     || local.activeTarget?.trim()
     || global.activeTarget?.trim()
-    || BUNDLED_DEFAULT_CONFIG.activeTarget
+    || defaults.activeTarget
     || DEFAULT_PIPELINE_TARGET;
-  const bundledTarget = BUNDLED_DEFAULT_CONFIG.targets?.[activeTarget]
-    ?? (activeTarget === DEFAULT_PIPELINE_TARGET ? BUNDLED_DEFAULT_CONFIG.targets?.[DEFAULT_PIPELINE_TARGET] : undefined);
+  const bundledTarget = defaults.targets?.[activeTarget]
+    ?? (activeTarget === DEFAULT_PIPELINE_TARGET ? defaults.targets?.[DEFAULT_PIPELINE_TARGET] : undefined);
   const globalTarget = global.targets?.[activeTarget];
   const localTarget = local.targets?.[activeTarget];
 
@@ -243,10 +150,10 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
   if (!target) {
     throw new DkbError(`Pipeline target "${name}" has no configuration`);
   }
-  if (Boolean(target.ingestion) === Boolean(target.parser || target.chunker)) {
-    throw new DkbError(`Pipeline target "${name}" must select either one ingestion provider or both parser and chunker providers`);
+  if (Boolean(target.evidence) === Boolean(target.parser || target.chunker)) {
+    throw new DkbError(`Pipeline target "${name}" must select either one Evidence provider or both parser and chunker providers`);
   }
-  if (!target.ingestion && (!target.parser || !target.chunker)) {
+  if (!target.evidence && (!target.parser || !target.chunker)) {
     throw new DkbError(`Pipeline target "${name}" requires both parser and chunker providers`);
   }
   for (const key of ['embedding', 'index', 'retrieval'] as const) {
@@ -254,7 +161,7 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
       throw new DkbError(`Pipeline target "${name}" requires a namespaced ${key} provider id`);
     }
   }
-  for (const providerId of [target.ingestion, target.parser, target.chunker].filter(Boolean)) {
+  for (const providerId of [target.evidence, target.parser, target.chunker].filter(Boolean)) {
     if (!isPluginId(providerId)) {
       throw new DkbError(`Pipeline target "${name}" contains an invalid provider id: ${String(providerId)}`);
     }
@@ -277,7 +184,7 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
   const retrieval = target.retrieval as string;
 
   return {
-    ...(target.ingestion ? { ingestion: target.ingestion } : {}),
+    ...(target.evidence ? { evidence: target.evidence } : {}),
     ...(target.parser ? { parser: target.parser } : {}),
     ...(target.chunker ? { chunker: target.chunker } : {}),
     embedding,
@@ -303,11 +210,11 @@ function mergeTarget(
     options: mergeOptions(base?.options, override?.options),
   };
 
-  if (override?.ingestion) {
+  if (override?.evidence) {
     delete result.parser;
     delete result.chunker;
   } else if (override?.parser || override?.chunker) {
-    delete result.ingestion;
+    delete result.evidence;
   }
 
   return result;

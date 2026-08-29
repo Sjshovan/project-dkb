@@ -6,7 +6,7 @@ import test from 'node:test';
 import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { resolveBuildProfiles } from '@sjshovan/dkb-pipeline/buildProfiles.js';
 import { DkbProviderHost, pluginPath } from '@sjshovan/dkb-pipeline/host.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../apps/cli/dist/providers/management.js';
 import { compileDkbWithProviderHost } from '@sjshovan/dkb-compiler/pipelineRunner.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
@@ -21,7 +21,7 @@ const allPlugin = {
   id: '@test/all',
   version: '1.0.0',
   setup(context) {
-    context.registerProvider({ kind: 'ingestion', async compile() { return { records: [], receipt: { providerId: '@test/all', providerVersion: '1.0.0', build: {} } }; } });
+    context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { providerId: '@test/all', providerVersion: '1.0.0', build: {} } }; } });
     context.registerProvider({
       kind: 'embedding',
       async embedDocuments({ texts }) { return texts.map(() => [1]); },
@@ -29,9 +29,13 @@ const allPlugin = {
       compatibility() { return { dimensions: 1, metric: 'cosine' }; },
     });
     context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } });
-    context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1' });
+    context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
   },
 };
+
+function distributionWith(plugins, defaults = DEFAULT_DKB_DISTRIBUTION.defaults) {
+  return { ...DEFAULT_DKB_DISTRIBUTION, defaults, plugins };
+}
 
 test('bundled 384, 768, FastEmbed, and TEI targets share Evidence IR only when ingestion is identical', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-bundled-spaces-'));
@@ -43,7 +47,7 @@ test('bundled 384, 768, FastEmbed, and TEI targets share Evidence IR only when i
     const host = await DkbProviderHost.create({
       root,
       globalRoot: path.join(root, 'global'),
-      bundled: BUNDLED_PROVIDER_PLUGINS,
+      distribution: DEFAULT_DKB_DISTRIBUTION,
       target,
     });
     try {
@@ -89,7 +93,7 @@ test('context configuration merges bundled, global, and local targets determinis
         embedding: '@test/all',
         index: '@test/all',
         retrieval: '@test/all',
-        ingestion: '@test/all',
+        evidence: '@test/all',
         processors: ['@test/global-processor'],
         options: { '@test/all': { shared: 'global', nested: { one: 1 } } },
       },
@@ -105,7 +109,7 @@ test('context configuration merges bundled, global, and local targets determinis
     },
   });
 
-  const resolved = await resolveContextConfig(contextRoot, { globalRoot });
+  const resolved = await resolveContextConfig(contextRoot, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, globalRoot });
 
   assert.deepEqual(resolved.target.processors, []);
   assert.deepEqual(resolved.target.options['@test/all'], {
@@ -124,11 +128,11 @@ test('provider configuration rejects inline secrets and accepts environment refe
   config.targets.default.options = { '@test/all': { apiKey: 'must-not-live-here' } };
   await writeJson(configPath, config);
 
-  await assert.rejects(resolveContextConfig(contextRoot, { globalRoot: path.join(root, 'global') }), /cannot store apiKey/i);
+  await assert.rejects(resolveContextConfig(contextRoot, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, globalRoot: path.join(root, 'global') }), /cannot store apiKey/i);
 
   config.targets.default.options = { '@test/all': { apiKeyEnv: 'TEST_PROVIDER_API_KEY' } };
   await writeJson(configPath, config);
-  const resolved = await resolveContextConfig(contextRoot, { globalRoot: path.join(root, 'global') });
+  const resolved = await resolveContextConfig(contextRoot, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, globalRoot: path.join(root, 'global') });
   assert.equal(resolved.target.options['@test/all'].apiKeyEnv, 'TEST_PROVIDER_API_KEY');
 });
 
@@ -143,7 +147,7 @@ test('provider host loads only selected plugins and prefers a local override', a
   await fs.mkdir(path.dirname(pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/unselected')), { recursive: true });
   await fs.writeFile(pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/unselected'), 'throw new Error("must not load");\n', 'utf8');
 
-  const host = await DkbProviderHost.create({ root: contextRoot, globalRoot, bundled: [allPlugin] });
+  const host = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) });
   t.after(() => host.dispose());
   const description = host.describe();
 
@@ -161,12 +165,12 @@ test('local plugin code drift changes the provider build digest even when versio
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await writeAllPlugin(entrypoint, '1.0.0', 'first');
   await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
-  const first = await DkbProviderHost.create({ root: contextRoot, globalRoot, bundled: [allPlugin] });
+  const first = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) });
   const firstDigest = first.describe().buildDigest;
   await first.dispose();
 
   await fs.writeFile(path.join(path.dirname(entrypoint), 'implementation.txt'), 'changed', 'utf8');
-  const second = await DkbProviderHost.create({ root: contextRoot, globalRoot, bundled: [allPlugin] });
+  const second = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) });
   t.after(() => second.dispose());
   assert.notEqual(second.describe().buildDigest, firstDigest);
 });
@@ -183,7 +187,7 @@ test('a broken local override fails instead of falling back', async (t) => {
   await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
 
   await assert.rejects(
-    DkbProviderHost.create({ root: contextRoot, globalRoot, bundled: [allPlugin] }),
+    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) }),
     /Invalid plugin.*expected exports id=@test\/all/i,
   );
 });
@@ -209,8 +213,8 @@ test('processor order is deterministic and hosts dispose independently', async (
   const bundled = [allPlugin, processor('@test/first', '-first'), processor('@test/second', '-second')];
   await writeJson(path.join(firstRoot, '.dkb/config.json'), targetConfig('@test/all', ['@test/first', '@test/second']));
   await writeJson(path.join(secondRoot, '.dkb/config.json'), targetConfig('@test/all', ['@test/second']));
-  const first = await DkbProviderHost.create({ root: firstRoot, globalRoot, bundled });
-  const second = await DkbProviderHost.create({ root: secondRoot, globalRoot, bundled });
+  const first = await DkbProviderHost.create({ root: firstRoot, globalRoot, distribution: distributionWith(bundled) });
+  const second = await DkbProviderHost.create({ root: secondRoot, globalRoot, distribution: distributionWith(bundled) });
   t.after(() => Promise.all([first.dispose(), second.dispose()]));
 
   const seed = [{ id: 'r', chunkId: 'c', text: 'seed', metadata: {} }];
@@ -231,7 +235,7 @@ test('separate parser, chunker, embedder, and middleware providers share one com
     provider('@test/chunker', (context) => context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'chunk', documentId: documents[0].id, text: `${documents[0].text}-chunked`, metadata: {} }]; } })),
     provider('@test/embedder', (context) => context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [0.5, 0.5]); }, async embedQuery() { return [0.5, 0.5]; }, compatibility() { return { embeddingSpace: 'test', dimensions: 2, metric: 'cosine', normalized: true }; } })),
     provider('@test/index', (context) => context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } })),
-    provider('@test/retrieval', (context) => context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1' })),
+    provider('@test/retrieval', (context) => context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } })),
     provider('@test/document-mutator', (context) => context.registerProcessor({ id: '@test/document-mutator', version: '1.0.0', stage: 'document', mutate(value) { return { ...value, text: `${value.text}-document` }; } })),
     provider('@test/chunk-mutator', (context) => context.registerProcessor({ id: '@test/chunk-mutator', version: '1.0.0', stage: 'chunk', mutate(value) { return { ...value, text: `${value.text}-chunk` }; } })),
     provider('@test/record-mutator', (context) => context.registerProcessor({ id: '@test/record-mutator', version: '1.0.0', stage: 'record', mutate(value) { return { ...value, text: `${value.text}-record` }; } })),
@@ -249,7 +253,7 @@ test('separate parser, chunker, embedder, and middleware providers share one com
       },
     },
   });
-  const host = await DkbProviderHost.create({ root: library, globalRoot: path.join(root, 'global'), bundled });
+  const host = await DkbProviderHost.create({ root: library, globalRoot: path.join(root, 'global'), distribution: distributionWith(bundled) });
   t.after(() => host.dispose());
   const compiled = await compileDkbWithProviderHost(host, {
     root: library,
@@ -307,8 +311,8 @@ export function setup(context) {
   context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'proof-chunk', documentId: documents[0].id, text: documents[0].text, metadata: {} }]; } });
   context.registerProvider({
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
-    async compilePackage({ root, compiled }) {
-      const target = path.join(root, '.dkb', 'artifacts', 'test-index.json');
+    async compilePackage({ artifactsRoot, compiled }) {
+      const target = path.join(artifactsRoot, 'test-index.json');
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records));
       return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
@@ -316,7 +320,7 @@ export function setup(context) {
     async validatePackage() { return { documentCount: 1 }; },
     async openRuntime() { return null; },
   });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1' });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
   context.registerProcessor({ id, version, stage: 'record', mutate(value) { return { ...value, text: value.text + '-MUTATED' }; } });
 }
 `, 'utf8');
@@ -406,14 +410,14 @@ test('embedding cache reuses exact text within one space and misses after a spac
     activeTarget: 'first',
     targets: {
       first: {
-        ingestion: '@test/cache-core',
+        evidence: '@test/cache-core',
         embedding: '@test/cache-embedding',
         index: '@test/cache-core',
         retrieval: '@test/cache-core',
         options: { '@test/cache-embedding': { space: 'first', value: 0.25 } },
       },
       second: {
-        ingestion: '@test/cache-core',
+        evidence: '@test/cache-core',
         embedding: '@test/cache-embedding',
         index: '@test/cache-core',
         retrieval: '@test/cache-core',
@@ -430,14 +434,14 @@ export const id = '@test/cache-core';
 export const version = '1.0.0';
 export function setup(context) {
   context.registerProvider({
-    kind: 'ingestion',
+    kind: 'evidence',
     async compile({ dkb }) {
       const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
       return { records: [{ id: 'cache', chunkId: 'cache', text, metadata: { assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem', locator: { path: 'knowledge.md' }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', hash: 'sha256:cache', updatedAt: '2026-08-28T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length, sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:cache-source' } } }], receipt: { providerId: id, providerVersion: version, build: {} } };
     },
   });
-  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', async compilePackage({ root, compiled }) { const target = path.join(root, '.dkb', 'artifacts', 'cache-index.json'); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records)); return { providerId: id, providerVersion: version, build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async openRuntime() { return null; } });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1' });
+  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', async compilePackage({ artifactsRoot, compiled }) { const target = path.join(artifactsRoot, 'cache-index.json'); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records)); return { providerId: id, providerVersion: version, build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async openRuntime() { return null; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
   const embedding = pluginPath(path.join(root, '.dkb/plugins'), '@test/cache-embedding');
@@ -493,7 +497,7 @@ test('plugin add, link, list, and guarded removal operate within the selected sc
   const listed = await listPlugins({ root: library, globalRoot });
   assert.ok(listed.some((entry) => entry.id === '@test/copied' && entry.scope === 'local' && entry.valid));
   assert.ok(listed.some((entry) => entry.id === '@test/linked' && entry.scope === 'global' && entry.valid));
-  assert.ok(listed.some((entry) => entry.id === '@dkb/faiss' && entry.scope === 'bundled' && entry.selected));
+  assert.ok(listed.some((entry) => entry.id === '@dkb/index-faiss' && entry.scope === 'bundled' && entry.selected));
 
   assert.equal((await removePlugin({ root: library, globalRoot, id: '@test/copied' })).removed, true);
   assert.equal((await removePlugin({ root: library, globalRoot, id: '@test/linked', scope: 'global' })).removed, true);
@@ -512,10 +516,10 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
     name: 'default',
     activate: true,
     patch: {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/fastembed',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
+      evidence: '@dkb/evidence-docling-llamaindex',
+      embedding: '@dkb/embedding-fastembed',
+      index: '@dkb/index-faiss',
+      retrieval: '@dkb/retrieval-hybrid',
       processors: [],
     },
   });
@@ -528,12 +532,12 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
     name: 'broken',
     activate: true,
     patch: {
-      ingestion: '@missing/ingestion',
-      embedding: '@dkb/fastembed',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
+      evidence: '@missing/evidence',
+      embedding: '@dkb/embedding-fastembed',
+      index: '@dkb/index-faiss',
+      retrieval: '@dkb/retrieval-hybrid',
     },
-  }), /Selected plugin @missing\/ingestion was not found/);
+  }), /Selected plugin @missing\/evidence was not found/);
   assert.equal(await fs.readFile(configPath, 'utf8'), before);
 });
 
@@ -550,18 +554,18 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     name: 'default',
     activate: true,
     patch: {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/fastembed',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
+      evidence: '@dkb/evidence-docling-llamaindex',
+      embedding: '@dkb/embedding-fastembed',
+      index: '@dkb/index-faiss',
+      retrieval: '@dkb/retrieval-hybrid',
       processors: [],
     },
   });
   const before = await fs.readFile(configPath, 'utf8');
-  const evidenceProfileDigest = stableHash({ ingestion: '@dkb/llamaindex', processors: [] });
+  const evidenceProfileDigest = stableHash({ evidence: '@dkb/evidence-docling-llamaindex', processors: [] });
   const compatibility = {
     evidenceProfileDigest,
-    embeddingProvider: '@dkb/fastembed',
+    embeddingProvider: '@dkb/embedding-fastembed',
     embeddingSpace: 'BAAI/bge-small-en-v1.5',
     dimensions: 384,
     metric: 'cosine',
@@ -569,10 +573,10 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     indexFormat: 'IndexIDMap2(IndexFlatIP)',
     protocol: 'dkb.evidence.v1',
   };
-  const retrievalProfileDigest = stableHash({ evidenceProfileDigest, embedding: '@dkb/fastembed', index: '@dkb/faiss' });
+  const retrievalProfileDigest = stableHash({ evidenceProfileDigest, embedding: '@dkb/embedding-fastembed', index: '@dkb/index-faiss' });
   const profile = {
-    compiler: { adapter: '@dkb/llamaindex', id: 'test', image: 'test', imageDigest: null },
-    embedding: { adapter: '@dkb/fastembed', model: compatibility.embeddingSpace, modelRevision: null, modelDigest: null, dimensions: 384, metric: 'cosine', normalized: true, queryMode: 'query', documentMode: 'passage' },
+    compiler: { adapter: '@dkb/evidence-docling-llamaindex', id: 'test', image: 'test', imageDigest: null },
+    embedding: { adapter: '@dkb/embedding-fastembed', model: compatibility.embeddingSpace, modelRevision: null, modelDigest: null, dimensions: 384, metric: 'cosine', normalized: true, queryMode: 'query', documentMode: 'passage' },
     extraction: { richParser: 'test', richChunker: 'test', fallbackParser: 'test', fallbackChunker: 'test' },
     evidence: { profileDigest: evidenceProfileDigest },
     target: 'default',
@@ -580,8 +584,8 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     providerBuildDigest: 'sha256:test',
     providers: [],
     processors: [],
-    index: { provider: '@dkb/faiss', mode: 'packaged', format: compatibility.indexFormat },
-    retrieval: { provider: '@dkb/hybrid', protocol: compatibility.protocol, profileDigest: retrievalProfileDigest },
+    index: { provider: '@dkb/index-faiss', mode: 'packaged', format: compatibility.indexFormat },
+    retrieval: { provider: '@dkb/retrieval-hybrid', protocol: compatibility.protocol, profileDigest: retrievalProfileDigest },
   };
   const compatibilityDigest = stableHash(compatibility);
   await writeJson(path.join(library, 'dkb-profile.lock.json'), {
@@ -600,12 +604,12 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     name: 'base',
     activate: true,
     patch: {
-      ingestion: '@dkb/llamaindex',
-      embedding: '@dkb/fastembed',
-      index: '@dkb/faiss',
-      retrieval: '@dkb/hybrid',
+      evidence: '@dkb/evidence-docling-llamaindex',
+      embedding: '@dkb/embedding-fastembed',
+      index: '@dkb/index-faiss',
+      retrieval: '@dkb/retrieval-hybrid',
       processors: [],
-      options: { '@dkb/fastembed': { model: 'BAAI/bge-base-en-v1.5', dimensions: 768 } },
+      options: { '@dkb/embedding-fastembed': { model: 'BAAI/bge-base-en-v1.5', dimensions: 768 } },
     },
   }), /Cannot activate pipeline target "base".*Save it with --no-activate/);
   assert.equal(await fs.readFile(configPath, 'utf8'), before);
@@ -615,7 +619,7 @@ function targetConfig(id, processors = []) {
   return {
     format: DKB_CONFIG_FORMAT,
     targets: {
-      default: { ingestion: id, embedding: id, index: id, retrieval: id, processors },
+      default: { evidence: id, embedding: id, index: id, retrieval: id, processors },
     },
   };
 }
@@ -631,10 +635,10 @@ async function writeAllPlugin(target, version, source) {
 export const id = '@test/all';
 export const version = '${version}';
 export function setup(context) {
-  context.registerProvider({ kind: 'ingestion', async compile() { return { records: [], receipt: { providerId: id, providerVersion: version, build: { source: '${source}' } } }; } });
+  context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { providerId: id, providerVersion: version, build: { source: '${source}' } } }; } });
   context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [${Number(version[0])}]); }, async embedQuery() { return [${Number(version[0])}]; }, compatibility() { return { dimensions: 1 }; } });
   context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } });
-  context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1' });
+  context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
 }

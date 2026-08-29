@@ -1,0 +1,13 @@
+{
+  "name": "@sjshovan/dkb-retrieval-hybrid",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }, "./plugin.js": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" } },
+  "files": ["dist/", "!dist/.tsbuildinfo"],
+  "scripts": { "build": "tsc -b", "check": "tsc -b --pretty false" },
+  "dependencies": { "@sjshovan/dkb-pipeline": "0.1.0" },
+  "engines": { "node": ">=22.15.0" },
+  "private": true
+}

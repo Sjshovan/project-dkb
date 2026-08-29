@@ -5,7 +5,7 @@ import { DKB_ARTIFACTS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js'
 import { capabilitiesForSourceType, type IndexedSourceUnit } from './sourceIndex.js';
 import { tokenize } from './scoring.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import type { LlamaIndexCompilerRecord, LlamaIndexCompilerResult } from './llamaindex.js';
+import type { LlamaIndexCompilerRecord, LlamaIndexCompilerResult } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 import { evidenceIdentityForRecord } from '@sjshovan/dkb-protocol/evidence/ir.js';
 
 export const LLAMAINDEX_COMPILER_BUNDLE_MANIFEST_PATH = `${DKB_ARTIFACTS_DIR}/llamaindex.compiler.manifest.json`;

@@ -24,19 +24,20 @@ export async function queryCollection(
   const includedDkbs = new Set(collection.dkbs.map((dkb) => dkb.manifest.id));
   const sourceUnits = sourceIndex.units.filter((unit) => includedDkbs.has(unit.dkbId));
   const documents = vectorDocumentsForSourceUnits(sourceUnits);
-  const result = options.queryContext?.index
-    ? await options.queryContext.index.search(query, limit)
+  const result = options.queryContext
+    ? await options.queryContext.retrieval.search({ query, limit })
     : await querySearchDocuments(
-      options.queryContext?.searchRegistryId ?? collection.manifest.id,
+      collection.manifest.id,
       documents,
       query,
       limit,
-      options.queryContext?.vectorArtifactRoot ?? path.join(collection.root, '.dkb', 'artifacts'),
+      path.join(collection.root, '.dkb', 'artifacts'),
     );
   const unitsById = new Map(sourceUnits.map((unit) => [unit.id, unit]));
   const results = result.hits
     .map((hit): QueryHit | null => {
-      const unit = unitsById.get(hit.id);
+      const id = 'evidenceId' in hit ? hit.evidenceId : hit.id;
+      const unit = unitsById.get(id);
 
       if (!unit) {
         return null;

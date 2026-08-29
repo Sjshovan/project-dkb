@@ -6,7 +6,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 const execFile = promisify(execFileCallback);
 
-export const DKB_TEI_PLUGIN_ID = '@dkb/tei';
+export const DKB_TEI_PLUGIN_ID = '@dkb/embedding-tei';
 export const TEI_VERSION = '1.9.3';
 export const TEI_CPU_IMAGE = 'ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07';
 export const TEI_DEFAULT_MODEL = 'BAAI/bge-small-en-v1.5';

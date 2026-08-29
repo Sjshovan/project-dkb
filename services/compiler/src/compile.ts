@@ -23,7 +23,7 @@ import {
   writePackageBuildGraph,
   type DkbPackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
-import type { LlamaIndexCompilerResult } from '@sjshovan/dkb-providers-bundled/llamaindex.js';
+import type { LlamaIndexCompilerResult } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 import {
   readLlamaIndexCompilerRecords,
   sourceUnitFromLlamaIndexRecord,
@@ -39,7 +39,7 @@ import {
   type DkbRetrievalProfileLock,
 } from '@sjshovan/dkb-pipeline/profile.js';
 import { buildEvidenceIr, evidenceIdentityForRecord, DKB_EVIDENCE_IR_PATH, readEvidenceIr, validateEvidenceIr, writeEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { sourceUnitFromPipelineRecord } from '@sjshovan/dkb-providers-bundled/records.js';
 import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
@@ -408,7 +408,7 @@ export async function compileRetrievalFromEvidence(
       estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding.dimensions),
       `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
     );
-    const providerHost = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS, target: desiredProfile.target });
+    const providerHost = await DkbProviderHost.create({ root: contextRoot, distribution: DEFAULT_DKB_DISTRIBUTION, target: desiredProfile.target });
 
     try {
       const evidencePipeline = pipelineFromEvidenceIr(evidence);
@@ -856,7 +856,7 @@ async function writeCompilerBundles(
       throw new DkbError(`Selected index provider ${target.index} does not support package compilation`);
     }
     await indexProvider.compilePackage({
-      root: stageRoot,
+      artifactsRoot: resolveFrom(stageRoot, DKB_ARTIFACTS_DIR),
       dkb: primary.dkb,
       compiled: primary.compiled,
       compatibility: options.compatibility,
@@ -1363,7 +1363,7 @@ async function collectRegistryState(
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const providerHost = await DkbProviderHost.create({ root: contextRoot, bundled: BUNDLED_PROVIDER_PLUGINS, target: desiredProfile.target });
+  const providerHost = await DkbProviderHost.create({ root: contextRoot, distribution: DEFAULT_DKB_DISTRIBUTION, target: desiredProfile.target });
   let packageEntries: Awaited<ReturnType<typeof collectDkbState>>[];
 
   try {
@@ -1397,7 +1397,7 @@ async function collectRegistryState(
 }
 
 async function resolvedProviderProfile(root: string, target?: string): Promise<DkbResolvedRetrievalProfile> {
-  const host = await DkbProviderHost.create({ root, bundled: BUNDLED_PROVIDER_PLUGINS, ...(target ? { target } : {}) });
+  const host = await DkbProviderHost.create({ root, distribution: DEFAULT_DKB_DISTRIBUTION, ...(target ? { target } : {}) });
 
   try {
     return await resolveProviderRetrievalProfile(host);
@@ -1473,7 +1473,7 @@ async function collectDkbVerificationState(dkb: LoadedDkb, artifactRoot: string)
   }
 
   try {
-    const artifact = await loadFaissPackageArtifact(dkb);
+    const artifact = await loadFaissPackageArtifact(dkb, resolveFrom(dkb.root, DKB_ARTIFACTS_DIR));
 
     if (artifact.units.length > 0) {
       const sourceAnalysis = analyzeSourceUnits(artifact.units);

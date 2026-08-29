@@ -241,8 +241,8 @@ function fastEmbedContainerName(model: string): string {
 
 function providerContextPath(): string {
   const candidates = [
-    path.resolve(process.cwd(), 'providers/bundled/python/llamaindex'),
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../python/llamaindex'),
+    path.resolve(process.cwd(), 'providers/embedding-fastembed/python'),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../python'),
   ];
   return candidates.find((candidate) => existsSync(path.join(candidate, 'Dockerfile'))) ?? candidates[0]!;
 }

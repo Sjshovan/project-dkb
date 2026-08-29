@@ -1,0 +1,20 @@
+{
+  "name": "@sjshovan/dkb-embedding-fastembed",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./plugin.js": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" },
+    "./service.js": { "types": "./dist/service.d.ts", "import": "./dist/service.js" }
+  },
+  "files": ["dist/", "!dist/.tsbuildinfo", "python/embedder.py", "python/requirements.txt", "python/Dockerfile"],
+  "scripts": { "build": "tsc -b", "check": "tsc -b --pretty false" },
+  "dependencies": {
+    "@sjshovan/dkb-pipeline": "0.1.0",
+    "@sjshovan/dkb-protocol": "1.0.0"
+  },
+  "engines": { "node": ">=22.15.0" },
+  "private": true
+}

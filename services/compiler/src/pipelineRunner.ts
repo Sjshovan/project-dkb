@@ -7,7 +7,7 @@ import type {
   DkbChunkerProvider,
   DkbCompiledPipeline,
   DkbEmbeddingProvider,
-  DkbIngestionProvider,
+  DkbEvidenceProvider,
   DkbParserProvider,
   DkbPipelineRecord,
 } from '@sjshovan/dkb-pipeline/types.js';
@@ -29,11 +29,11 @@ export async function ingestDkbWithProviderHost(
   const target = host.config.target;
   let result: DkbCompiledPipeline;
 
-  if (target.ingestion) {
-    const ingestion = host.provider<DkbIngestionProvider>('ingestion');
-    const compiled = await ingestion.compile({
+  if (target.evidence) {
+    const evidenceProvider = host.provider<DkbEvidenceProvider>('evidence');
+    const compiled = await evidenceProvider.compile({
       dkb,
-      options: host.optionsFor(target.ingestion),
+      options: host.optionsFor(target.evidence),
       ...(options.signal ? { signal: options.signal } : {}),
     });
     result = {
@@ -85,7 +85,7 @@ export async function ingestDkbWithProviderHost(
     };
   }
 
-  if (target.ingestion) {
+  if (target.evidence) {
     result.documents = await host.mutate('document', result.documents, options.signal);
     result.chunks = await host.mutate('chunk', result.chunks, options.signal);
   }

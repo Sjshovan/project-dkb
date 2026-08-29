@@ -132,17 +132,17 @@ test('Runtime switches retained package builds atomically without contacting the
 
 async function writePipelinePlugins(root) {
   await writeJson(path.join(root, '.dkb', 'config.json'), {
-    format: 'dkb.config.v1',
+    format: 'dkb.config.v2',
     activeTarget: 'fast',
     targets: {
       fast: {
-        ingestion: '@test/core',
+        evidence: '@test/core',
         embedding: '@test/fast',
         index: '@test/core',
         retrieval: '@test/core',
       },
       tei: {
-        ingestion: '@test/core',
+        evidence: '@test/core',
         embedding: '@test/tei',
         index: '@test/core',
         retrieval: '@test/core',
@@ -156,7 +156,7 @@ export const id = '@test/core';
 export const version = '1.0.0';
 export function setup(context) {
   context.registerProvider({
-    kind: 'ingestion',
+    kind: 'evidence',
     async compile({ dkb }) {
       const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
       return {
@@ -176,19 +176,19 @@ export function setup(context) {
   });
   context.registerProvider({
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
-    async compilePackage({ root, compiled }) {
-      const target = path.join(root, '.dkb', 'artifacts', 'test-index.json');
+    async compilePackage({ artifactsRoot, compiled }) {
+      const target = path.join(artifactsRoot, 'test-index.json');
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records));
       return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
     },
-    async validatePackage({ dkb }) {
-      const records = JSON.parse(await fs.readFile(path.join(dkb.root, '.dkb', 'artifacts', 'test-index.json'), 'utf8'));
+    async validatePackage({ artifactsRoot }) {
+      const records = JSON.parse(await fs.readFile(path.join(artifactsRoot, 'test-index.json'), 'utf8'));
       return { documentCount: records.length };
     },
     async openRuntime() { return null; },
   });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1' });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `);
   await writePlugin(root, '@test', 'fast', embeddingPlugin('@test/fast', 'fast-space', 0.25));

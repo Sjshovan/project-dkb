@@ -9,17 +9,17 @@ import { promisify } from 'node:util';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import {
   ensureFastEmbedService,
   fastEmbedServiceStatus,
   stopFastEmbedService,
-} from '@sjshovan/dkb-providers-bundled/fastembed.js';
+} from '@sjshovan/dkb-embedding-fastembed/service.js';
 import {
   ensureTeiService,
   stopTeiService,
   teiServiceStatus,
-} from '@sjshovan/dkb-providers-bundled/tei.js';
+} from '@sjshovan/dkb-embedding-tei/tei.js';
 
 const executeFile = promisify(execFile);
 const sourceRoot = path.resolve(required(process.env.DKB_BENCHMARK_CORPUS_ROOT, 'DKB_BENCHMARK_CORPUS_ROOT'));
@@ -184,7 +184,7 @@ async function compileOne(target, evidence, contextRoot) {
 }
 
 async function benchmarkQueries(target, contextRoot) {
-  const host = await DkbProviderHost.create({ root: contextRoot, target, bundled: BUNDLED_PROVIDER_PLUGINS });
+  const host = await DkbProviderHost.create({ root: contextRoot, target, distribution: DEFAULT_DKB_DISTRIBUTION });
   try {
     const provider = host.provider('embedding');
     const options = host.optionsFor(host.config.target.embedding);

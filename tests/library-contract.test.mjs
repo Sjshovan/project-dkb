@@ -218,10 +218,10 @@ async function writeDkb(root, name, version) {
 async function writeTestPipeline(root) {
   const pluginRoot = path.join(root, '.dkb', 'plugins', '@test', 'pipeline');
   await writeJson(path.join(root, '.dkb', 'config.json'), {
-    format: 'dkb.config.v1',
+    format: 'dkb.config.v2',
     targets: {
       default: {
-        ingestion: '@test/pipeline',
+        evidence: '@test/pipeline',
         embedding: '@test/pipeline',
         index: '@test/pipeline',
         retrieval: '@test/pipeline',
@@ -236,7 +236,7 @@ export const id = '@test/pipeline';
 export const version = '1.0.0';
 export function setup(context) {
   context.registerProvider({
-    kind: 'ingestion',
+    kind: 'evidence',
     async compile({ dkb }) {
       const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
       return {
@@ -262,8 +262,8 @@ export function setup(context) {
   });
   context.registerProvider({
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
-    async compilePackage({ root, compiled }) {
-      const target = path.join(root, '.dkb', 'artifacts', 'test-index.json');
+    async compilePackage({ artifactsRoot, compiled }) {
+      const target = path.join(artifactsRoot, 'test-index.json');
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records));
       return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
@@ -271,7 +271,7 @@ export function setup(context) {
     async validatePackage() { return { documentCount: 1 }; },
     async openRuntime() { return null; },
   });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1' });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
 }

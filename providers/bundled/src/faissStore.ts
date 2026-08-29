@@ -10,18 +10,17 @@ import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { capabilitiesForSourceType, sourceAssetsFromChunks, type IndexedSourceAsset, type IndexedSourceUnit } from './sourceIndex.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { tokenize } from './scoring.js';
 import { sourceUnitFromPipelineRecord } from './records.js';
-import type { DkbCompiledPipeline } from '@sjshovan/dkb-pipeline/types.js';
-import { LLAMAINDEX_COMPILER_IMAGE } from './llamaindex.js';
+import type { DkbCompiledPipeline, DkbRuntimePackageBuild } from '@sjshovan/dkb-pipeline/types.js';
+import { LLAMAINDEX_COMPILER_IMAGE } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 
 const execFile = promisify(execFileCallback);
 
-export const FAISS_ARTIFACT_DIR = `${DKB_ARTIFACTS_DIR}/faiss`;
+export const FAISS_ARTIFACT_DIR = 'faiss';
 export const FAISS_CATALOG_PATH = `${FAISS_ARTIFACT_DIR}/chunks.sqlite`;
 export const FAISS_SEGMENT_PATH = `${FAISS_ARTIFACT_DIR}/chunks.faiss`;
 export const FAISS_MANIFEST_PATH = `${FAISS_ARTIFACT_DIR}/manifest.json`;
@@ -226,35 +225,33 @@ export async function validateFaissPackageArtifact(root: string): Promise<FaissP
   return manifest;
 }
 
-export async function loadFaissPackageArtifact(dkb: LoadedDkb): Promise<FaissPackageRuntimeArtifact> {
-  const manifest = await validateFaissPackageArtifact(dkb.root);
+export async function loadFaissPackageArtifact(dkb: LoadedDkb, artifactsRoot: string): Promise<FaissPackageRuntimeArtifact> {
+  const manifest = await validateFaissPackageArtifact(artifactsRoot);
 
   if (manifest.packageId !== dkb.manifest.id || manifest.packageVersion !== dkb.manifest.version) {
     throw new DkbError(`FAISS package manifest identity mismatch at ${dkb.root}`);
   }
 
-  const catalogPath = resolveFrom(dkb.root, manifest.files.catalog.path);
+  const catalogPath = resolveFrom(artifactsRoot, manifest.files.catalog.path);
   const { units, numericIdToUnitId } = readFaissCatalog(catalogPath);
 
   return {
     dkb,
     manifest,
     catalogPath,
-    segmentPath: resolveFrom(dkb.root, manifest.files.segment.path),
+    segmentPath: resolveFrom(artifactsRoot, manifest.files.segment.path),
     units,
     assets: sourceAssetsFromChunks(units),
     numericIdToUnitId,
   };
 }
 
-export async function buildFaissRuntimeSnapshot(root: string, registryId: string): Promise<FaissRuntimeSnapshot | null> {
-  const library = await loadLibrary(root);
-  const dkbs = uniqueLoadedDkbs([
-    ...library.collections.flatMap((collection) => collection.dkbs),
-    ...library.dkbs,
-  ]);
-  const packages = await Promise.all(dkbs.map((dkb) => loadFaissPackageArtifact(dkb).catch(() => null)));
-  const ready = packages.filter((item): item is FaissPackageRuntimeArtifact => Boolean(item));
+export async function buildFaissRuntimeSnapshot(
+  root: string,
+  registryId: string,
+  packages: readonly DkbRuntimePackageBuild[],
+): Promise<FaissRuntimeSnapshot | null> {
+  const ready = await Promise.all(packages.map(({ dkb, artifactsRoot }) => loadFaissPackageArtifact(dkb, artifactsRoot)));
 
   if (ready.length === 0) {
     return null;
@@ -351,8 +348,8 @@ export async function closeFaissSnapshot(snapshot?: FaissRuntimeSnapshot): Promi
   await snapshot?.helper.close();
 }
 
-export async function validateFaissPackageQueryability(dkb: LoadedDkb): Promise<void> {
-  const artifact = await loadFaissPackageArtifact(dkb);
+export async function validateFaissPackageQueryability(dkb: LoadedDkb, artifactsRoot: string): Promise<void> {
+  const artifact = await loadFaissPackageArtifact(dkb, artifactsRoot);
   const firstUnit = artifact.units[0];
 
   if (!firstUnit) {
@@ -366,12 +363,13 @@ export async function validateFaissPackageQueryability(dkb: LoadedDkb): Promise<
 export async function validateFaissRuntimeReady(input: {
   root: string;
   registryId: string;
+  packages: readonly DkbRuntimePackageBuild[];
   packageId?: string;
   packageVersion?: string;
 }): Promise<FaissPackageMutationResult> {
   const started = performanceNow();
   const loadStart = performanceNow();
-  const snapshot = await buildFaissRuntimeSnapshot(input.root, input.registryId);
+  const snapshot = await buildFaissRuntimeSnapshot(input.root, input.registryId, input.packages);
   const loadMs = performanceNow() - loadStart;
 
   try {

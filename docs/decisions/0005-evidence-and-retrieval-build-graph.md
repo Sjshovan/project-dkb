@@ -1,6 +1,6 @@
 # 0005 - Evidence And Retrieval Build Graph
 
-- **Status:** Accepted and implemented for the developer preview
+- **Status:** Build graph retained; active-artifact details superseded by 0006
 - **Date:** 2026-08-27
 - **Scope:** compilation identity, stored build layers, Runtime selection, Registry publication, and Collection portability
 

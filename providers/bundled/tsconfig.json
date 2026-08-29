@@ -8,7 +8,8 @@
   },
   "references": [
     { "path": "../../packages/protocol" },
-    { "path": "../../packages/pipeline" }
+    { "path": "../../packages/pipeline" },
+    { "path": "../evidence-docling-llamaindex" }
   ],
   "include": ["src/**/*.ts"]
 }

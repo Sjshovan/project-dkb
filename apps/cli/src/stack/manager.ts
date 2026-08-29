@@ -481,21 +481,21 @@ function contextFrom(root: string, composeFile: string, envFile: string, values:
 
 async function writePipelineConfig(targetPath: string, target: DkbStackTarget): Promise<void> {
   const config = target !== 'meilisearch'
-    ? { format: 'dkb.config.v1', activeTarget: target }
+    ? { format: 'dkb.config.v2', activeTarget: target }
     : {
-        format: 'dkb.config.v1',
+        format: 'dkb.config.v2',
         activeTarget: 'meilisearch',
         targets: {
           meilisearch: {
-            ingestion: '@dkb/llamaindex',
-            embedding: '@dkb/fastembed',
-            index: '@dkb/meilisearch',
-            retrieval: '@dkb/hybrid',
+            evidence: '@dkb/evidence-docling-llamaindex',
+            embedding: '@dkb/embedding-fastembed',
+            index: '@dkb/index-meilisearch',
+            retrieval: '@dkb/retrieval-hybrid',
             processors: [],
             options: {
-              '@dkb/llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
-              '@dkb/fastembed': { model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
-              '@dkb/meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 },
+              '@dkb/evidence-docling-llamaindex': { tokenizerModel: 'BAAI/bge-small-en-v1.5' },
+              '@dkb/embedding-fastembed': { model: 'BAAI/bge-small-en-v1.5', dimensions: 384 },
+              '@dkb/index-meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 },
             },
           },
         },

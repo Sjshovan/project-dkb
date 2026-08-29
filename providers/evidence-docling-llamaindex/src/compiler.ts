@@ -1409,8 +1409,8 @@ function environmentFlag(value: string | undefined): boolean {
 
 function compilerContextPath(): string {
   const candidates = [
-    path.resolve(process.cwd(), 'providers/bundled/python/llamaindex'),
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../python/llamaindex'),
+    path.resolve(process.cwd(), 'providers/evidence-docling-llamaindex/python'),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../python'),
   ];
 
   return candidates.find((candidate) => fileExistsSync(path.join(candidate, 'Dockerfile'))) ?? candidates[0]!;

@@ -47,9 +47,9 @@ test('Meilisearch stack target configures the same provider contract for compile
 
     assert.deepEqual(runtime, compiler);
     assert.equal(runtime.activeTarget, 'meilisearch');
-    assert.equal(runtime.targets.meilisearch.options['@dkb/llamaindex'].tokenizerModel, 'BAAI/bge-small-en-v1.5');
-    assert.equal(runtime.targets.meilisearch.index, '@dkb/meilisearch');
-    assert.equal(runtime.targets.meilisearch.options['@dkb/meilisearch'].keyEnv, 'MEILI_MASTER_KEY');
+    assert.equal(runtime.targets.meilisearch.options['@dkb/evidence-docling-llamaindex'].tokenizerModel, 'BAAI/bge-small-en-v1.5');
+    assert.equal(runtime.targets.meilisearch.index, '@dkb/index-meilisearch');
+    assert.equal(runtime.targets.meilisearch.options['@dkb/index-meilisearch'].keyEnv, 'MEILI_MASTER_KEY');
     assert.deepEqual(
       composeArguments(stack, ['down', '--remove-orphans']).slice(-6),
       ['--profile', 'tei', '--profile', 'meilisearch', 'down', '--remove-orphans'],

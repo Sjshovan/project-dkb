@@ -102,19 +102,19 @@ export async function semanticSearch(
       })
       .filter((reference): reference is DkbNavigationReference => Boolean(reference))
     : memoryLexicalSearch(scopedUnits, query, searchLimit);
-  const result = queryContext?.index
-    ? await queryContext.index.search(query, searchLimit)
+  const result = queryContext
+    ? await queryContext.retrieval.search({ query, limit: searchLimit, ...(scope ? { scope } : {}) })
     : await querySearchDocuments(
-      queryContext?.searchRegistryId ?? 'compose-index',
-      queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(scopedUnits),
+      'compose-index',
+      vectorDocumentsForSourceUnits(scopedUnits),
       query,
       searchLimit,
-      queryContext?.vectorArtifactRoot,
+      undefined,
     );
   const vectorResults = result.hits
-    .filter((hit) => scopedIds.has(hit.id))
+    .filter((hit) => scopedIds.has('evidenceId' in hit ? hit.evidenceId : hit.id))
     .map((hit) => {
-      const unit = unitsById.get(hit.id);
+      const unit = unitsById.get('evidenceId' in hit ? hit.evidenceId : hit.id);
 
       return unit ? navigationReference(unit, hit.score) : null;
     })

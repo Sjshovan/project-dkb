@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
 import { once } from 'node:events';
-import { embedWithFastEmbed } from '@sjshovan/dkb-providers-bundled/bundled.js';
-import { embedWithTei, teiCompatibility, TEI_DEFAULT_MODEL_REVISION } from '@sjshovan/dkb-providers-bundled/tei.js';
+import { embedWithFastEmbed } from '@sjshovan/dkb-embedding-fastembed/plugin.js';
+import { embedWithTei, teiCompatibility, TEI_DEFAULT_MODEL_REVISION } from '@sjshovan/dkb-embedding-tei/tei.js';
 
 test('FastEmbed provider bounds document batches and preserves result order', async (t) => {
   const requests = [];

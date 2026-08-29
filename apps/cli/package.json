@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@sjshovan/dkb-compiler": "0.1.0",
+    "@sjshovan/dkb-distribution-default": "0.1.0",
     "@sjshovan/dkb-library": "0.1.0",
     "@sjshovan/dkb-pipeline": "0.1.0",
     "@sjshovan/dkb-protocol": "1.0.0",

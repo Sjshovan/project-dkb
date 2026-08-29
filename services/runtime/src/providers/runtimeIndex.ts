@@ -2,10 +2,11 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbIndexMutationResult, DkbIndexProvider } from '@sjshovan/dkb-pipeline/types.js';
-import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { DKB_RETRIEVAL_BUILD_ARTIFACTS, resolveLibraryRuntimeBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import path from 'node:path';
 
 export interface PreparedRuntimeIndexPackage {
   providerId: string;
@@ -24,7 +25,7 @@ export async function prepareRuntimeIndexPackage(input: {
 }): Promise<PreparedRuntimeIndexPackage> {
   const host = await DkbProviderHost.create({
     root: input.libraryRoot,
-    bundled: BUNDLED_PROVIDER_PLUGINS,
+    distribution: DEFAULT_DKB_DISTRIBUTION,
     ...(input.target ? { target: input.target } : {}),
   });
 
@@ -61,6 +62,7 @@ export async function prepareRuntimeIndexPackage(input: {
     const options = host.optionsFor(selected);
     const validation = await provider.validatePackage({
       dkb: input.dkb,
+      artifactsRoot: path.join(buildGraph.retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS),
       compatibility: profile.compatibility,
       options,
       ...(input.signal ? { signal: input.signal } : {}),
@@ -70,6 +72,7 @@ export async function prepareRuntimeIndexPackage(input: {
           libraryRoot: input.libraryRoot,
           libraryId: input.libraryId,
           dkb: input.dkb,
+          artifactsRoot: path.join(buildGraph.retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS),
           compatibility: profile.compatibility,
           options,
           ...(input.signal ? { signal: input.signal } : {}),
@@ -112,7 +115,7 @@ export async function verifyRuntimeIndex(input: {
 }): Promise<DkbIndexMutationResult | null> {
   const host = await DkbProviderHost.create({
     root: input.libraryRoot,
-    bundled: BUNDLED_PROVIDER_PLUGINS,
+    distribution: DEFAULT_DKB_DISTRIBUTION,
     ...(input.target ? { target: input.target } : {}),
   });
 
@@ -123,9 +126,11 @@ export async function verifyRuntimeIndex(input: {
       return null;
     }
     const profile = await resolveProviderRetrievalProfile(host);
+    const packages = await resolveLibraryRuntimeBuilds(input.libraryRoot);
     return provider.verifyRuntime({
       libraryRoot: input.libraryRoot,
       libraryId: input.libraryId,
+      packages,
       packageId: input.packageId,
       packageVersion: input.packageVersion,
       compatibility: profile.compatibility,
@@ -144,7 +149,7 @@ export async function cleanupRuntimeIndexPackage(input: {
   packageVersion: string;
   signal?: AbortSignal;
 }): Promise<DkbIndexMutationResult | null> {
-  const host = await DkbProviderHost.create({ root: input.libraryRoot, bundled: BUNDLED_PROVIDER_PLUGINS });
+  const host = await DkbProviderHost.create({ root: input.libraryRoot, distribution: DEFAULT_DKB_DISTRIBUTION });
 
   try {
     const provider = host.provider<DkbIndexProvider>('index');

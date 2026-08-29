@@ -159,19 +159,19 @@ export async function retrieveKnowledge(
     : querySourceChunks(sourceUnits, sourceIndexQuery, candidateLimit);
   const lexicalQueryMs = performance.now() - lexicalStart;
   const vectorStart = performance.now();
-  const vectorResult = queryContext?.index
-    ? await queryContext.index.search(query, candidateLimit)
+  const vectorResult = queryContext
+    ? await queryContext.retrieval.search({ query, limit: candidateLimit })
     : await querySearchDocuments(
-      queryContext?.searchRegistryId ?? 'compose-index',
-      queryContext?.vectorDocuments ?? vectorDocumentsForSourceUnits(sourceUnits),
+      'compose-index',
+      vectorDocumentsForSourceUnits(sourceUnits),
       query,
       candidateLimit,
-      queryContext?.vectorArtifactRoot,
+      undefined,
       request.phrases ?? [],
     );
   const vectorQueryMs = performance.now() - vectorStart;
   const vectorMatches = vectorResult.hits
-    .map((hit) => sourceUnitsById.get(hit.id))
+    .map((hit) => sourceUnitsById.get('evidenceId' in hit ? hit.evidenceId : hit.id))
     .filter((unit): unit is IndexedSourceUnit => Boolean(unit))
     .map((unit) => querySourceChunks([unit], sourceIndexQuery, 1)[0] ?? emptyMatch(unit));
   const candidateChunkMatches = fuseChunkMatches(lexicalMatches, vectorMatches, candidateLimit);

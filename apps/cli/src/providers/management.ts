@@ -5,7 +5,6 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   DKB_CONFIG_FORMAT,
   DKB_CONFIG_PATH,
-  BUNDLED_DEFAULT_CONFIG,
   defaultDkbGlobalRoot,
   isPluginId,
   readDkbContextConfig,
@@ -15,7 +14,7 @@ import {
   type DkbContextConfig,
   type DkbPipelineTargetConfig,
 } from '@sjshovan/dkb-pipeline/config.js';
-import { BUNDLED_PROVIDER_PLUGINS } from '@sjshovan/dkb-providers-bundled/bundled.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost, pluginPath } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbPluginModule } from '@sjshovan/dkb-pipeline/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
@@ -39,9 +38,9 @@ export async function listPipelineTargets(input: { root: string; globalRoot?: st
   activeTarget: string;
   targets: Array<{ name: string; active: boolean; providers: string[] }>;
 }> {
-  const resolved = await resolveContextConfig(input.root, { ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const resolved = await resolveContextConfig(input.root, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
   const names = [...new Set([
-    ...Object.keys(BUNDLED_DEFAULT_CONFIG.targets ?? {}),
+    ...Object.keys(DEFAULT_DKB_DISTRIBUTION.defaults.targets ?? {}),
     ...Object.keys(resolved.global.targets ?? {}),
     ...Object.keys(resolved.local.targets ?? {}),
   ])];
@@ -49,7 +48,7 @@ export async function listPipelineTargets(input: { root: string; globalRoot?: st
     root: resolved.root,
     activeTarget: resolved.activeTarget,
     targets: names.map((name) => {
-      const target = resolveContextConfigDocuments(resolved.root, resolved.globalRoot, resolved.global, resolved.local, name).target;
+      const target = resolveContextConfigDocuments(resolved.root, resolved.globalRoot, DEFAULT_DKB_DISTRIBUTION.defaults, resolved.global, resolved.local, name).target;
       return { name, active: name === resolved.activeTarget, providers: selectedPluginIds(target) };
     }).sort((left, right) => left.name.localeCompare(right.name)),
   };
@@ -64,8 +63,8 @@ export async function activatePipelineTarget(input: { root: string; name: string
     readDkbContextConfig(targetPath),
   ]);
   const candidate: DkbContextConfig = { ...local, format: DKB_CONFIG_FORMAT, activeTarget: input.name };
-  const resolved = resolveContextConfigDocuments(root, globalRoot, global, candidate, input.name);
-  const host = await DkbProviderHost.createFromConfig(resolved, BUNDLED_PROVIDER_PLUGINS);
+  const resolved = resolveContextConfigDocuments(root, globalRoot, DEFAULT_DKB_DISTRIBUTION.defaults, global, candidate, input.name);
+  const host = await DkbProviderHost.createFromConfig(resolved, DEFAULT_DKB_DISTRIBUTION);
 
   try {
     const selected = await resolveProviderRetrievalProfile(host);
@@ -147,7 +146,7 @@ export async function removePlugin(input: {
   }
   const scope = input.scope ?? 'local';
   const destination = pluginDirectory(input.root, input.id, scope, input.globalRoot);
-  const selected = await resolveContextConfig(input.root, { ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const selected = await resolveContextConfig(input.root, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
   const selectedIds = selectedPluginIds(selected.target);
 
   if (selectedIds.includes(input.id)) {
@@ -166,12 +165,12 @@ export async function listPlugins(input: {
   root: string;
   globalRoot?: string;
 }): Promise<DkbPluginListEntry[]> {
-  const resolved = await resolveContextConfig(input.root, { ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const resolved = await resolveContextConfig(input.root, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
   const selected = new Set(selectedPluginIds(resolved.target));
   const entries = [
     ...(await scanPlugins(path.join(resolved.globalRoot, 'plugins'), 'global', selected)),
     ...(await scanPlugins(path.join(resolved.root, '.dkb/plugins'), 'local', selected)),
-    ...BUNDLED_PROVIDER_PLUGINS.map((plugin) => ({
+    ...DEFAULT_DKB_DISTRIBUTION.plugins.map((plugin) => ({
       id: plugin.id,
       version: plugin.version,
       scope: 'bundled' as const,
@@ -213,11 +212,11 @@ export async function setPipelineTarget(input: {
       },
     },
   };
-  const resolved = resolveContextConfigDocuments(root, globalRoot, global, candidate, input.activate ? input.name : undefined);
-  const host = await DkbProviderHost.createFromConfig(resolved, BUNDLED_PROVIDER_PLUGINS);
+  const resolved = resolveContextConfigDocuments(root, globalRoot, DEFAULT_DKB_DISTRIBUTION.defaults, global, candidate, input.activate ? input.name : undefined);
+  const host = await DkbProviderHost.createFromConfig(resolved, DEFAULT_DKB_DISTRIBUTION);
 
   try {
-    const unhealthy = (await host.health()).filter((result) => !result.ok && result.kind !== 'embedding' && result.kind !== 'ingestion');
+    const unhealthy = (await host.health()).filter((result) => !result.ok && result.kind !== 'embedding' && result.kind !== 'evidence');
 
     if (unhealthy.length > 0) {
       throw new DkbError(`Pipeline validation failed: ${unhealthy.map((result) => `${result.id}: ${result.detail ?? 'unhealthy'}`).join('; ')}`);
@@ -253,7 +252,7 @@ export async function verifyPipeline(input: { root: string; globalRoot?: string;
     root: input.root,
     ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}),
     ...(input.target ? { target: input.target } : {}),
-    bundled: BUNDLED_PROVIDER_PLUGINS,
+    distribution: DEFAULT_DKB_DISTRIBUTION,
   });
 
   try {
@@ -339,7 +338,7 @@ async function pathExists(target: string): Promise<boolean> {
 }
 
 function selectedPluginIds(target: DkbPipelineTargetConfig): string[] {
-  return [target.ingestion, target.parser, target.chunker, target.embedding, target.index, target.retrieval, ...(target.processors ?? [])]
+  return [target.evidence, target.parser, target.chunker, target.embedding, target.index, target.retrieval, ...(target.processors ?? [])]
     .filter((id): id is string => Boolean(id));
 }
 

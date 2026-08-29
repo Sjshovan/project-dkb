@@ -7,8 +7,8 @@ import type { DkbProviderHost, DkbProviderHostDescription } from './host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
 import { resolveBuildProfiles } from './buildProfiles.js';
 
-const DEFAULT_INDEX_PROVIDER_ID = '@dkb/faiss';
-const DEFAULT_RETRIEVAL_PROVIDER_ID = '@dkb/hybrid';
+const DEFAULT_INDEX_PROVIDER_ID = '@dkb/index-faiss';
+const DEFAULT_RETRIEVAL_PROVIDER_ID = '@dkb/retrieval-hybrid';
 
 export interface DkbCompilerProfileResult {
   compiler: {
@@ -122,7 +122,7 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
     providerBuildDigest: description.buildDigest,
     providers: description.providers,
     processors: description.processors,
-    compiler: target.ingestion ?? (target.parser === target.chunker ? target.parser! : `${target.parser}+${target.chunker}`),
+    compiler: target.evidence ?? (target.parser === target.chunker ? target.parser! : `${target.parser}+${target.chunker}`),
     indexMode: index.mode,
     embedding: { adapter: target.embedding, model, dimensions },
     compatibility: builds.retrieval.compatibility,
@@ -160,11 +160,11 @@ export function retrievalProfileLockForCompilerResults(
   if (compilerImages.length !== 1 || compilerIds.length !== 1) {
     throw new DkbError(`Compiler implementation mismatch across packages: ${compilerIds.join(', ')} / ${compilerImages.join(', ')}`);
   }
-  const ingestion = desired.providers.find((provider) => provider.kind === 'ingestion');
+  const evidence = desired.providers.find((provider) => provider.kind === 'evidence');
   const parser = desired.providers.find((provider) => provider.kind === 'parser');
   const chunker = desired.providers.find((provider) => provider.kind === 'chunker');
-  const parserId = ingestion?.id ?? parser?.id ?? desired.compiler;
-  const chunkerId = ingestion?.id ?? chunker?.id ?? desired.compiler;
+  const parserId = evidence?.id ?? parser?.id ?? desired.compiler;
+  const chunkerId = evidence?.id ?? chunker?.id ?? desired.compiler;
 
   const profile: DkbRetrievalProfileLock['profile'] = {
     compiler: {

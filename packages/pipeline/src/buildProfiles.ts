@@ -13,7 +13,7 @@ type ProcessorDescription = DkbProviderHostDescription['processors'][number];
 export interface DkbResolvedEvidenceProfile {
   format: typeof DKB_EVIDENCE_PROFILE_FORMAT;
   schema: typeof DKB_EVIDENCE_IR_FORMAT;
-  ingestion: {
+  evidence: {
     mode: 'fused' | 'separate';
     providers: ProviderDescription[];
   };
@@ -74,8 +74,8 @@ export interface DkbResolvedBuildProfiles {
 export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbResolvedBuildProfiles> {
   const description = host.describe();
   const target = host.config.target;
-  const evidenceProviderKinds = target.ingestion
-    ? new Set(['ingestion'])
+  const evidenceProviderKinds = target.evidence
+    ? new Set(['evidence'])
     : new Set(['parser', 'chunker']);
   const evidenceProviders = description.providers
     .filter((provider) => evidenceProviderKinds.has(provider.kind))
@@ -84,8 +84,8 @@ export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbRe
   const evidenceProfile = {
     format: DKB_EVIDENCE_PROFILE_FORMAT as typeof DKB_EVIDENCE_PROFILE_FORMAT,
     schema: DKB_EVIDENCE_IR_FORMAT as typeof DKB_EVIDENCE_IR_FORMAT,
-    ingestion: {
-      mode: target.ingestion ? 'fused' as const : 'separate' as const,
+    evidence: {
+      mode: target.evidence ? 'fused' as const : 'separate' as const,
       providers: evidenceProviders,
     },
     processors,

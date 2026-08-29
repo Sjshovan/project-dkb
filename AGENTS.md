@@ -16,7 +16,7 @@ Before changing behavior:
    - `packages/library/`
    - `packages/pipeline/`
    - `packages/registry-client/`
-   - `providers/bundled/`
+   - the relevant `providers/*/` workspace
    - `services/compiler/`
    - `services/runtime/`
 4. Check `docs/decisions/` for accepted directions that are not implemented yet.
@@ -37,7 +37,8 @@ py -m graphify update apps/cli/src
 | `packages/pipeline/` | Provider contracts, configuration, plugin discovery, compatibility, and context-local lifecycle |
 | `packages/library/` | Library roots, exact lock resolution, applied-state ledger, Collections, and transactional snapshots |
 | `packages/registry-client/` | Laravel Registry transport, archive safety, publication, download, and endpoint verification |
-| `providers/bundled/` | LlamaIndex/Docling, FastEmbed, TEI, FAISS, Meilisearch, and hybrid retrieval implementations |
+| `packages/distribution-default/` | Default target recipes, bundled plugin catalog, and stack service metadata |
+| `providers/*/` | One concrete Evidence, embedding, index, or retrieval provider per workspace |
 | `services/compiler/` | Shared compilation runner and Registry-facing compiler HTTP service |
 | `services/runtime/` | Installed state, retrieval, evidence, Runtime HTTP, tracing, and read-only remote MCP |
 | `apps/cli/` | Command registration, presentation, host inventory, context selection, and orchestration |
@@ -80,8 +81,8 @@ public-release gate. `docs/decisions/0002-library-and-collections-hard-cutover.m
 records the implemented Library and Collection model.
 `docs/decisions/0003-host-inventory-and-context-selection.md` records the
 implemented host-local inventory, selections, and resolution precedence.
-`docs/decisions/0005-evidence-and-retrieval-build-graph.md` records the active
-multi-build architecture. Verify
+`docs/decisions/0006-final-provider-architecture-and-storage-cutover.md` records
+the active provider and immutable-build hard cut. Verify
 actual behavior in source and tests rather than treating these records as
 runtime evidence.
 

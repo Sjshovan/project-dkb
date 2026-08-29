@@ -1194,7 +1194,7 @@ test('runtime import removes its staged copy after a successful activation', asy
     await fs.writeFile(path.join(packageRoot, 'notes.md'), 'Staged source.\n');
     await fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index'), { recursive: true });
     await fs.writeFile(path.join(packageRoot, '.dkb', 'config.json'), JSON.stringify({
-      format: 'dkb.config.v1',
+      format: 'dkb.config.v2',
       targets: { default: { index: '@test/index' } },
     }));
     await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index', 'plugin.mjs'), `
@@ -1207,8 +1207,8 @@ export function setup(context) {
     kind: 'index',
     mode: 'packaged',
     format: 'test.index.v1',
-    async compilePackage({ root, compiled }) {
-      const target = path.join(root, '.dkb', 'artifacts', 'test-index.json');
+    async compilePackage({ artifactsRoot, compiled }) {
+      const target = path.join(artifactsRoot, 'test-index.json');
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records));
       return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };

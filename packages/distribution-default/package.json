@@ -1,0 +1,33 @@
+{
+  "name": "@sjshovan/dkb-distribution-default",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@sjshovan/dkb-embedding-fastembed": "0.1.0",
+    "@sjshovan/dkb-embedding-tei": "0.1.0",
+    "@sjshovan/dkb-evidence-docling-llamaindex": "0.1.0",
+    "@sjshovan/dkb-pipeline": "0.1.0",
+    "@sjshovan/dkb-providers-bundled": "0.1.0",
+    "@sjshovan/dkb-retrieval-hybrid": "0.1.0"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "private": true
+}

@@ -8,7 +8,7 @@ import {
   LLAMAINDEX_COMPILER_IMAGE,
   LLAMAINDEX_COMPILER_SERVICE_VERSION,
   LLAMAINDEX_DOCUMENT_BATCH_SIZE,
-} from '@sjshovan/dkb-providers-bundled/llamaindex.js';
+} from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -17,14 +17,14 @@ test('local, one-shot, Python, and Compose compiler defaults stay aligned', asyn
   assert.equal(LLAMAINDEX_COMPILER_SERVICE_VERSION, '3');
   assert.equal(LLAMAINDEX_DOCUMENT_BATCH_SIZE, 32);
 
-  const python = await readFile(path.join(root, 'providers/bundled/python/llamaindex/compile.py'), 'utf8');
+  const python = await readFile(path.join(root, 'providers/evidence-docling-llamaindex/python/compile.py'), 'utf8');
   assert.match(python, /DKB_LLAMA_DOCUMENT_BATCH_SIZE", "32"/);
   assert.doesNotMatch(python, /FASTEMBED|EMBED_BATCH|INFERENCE_BATCH/);
 
-  const service = await readFile(path.join(root, 'providers/bundled/python/llamaindex/service.py'), 'utf8');
+  const service = await readFile(path.join(root, 'providers/evidence-docling-llamaindex/python/service.py'), 'utf8');
   assert.match(service, /SERVICE_VERSION = "3"/);
 
-  const dockerfile = await readFile(path.join(root, 'providers/bundled/python/llamaindex/Dockerfile'), 'utf8');
+  const dockerfile = await readFile(path.join(root, 'providers/evidence-docling-llamaindex/python/Dockerfile'), 'utf8');
   assert.match(dockerfile, /org\.dkb\.compiler\.service\.version="3"/);
 
   const compose = YAML.parse(await readFile(path.join(root, 'deploy/compose.yaml'), 'utf8'));

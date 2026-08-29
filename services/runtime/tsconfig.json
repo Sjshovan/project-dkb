@@ -10,6 +10,7 @@
     { "path": "../../packages/protocol" },
     { "path": "../../packages/pipeline" },
     { "path": "../../packages/library" },
+    { "path": "../../packages/distribution-default" },
     { "path": "../../packages/registry-client" },
     { "path": "../../providers/bundled" }
   ],

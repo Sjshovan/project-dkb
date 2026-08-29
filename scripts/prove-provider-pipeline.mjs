@@ -290,18 +290,18 @@ async function writePipelineConfig(root) {
   const managed = target === 'meilisearch';
   await fs.mkdir(path.join(root, '.dkb'), { recursive: true });
   await fs.writeFile(path.join(root, '.dkb/config.json'), `${JSON.stringify({
-    format: 'dkb.config.v1',
+    format: 'dkb.config.v2',
     activeTarget: target,
     targets: {
       [target]: {
-        ingestion: '@dkb/llamaindex',
-        embedding: '@dkb/fastembed',
-        index: managed ? '@dkb/meilisearch' : '@dkb/faiss',
-        retrieval: '@dkb/hybrid',
+        evidence: '@dkb/evidence-docling-llamaindex',
+        embedding: '@dkb/embedding-fastembed',
+        index: managed ? '@dkb/index-meilisearch' : '@dkb/index-faiss',
+        retrieval: '@dkb/retrieval-hybrid',
         processors: [],
         options: {
-          '@dkb/fastembed': { model: embeddingModel, dimensions: embeddingDimensions },
-          ...(managed ? { '@dkb/meilisearch': { urlEnv: 'MEILI_URL', apiKeyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 } } : {}),
+          '@dkb/embedding-fastembed': { model: embeddingModel, dimensions: embeddingDimensions },
+          ...(managed ? { '@dkb/index-meilisearch': { urlEnv: 'MEILI_URL', apiKeyEnv: 'MEILI_MASTER_KEY', semanticRatio: 0.7 } } : {}),
         },
       },
     },
