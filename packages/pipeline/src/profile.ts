@@ -11,7 +11,7 @@ import {
   type DkbRetrievalProfileLock,
 } from '@sjshovan/dkb-protocol/retrievalProfile.js';
 import type { DkbProviderHost, DkbProviderHostDescription } from './host.js';
-import type { DkbCompiledPipeline, DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalPipeline, DkbRetrievalProvider } from './types.js';
 import { resolveBuildProfiles } from './buildProfiles.js';
 
 export {
@@ -66,9 +66,9 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
   };
 }
 
-export function retrievalProfileLockForCompiledPipelines(
+export function retrievalProfileLockForRetrievalPipelines(
   desired: DkbResolvedRetrievalProfile,
-  results: readonly DkbCompiledPipeline[],
+  results: readonly DkbRetrievalPipeline[],
   options: {
     compilerImageDigest?: string | null;
     modelRevision?: string | null;
@@ -81,9 +81,20 @@ export function retrievalProfileLockForCompiledPipelines(
   }
 
   for (const result of results) {
-    const dimensions = result.records.find((record) => (record.embedding?.length ?? 0) > 0)?.embedding?.length ?? 0;
+    if (result.vectors.length !== result.records.length) {
+      throw new DkbError(`Retrieval pipeline vector count mismatch: expected ${result.records.length}, got ${result.vectors.length}`);
+    }
+    const recordIds = new Set(result.records.map((record) => record.id));
+    const vectorIds = new Set(result.vectors.map((vector) => vector.evidenceId));
+    if (recordIds.size !== result.records.length || vectorIds.size !== result.vectors.length
+      || [...recordIds].some((id) => !vectorIds.has(id))) {
+      throw new DkbError('Retrieval pipeline vectors must map one-to-one to exact Evidence record IDs');
+    }
+    const dimensions = result.vectors[0]?.values.length ?? 0;
 
-    if (dimensions !== desired.embedding.dimensions) {
+    if (dimensions !== desired.embedding.dimensions
+      || result.vectors.some((vector) => vector.values.length !== dimensions
+        || vector.values.some((value) => typeof value !== 'number' || !Number.isFinite(value)))) {
       throw new DkbError(`Embedding dimension mismatch for ${desired.embedding.model}: expected ${desired.embedding.dimensions}, got ${dimensions}`);
     }
   }
@@ -164,25 +175,4 @@ export async function readRetrievalProfileLock(root: string): Promise<DkbRetriev
   const parsed = JSON.parse(await fs.readFile(target, 'utf8')) as unknown;
 
   return validateRetrievalProfileLock(parsed, target);
-}
-
-function stringValue(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new DkbError(`${label} must be a non-empty string`);
-  }
-  return value;
-}
-
-function positiveIntegerValue(value: unknown, label: string): number {
-  if (!Number.isInteger(value) || Number(value) <= 0) {
-    throw new DkbError(`${label} must be a positive integer`);
-  }
-  return Number(value);
-}
-
-function booleanValue(value: unknown, label: string): boolean {
-  if (typeof value !== 'boolean') {
-    throw new DkbError(`${label} must be a boolean`);
-  }
-  return value;
 }

@@ -29,8 +29,12 @@ source -> Evidence provider/processors -> Evidence IR + Evidence catalog
 ```
 
 All text mutation finishes before Evidence IR. Evidence Builds contain no
-retrieval vectors. Retrieval Builds bind exact vectors and generic artifact
-manifests to one Evidence digest.
+retrieval vectors. The compiler represents this boundary as a vector-free
+`DkbEvidencePipeline`; the selected embedding provider produces a separate
+`DkbRetrievalPipeline.vectors` collection keyed one-to-one by Evidence ID.
+Index providers receive the unchanged Evidence records and that separately
+validated vector collection, then bind their generic artifact manifests to one
+Evidence digest. An Evidence provider cannot precompute or override vectors.
 
 ## Query flow
 

@@ -5,11 +5,12 @@ import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { pipelineRecordMetadata, refreshMutatedRecordHashes } from './records.js';
 import type {
   DkbChunkerProvider,
-  DkbCompiledPipeline,
   DkbEmbeddingProvider,
+  DkbEvidencePipeline,
   DkbEvidenceProvider,
   DkbParserProvider,
   DkbPipelineRecord,
+  DkbRetrievalPipeline,
 } from '@sjshovan/dkb-pipeline/types.js';
 import { embeddingCacheEnabled, openEmbeddingCache } from './embeddingCache.js';
 
@@ -17,7 +18,7 @@ export async function compileDkbWithProviderHost(
   host: DkbProviderHost,
   dkb: LoadedDkb,
   options: { signal?: AbortSignal } = {},
-): Promise<DkbCompiledPipeline> {
+): Promise<DkbRetrievalPipeline> {
   return embedDkbEvidenceWithProviderHost(host, await ingestDkbWithProviderHost(host, dkb, options), options);
 }
 
@@ -25,9 +26,9 @@ export async function ingestDkbWithProviderHost(
   host: DkbProviderHost,
   dkb: LoadedDkb,
   options: { signal?: AbortSignal } = {},
-): Promise<DkbCompiledPipeline> {
+): Promise<DkbEvidencePipeline> {
   const target = host.config.target;
-  let result: DkbCompiledPipeline;
+  let result: DkbEvidencePipeline;
 
   if (target.evidence) {
     const evidenceProvider = host.provider<DkbEvidenceProvider>('evidence');
@@ -93,7 +94,7 @@ export async function ingestDkbWithProviderHost(
     beforeRecordMutation,
     await host.mutate('record', beforeRecordMutation, options.signal),
   );
-  result.records = result.records.map((record) => ({ ...record, embedding: undefined }));
+  result.records = result.records.map(({ id, chunkId, text, metadata }) => ({ id, chunkId, text, metadata }));
   result.receipts.push(...host.describe().processors.map((processor, order) => ({
     providerId: processor.id,
     providerVersion: processor.version,
@@ -110,9 +111,9 @@ export async function ingestDkbWithProviderHost(
 
 export async function embedDkbEvidenceWithProviderHost(
   host: DkbProviderHost,
-  evidence: DkbCompiledPipeline,
+  evidence: DkbEvidencePipeline,
   options: { signal?: AbortSignal } = {},
-): Promise<DkbCompiledPipeline> {
+): Promise<DkbRetrievalPipeline> {
   const target = host.config.target;
   const embedding = host.provider<DkbEmbeddingProvider>('embedding');
   const embeddingOptions = host.optionsFor(target.embedding);
@@ -184,11 +185,11 @@ export async function embedDkbEvidenceWithProviderHost(
   if (vectors.length !== evidence.records.length) {
     throw new DkbError(`Embedding provider ${target.embedding} returned ${vectors.length} vectors for ${evidence.records.length} Evidence records`);
   }
-  const result: DkbCompiledPipeline = {
+  const result: DkbRetrievalPipeline = {
     ...evidence,
-    records: evidence.records.map((record, index) => ({
-    ...record,
-    embedding: vectors[index],
+    vectors: evidence.records.map((record, index) => ({
+      evidenceId: record.id,
+      values: vectors[index]!,
     })),
     receipts: [
       ...evidence.receipts,

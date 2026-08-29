@@ -9,7 +9,7 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import type { DkbCompiledPipeline, DkbRuntimePackageBuild } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbRetrievalPipeline, DkbRuntimePackageBuild } from '@sjshovan/dkb-pipeline/types.js';
 import { FaissHelperClient, runFaissHelper } from './faissHelperClient.js';
 
 export { faissProviderHealth } from './faissHelperClient.js';
@@ -102,16 +102,17 @@ interface FaissCompiledRecord {
 export async function writeFaissPackageArtifacts(
   root: string,
   dkb: LoadedDkb,
-  compiled: DkbCompiledPipeline,
+  compiled: DkbRetrievalPipeline,
   compatibility: Record<string, unknown>,
 ): Promise<FaissPackageManifest | null> {
   if (compiled.records.length === 0) {
     return null;
   }
+  const vectorsByEvidenceId = retrievalVectorsByEvidenceId(compiled, dkb.manifest.id, dkb.manifest.version);
   const profile = embeddingProfileFor(compiled, compatibility);
   const records = compiled.records.map((record) => ({
     evidenceId: record.id,
-    embedding: [...(record.embedding ?? [])],
+    embedding: [...vectorsByEvidenceId.get(record.id)!],
   })).sort((left, right) => left.evidenceId.localeCompare(right.evidenceId));
   const numericIdToRecord = new Map<string, FaissCompiledRecord>();
 
@@ -375,8 +376,8 @@ export async function validateFaissRuntimeReady(input: {
   }
 }
 
-function embeddingProfileFor(compiled: DkbCompiledPipeline, compatibility: Record<string, unknown>): FaissEmbeddingProfile {
-  const dimensions = compiled.records.find((record) => (record.embedding?.length ?? 0) > 0)?.embedding?.length ?? 0;
+function embeddingProfileFor(compiled: DkbRetrievalPipeline, compatibility: Record<string, unknown>): FaissEmbeddingProfile {
+  const dimensions = compiled.vectors[0]?.values.length ?? 0;
 
   if (dimensions <= 0) {
     throw new DkbError('FAISS package artifacts require compiler vectors');
@@ -402,11 +403,33 @@ function embeddingProfileFor(compiled: DkbCompiledPipeline, compatibility: Recor
   };
 }
 
+function retrievalVectorsByEvidenceId(
+  compiled: DkbRetrievalPipeline,
+  packageId: string,
+  version: string,
+): Map<string, number[]> {
+  if (compiled.vectors.length !== compiled.records.length) {
+    throw new DkbError(`FAISS vector count mismatch in ${packageId}@${version}: expected ${compiled.records.length}, got ${compiled.vectors.length}`);
+  }
+  const recordIds = new Set(compiled.records.map((record) => record.id));
+  const vectors = new Map<string, number[]>();
+  for (const vector of compiled.vectors) {
+    if (!recordIds.has(vector.evidenceId) || vectors.has(vector.evidenceId)) {
+      throw new DkbError(`FAISS vectors must map one-to-one to Evidence records in ${packageId}@${version}`);
+    }
+    vectors.set(vector.evidenceId, vector.values);
+  }
+  if ([...recordIds].some((id) => !vectors.has(id))) {
+    throw new DkbError(`FAISS vectors are missing Evidence records in ${packageId}@${version}`);
+  }
+  return vectors;
+}
+
 function assertCompatibleRecordEmbedding(record: FaissCompiledRecord, profile: FaissEmbeddingProfile, packageId: string, version: string): void {
   if (!Array.isArray(record.embedding)
     || record.embedding.length !== profile.dimensions
     || !record.embedding.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-    throw new DkbError(`Compiler record ${record.evidenceId} in ${packageId}@${version} has an incompatible embedding vector`);
+    throw new DkbError(`Retrieval vector ${record.evidenceId} in ${packageId}@${version} is incompatible with the selected embedding space`);
   }
 }
 

@@ -80,6 +80,12 @@ for (const genericRoot of genericCoreRoots) {
   }
 }
 
+const pipelineTypes = await fs.readFile(path.join(root, 'packages/pipeline/src/types.ts'), 'utf8');
+const evidenceRecordContract = pipelineTypes.match(/export interface DkbPipelineRecord\s*\{([\s\S]*?)\n\}/u)?.[1] ?? '';
+if (/\b(?:embedding|vector|vectors)\s*\??\s*:/u.test(evidenceRecordContract)) {
+  errors.push('packages/pipeline/src/types.ts allows retrieval vectors on the provider-neutral Evidence record contract');
+}
+
 const approvedDistributionImports = new Set([
   'apps/cli/src/cli/index.ts',
   'services/compiler/src/compile.ts',

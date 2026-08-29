@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   assertMatchingRetrievalProfiles,
-  retrievalProfileLockForCompiledPipelines,
+  retrievalProfileLockForRetrievalPipelines,
   validateRetrievalProfileLock,
 } from '@sjshovan/dkb-pipeline/profile.js';
 import { buildEvidenceIr, validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
@@ -31,6 +31,7 @@ function compilerResult(model, dimensions) {
     documents: [],
     chunks: [],
     receipts: [],
+    vectors: [{ evidenceId: 'chunk-1', values: Array(dimensions).fill(0.125) }],
     records: [{
       id: 'chunk-1',
       chunkId: 'chunk-1',
@@ -53,24 +54,23 @@ function compilerResult(model, dimensions) {
         dkb_path: 'facts.md',
         internal_transient_value: 'must-not-cross-evidence-boundary',
       },
-      embedding: Array(dimensions).fill(0.125),
     }],
   };
 }
 
 test('profile locks reject model, dimension, and digest mismatches', () => {
   const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
-  const smallLock = retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 384)], {
+  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 384)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
   const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
-  const baseLock = retrievalProfileLockForCompiledPipelines(base, [compilerResult(base.embedding.model, 768)], {
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.model, 768)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
 
   assert.throws(() => assertMatchingRetrievalProfiles(smallLock, baseLock, 'proof-safe'), /profile mismatch/i);
   assert.throws(
-    () => retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 768)]),
+    () => retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 768)]),
     /dimension mismatch/i,
   );
   assert.throws(
@@ -141,7 +141,7 @@ test('build locks bind retrieval artifacts to one exact Evidence Build', () => {
 test('stored Retrieval Builds switch atomically without recompiling and keep Evidence IR in its own layer', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-multi-build-switch-'));
   t.after(() => fs.rm(root, { force: true, recursive: true }));
-  const artifacts = path.join(root, '.dkb', 'artifacts');
+  const artifacts = path.join(root, 'staged-retrieval-artifacts');
   await fs.mkdir(artifacts, { recursive: true });
 
   const packageIdentity = {
@@ -154,8 +154,8 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
   const evidence = buildEvidenceIr([compilerResult(small.embedding.model, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 384)]);
-  const baseLock = retrievalProfileLockForCompiledPipelines(base, [compilerResult(base.embedding.model, 768)]);
+  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 384)]);
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.model, 768)]);
 
   await fs.writeFile(path.join(artifacts, 'evidence.ir.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   await fs.writeFile(path.join(artifacts, 'selected.index'), 'small\n', 'utf8');
@@ -233,11 +233,11 @@ test('downloaded package layers retain existing compatible builds and reject dig
   const evidence = buildEvidenceIr([compilerResult(small.embedding.model, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 384)], { generatedAt });
-  const baseLock = retrievalProfileLockForCompiledPipelines(base, [compilerResult(base.embedding.model, 768)], { generatedAt });
+  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 384)], { generatedAt });
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.model, 768)], { generatedAt });
 
   for (const root of [source, destination]) {
-    const artifacts = path.join(root, '.dkb', 'artifacts');
+    const artifacts = path.join(root, 'staged-retrieval-artifacts');
     await fs.mkdir(artifacts, { recursive: true });
     await fs.writeFile(path.join(artifacts, 'evidence.ir.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
     await fs.writeFile(path.join(artifacts, 'selected.index'), 'small\n', 'utf8');
@@ -252,7 +252,7 @@ test('downloaded package layers retain existing compatible builds and reject dig
     });
   }
 
-  const sourceArtifacts = path.join(source, '.dkb', 'artifacts');
+  const sourceArtifacts = path.join(source, 'staged-retrieval-artifacts');
   await fs.writeFile(path.join(sourceArtifacts, 'selected.index'), 'base\n', 'utf8');
   const baseGraph = await writePackageBuildGraph({
     root: source,
@@ -420,8 +420,9 @@ export function setup(context) {
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
     async compilePackage({ artifactsRoot, compiled }) {
       const target = path.join(artifactsRoot, 'test-index.json');
+      const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values]));
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, JSON.stringify(compiled.records));
+      await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) }))));
       return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
     },
     async validatePackage() { return { documentCount: 1 }; },

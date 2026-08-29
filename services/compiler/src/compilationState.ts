@@ -8,7 +8,7 @@ import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import type { DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import {
   resolveProviderRetrievalProfile,
-  retrievalProfileLockForCompiledPipelines,
+  retrievalProfileLockForRetrievalPipelines,
   type DkbResolvedRetrievalProfile,
 } from '@sjshovan/dkb-pipeline/profile.js';
 import {
@@ -17,7 +17,7 @@ import {
   type DkbEvidenceIr,
 } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbProviderHost, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbCompiledPipeline, IndexedSourceUnit } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbEvidencePipeline, IndexedSourceUnit } from '@sjshovan/dkb-pipeline/types.js';
 import { evidenceSourceRecordFromPipelineRecord, indexedSourceUnitFromPipelineRecord } from './records.js';
 import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
 import { summarizeEvidenceCorpus } from './buildStatistics.js';
@@ -27,7 +27,7 @@ import { quickStoreSnapshotsForDkb, sourceStatisticsForStores, storesForDkb } fr
 import type { CompileComposeProfile } from './compilerContracts.js';
 import type { CompilerArtifactState, RegistryCompileState } from './compilerState.js';
 
-export function pipelineFromEvidenceIr(evidence: DkbEvidenceIr): DkbCompiledPipeline {
+export function pipelineFromEvidenceIr(evidence: DkbEvidenceIr): DkbEvidencePipeline {
   const chunkByEvidence = new Map<string, DkbEvidenceIr['chunks'][number]>();
   for (const chunk of evidence.chunks) {
     if (chunkByEvidence.has(chunk.evidenceId)) {
@@ -122,7 +122,7 @@ export async function collectRegistryState(
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const compilerArtifacts = packageEntries.flatMap((entry) => entry.compilerArtifact ? [entry.compilerArtifact] : []);
   const retrievalProfileLock = compilerArtifacts.length > 0
-    ? retrievalProfileLockForCompiledPipelines(desiredProfile, compilerArtifacts.map((artifact) => artifact.compiled))
+    ? retrievalProfileLockForRetrievalPipelines(desiredProfile, compilerArtifacts.map((artifact) => artifact.compiled))
     : undefined;
 
   return {
@@ -270,9 +270,9 @@ async function buildSourceUnitsForDkb(
 
 function annotateEvidenceIds(
   dkb: LoadedDkb,
-  compiled: DkbCompiledPipeline,
+  compiled: DkbEvidencePipeline,
   evidenceProfileDigest: string,
-): DkbCompiledPipeline {
+): DkbEvidencePipeline {
   return {
     ...compiled,
     records: compiled.records.map((record) => {

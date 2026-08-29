@@ -34,10 +34,13 @@ executable plugins or operator configuration.
 
 Pipeline owns provider contracts, lifecycle, validation, and plugin hosting.
 Evidence providers produce embedding-free records. Embedding providers own
-matching document and query transformations. Index providers accept exact
-Evidence IDs and vectors and return candidate IDs and scores. Retrieval
-providers perform lexical/vector ranking and fusion. Library owns the Evidence
-catalog and resolves canonical evidence text, provenance, and locators.
+matching document and query transformations. Their document vectors are kept
+in a separate Evidence-ID-keyed collection rather than on Evidence records.
+Index providers accept the exact Evidence records plus that collection, reject
+missing, duplicate, or unknown vector identities, and return candidate IDs and
+scores. Retrieval providers perform lexical/vector ranking and fusion. Library
+owns the Evidence catalog and resolves canonical evidence text, provenance, and
+locators.
 
 Immutable Evidence and Retrieval Builds are the only durable derived state.
 Runtime locks point directly to exact build directories. DKB does not maintain

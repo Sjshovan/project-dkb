@@ -10,11 +10,11 @@ import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.j
 import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type {
-  DkbCompiledPipeline,
   DkbIndexMutationResult,
   DkbIndexRuntime,
   DkbPipelineRecord,
   DkbProviderBuildReceipt,
+  DkbRetrievalPipeline,
   DkbRuntimePackageBuild,
 } from '@sjshovan/dkb-pipeline/types.js';
 import {
@@ -97,7 +97,7 @@ interface MeilisearchDocument {
 export async function writeMeilisearchPackageArtifacts(input: {
   artifactsRoot: string;
   dkb: LoadedDkb;
-  compiled: DkbCompiledPipeline;
+  compiled: DkbRetrievalPipeline;
   compatibility: Record<string, unknown>;
   providerVersion: string;
 }): Promise<DkbProviderBuildReceipt | null> {
@@ -443,10 +443,25 @@ export function meilisearchIndexPrefix(libraryRoot: string, libraryId: string, p
   return `dkb_${safePart(libraryId).slice(0, 20)}_${namespace}_${release}`;
 }
 
-function compiledRecords(dkb: LoadedDkb, compiled: DkbCompiledPipeline): MeilisearchImportRecord[] {
+function compiledRecords(dkb: LoadedDkb, compiled: DkbRetrievalPipeline): MeilisearchImportRecord[] {
+  if (compiled.vectors.length !== compiled.records.length) {
+    throw new DkbError(`Meilisearch vector count mismatch in ${dkb.manifest.id}@${dkb.manifest.version}: expected ${compiled.records.length}, got ${compiled.vectors.length}`);
+  }
+  const recordIds = new Set(compiled.records.map((record) => record.id));
+  const vectorsByEvidenceId = new Map<string, number[]>();
+  for (const vector of compiled.vectors) {
+    if (!recordIds.has(vector.evidenceId) || vectorsByEvidenceId.has(vector.evidenceId)) {
+      throw new DkbError(`Meilisearch vectors must map one-to-one to Evidence records in ${dkb.manifest.id}@${dkb.manifest.version}`);
+    }
+    vectorsByEvidenceId.set(vector.evidenceId, vector.values);
+  }
+  if ([...recordIds].some((id) => !vectorsByEvidenceId.has(id))) {
+    throw new DkbError(`Meilisearch vectors are missing Evidence records in ${dkb.manifest.id}@${dkb.manifest.version}`);
+  }
+
   return compiled.records.map((record) => ({
     unit: unitFromRecord(dkb, record),
-    embedding: [...(record.embedding ?? [])],
+    embedding: [...vectorsByEvidenceId.get(record.id)!],
   })).sort(compareImportRecords);
 }
 

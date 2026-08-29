@@ -1,7 +1,7 @@
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import type { DkbRetrievalProfileLock, DkbResolvedRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import type { DkbCompiledPipeline } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbRetrievalPipeline } from '@sjshovan/dkb-pipeline/types.js';
 import type { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbLockManifest } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbCorpusStatistics } from './buildStatistics.js';
@@ -22,7 +22,7 @@ export interface AtomicCompileArtifactTimings {
 export interface CompilerArtifactState {
   dkb: LoadedDkb;
   dkbRoot: string;
-  compiled: DkbCompiledPipeline;
+  compiled: DkbRetrievalPipeline;
   evidence: DkbEvidenceIr;
   corpus: DkbCorpusStatistics;
   diskCapacity: DkbDiskCapacityCheck;

@@ -305,7 +305,8 @@ test('separate parser, chunker, embedder, and middleware providers share one com
   assert.equal(compiled.documents[0].text, 'parsed-document');
   assert.equal(compiled.chunks[0].text, 'parsed-document-chunked-chunk');
   assert.equal(compiled.records[0].text, 'parsed-document-chunked-chunk-record');
-  assert.deepEqual(compiled.records[0].embedding, [0.5, 0.5]);
+  assert.equal('embedding' in compiled.records[0], false);
+  assert.deepEqual(compiled.vectors, [{ evidenceId: compiled.records[0].id, values: [0.5, 0.5] }]);
   assert.deepEqual(
     compiled.receipts
       .filter((receipt) => receipt.build.kind === 'processor')
@@ -354,8 +355,9 @@ export function setup(context) {
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
     async compilePackage({ artifactsRoot, compiled }) {
       const target = path.join(artifactsRoot, 'test-index.json');
+      const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values]));
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, JSON.stringify(compiled.records));
+      await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) }))));
       return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
     },
     async validatePackage() { return { documentCount: 1 }; },
@@ -483,10 +485,10 @@ export function setup(context) {
     kind: 'evidence',
     async compile({ dkb }) {
       const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
-      return { records: [{ id: 'cache', chunkId: 'cache', text, metadata: { assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem', locator: { path: 'knowledge.md' }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', hash: 'sha256:cache', updatedAt: '2026-08-28T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length, sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:cache-source' } } }], receipt: { providerId: id, providerVersion: version, build: {} } };
+      return { records: [{ id: 'cache', chunkId: 'cache', text, embedding: [999], metadata: { assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem', locator: { path: 'knowledge.md' }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', hash: 'sha256:cache', updatedAt: '2026-08-28T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length, sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:cache-source' } } }], receipt: { providerId: id, providerVersion: version, build: {} } };
     },
   });
-  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', async compilePackage({ artifactsRoot, compiled }) { const target = path.join(artifactsRoot, 'cache-index.json'); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records)); return { providerId: id, providerVersion: version, build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async openRuntime() { return null; } });
+  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', async compilePackage({ artifactsRoot, compiled }) { const target = path.join(artifactsRoot, 'cache-index.json'); const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values])); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) })))); return { providerId: id, providerVersion: version, build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async openRuntime() { return null; } });
   context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
@@ -510,6 +512,9 @@ export function setup(context) {
   await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
   await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
   assert.equal(await fs.readFile(counterPath, 'utf8'), '1');
+  const firstGraph = await validatePackageBuildGraph(root);
+  const firstIndex = JSON.parse(await fs.readFile(path.join(firstGraph.retrievalPath, 'artifacts', 'cache-index.json'), 'utf8'));
+  assert.deepEqual(firstIndex[0].embedding, [0.25]);
 
   await compileComposeProject(root, { force: true, mode: 'package', target: 'second' });
   assert.equal(await fs.readFile(counterPath, 'utf8'), '2');

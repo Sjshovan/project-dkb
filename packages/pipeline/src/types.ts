@@ -32,15 +32,23 @@ export interface DkbPipelineRecord {
   id: string;
   chunkId: string;
   text: string;
-  embedding?: number[];
   metadata: Record<string, unknown>;
 }
 
-export interface DkbCompiledPipeline {
+export interface DkbEvidencePipeline {
   documents: DkbPipelineDocument[];
   chunks: DkbPipelineChunk[];
   records: DkbPipelineRecord[];
   receipts: DkbProviderBuildReceipt[];
+}
+
+export interface DkbEvidenceVector {
+  evidenceId: string;
+  values: number[];
+}
+
+export interface DkbRetrievalPipeline extends DkbEvidencePipeline {
+  vectors: DkbEvidenceVector[];
 }
 
 export interface DkbProviderBuildReceipt {
@@ -148,7 +156,7 @@ export interface DkbIndexProvider {
   compilePackage?(input: {
     artifactsRoot: string;
     dkb: LoadedDkb;
-    compiled: DkbCompiledPipeline;
+    compiled: DkbRetrievalPipeline;
     compatibility: Record<string, unknown>;
     options: Readonly<Record<string, unknown>>;
     signal?: AbortSignal;

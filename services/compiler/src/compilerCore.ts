@@ -15,7 +15,7 @@ import {
 } from '@sjshovan/dkb-library/builds.js';
 import { DKB_EVIDENCE_CATALOG_FILENAME } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { DKB_ARTIFACT_MANIFEST_FILENAME } from '@sjshovan/dkb-protocol/artifacts.js';
-import { retrievalProfileLockForCompiledPipelines } from '@sjshovan/dkb-pipeline/profile.js';
+import { retrievalProfileLockForRetrievalPipelines } from '@sjshovan/dkb-pipeline/profile.js';
 import { validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { indexedSourceUnitFromPipelineRecord } from './records.js';
@@ -255,7 +255,7 @@ export async function compileRetrievalFromEvidence(
         corpus,
         diskCapacity: retrievalCapacity,
       };
-      const retrievalProfileLock = retrievalProfileLockForCompiledPipelines(desiredProfile, [compiled]);
+      const retrievalProfileLock = retrievalProfileLockForRetrievalPipelines(desiredProfile, [compiled]);
       const state: RegistryCompileState = {
         sourceUnits: units,
         packages: {
