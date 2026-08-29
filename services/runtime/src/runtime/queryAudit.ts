@@ -32,7 +32,7 @@ export interface DkbQueryAuditEvent {
 
 interface QueryAuditRow {
   id: number;
-  event_id: string | null;
+  event_id: string;
   recorded_at: string;
   channel: DkbQueryAuditChannel;
   request_id: string;
@@ -366,38 +366,71 @@ async function openQueryAuditDatabase(root: string): Promise<DatabaseSync> {
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(path.toNamespacedPath(databasePath));
 
-  database.exec(`
-    create table if not exists query_audit (
-      id integer primary key autoincrement,
-      event_id text unique,
-      recorded_at text not null,
-      channel text not null check (channel in ('runtime-http', 'mcp')),
-      request_id text not null,
-      query text not null,
-      intent text not null,
-      result_count integer not null,
-      status text not null,
-      packages_json text not null,
-      citations_json text not null,
-      timing_json text not null
-    );
-    create index if not exists query_audit_recorded_at_idx on query_audit(recorded_at);
-    create index if not exists query_audit_channel_idx on query_audit(channel, id desc);
-  `);
-  ensureQueryAuditEventIdColumn(database);
+  try {
+    database.exec(`
+      create table if not exists query_audit (
+        id integer primary key autoincrement,
+        event_id text not null unique,
+        recorded_at text not null,
+        channel text not null check (channel in ('runtime-http', 'mcp')),
+        request_id text not null,
+        query text not null,
+        intent text not null,
+        result_count integer not null,
+        status text not null,
+        packages_json text not null,
+        citations_json text not null,
+        timing_json text not null
+      )
+    `);
+    assertCurrentQueryAuditSchema(database, databasePath);
+    database.exec(`
+      create unique index if not exists query_audit_event_id_idx on query_audit(event_id);
+      create index if not exists query_audit_recorded_at_idx on query_audit(recorded_at);
+      create index if not exists query_audit_channel_idx on query_audit(channel, id desc);
+    `);
 
-  return database;
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
-function ensureQueryAuditEventIdColumn(database: DatabaseSync): void {
-  const columns = database.prepare('pragma table_info(query_audit)').all() as Array<{ name: string }>;
+function assertCurrentQueryAuditSchema(database: DatabaseSync, databasePath: string): void {
+  const columns = database.prepare('pragma table_info(query_audit)').all() as Array<{
+    name: string;
+    notnull: number;
+    pk: number;
+    type: string;
+  }>;
+  const expected = [
+    ['id', 'INTEGER', 0, 1],
+    ['event_id', 'TEXT', 1, 0],
+    ['recorded_at', 'TEXT', 1, 0],
+    ['channel', 'TEXT', 1, 0],
+    ['request_id', 'TEXT', 1, 0],
+    ['query', 'TEXT', 1, 0],
+    ['intent', 'TEXT', 1, 0],
+    ['result_count', 'INTEGER', 1, 0],
+    ['status', 'TEXT', 1, 0],
+    ['packages_json', 'TEXT', 1, 0],
+    ['citations_json', 'TEXT', 1, 0],
+    ['timing_json', 'TEXT', 1, 0],
+  ] as const;
+  const current = columns.map((column) => [
+    column.name,
+    column.type.toUpperCase(),
+    column.notnull,
+    column.pk,
+  ] as const);
 
-  if (!columns.some((column) => column.name === 'event_id')) {
-    database.exec('alter table query_audit add column event_id text');
-    database.exec("update query_audit set event_id = 'legacy:' || id where event_id is null");
+  if (JSON.stringify(current) !== JSON.stringify(expected)) {
+    throw new Error(
+      `Query audit database format is obsolete at ${databasePath}. `
+      + 'Stop the Runtime, remove only this DKB-owned derived database, and restart the Runtime to recreate it.',
+    );
   }
-
-  database.exec('create unique index if not exists query_audit_event_id_idx on query_audit(event_id)');
 }
 
 function queryAuditEventFor(options: {
@@ -439,7 +472,7 @@ function queryAuditEventFor(options: {
 function queryAuditEventFromRow(row: QueryAuditRow): DkbQueryAuditEvent {
   return {
     id: row.id,
-    eventId: row.event_id ?? `legacy:${row.id}`,
+    eventId: row.event_id,
     recordedAt: row.recorded_at,
     channel: row.channel,
     requestId: row.request_id,

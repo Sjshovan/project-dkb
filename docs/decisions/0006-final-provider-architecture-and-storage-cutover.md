@@ -58,6 +58,13 @@ v4, generic artifact manifest v2, Runtime lock v2, and plugin API v2. Source,
 manifests, logical locks, credentials, and host inventory are preserved;
 derived state is rebuilt. No legacy readers or compatibility aliases ship.
 
+That rule applies to compiled builds, Runtime caches, and derived operational
+databases such as the query-audit store. A mismatched derived schema fails with
+an exact rebuild path instead of being migrated in place. It does not prohibit
+an explicit one-time relocation of an authoritative Docker Registry data volume:
+that upgrade path copies Registry data into the current named volume and leaves
+the source volume unchanged until verification succeeds.
+
 ## Consequences
 
 - Named Docling, FastEmbed, TEI, FAISS, and Meilisearch code exists only inside

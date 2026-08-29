@@ -238,12 +238,12 @@ async function openTraceDatabase(root: string): Promise<DatabaseSync> {
 
   const database = new DatabaseSync(path.toNamespacedPath(databasePath));
 
-  migrateTraceDatabase(database);
+  initializeTraceDatabase(database);
 
   return database;
 }
 
-function migrateTraceDatabase(database: DatabaseSync): void {
+function initializeTraceDatabase(database: DatabaseSync): void {
   database.exec(`
     create table if not exists trace_runs (
       id text primary key,
