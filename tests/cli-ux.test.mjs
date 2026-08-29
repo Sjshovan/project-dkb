@@ -452,7 +452,7 @@ test('install detects an identical package before requesting its archive', async
     assert.notEqual(typeof address, 'string');
     const baseUrl = `http://127.0.0.1:${address.port}`;
     await fs.mkdir(path.dirname(libraryRegistryConfigPath(tempRoot)), { recursive: true });
-    await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ registry: { url: baseUrl } }, null, 2)}\n`);
+    await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ format: 'dkb.config.v2', registry: { url: baseUrl } }, null, 2)}\n`);
     const result = await runCli([
       '--no-progress',
       'install',
@@ -567,7 +567,7 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     assert.notEqual(typeof address, 'string');
     const registryUrl = `http://127.0.0.1:${address.port}`;
     await fs.mkdir(path.dirname(libraryRegistryConfigPath(tempRoot)), { recursive: true });
-    await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ registry: { url: registryUrl } }, null, 2)}\n`);
+    await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ format: 'dkb.config.v2', registry: { url: registryUrl } }, null, 2)}\n`);
 
     const search = await runCli(['--json', 'search', 'knowledge', '--library', tempRoot], { DKB_REGISTRY_URL: '' });
     assert.equal(search.code, 0, search.stderr);

@@ -7,10 +7,7 @@ import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbRuntimeLock } from '@sjshovan/dkb-protocol/builds.js';
-import {
-  maybeReadRetrievalProfileLock,
-  type DkbRetrievalProfileLock,
-} from '@sjshovan/dkb-pipeline/profile.js';
+import type { DkbRetrievalProfileLock } from '@sjshovan/dkb-protocol/retrievalProfile.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import {
   ensureRuntimeState,
@@ -77,8 +74,8 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
       };
     }
   }));
-  const retrievalProfile = await maybeReadRetrievalProfileLock(paths.stateRoot);
   const runtimeLock = await maybeReadRuntimeLock(paths.stateRoot);
+  const retrievalProfile = runtimeLock ? await activeRetrievalProfile(dkbs, runtimeLock) : null;
 
   return {
     ok: true,
@@ -91,6 +88,19 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     retrievalProfile,
     runtimeLock,
   };
+}
+
+async function activeRetrievalProfile(dkbs: LoadedDkb[], runtime: DkbRuntimeLock): Promise<DkbRetrievalProfileLock> {
+  const dkb = dkbs.find((candidate) => Boolean(runtime.packages[candidate.manifest.id]));
+  if (!dkb) {
+    throw new Error(`Runtime lock ${runtime.retrievalProfileDigest} does not reference an installed DKB`);
+  }
+  const entry = runtime.packages[dkb.manifest.id]!;
+  const graph = await validatePackageBuildGraph(dkb.root, {
+    ...runtime,
+    packages: { [dkb.manifest.id]: entry },
+  });
+  return graph.profile;
 }
 
 export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntimePackageListing> {

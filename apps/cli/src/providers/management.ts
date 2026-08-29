@@ -16,7 +16,7 @@ import {
 } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost, pluginPath, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbPluginModule } from '@sjshovan/dkb-pipeline/types.js';
-import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
+import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 
@@ -224,15 +224,15 @@ export async function setPipelineTarget(input: {
       throw new DkbError(`Pipeline validation failed: ${unhealthy.map((result) => `${result.id}: ${result.detail ?? 'unhealthy'}`).join('; ')}`);
     }
     if (input.activate) {
-      const installedProfile = await maybeReadRetrievalProfileLock(root);
+      const installedRuntime = await maybeReadRuntimeLock(root);
 
-      if (installedProfile) {
+      if (installedRuntime) {
         const selectedProfile = await resolveProviderRetrievalProfile(host);
         const selectedCompatibilityDigest = stableHash(selectedProfile.compatibility);
 
-        if (selectedCompatibilityDigest !== installedProfile.compatibilityDigest) {
+        if (selectedCompatibilityDigest !== installedRuntime.compatibilityDigest) {
           throw new DkbError(
-            `Cannot activate pipeline target "${input.name}": installed packages require compatibility ${installedProfile.compatibilityDigest}, but the target provides ${selectedCompatibilityDigest}. Save it with --no-activate, rebuild or remove incompatible packages, then activate it.`,
+            `Cannot activate pipeline target "${input.name}": installed packages require compatibility ${installedRuntime.compatibilityDigest}, but the target provides ${selectedCompatibilityDigest}. Save it with --no-activate, rebuild or remove incompatible packages, then activate it.`,
           );
         }
       }

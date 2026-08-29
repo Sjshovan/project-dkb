@@ -159,35 +159,11 @@ export function retrievalProfileLockForCompiledPipelines(
   };
 }
 
-export async function writeRetrievalProfileLock(root: string, lock: DkbRetrievalProfileLock): Promise<void> {
-  validateRetrievalProfileLock(lock, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
-  const target = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
-  const temp = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
-
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(temp, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
-  await fs.rm(target, { force: true });
-  await fs.rename(temp, target);
-}
-
 export async function readRetrievalProfileLock(root: string): Promise<DkbRetrievalProfileLock> {
   const target = resolveFrom(root, DKB_RETRIEVAL_PROFILE_LOCK_PATH);
   const parsed = JSON.parse(await fs.readFile(target, 'utf8')) as unknown;
 
   return validateRetrievalProfileLock(parsed, target);
-}
-
-export async function maybeReadRetrievalProfileLock(root: string): Promise<DkbRetrievalProfileLock | null> {
-  try {
-    return await readRetrievalProfileLock(root);
-  } catch (error) {
-    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code) : '';
-
-    if (code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
 }
 
 function stringValue(value: unknown, label: string): string {

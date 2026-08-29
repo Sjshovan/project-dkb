@@ -4,6 +4,12 @@ import path from 'node:path';
 import { hostInventoryPath, selectedHostRegistry } from '../host/inventory.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
+import {
+  DKB_CONFIG_FORMAT,
+  readDkbContextConfig,
+  writeDkbContextConfig,
+  type DkbContextConfig,
+} from '@sjshovan/dkb-pipeline/config.js';
 
 export { DEFAULT_REGISTRY_URL, normalizeRegistryUrl, verifyRegistryEndpoint } from '@sjshovan/dkb-registry-client/config.js';
 export type { RegistryVerification, RegistryVerificationCheck } from '@sjshovan/dkb-registry-client/config.js';
@@ -17,12 +23,6 @@ export interface ConfiguredRegistry {
   source: RegistryUrlSource;
   configPath: string;
   root?: string;
-}
-
-interface DkbCliConfig {
-  registry?: {
-    url?: string;
-  };
 }
 
 interface RegistryConfigurationOptions {
@@ -102,16 +102,16 @@ export async function writeConfiguredRegistryUrl(url: string, options: {
   const configPath = projectRoot ? libraryRegistryConfigPath(projectRoot) : cliConfigPath();
   const normalized = normalizeRegistryUrl(url);
   const config = await readCliConfig(configPath);
-  const updated: DkbCliConfig = {
+  const updated: DkbContextConfig = {
     ...config,
+    format: DKB_CONFIG_FORMAT,
     registry: {
       ...(config.registry ?? {}),
       url: normalized,
     },
   };
 
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+  await writeDkbContextConfig(configPath, updated);
   if (projectRoot) {
     await writeLibraryManifestRegistryUrl(projectRoot, normalized);
   }
@@ -119,23 +119,8 @@ export async function writeConfiguredRegistryUrl(url: string, options: {
   return configuredResult(normalized, projectRoot ? 'project' : 'user', configPath, projectRoot);
 }
 
-async function readCliConfig(configPath: string): Promise<DkbCliConfig> {
-  try {
-    const raw = await fs.readFile(configPath, 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-
-    return isObject(parsed) ? parsed as DkbCliConfig : {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {};
-    }
-
-    if (error instanceof SyntaxError) {
-      throw new DkbError(`Invalid DKB CLI config JSON: ${configPath}`);
-    }
-
-    throw error;
-  }
+async function readCliConfig(configPath: string): Promise<DkbContextConfig> {
+  return readDkbContextConfig(configPath);
 }
 
 async function libraryManifestRegistryUrl(root: string): Promise<string | null> {

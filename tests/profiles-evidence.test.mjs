@@ -279,7 +279,7 @@ test('downloaded package layers retain existing compatible builds and reject dig
   );
 });
 
-test('generated retrieval profile locks do not invalidate package source hashes', async (t) => {
+test('immutable Retrieval Build profiles are validated and retired root profiles are never Runtime input', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-profile-source-hash-'));
   t.after(() => fs.rm(root, { force: true, recursive: true }));
 
@@ -306,7 +306,14 @@ test('generated retrieval profile locks do not invalidate package source hashes'
   await assert.rejects(validatePackageBuildGraph(root), /artifact tree mismatch/i);
   await fs.writeFile(copiedManifest, originalCopiedManifest);
   await validatePackageBuildGraph(root);
-  await fs.writeFile(path.join(root, 'dkb-profile.lock.json'), '{"generated":"derived"}\n', 'utf8');
+  const profilePath = path.join(graph.retrievalPath, 'dkb-profile.lock.json');
+  const originalProfile = await fs.readFile(profilePath);
+  const changedProfile = JSON.parse(originalProfile.toString('utf8'));
+  changedProfile.compatibilityDigest = `sha256:${'f'.repeat(64)}`;
+  await fs.writeFile(profilePath, `${JSON.stringify(changedProfile, null, 2)}\n`, 'utf8');
+  await assert.rejects(validatePackageBuildGraph(root), /profile|compatibility/i);
+  await fs.writeFile(profilePath, originalProfile);
+  await fs.writeFile(path.join(root, 'dkb-profile.lock.json'), '{"retired":"not-runtime-input"}\n', 'utf8');
 
   const verification = await verifyComposeProject(root);
   assert.equal(verification.ok, true, JSON.stringify(verification.checks));

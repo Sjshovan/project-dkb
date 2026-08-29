@@ -120,6 +120,21 @@ test('context configuration merges bundled, global, and local targets determinis
   });
 });
 
+test('context configuration rejects pre-v2 documents instead of applying a legacy reader', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-config-version-'));
+  const contextRoot = path.join(root, 'library');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await writeJson(path.join(contextRoot, '.dkb/config.json'), { activeTarget: 'default' });
+
+  await assert.rejects(
+    resolveContextConfig(contextRoot, {
+      defaults: DEFAULT_DKB_DISTRIBUTION.defaults,
+      globalRoot: path.join(root, 'global'),
+    }),
+    /format must be dkb\.config\.v2/u,
+  );
+});
+
 test('provider configuration rejects inline secrets and accepts environment references', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-secrets-'));
   const contextRoot = path.join(root, 'library');
@@ -602,27 +617,15 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     protocol: 'dkb.evidence.v1',
   };
   const retrievalProfileDigest = stableHash({ evidenceProfileDigest, embedding: '@dkb/embedding-fastembed', index: '@dkb/index-faiss' });
-  const profile = {
-    compiler: { adapter: '@dkb/evidence-docling-llamaindex', id: 'test', image: 'test', imageDigest: null },
-    embedding: { adapter: '@dkb/embedding-fastembed', model: compatibility.embeddingSpace, modelRevision: null, modelDigest: null, dimensions: 384, metric: 'cosine', normalized: true, queryMode: 'query', documentMode: 'passage' },
-    extraction: { richParser: 'test', richChunker: 'test', fallbackParser: 'test', fallbackChunker: 'test' },
-    evidence: { profileDigest: evidenceProfileDigest },
-    target: 'default',
-    configDigest: 'sha256:test',
-    providerBuildDigest: 'sha256:test',
-    providers: [],
-    processors: [],
-    index: { provider: '@dkb/index-faiss', mode: 'packaged', format: compatibility.indexFormat },
-    retrieval: { provider: '@dkb/retrieval-hybrid', protocol: compatibility.protocol, profileDigest: retrievalProfileDigest },
-  };
   const compatibilityDigest = stableHash(compatibility);
-  await writeJson(path.join(library, 'dkb-profile.lock.json'), {
-    format: 'dkb.retrieval-profile.v2',
-    profile,
-    buildDigest: stableHash(profile),
-    compatibility,
+  await writeJson(path.join(library, '.dkb', 'runtime.lock.json'), {
+    format: 'dkb.runtime-lock.v2',
+    target: 'default',
+    evidenceProfileDigest,
+    retrievalProfileDigest,
     compatibilityDigest,
-    profileDigest: retrievalProfileDigest,
+    packages: {},
+    generation: 1,
     generatedAt: new Date().toISOString(),
   });
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { mergeStoredPackageBuilds, listPackageBuilds, activateStoredPackageBuild, maybeReadRuntimeLock, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import { mergeStoredPackageBuilds, listPackageBuilds, activateStoredPackageBuild, maybeReadRuntimeLock, readRetrievalBuildProfile, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { DKB_RUNTIME_LOCK_FORMAT, validateRuntimeLock, type DkbRuntimeLock, type DkbRuntimeLockEntry } from '@sjshovan/dkb-protocol/builds.js';
@@ -11,7 +11,7 @@ import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 import { DKB_CONFIG_FORMAT, DKB_CONFIG_PATH, readDkbContextConfig, writeDkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import { resolveProviderRetrievalProfile, maybeReadRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
+import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { materializeDkbInstallPlan } from './registryInstall.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
@@ -95,9 +95,11 @@ export async function switchRuntimePipelineFromRegistry(options: {
       throw new DkbError('The Runtime Library has no installed DKBs to prepare for a pipeline switch.');
     }
     await fs.mkdir(stageRoot, { recursive: true });
-    const publicKeys = entries.some((entry) => entry.source === 'registry')
-      ? await trustedRegistryKeys(client)
-      : [];
+    let publicKeys: Promise<DkbSigningKeyRecord[]> | null = null;
+    const trustedKeys = () => {
+      publicKeys ??= trustedRegistryKeys(client);
+      return publicKeys;
+    };
     const library = await loadLibrary(runtime.stateRoot);
 
     for (const entry of entries) {
@@ -105,7 +107,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
       const stagedRoot = path.join(stageRoot, safePathSegment(entry.identity));
       const preparation = await preparePackage({
         client,
-        publicKeys,
+        trustedKeys,
         currentRoot,
         stagedRoot,
         id: entry.identity,
@@ -167,11 +169,11 @@ export async function switchRuntimePipelineFromRegistry(options: {
       generation: (previousRuntime?.generation ?? 0) + 1,
       generatedAt: new Date().toISOString(),
     });
-    const firstProfile = await maybeReadRetrievalProfileLock(path.join(
+    const firstProfile = await readRetrievalBuildProfile(path.join(
       prepared[0]!.currentRoot,
       prepared[0]!.retrievalRelativePath,
     ));
-    if (!firstProfile || firstProfile.profileDigest !== profile.retrievalProfileDigest) {
+    if (firstProfile.profileDigest !== profile.retrievalProfileDigest) {
       throw new DkbError(`Prepared packages do not contain the exact retrieval profile for ${target}`);
     }
     await writeRuntimeLock(runtime.stateRoot, runtimeLock);
@@ -236,7 +238,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
 
 async function preparePackage(input: {
   client: DkbRegistryClient;
-  publicKeys: DkbSigningKeyRecord[];
+  trustedKeys: () => Promise<DkbSigningKeyRecord[]>;
   currentRoot: string;
   stagedRoot: string;
   id: string;
@@ -288,7 +290,7 @@ async function preparePackage(input: {
       plan,
       layerRoot,
       destinationRoot: downloadedRoot,
-      trustedKeys: input.publicKeys,
+      trustedKeys: await input.trustedKeys(),
       progress: input.progress,
     });
     await mergeStoredPackageBuilds(input.currentRoot, downloadedRoot);

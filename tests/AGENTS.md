@@ -18,5 +18,6 @@ defines the required release gate.
 - Fixtures may emulate the removed Node Registry, but product code must not
   import test fixtures.
 
-Run the focused file while iterating, then `npm test` and `npm run temp:audit`
-before a milestone commit.
+Run a focused file with
+`node --import ./tests/test-environment.mjs --test tests/<name>.test.mjs`, then
+`npm test` and `npm run temp:audit` before a milestone commit.

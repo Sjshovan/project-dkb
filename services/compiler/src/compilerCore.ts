@@ -9,15 +9,13 @@ import type { LoadedCollection } from '@sjshovan/dkb-protocol/types.js';
 import {
   DKB_EVIDENCE_BUILD_IR,
   listPackageBuilds,
+  maybeReadActivePackageRetrievalProfile,
   maybeReadRuntimeLock,
   mergeStoredPackageBuilds,
 } from '@sjshovan/dkb-library/builds.js';
 import { DKB_EVIDENCE_CATALOG_FILENAME } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { DKB_ARTIFACT_MANIFEST_FILENAME } from '@sjshovan/dkb-protocol/artifacts.js';
-import {
-  maybeReadRetrievalProfileLock,
-  retrievalProfileLockForCompiledPipelines,
-} from '@sjshovan/dkb-pipeline/profile.js';
+import { retrievalProfileLockForCompiledPipelines } from '@sjshovan/dkb-pipeline/profile.js';
 import { validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { indexedSourceUnitFromPipelineRecord } from './records.js';
@@ -108,7 +106,7 @@ export async function compileComposeProject(
     const sourceStatistics = sourceStatisticsForSnapshot(sourceSnapshot);
     const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
     const cacheLookupStart = performance.now();
-    const existingProfile = await maybeReadRetrievalProfileLock(resolvedRoot);
+    const existingProfile = await maybeReadActivePackageRetrievalProfile(resolvedRoot);
     const profileDrift = !existingProfile
       || existingProfile.profile.configDigest !== desiredProfile.configDigest
       || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;

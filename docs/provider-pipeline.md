@@ -35,8 +35,11 @@ Library's pipeline.
 
 ## Profiles, targets, and stored builds
 
-User-global bindings live in `~/.dkb/config.json`. Context overrides live in
-`<context>/.dkb/config.json`. A target selects:
+User-global bindings live in `~/.dkb/config.json`; automation may relocate that
+directory with `DKB_GLOBAL_ROOT`. Context overrides live in
+`<context>/.dkb/config.json`. Both documents require the exact
+`dkb.config.v2` format marker; DKB has no legacy configuration reader. A target
+selects:
 
 - one fused ingestion provider, or one parser plus one chunker;
 - zero or more ordered document, chunk, or record processors;

@@ -22,7 +22,7 @@ import {
 } from '@sjshovan/dkb-protocol/artifacts.js';
 import { validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
+import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { materializeEvidenceCatalog } from './evidenceCatalog.js';
 import {
@@ -47,6 +47,7 @@ export const DKB_RETRIEVAL_BUILD_PROFILE_LOCK = 'dkb-profile.lock.json';
 export interface DkbPackageBuildGraph {
   evidence: DkbEvidenceBuildLock;
   retrieval: DkbRetrievalBuildLock;
+  profile: DkbRetrievalProfileLock;
   runtime: DkbRuntimeLock;
   evidencePath: string;
   retrievalPath: string;
@@ -77,6 +78,14 @@ export interface DkbResolvedPackageBuild {
   evidenceRoot: string;
   retrievalRoot: string;
   artifactsRoot: string;
+}
+
+export interface DkbKnowledgeBuildVerification {
+  ok: boolean;
+  root: string;
+  type: 'library' | 'collection' | 'dkb';
+  lockPath: string;
+  checks: Array<{ name: string; ok: boolean; detail: string }>;
 }
 
 export async function resolveLibraryRuntimeBuilds(root: string): Promise<DkbResolvedPackageBuild[]> {
@@ -291,7 +300,7 @@ export async function writePackageBuildGraph(input: {
   });
   await writeRuntimeLock(root, runtime);
 
-  return { evidence: evidenceLock, retrieval: retrievalLock, runtime, evidencePath, retrievalPath };
+  return { evidence: evidenceLock, retrieval: retrievalLock, profile: input.retrievalProfile, runtime, evidencePath, retrievalPath };
 }
 
 export async function activateStoredPackageBuild(input: {
@@ -349,7 +358,7 @@ export async function activateStoredPackageBuild(input: {
 
   await writeRuntimeLock(root, runtime);
 
-  return { evidence, retrieval, runtime, evidencePath, retrievalPath };
+  return { evidence, retrieval, profile, runtime, evidencePath, retrievalPath };
 }
 
 export async function validatePackageBuildGraph(root: string, runtimeLock?: DkbRuntimeLock): Promise<DkbPackageBuildGraph> {
@@ -369,6 +378,8 @@ export async function validatePackageBuildGraph(root: string, runtimeLock?: DkbR
     JSON.parse(await fs.readFile(path.join(retrievalPath, DKB_RETRIEVAL_BUILD_LOCK), 'utf8')),
     path.join(retrievalPath, DKB_RETRIEVAL_BUILD_LOCK),
   );
+  const profilePath = path.join(retrievalPath, DKB_RETRIEVAL_BUILD_PROFILE_LOCK);
+  const profile = validateRetrievalProfileLock(JSON.parse(await fs.readFile(profilePath, 'utf8')), profilePath);
   const artifactTreeDigest = stableHash(await treeReceipt(path.join(retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS)));
   const artifactManifestPath = path.join(retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
   const artifactManifest = validateArtifactManifest(JSON.parse(await fs.readFile(artifactManifestPath, 'utf8')), artifactManifestPath);
@@ -387,9 +398,14 @@ export async function validatePackageBuildGraph(root: string, runtimeLock?: DkbR
   if (evidence.evidenceDigest !== retrieval.evidenceDigest || evidence.evidenceProfileDigest !== retrieval.evidenceProfileDigest) {
     throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} is attached to the wrong Evidence Build`);
   }
+  if (profile.profileDigest !== retrieval.retrievalProfileDigest
+    || profile.compatibilityDigest !== retrieval.compatibilityDigest
+    || profile.profile.evidence.profileDigest !== retrieval.evidenceProfileDigest) {
+    throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} profile receipt does not match its immutable build graph`);
+  }
   assertEvidenceLayer(evidence, evidenceIr);
 
-  return { evidence, retrieval, runtime, evidencePath, retrievalPath };
+  return { evidence, retrieval, profile, runtime, evidencePath, retrievalPath };
 }
 
 export async function readEvidenceBuild(evidenceRoot: string): Promise<DkbEvidenceIr> {
@@ -400,6 +416,12 @@ export async function readEvidenceBuild(evidenceRoot: string): Promise<DkbEviden
 export async function readRetrievalBuildProfile(retrievalRoot: string): Promise<DkbRetrievalProfileLock> {
   const target = path.join(path.resolve(retrievalRoot), DKB_RETRIEVAL_BUILD_PROFILE_LOCK);
   return validateRetrievalProfileLock(JSON.parse(await fs.readFile(target, 'utf8')), target);
+}
+
+export async function maybeReadActivePackageRetrievalProfile(root: string): Promise<DkbRetrievalProfileLock | null> {
+  const runtime = await maybeReadRuntimeLock(root);
+  if (!runtime) return null;
+  return (await validatePackageBuildGraph(root, runtime)).profile;
 }
 
 /**
@@ -450,6 +472,84 @@ export async function validateCompiledPackage(root: string): Promise<ValidatePac
   ];
 
   return { ok: true, root: resolvedRoot, manifestPath, manifest, graph, checks };
+}
+
+/**
+ * Verify the exact immutable build graph selected by a package, Collection, or
+ * Library Runtime lock. Compiler caches and active artifact mirrors are not
+ * part of this durable verification boundary.
+ */
+export async function verifyKnowledgeBuilds(root: string): Promise<DkbKnowledgeBuildVerification> {
+  const resolvedRoot = path.resolve(root);
+  const manifest = await loadManifest(resolvedRoot);
+  const type = manifest.type;
+  const lockPath = resolveFrom(resolvedRoot, DKB_RUNTIME_LOCK_PATH);
+  if (type === 'dkb') {
+    const result = await validateCompiledPackage(resolvedRoot);
+    return { ok: result.ok, root: resolvedRoot, type, lockPath, checks: result.checks };
+  }
+
+  const dkbs = type === 'library'
+    ? await loadLibrary(resolvedRoot).then((library) => uniqueLoadedDkbs([
+      ...library.collections.flatMap((collection) => collection.dkbs),
+      ...library.dkbs,
+    ]))
+    : await loadCollection(resolvedRoot).then((collection) => uniqueLoadedDkbs(collection.dkbs));
+  let runtime: DkbRuntimeLock;
+  try {
+    runtime = await readRuntimeLock(resolvedRoot);
+  } catch (error) {
+    return {
+      ok: false,
+      root: resolvedRoot,
+      type,
+      lockPath,
+      checks: [{ name: 'runtime.lock', ok: false, detail: error instanceof Error ? error.message : String(error) }],
+    };
+  }
+
+  const expectedIds = dkbs.map((dkb) => dkb.manifest.id).sort();
+  const lockedIds = Object.keys(runtime.packages).sort();
+  const packageSetMatches = stableHash(expectedIds) === stableHash(lockedIds);
+  const checks: DkbKnowledgeBuildVerification['checks'] = [{
+    name: 'runtime.packages',
+    ok: packageSetMatches,
+    detail: packageSetMatches
+      ? `${lockedIds.length} package${lockedIds.length === 1 ? '' : 's'} pinned by exact digest`
+      : `active packages ${expectedIds.join(', ') || 'none'} do not match Runtime lock ${lockedIds.join(', ') || 'none'}`,
+  }];
+
+  for (const dkb of dkbs) {
+    const entry = runtime.packages[dkb.manifest.id];
+    if (!entry) continue;
+    try {
+      if (entry.version !== dkb.manifest.version) {
+        throw new DkbError(`Runtime lock selects ${entry.version}; manifest is ${dkb.manifest.version}`);
+      }
+      if (entry.evidenceProfileDigest !== runtime.evidenceProfileDigest
+        || entry.retrievalProfileDigest !== runtime.retrievalProfileDigest) {
+        throw new DkbError('package build profile does not match the active Runtime space');
+      }
+      const packageRuntime = validateRuntimeLock({ ...runtime, packages: { [dkb.manifest.id]: entry } });
+      const graph = await validatePackageBuildGraph(dkb.root, packageRuntime);
+      if (graph.retrieval.compatibilityDigest !== runtime.compatibilityDigest) {
+        throw new DkbError('Retrieval Build compatibility does not match the active Runtime space');
+      }
+      checks.push({
+        name: `build.${dkb.manifest.id}`,
+        ok: true,
+        detail: `${graph.evidence.evidenceDigest} -> ${graph.retrieval.retrievalBuildDigest}`,
+      });
+    } catch (error) {
+      checks.push({
+        name: `build.${dkb.manifest.id}`,
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { ok: checks.every((check) => check.ok), root: resolvedRoot, type, lockPath, checks };
 }
 
 export async function readRuntimeLock(root: string): Promise<DkbRuntimeLock> {

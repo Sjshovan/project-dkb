@@ -27,20 +27,44 @@ export function assertRequiredImages(context: DkbStackContext): void {
     if (!service.stack) continue;
     const image = values[service.stack.imageEnvironment] ?? service.image;
     if (!image) throw new DkbError(`Stack service ${service.id} does not declare an image.`);
-    let result = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8' });
+    let result = inspectImage(image);
     if (result.status !== 0 && !service.stack.build && !service.stack.recovery) {
       result = spawnSync('docker', ['pull', image], { encoding: 'utf8' });
+      if (result.status === 0) result = inspectImage(image);
     }
     if (result.status !== 0) {
-      const recovery = service.stack.recovery
-        ?? (service.stack.build
-          ? `Run: docker build -f ${service.stack.build.dockerfile} -t ${image} ${service.stack.build.context}.`
-          : `Run: docker pull ${image}.`);
+      const recovery = imageRecovery(service, image, values.DKB_BUILD_COMMIT);
       throw new DkbError(
         `Required stack image ${image} for ${service.id} is unavailable. ${recovery} Then retry: dkb stack up ${context.name}`,
       );
     }
+
+    if (!service.stack.build) continue;
+    const labels = parseImageLabels(String(result.stdout ?? ''));
+    const issue = localImageMetadataIssue(labels, service.version, values.DKB_BUILD_COMMIT);
+    if (issue) {
+      throw new DkbError(
+        `Required stack image ${image} for ${service.id} is stale: ${issue}. `
+        + `${imageRecovery(service, image, values.DKB_BUILD_COMMIT)} Then retry: dkb stack up ${context.name}`,
+      );
+    }
   }
+}
+
+export function localImageMetadataIssue(
+  labels: Record<string, string>,
+  expectedVersion?: string,
+  expectedRevision?: string,
+): string | null {
+  const actualVersion = labels['org.opencontainers.image.version'];
+  if (expectedVersion && actualVersion !== expectedVersion) {
+    return `OCI version is ${actualVersion ?? 'missing'}; expected ${expectedVersion}`;
+  }
+  const revision = normalizedExpectedRevision(expectedRevision);
+  if (revision && labels['org.opencontainers.image.revision'] !== revision) {
+    return `OCI revision is ${labels['org.opencontainers.image.revision'] ?? 'missing'}; expected ${revision}`;
+  }
+  return null;
 }
 
 export async function migrateLegacyRegistryVolume(
@@ -185,4 +209,35 @@ function stringValue(value: unknown): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function inspectImage(image: string): ReturnType<typeof spawnSync> {
+  return spawnSync('docker', ['image', 'inspect', image, '--format', '{{json .Config.Labels}}'], { encoding: 'utf8' });
+}
+
+function parseImageLabels(value: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value.trim()) as unknown;
+    if (!isRecord(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch {
+    return {};
+  }
+}
+
+function imageRecovery(
+  service: DkbStackContext['requiredServices'][number],
+  image: string,
+  revision?: string,
+): string {
+  if (service.stack?.recovery) return service.stack.recovery;
+  if (!service.stack?.build) return `Run: docker pull ${image}.`;
+  const version = service.version ?? 'development';
+  const commit = normalizedExpectedRevision(revision) ?? 'development';
+  return `Run: docker build --build-arg DKB_VERSION=${version} --build-arg DKB_COMMIT=${commit} -f ${service.stack.build.dockerfile} -t ${image} ${service.stack.build.context}.`;
+}
+
+function normalizedExpectedRevision(value?: string): string | null {
+  const revision = value?.trim();
+  return revision && revision !== 'development' ? revision : null;
 }

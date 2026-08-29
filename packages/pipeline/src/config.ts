@@ -43,7 +43,9 @@ export interface DkbResolvedContextConfig {
 }
 
 export function defaultDkbGlobalRoot(): string {
-  return path.join(os.homedir(), '.dkb');
+  return process.env.DKB_GLOBAL_ROOT
+    ? path.resolve(process.env.DKB_GLOBAL_ROOT)
+    : path.join(os.homedir(), '.dkb');
 }
 
 export async function resolveContextConfig(
@@ -133,7 +135,7 @@ export async function writeDkbContextConfig(target: string, config: DkbContextCo
 }
 
 export function validateContextConfig(value: unknown, source = DKB_CONFIG_PATH): DkbContextConfig {
-  if (!isRecord(value) || (value.format !== undefined && value.format !== DKB_CONFIG_FORMAT)) {
+  if (!isRecord(value) || value.format !== DKB_CONFIG_FORMAT) {
     throw new DkbError(`Invalid DKB configuration at ${source}: format must be ${DKB_CONFIG_FORMAT}`);
   }
   if (value.activeTarget !== undefined && (typeof value.activeTarget !== 'string' || value.activeTarget.trim().length === 0)) {

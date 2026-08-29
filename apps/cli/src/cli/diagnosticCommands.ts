@@ -15,27 +15,17 @@ export function registerDiagnosticCommands(program: Command, context: Diagnostic
   const { presenter, printJson, parseLimit, parsePositiveInteger, defaultRuntimeContext } = context;
   program
     .command('verify')
-    .description('Verify a compiled Library, Collection, or DKB against its artifact lock')
-    .argument('<path>', 'Directory containing DKB packages and dkb-lock.json')
-    .option('--strict', 'Require all generated artifacts to be built')
-    .action(async (target: string, options: { strict?: boolean }) => {
-      const { verifyComposeProject } = await import('@sjshovan/dkb-compiler/compile.js');
-      const output = await presenter().check('Compiled knowledge verification', async () => {
-        const result = await verifyComposeProject(target);
-        const strictFailures = options.strict
-          ? Object.entries(result.checks)
-            .filter(([, check]) => !check.ok)
-            .map(([name]) => name)
-          : [];
+    .description('Verify the active immutable Evidence and Retrieval Build graph')
+    .argument('<path>', 'Directory containing a Library, Collection, or DKB manifest')
+    .action(async (target: string) => {
+      const { verifyKnowledgeBuilds } = await import('@sjshovan/dkb-library/builds.js');
+      const output = await presenter().check(
+        'Knowledge Build verification',
+        async () => verifyKnowledgeBuilds(target),
+        (value) => value.ok,
+      );
 
-        return {
-          ...result,
-          strict: Boolean(options.strict),
-          strictFailures,
-        };
-      }, (value) => value.ok && value.strictFailures.length === 0);
-
-      if (!output.ok || output.strictFailures.length > 0) {
+      if (!output.ok) {
         process.exitCode = 1;
       }
     });

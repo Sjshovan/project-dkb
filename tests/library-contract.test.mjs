@@ -19,7 +19,7 @@ import { healthReport } from '../apps/cli/dist/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
-import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { validatePackageBuildGraph, verifyKnowledgeBuilds, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
   const root = await tempDirectory(t, 'dkb-manifest-cutover-');
@@ -165,6 +165,11 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   assert.equal(activated.packageCount, 1);
   assert.equal(await fs.readFile(packageLockPath, 'utf8'), packageLock);
   await validatePackageBuildGraph(dkbRoot);
+  await writeRuntimeLock(root, graph.runtime);
+  const verified = await verifyKnowledgeBuilds(root);
+  assert.equal(verified.ok, true, JSON.stringify(verified.checks));
+  assert.equal(verified.type, 'library');
+  assert.equal(verified.checks.some((check) => check.name === 'build.@test/core' && check.ok), true);
 
   await writeLibrary(root, {});
   const removed = await refreshRuntimeCatalogFromInstalledArtifacts(root);
@@ -175,21 +180,17 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
 test('failed Library mutations restore mutable Runtime receipts byte for byte', async (t) => {
   const root = await tempDirectory(t, 'dkb-runtime-receipt-rollback-');
   const lockPath = path.join(root, '.dkb', 'runtime.lock.json');
-  const profilePath = path.join(root, 'dkb-profile.lock.json');
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await fs.writeFile(lockPath, 'original-lock\n', 'utf8');
-  await fs.writeFile(profilePath, 'original-profile\n', 'utf8');
 
   const snapshot = await snapshotRuntimeReceipts(root);
   await fs.writeFile(lockPath, 'mutated-lock\n', 'utf8');
-  await fs.rm(profilePath);
   const cachePath = path.join(root, '.dkb', 'cache', 'compile-cache.json');
   await fs.mkdir(path.dirname(cachePath), { recursive: true });
   await fs.writeFile(cachePath, 'new-cache\n', 'utf8');
   await snapshot.rollback();
 
   assert.equal(await fs.readFile(lockPath, 'utf8'), 'original-lock\n');
-  assert.equal(await fs.readFile(profilePath, 'utf8'), 'original-profile\n');
   await assert.rejects(fs.access(cachePath));
 });
 

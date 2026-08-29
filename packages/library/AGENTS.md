@@ -8,7 +8,9 @@ The authoritative build boundary is [ADR 0005](../../docs/decisions/0005-evidenc
 
 ## Dependency direction
 
-- Depend on `@sjshovan/dkb-protocol` for durable formats, `@sjshovan/dkb-pipeline` for profile receipts, and bundled artifact readers only where verification requires a concrete format.
+- Depend only on `@sjshovan/dkb-protocol` and Node platform APIs. Validate
+  generic Evidence, Retrieval, artifact-manifest, and Runtime receipts without
+  importing Pipeline or concrete providers.
 - Expose domain operations to CLI, Runtime, compiler, and Registry client orchestration.
 - Keep presentation and network transport outside this package.
 

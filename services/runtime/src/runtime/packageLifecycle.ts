@@ -18,12 +18,6 @@ import {
 } from '@sjshovan/dkb-library/builds.js';
 import { DKB_RUNTIME_LOCK_PATH } from '@sjshovan/dkb-protocol/paths.js';
 import { DKB_RUNTIME_LOCK_FORMAT, type DkbRuntimeLock } from '@sjshovan/dkb-protocol/builds.js';
-import {
-  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
-  assertMatchingRetrievalProfiles,
-  maybeReadRetrievalProfileLock,
-  writeRetrievalProfileLock,
-} from '@sjshovan/dkb-pipeline/profile.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
 import type { DkbIndexMutationResult } from '@sjshovan/dkb-pipeline/types.js';
 import type { DkbRuntimeContext } from './context.js';
@@ -126,13 +120,7 @@ export async function importCompiledDkbArtifactIntoRuntime(
 
     const stagedDkb = await loadDkbPackage(tempPath, id);
     const candidateGraph = await validatePackageBuildGraph(tempPath);
-    const candidateProfile = await maybeReadRetrievalProfileLock(tempPath);
-    const activeProfile = await maybeReadRetrievalProfileLock(paths.stateRoot);
     const activeRuntimeLock = await maybeReadRuntimeLock(paths.stateRoot);
-
-    if (activeProfile && candidateProfile) {
-      assertMatchingRetrievalProfiles(activeProfile, candidateProfile, `${stagedDkb.manifest.id}@${stagedDkb.manifest.version}`);
-    }
     if (activeRuntimeLock && (
       activeRuntimeLock.evidenceProfileDigest !== candidateGraph.runtime.evidenceProfileDigest
       || activeRuntimeLock.retrievalProfileDigest !== candidateGraph.runtime.retrievalProfileDigest
@@ -220,9 +208,6 @@ export async function importCompiledDkbArtifactIntoRuntime(
         documentCount: preparedIndex!.validation.documentCount,
         status: 'ready',
       };
-      if (!activeProfile && candidateProfile) {
-        await writeRetrievalProfileLock(paths.stateRoot, candidateProfile);
-      }
       await writeRuntimeLock(paths.stateRoot, mergedRuntimeLock(activeRuntimeLock, candidateGraph.runtime, stagedDkb.manifest.id));
       options.progress?.(progressUpdate({
         phase: 'activate',
@@ -377,9 +362,6 @@ export async function removeDkbFromRuntime(
       packageVersion: installed.manifest.version,
     });
     const remaining = await verifyRuntimeIndex({ runtime: options.runtime, libraryRoot: paths.stateRoot, libraryId: registryId }).catch(() => null);
-    if (catalog.packageCount === 0) {
-      await fs.rm(path.join(paths.stateRoot, DKB_RETRIEVAL_PROFILE_LOCK_PATH), { force: true });
-    }
     const activeRuntimeLock = await maybeReadRuntimeLock(paths.stateRoot);
     if (activeRuntimeLock) {
       const packages = { ...activeRuntimeLock.packages };

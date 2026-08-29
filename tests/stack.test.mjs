@@ -7,8 +7,21 @@ import test from 'node:test';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { backupDkbStack, composeArguments, prepareDkbStack, restoreDkbStack } from '../apps/cli/dist/stack/manager.js';
+import { localImageMetadataIssue } from '../apps/cli/dist/stack/docker.js';
 
 const dockerAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
+
+test('stack image checks reject stale version and revision labels', () => {
+  const current = {
+    'org.opencontainers.image.version': '0.2.0',
+    'org.opencontainers.image.revision': 'abc123',
+  };
+  assert.equal(localImageMetadataIssue(current, '0.2.0', 'abc123'), null);
+  assert.equal(localImageMetadataIssue(current, '0.2.0', 'development'), null);
+  assert.match(localImageMetadataIssue(current, '0.3.0', 'abc123'), /version is 0\.2\.0; expected 0\.3\.0/u);
+  assert.match(localImageMetadataIssue(current, '0.2.0', 'def456'), /revision is abc123; expected def456/u);
+  assert.match(localImageMetadataIssue({}, '0.2.0', 'development'), /version is missing/u);
+});
 
 test('stack preparation generates reusable local secrets without returning them', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-test-'));
@@ -32,6 +45,34 @@ test('stack preparation generates reusable local secrets without returning them'
       composeArguments(first, ['up']).slice(-5),
       ['--profile', 'tei', '--profile', 'faiss', 'up'],
     );
+  } finally {
+    if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
+    else process.env.DKB_STACK_STATE_ROOT = previousRoot;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unlocked development stacks refresh local-build images without retaining retired image keys', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-image-refresh-test-'));
+  const previousRoot = process.env.DKB_STACK_STATE_ROOT;
+  process.env.DKB_STACK_STATE_ROOT = root;
+
+  try {
+    const stackRoot = path.join(root, 'image-refresh');
+    await fs.mkdir(stackRoot, { recursive: true });
+    await fs.writeFile(path.join(stackRoot, 'stack.env'), [
+      'DKB_STACK_NAME=image-refresh',
+      'DKB_COMPILER_IMAGE=dkb-compiler:0.1.0',
+      'DKB_RUNTIME_IMAGE=dkb-runtime:0.1.0',
+      'DKB_PROVIDER_IMAGE=dkb-provider-sidecar:0.1.0',
+      '',
+    ].join('\n'), 'utf8');
+
+    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'image-refresh', 'default');
+    const environment = await fs.readFile(stack.envFile, 'utf8');
+    assert.match(environment, /^DKB_COMPILER_IMAGE=dkb-compiler:0\.2\.0$/mu);
+    assert.match(environment, /^DKB_RUNTIME_IMAGE=dkb-runtime:0\.2\.0$/mu);
+    assert.doesNotMatch(environment, /DKB_PROVIDER_IMAGE/u);
   } finally {
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;

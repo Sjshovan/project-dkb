@@ -48,11 +48,15 @@ export async function prepareDkbStack(
     DKB_MCP_BEARER_TOKEN: existing.DKB_MCP_BEARER_TOKEN ?? randomBytes(32).toString('base64url'),
     DKB_RUNTIME_ADMIN_TOKEN: existing.DKB_RUNTIME_ADMIN_TOKEN ?? randomBytes(32).toString('base64url'),
   };
+  delete values.DKB_PROVIDER_IMAGE;
 
   for (const service of distribution.services) {
     const stack = service.stack;
     if (!stack) continue;
-    if (service.image) values[stack.imageEnvironment] = existing[stack.imageEnvironment] ?? service.image;
+    if (service.image) {
+      values[stack.imageEnvironment] = process.env[stack.imageEnvironment]
+        ?? (!existing.DKB_STACK_VERSION && stack.build ? service.image : existing[stack.imageEnvironment] ?? service.image);
+    }
     if (stack.health) {
       values[stack.health.portEnvironment] = existing[stack.health.portEnvironment]
         ?? String(hostPortFor(normalizedName, stack.health.defaultHostPort, stack.health.namedPortBase));

@@ -16,7 +16,7 @@ import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime
 import { switchRuntimePipelineFromRegistry } from '../services/runtime/dist/runtime/pipelineSwitch.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
 
-test('Runtime switches retained package builds atomically without contacting the Registry', async (t) => {
+test('Runtime switches retained Registry package builds atomically without contacting the Registry', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-pipeline-switch-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const packageRoot = path.join(root, 'knowledge');
@@ -68,7 +68,7 @@ test('Runtime switches retained package builds atomically without contacting the
       [packageId]: {
         identity: packageId,
         kind: 'dkb',
-        source: 'local',
+        source: 'registry',
         version: '1.0.0',
         digest: stableHash({ package: packageId, version: '1.0.0' }),
         path: 'knowledge',
