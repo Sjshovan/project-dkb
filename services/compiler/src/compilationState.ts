@@ -82,7 +82,7 @@ export function providerStageStatistics(
       .map((provider) => provider.id) ?? []);
     const evidenceReceipt = artifact.compiled.receipts.find((receipt) => evidenceProviderIds.has(receipt.providerId));
     const embeddingReceipt = artifact.compiled.receipts.find((receipt) => {
-      return receipt.providerId === state.resolvedProfile?.embedding.adapter
+      return receipt.providerId === state.resolvedProfile?.embedding.provider
         && isRecord(receipt.build.timingsMs);
     });
     const evidenceExecution = isRecord(evidenceReceipt?.build.execution) ? evidenceReceipt.build.execution : undefined;

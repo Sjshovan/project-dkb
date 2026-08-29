@@ -9,7 +9,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./adapters.js": { "types": "./dist/adapters.d.ts", "import": "./dist/adapters.js" },
     "./buildStatistics.js": { "types": "./dist/buildStatistics.d.ts", "import": "./dist/buildStatistics.js" },
     "./compile.js": { "types": "./dist/compile.d.ts", "import": "./dist/compile.js" },
     "./diskCapacity.js": { "types": "./dist/diskCapacity.d.ts", "import": "./dist/diskCapacity.js" },

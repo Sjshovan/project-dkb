@@ -43,7 +43,7 @@ export async function prepareRuntimeIndexPackage(input: {
     }
     if (packageProfile.compatibilityDigest !== stableHash(profile.compatibility)) {
       throw new DkbError(
-        `Pipeline compatibility mismatch for ${input.dkb.manifest.id}@${input.dkb.manifest.version}: Library ${profile.embedding.model}/${profile.embedding.dimensions}, package ${packageProfile.profile.embedding.model}/${packageProfile.profile.embedding.dimensions}`,
+        `Pipeline compatibility mismatch for ${input.dkb.manifest.id}@${input.dkb.manifest.version}: Library ${profile.embedding.space}/${profile.embedding.dimensions}, package ${packageProfile.profile.embedding.space}/${packageProfile.profile.embedding.dimensions}`,
       );
     }
     if (buildGraph.runtime.evidenceProfileDigest !== profile.evidenceProfileDigest

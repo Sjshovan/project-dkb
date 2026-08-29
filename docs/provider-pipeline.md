@@ -41,7 +41,7 @@ directory with `DKB_GLOBAL_ROOT`. Context overrides live in
 `dkb.config.v2` format marker; DKB has no legacy configuration reader. A target
 selects:
 
-- one fused ingestion provider, or one parser plus one chunker;
+- one fused Evidence provider, or one parser plus one chunker;
 - zero or more ordered document, chunk, or record processors;
 - one document/query embedding provider;
 - one packaged or managed index provider;
@@ -54,9 +54,10 @@ locks are build receipts, not hand-authored configuration. An Evidence Profile
 records the exact parser, chunker, processors, Evidence IR schema, options, and
 provider code. A target references one Evidence Profile and adds embedding,
 index, and retrieval providers. The resolved receipts keep these identities
-separate:
+separate and preserve execution order: fused Evidence or parser then chunker,
+followed by embedding, index, and retrieval:
 
-- Evidence Profile digest: the exact ingestion recipe;
+- Evidence Profile digest: the exact evidence-building recipe;
 - Evidence digest: the exact package-specific Evidence IR;
 - Retrieval Profile digest: the exact search recipe and required Evidence Profile;
 - compatibility digest: the Runtime-visible embedding/index space; and
@@ -74,11 +75,11 @@ shared runner. Failure leaves the previous target active.
 
 ## Contracts
 
-The provider boundary supports both fused and separated ingestion:
+The provider boundary supports both fused and separated Evidence production:
 
 ```text
 folder
-  -> ingestion OR parser -> chunker
+  -> Evidence provider OR parser -> chunker
   -> ordered document/chunk/record processors
   -> embedding-free Evidence Build
   -> selected document embedder
@@ -92,12 +93,12 @@ view, searches, verifies activation, and cleans up a release. All providers
 return DKB source-unit identities; the stable `dkb.evidence.v1` layer resolves
 text, provenance, citations, and trace metadata independently of the backend.
 
-The shared runner normalizes fused or separated ingestion output into DKB
+The shared runner normalizes fused or separated Evidence output into DKB
 pipeline records before Evidence IR is materialized. Every text-changing
 processor runs before embedding, so Evidence text, IDs, hashes, vectors, and
-provenance cannot drift. A provider may retain an opaque native result for
-diagnostics or caching, but native engine objects are never canonical package
-or provenance input.
+provenance cannot drift. Provider-native diagnostics may be written only to an
+optional provider-namespaced diagnostics directory. Native engine objects are
+never canonical package, build, provenance, or Runtime input.
 
 Processors register one `mutate` function plus a stage. The runner applies them
 in configured order, permits a processor to drop a value by returning `null`,
@@ -107,7 +108,7 @@ and records stage, order, version, and source-code digest in build receipts.
 
 | ID | Role | Behavior |
 | --- | --- | --- |
-| `@dkb/evidence-docling-llamaindex` | ingestion | Docling rich-file parsing plus LlamaIndex fallbacks |
+| `@dkb/evidence-docling-llamaindex` | Evidence | Docling rich-file parsing plus LlamaIndex fallbacks |
 | `@dkb/embedding-fastembed` | embedding | native FastEmbed document/query vectors through the bounded sidecar |
 | `@dkb/embedding-tei` | embedding | TEI document/query vectors through its HTTP contract |
 | `@dkb/index-faiss` | packaged index | immutable package-local FAISS and SQLite artifacts |
@@ -149,7 +150,7 @@ dkb plugin remove @team/provider --root ./Library
 dkb pipeline show ./Library
 dkb pipeline verify ./Library
 dkb pipeline set meili --root ./Library \
-  --ingestion @dkb/evidence-docling-llamaindex \
+  --evidence @dkb/evidence-docling-llamaindex \
   --embedding @dkb/embedding-fastembed \
   --index @dkb/index-meilisearch \
   --retrieval @dkb/retrieval-hybrid \

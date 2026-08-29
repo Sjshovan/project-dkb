@@ -33,12 +33,13 @@ export interface DkbResolvedRetrievalProfile {
   providerBuildDigest: string;
   providers: DkbProviderHostDescription['providers'];
   processors: DkbProviderHostDescription['processors'];
-  compiler: string;
   indexMode: DkbIndexProvider['mode'];
   embedding: {
-    adapter: string;
-    model: string;
+    provider: string;
+    space: string;
     dimensions: number;
+    queryMode: string;
+    documentMode: string;
   };
   compatibility: DkbRetrievalCompatibilityReceipt;
 }
@@ -59,9 +60,14 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
     providerBuildDigest: description.buildDigest,
     providers: description.providers,
     processors: description.processors,
-    compiler: target.evidence ?? (target.parser === target.chunker ? target.parser! : `${target.parser}+${target.chunker}`),
     indexMode: index.mode,
-    embedding: { adapter: target.embedding, model, dimensions },
+    embedding: {
+      provider: target.embedding,
+      space: model,
+      dimensions,
+      queryMode: builds.retrieval.embedding.queryMode,
+      documentMode: builds.retrieval.embedding.documentMode,
+    },
     compatibility: builds.retrieval.compatibility,
   };
 }
@@ -70,9 +76,6 @@ export function retrievalProfileLockForRetrievalPipelines(
   desired: DkbResolvedRetrievalProfile,
   results: readonly DkbRetrievalPipeline[],
   options: {
-    compilerImageDigest?: string | null;
-    modelRevision?: string | null;
-    modelDigest?: string | null;
     generatedAt?: string;
   } = {},
 ): DkbRetrievalProfileLock {
@@ -95,7 +98,7 @@ export function retrievalProfileLockForRetrievalPipelines(
     if (dimensions !== desired.embedding.dimensions
       || result.vectors.some((vector) => vector.values.length !== dimensions
         || vector.values.some((value) => typeof value !== 'number' || !Number.isFinite(value)))) {
-      throw new DkbError(`Embedding dimension mismatch for ${desired.embedding.model}: expected ${desired.embedding.dimensions}, got ${dimensions}`);
+      throw new DkbError(`Embedding dimension mismatch for ${desired.embedding.space}: expected ${desired.embedding.dimensions}, got ${dimensions}`);
     }
   }
 
@@ -107,42 +110,34 @@ export function retrievalProfileLockForRetrievalPipelines(
   if ((!evidence && (!parser || !chunker)) || !index || !retrieval) {
     throw new DkbError(`Resolved target ${desired.target} is missing required provider receipts`);
   }
-  const parserId = evidence?.id ?? parser?.id ?? desired.compiler;
-  const chunkerId = evidence?.id ?? chunker?.id ?? desired.compiler;
-  const evidenceImplementation = evidence ?? parser!;
+  const evidenceProviders = desired.providers.filter((provider) => provider.kind === 'evidence'
+    || provider.kind === 'parser'
+    || provider.kind === 'chunker');
+  const retrievalProviders = desired.providers.filter((provider) => provider.kind === 'embedding'
+    || provider.kind === 'index'
+    || provider.kind === 'retrieval');
 
   const profile: DkbRetrievalProfileLock['profile'] = {
-    compiler: {
-      adapter: desired.compiler,
-      id: evidenceImplementation.id,
-      image: evidenceImplementation.sourcePath,
-      imageDigest: options.compilerImageDigest ?? evidenceImplementation.sourceDigest,
-    },
     embedding: {
-      adapter: desired.embedding.adapter,
-      model: desired.embedding.model,
-      modelRevision: options.modelRevision ?? desired.compatibility.modelRevision ?? null,
-      modelDigest: options.modelDigest ?? null,
+      provider: desired.embedding.provider,
+      space: desired.embedding.space,
+      ...(desired.compatibility.modelRevision ? { modelRevision: desired.compatibility.modelRevision } : {}),
       dimensions: desired.embedding.dimensions,
       metric: desired.compatibility.metric,
       normalized: desired.compatibility.normalized,
-      queryMode: 'query',
-      documentMode: 'passage',
-    },
-    extraction: {
-      richParser: parserId,
-      richChunker: chunkerId,
-      fallbackParser: parserId,
-      fallbackChunker: chunkerId,
+      queryMode: desired.embedding.queryMode,
+      documentMode: desired.embedding.documentMode,
+      queryTransformDigest: desired.compatibility.queryTransformDigest,
+      documentTransformDigest: desired.compatibility.documentTransformDigest,
     },
     evidence: {
       profileDigest: desired.evidenceProfileDigest,
+      providers: evidenceProviders,
+      processors: desired.processors,
     },
     target: desired.target,
     configDigest: desired.configDigest,
     providerBuildDigest: desired.providerBuildDigest,
-    providers: desired.providers,
-    processors: desired.processors,
     index: {
       provider: index.id,
       mode: desired.indexMode,
@@ -152,6 +147,7 @@ export function retrievalProfileLockForRetrievalPipelines(
       provider: retrieval.id,
       protocol: desired.compatibility.protocol,
       profileDigest: desired.retrievalProfileDigest,
+      providers: retrievalProviders,
     },
   };
 
@@ -159,7 +155,7 @@ export function retrievalProfileLockForRetrievalPipelines(
   const compatibility = desired.compatibility;
   const compatibilityDigest = stableHash(compatibility);
 
-  return {
+  return validateRetrievalProfileLock({
     format: DKB_RETRIEVAL_PROFILE_FORMAT,
     profile,
     buildDigest,
@@ -167,7 +163,7 @@ export function retrievalProfileLockForRetrievalPipelines(
     compatibilityDigest,
     profileDigest: desired.retrievalProfileDigest,
     generatedAt: options.generatedAt ?? new Date().toISOString(),
-  };
+  });
 }
 
 export async function readRetrievalProfileLock(root: string): Promise<DkbRetrievalProfileLock> {

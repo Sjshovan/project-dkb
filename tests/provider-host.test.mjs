@@ -416,7 +416,11 @@ export function setup(context) {
   assert.match(catalog.records[0].text, /SOURCE-PROOF-14-MUTATED/);
   assert.equal(evidence.evidence[0].text, 'SOURCE-PROOF-14-MUTATED');
   assert.equal(indexRecords[0].text, 'SOURCE-PROOF-14-MUTATED');
-  assert.equal(profile.profile.compiler.id, '@test/separate');
+  assert.equal('compiler' in profile.profile, false);
+  assert.equal('extraction' in profile.profile, false);
+  assert.deepEqual(profile.profile.evidence.providers.map((provider) => provider.kind), ['parser', 'chunker']);
+  assert.deepEqual(profile.profile.evidence.providers.map((provider) => provider.id), ['@test/separate', '@test/separate']);
+  assert.deepEqual(profile.profile.retrieval.providers.map((provider) => provider.kind), ['embedding', 'index', 'retrieval']);
   assert.equal(profile.profile.index.provider, '@test/separate');
   assert.equal(profile.compatibility.dimensions, 2);
   assert.equal(await fs.readFile(path.join(root, '.dkb/parse-count.txt'), 'utf8'), '1');

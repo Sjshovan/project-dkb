@@ -1,4 +1,3 @@
-export * from './adapters.js';
 export * from './buildStatistics.js';
 export * from './compile.js';
 export * from './diskCapacity.js';

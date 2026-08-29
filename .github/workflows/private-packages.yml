@@ -38,6 +38,7 @@ jobs:
           scope: '@sjshovan'
 
       - run: npm ci --ignore-scripts
+      - run: npm run version:status
       - run: npm run graph:check
       - run: npm run boundaries:check
       - run: npm run agents:check

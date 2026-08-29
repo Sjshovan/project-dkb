@@ -60,17 +60,17 @@ function compilerResult(model, dimensions) {
 
 test('profile locks reject model, dimension, and digest mismatches', () => {
   const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
-  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 384)], {
+  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.space, 384)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
   const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
-  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.model, 768)], {
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.space, 768)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
 
   assert.throws(() => assertMatchingRetrievalProfiles(smallLock, baseLock, 'proof-safe'), /profile mismatch/i);
   assert.throws(
-    () => retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 768)]),
+    () => retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.space, 768)]),
     /dimension mismatch/i,
   );
   assert.throws(
@@ -81,9 +81,9 @@ test('profile locks reject model, dimension, and digest mismatches', () => {
 
 test('Evidence IR is reusable across retrieval profiles and changes only with its Evidence Profile', () => {
   const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
-  const smallResult = compilerResult(small.embedding.model, 384);
+  const smallResult = compilerResult(small.embedding.space, 384);
   const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
-  const baseResult = compilerResult(base.embedding.model, 768);
+  const baseResult = compilerResult(base.embedding.space, 768);
   const evidenceProfileDigest = stableHash({ parser: 'docling', chunker: 'hybrid-v1' });
   const alternateEvidenceProfileDigest = stableHash({ parser: 'docling', chunker: 'hybrid-v2' });
   const smallIr = buildEvidenceIr([smallResult], { evidenceProfileDigest });
@@ -151,11 +151,11 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
   };
   const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
   const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
-  const evidence = buildEvidenceIr([compilerResult(small.embedding.model, 384)], {
+  const evidence = buildEvidenceIr([compilerResult(small.embedding.space, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 384)]);
-  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.model, 768)]);
+  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.space, 384)]);
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.space, 768)]);
 
   await fs.writeFile(path.join(artifacts, 'evidence.ir.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   await fs.writeFile(path.join(artifacts, 'selected.index'), 'small\n', 'utf8');
@@ -230,11 +230,11 @@ test('downloaded package layers retain existing compatible builds and reject dig
   };
   const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
   const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
-  const evidence = buildEvidenceIr([compilerResult(small.embedding.model, 384)], {
+  const evidence = buildEvidenceIr([compilerResult(small.embedding.space, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.model, 384)], { generatedAt });
-  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.model, 768)], { generatedAt });
+  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.space, 384)], { generatedAt });
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.space, 768)], { generatedAt });
 
   for (const root of [source, destination]) {
     const artifacts = path.join(root, 'staged-retrieval-artifacts');
@@ -335,16 +335,17 @@ function resolvedProfile(model, dimensions) {
     target: 'test',
     evidenceProfileDigest,
     retrievalProfileDigest,
-    configDigest: `config:${model}`,
-    providerBuildDigest: `providers:${model}`,
+    configDigest: stableHash({ config: model }),
+    providerBuildDigest: stableHash({ providers: model }),
     providers,
     processors: [],
-    compiler: '@dkb/evidence-docling-llamaindex',
     indexMode: 'packaged',
     embedding: {
-      adapter: '@dkb/embedding-fastembed',
-      model,
+      provider: '@dkb/embedding-fastembed',
+      space: model,
       dimensions,
+      queryMode: 'query',
+      documentMode: 'passage',
     },
     compatibility: {
       evidenceProfileDigest,
@@ -353,6 +354,8 @@ function resolvedProfile(model, dimensions) {
       dimensions,
       metric: 'cosine',
       normalized: true,
+      queryTransformDigest: stableHash({ mode: 'query' }),
+      documentTransformDigest: stableHash({ mode: 'passage' }),
       indexFormat: 'IndexIDMap2(IndexFlatIP)',
       protocol: 'dkb.evidence.v1',
     },

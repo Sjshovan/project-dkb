@@ -35,6 +35,11 @@ retrieval vectors. The compiler represents this boundary as a vector-free
 Index providers receive the unchanged Evidence records and that separately
 validated vector collection, then bind their generic artifact manifests to one
 Evidence digest. An Evidence provider cannot precompute or override vectors.
+The generated retrieval profile receipt records provider-neutral Evidence and
+retrieval provider groups, exact code digests, embedding-space compatibility,
+and index/retrieval protocols. Provider-native parser or chunker diagnostics
+remain inside the owning provider receipt; Protocol has no Docling- or
+LlamaIndex-shaped extraction schema.
 
 ## Query flow
 

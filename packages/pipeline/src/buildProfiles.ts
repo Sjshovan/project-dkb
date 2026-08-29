@@ -78,8 +78,7 @@ export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbRe
     ? new Set(['evidence'])
     : new Set(['parser', 'chunker']);
   const evidenceProviders = description.providers
-    .filter((provider) => evidenceProviderKinds.has(provider.kind))
-    .sort(compareProvider);
+    .filter((provider) => evidenceProviderKinds.has(provider.kind));
   const processors = [...description.processors];
   const evidenceProfile = {
     format: DKB_EVIDENCE_PROFILE_FORMAT as typeof DKB_EVIDENCE_PROFILE_FORMAT,
@@ -109,8 +108,7 @@ export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbRe
   const queryTransformDigest = optionalString(raw.queryTransformDigest) ?? stableHash({ mode: queryMode });
   const documentTransformDigest = optionalString(raw.documentTransformDigest) ?? stableHash({ mode: documentMode });
   const retrievalProviders = description.providers
-    .filter((provider) => ['embedding', 'index', 'retrieval'].includes(provider.kind))
-    .sort(compareProvider);
+    .filter((provider) => ['embedding', 'index', 'retrieval'].includes(provider.kind));
   const retrievalProfile = {
     format: DKB_RETRIEVAL_BUILD_PROFILE_FORMAT as typeof DKB_RETRIEVAL_BUILD_PROFILE_FORMAT,
     evidenceProfileDigest,
@@ -170,10 +168,6 @@ export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbRe
 
 function selectedOptions(host: DkbProviderHost, ids: readonly string[]): Record<string, Record<string, unknown>> {
   return Object.fromEntries([...new Set(ids)].sort().map((id) => [id, { ...host.optionsFor(id) }]));
-}
-
-function compareProvider(left: ProviderDescription, right: ProviderDescription): number {
-  return left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id);
 }
 
 function requiredString(value: unknown, label: string): string {

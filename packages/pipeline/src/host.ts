@@ -192,7 +192,7 @@ export class DkbProviderHost {
         sourcePath: registration.sourcePath,
         sourceDigest: registration.sourceDigest,
       }))
-      .sort((left, right) => left.kind.localeCompare(right.kind));
+      .sort((left, right) => PROVIDER_KIND_ORDER.indexOf(left.kind) - PROVIDER_KIND_ORDER.indexOf(right.kind));
     const processors = this.processors.map((registration) => ({
       id: registration.id,
       version: registration.version,
@@ -347,6 +347,8 @@ export class DkbProviderHost {
     }
   }
 }
+
+const PROVIDER_KIND_ORDER = ['evidence', 'parser', 'chunker', 'embedding', 'index', 'retrieval'] as const;
 
 function selectedPluginIds(config: DkbResolvedContextConfig): string[] {
   const target = config.target;

@@ -86,6 +86,11 @@ if (/\b(?:embedding|vector|vectors)\s*\??\s*:/u.test(evidenceRecordContract)) {
   errors.push('packages/pipeline/src/types.ts allows retrieval vectors on the provider-neutral Evidence record contract');
 }
 
+const retrievalProfileContract = await fs.readFile(path.join(root, 'packages/protocol/src/retrievalProfile.ts'), 'utf8');
+if (/\b(?:compiler|extraction)\s*:\s*\{|\b(?:richParser|richChunker|fallbackParser|fallbackChunker)\s*:/u.test(retrievalProfileContract)) {
+  errors.push('packages/protocol/src/retrievalProfile.ts contains a concrete compiler or extraction-shaped receipt contract');
+}
+
 const approvedDistributionImports = new Set([
   'apps/cli/src/cli/index.ts',
   'services/compiler/src/compile.ts',

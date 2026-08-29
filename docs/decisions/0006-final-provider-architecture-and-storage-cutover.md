@@ -42,6 +42,11 @@ scores. Retrieval providers perform lexical/vector ranking and fusion. Library
 owns the Evidence catalog and resolves canonical evidence text, provenance, and
 locators.
 
+Generated profile locks contain only provider-neutral provider groups,
+processors, embedding-space compatibility, index format, and retrieval
+protocol. Concrete parser/chunker details belong to the owning provider's
+arbitrary build receipt rather than a hard-coded Protocol extraction object.
+
 Immutable Evidence and Retrieval Builds are the only durable derived state.
 Runtime locks point directly to exact build directories. DKB does not maintain
 an active `.dkb/artifacts` mirror. Regenerable consolidated state belongs under
