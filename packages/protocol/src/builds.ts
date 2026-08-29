@@ -4,7 +4,7 @@ import type { DkbPublisherReleaseSignature, DkbRegistryReleaseSignature } from '
 
 export const DKB_EVIDENCE_BUILD_LOCK_FORMAT = 'dkb.evidence-build.v1';
 export const DKB_RETRIEVAL_BUILD_LOCK_FORMAT = 'dkb.retrieval-build.v1';
-export const DKB_RUNTIME_LOCK_FORMAT = 'dkb.runtime-lock.v1';
+export const DKB_RUNTIME_LOCK_FORMAT = 'dkb.runtime-lock.v2';
 export const DKB_INSTALL_PLAN_FORMAT = 'dkb.install-plan.v1';
 
 export interface DkbEvidenceBuildLock {

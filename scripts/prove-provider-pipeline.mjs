@@ -6,16 +6,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { loadFaissPackageArtifact, validateFaissPackageArtifact } from '@sjshovan/dkb-index-faiss/faissStore.js';
 import { validateMeilisearchPackageArtifact } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
 import { getQueryContext, closeQueryContext } from '../services/runtime/dist/indexes/queryContext.js';
-import { readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { semanticSearch } from '../services/runtime/dist/read/navigation.js';
 import { loadDkb, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { cleanupRuntimeIndexPackage, prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
 import { serveDkbRegistryCompiler } from '@sjshovan/dkb-compiler/server.js';
+import { readEvidenceBuild, readRetrievalBuildProfile, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
 
 const executeFile = promisify(execFile);
 
@@ -97,11 +97,15 @@ try {
   await fs.writeFile(remoteArchive, Buffer.from(remote.archive.contents, 'base64'));
   await extractDkbPackageArchive(remoteArchive, remoteRoot);
 
+  const [localGraph, remoteGraph] = await Promise.all([
+    validatePackageBuildGraph(localRoot),
+    validatePackageBuildGraph(remoteRoot),
+  ]);
   const [localLock, remoteLock, localIr, remoteIr] = await Promise.all([
-    readRetrievalProfileLock(localRoot),
-    readRetrievalProfileLock(remoteRoot),
-    readEvidenceIr(localRoot),
-    readEvidenceIr(remoteRoot),
+    readRetrievalBuildProfile(localGraph.retrievalPath),
+    readRetrievalBuildProfile(remoteGraph.retrievalPath),
+    readEvidenceBuild(localGraph.evidencePath),
+    readEvidenceBuild(remoteGraph.evidencePath),
   ]);
 
   assert.equal(localLock.buildDigest, remoteLock.buildDigest, 'local and remote build digests differ');
@@ -133,11 +137,12 @@ try {
   await writePipelineConfig(queryRoot);
   const queryLibraryId = (await loadLibrary(queryRoot)).manifest.id;
   const prepared = await prepareRuntimeIndexPackage({
+    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
     libraryRoot: queryRoot,
     libraryId: queryLibraryId,
     dkb: await loadDkb(path.join(queryRoot, 'knowledge')),
   });
-  const queryContext = await getQueryContext(queryRoot, queryLibraryId);
+  const queryContext = await getQueryContext(queryRoot, queryLibraryId, DEFAULT_DKB_RUNTIME_CONTEXT);
   const searches = {};
 
   try {
@@ -150,6 +155,7 @@ try {
     await closeQueryContext(queryRoot);
     if (target === 'meilisearch') {
       await cleanupRuntimeIndexPackage({
+        runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
         libraryRoot: queryRoot,
         libraryId: queryLibraryId,
         packageId: '@proof/comparative-corpus',

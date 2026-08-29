@@ -24,8 +24,8 @@ export function estimateRetrievalWorkingBytes(
   dimensions: number,
 ): number {
   const rawVectorBytes = corpus.evidenceRecords * dimensions * Float32Array.BYTES_PER_ELEMENT;
-  // Compilation temporarily holds JSON vectors, the FAISS segment/catalog, the
-  // active artifact tree, and immutable Retrieval Build copies concurrently.
+  // Compilation temporarily holds JSON vectors, the provider-native index,
+  // staging artifacts, and immutable Retrieval Build copies concurrently.
   const vectorWorkingBytes = rawVectorBytes * 16;
   const evidenceWorkingBytes = corpus.evidenceTextBytes * 6;
   const sourceWorkingBytes = corpus.sourceBytes * 2;

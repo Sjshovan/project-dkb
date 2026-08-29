@@ -14,6 +14,7 @@ import { applyLibraryLock } from '@sjshovan/dkb-library/state.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
 import { switchRuntimePipelineFromRegistry } from '../services/runtime/dist/runtime/pipelineSwitch.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
 
 test('Runtime switches retained package builds atomically without contacting the Registry', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-pipeline-switch-'));
@@ -84,6 +85,7 @@ test('Runtime switches retained package builds atomically without contacting the
   });
 
   const switched = await switchRuntimePipelineFromRegistry({
+    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
     stateRoot: root,
     target: 'tei',
     registryUrl: 'http://127.0.0.1:1',
@@ -96,6 +98,7 @@ test('Runtime switches retained package builds atomically without contacting the
   assert.equal((await readRuntimeLock(packageRoot)).target, 'tei');
 
   const switchedBack = await switchRuntimePipelineFromRegistry({
+    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
     stateRoot: root,
     target: 'fast',
     registryUrl: 'http://127.0.0.1:1',
@@ -117,6 +120,7 @@ test('Runtime switches retained package builds atomically without contacting the
 
   await assert.rejects(
     switchRuntimePipelineFromRegistry({
+      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
       stateRoot: root,
       target: 'tei',
       registryUrl: 'http://127.0.0.1:1',
@@ -152,6 +156,7 @@ async function writePipelinePlugins(root) {
   await writePlugin(root, '@test', 'core', `
 import fs from 'node:fs/promises';
 import path from 'node:path';
+export const apiVersion = 2;
 export const id = '@test/core';
 export const version = '1.0.0';
 export function setup(context) {
@@ -197,6 +202,7 @@ export function setup(context) {
 
 function embeddingPlugin(id, space, value) {
   return `
+export const apiVersion = 2;
 export const id = '${id}';
 export const version = '1.0.0';
 export function setup(context) {

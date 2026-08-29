@@ -1,11 +1,7 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { stableHash } from '../contracts/hash.js';
 import { DkbError } from '../errors.js';
-import { DKB_ARTIFACTS_DIR, resolveFrom } from '../paths.js';
 
-export const DKB_EVIDENCE_IR_PATH = `${DKB_ARTIFACTS_DIR}/evidence.ir.json`;
-export const DKB_EVIDENCE_IR_FORMAT = 'dkb.evidence.ir.v3';
+export const DKB_EVIDENCE_IR_FORMAT = 'dkb.evidence.ir.v4';
 
 export interface DkbEvidenceSourceRecord {
   id: string;
@@ -163,25 +159,7 @@ export function buildEvidenceIr(
   };
 }
 
-export async function writeEvidenceIr(root: string, ir: DkbEvidenceIr): Promise<void> {
-  validateEvidenceIr(ir, DKB_EVIDENCE_IR_PATH);
-  const target = resolveFrom(root, DKB_EVIDENCE_IR_PATH);
-  const temp = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
-
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(temp, `${JSON.stringify(ir, null, 2)}\n`, 'utf8');
-  await fs.rm(target, { force: true });
-  await fs.rename(temp, target);
-}
-
-export async function readEvidenceIr(root: string): Promise<DkbEvidenceIr> {
-  const target = resolveFrom(root, DKB_EVIDENCE_IR_PATH);
-  const parsed = JSON.parse(await fs.readFile(target, 'utf8')) as unknown;
-
-  return validateEvidenceIr(parsed, target);
-}
-
-export function validateEvidenceIr(value: unknown, source = DKB_EVIDENCE_IR_PATH): DkbEvidenceIr {
+export function validateEvidenceIr(value: unknown, source = 'Evidence IR'): DkbEvidenceIr {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new DkbError(`Invalid Evidence IR at ${source}: expected object`);
   }
@@ -229,7 +207,7 @@ function stringMetadata(record: DkbEvidenceSourceRecord, key: string): string {
 
 function provenanceFor(metadata: Record<string, unknown>): Record<string, unknown> {
   const provenance = Object.fromEntries(Object.entries(metadata)
-    .filter(([key]) => key.startsWith('dkb_') || key === 'docling')
+    .filter(([key]) => key.startsWith('dkb_'))
     .sort(([left], [right]) => left.localeCompare(right)));
   if (typeof metadata.updatedAt === 'string') provenance.dkb_updated_at = metadata.updatedAt;
   if (typeof metadata.heading === 'string') provenance.dkb_heading = metadata.heading;

@@ -11,7 +11,6 @@ const required = [
   'packages/library/AGENTS.md',
   'packages/pipeline/AGENTS.md',
   'packages/registry-client/AGENTS.md',
-  'providers/bundled/AGENTS.md',
   'providers/evidence-docling-llamaindex/AGENTS.md',
   'providers/embedding-fastembed/AGENTS.md',
   'providers/embedding-tei/AGENTS.md',

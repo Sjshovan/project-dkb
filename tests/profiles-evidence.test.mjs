@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   assertMatchingRetrievalProfiles,
-  retrievalProfileLockForCompilerResults,
+  retrievalProfileLockForCompiledPipelines,
   validateRetrievalProfileLock,
 } from '@sjshovan/dkb-pipeline/profile.js';
 import { buildEvidenceIr, validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
@@ -16,11 +16,6 @@ import {
   validateRetrievalBuildLock,
 } from '@sjshovan/dkb-protocol/builds.js';
 import { compileComposeProject, verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import {
-  readLlamaIndexCompilerBundleManifest,
-  writeLlamaIndexCompilerBundle,
-} from '@sjshovan/dkb-providers-bundled/llamaindexArtifacts.js';
-import { analyzeSourceUnits } from '@sjshovan/dkb-compiler/sourceAnalysis.js';
 import {
   activateStoredPackageBuild,
   listPackageBuilds,
@@ -33,13 +28,12 @@ const image = 'dkb-compiler-llamaindex:0.3.7';
 
 function compilerResult(model, dimensions) {
   return {
-    compiler: {
-      id: 'llamaindex.fastembed.onnx',
-      model,
-      image,
-    },
+    documents: [],
+    chunks: [],
+    receipts: [],
     records: [{
       id: 'chunk-1',
+      chunkId: 'chunk-1',
       assetId: 'asset-1',
       storeId: 'files',
       type: 'filesystem',
@@ -66,17 +60,17 @@ function compilerResult(model, dimensions) {
 
 test('profile locks reject model, dimension, and digest mismatches', () => {
   const small = resolvedProfile('BAAI/bge-small-en-v1.5', 384);
-  const smallLock = retrievalProfileLockForCompilerResults(small, [compilerResult(small.embedding.model, 384)], {
+  const smallLock = retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 384)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
   const base = resolvedProfile('BAAI/bge-base-en-v1.5', 768);
-  const baseLock = retrievalProfileLockForCompilerResults(base, [compilerResult(base.embedding.model, 768)], {
+  const baseLock = retrievalProfileLockForCompiledPipelines(base, [compilerResult(base.embedding.model, 768)], {
     generatedAt: '2026-08-25T00:00:00.000Z',
   });
 
   assert.throws(() => assertMatchingRetrievalProfiles(smallLock, baseLock, 'proof-safe'), /profile mismatch/i);
   assert.throws(
-    () => retrievalProfileLockForCompilerResults(small, [compilerResult(small.embedding.model, 768)]),
+    () => retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 768)]),
     /dimension mismatch/i,
   );
   assert.throws(
@@ -160,8 +154,8 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
   const evidence = buildEvidenceIr([compilerResult(small.embedding.model, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForCompilerResults(small, [compilerResult(small.embedding.model, 384)]);
-  const baseLock = retrievalProfileLockForCompilerResults(base, [compilerResult(base.embedding.model, 768)]);
+  const smallLock = retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 384)]);
+  const baseLock = retrievalProfileLockForCompiledPipelines(base, [compilerResult(base.embedding.model, 768)]);
 
   await fs.writeFile(path.join(artifacts, 'evidence.ir.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   await fs.writeFile(path.join(artifacts, 'selected.index'), 'small\n', 'utf8');
@@ -239,8 +233,8 @@ test('downloaded package layers retain existing compatible builds and reject dig
   const evidence = buildEvidenceIr([compilerResult(small.embedding.model, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForCompilerResults(small, [compilerResult(small.embedding.model, 384)], { generatedAt });
-  const baseLock = retrievalProfileLockForCompilerResults(base, [compilerResult(base.embedding.model, 768)], { generatedAt });
+  const smallLock = retrievalProfileLockForCompiledPipelines(small, [compilerResult(small.embedding.model, 384)], { generatedAt });
+  const baseLock = retrievalProfileLockForCompiledPipelines(base, [compilerResult(base.embedding.model, 768)], { generatedAt });
 
   for (const root of [source, destination]) {
     const artifacts = path.join(root, '.dkb', 'artifacts');
@@ -317,64 +311,26 @@ test('generated retrieval profile locks do not invalidate package source hashes'
   const verification = await verifyComposeProject(root);
   assert.equal(verification.ok, true, JSON.stringify(verification.checks));
 
-  // Published packages may omit provider-specific compiler shards. Verification
-  // must use the normalized portable index before raw provider/index records.
-  await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.compiler.manifest.json'), { force: true });
-  await fs.rm(path.join(root, '.dkb', 'artifacts', 'llamaindex.records'), { force: true, recursive: true });
-
   const packagedVerification = await verifyComposeProject(root);
   assert.equal(packagedVerification.ok, true, JSON.stringify(packagedVerification.checks));
-});
-
-test('compiler bundles serialize compact Float32 embeddings as portable JSON arrays', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-float32-bundle-'));
-  t.after(() => fs.rm(root, { force: true, recursive: true }));
-  const result = compilerResult('BAAI/bge-small-en-v1.5', 384);
-  result.records[0].embedding = Float32Array.from(result.records[0].embedding);
-
-  await writeLlamaIndexCompilerBundle(root, result);
-
-  const manifest = await readLlamaIndexCompilerBundleManifest(root);
-  const shard = JSON.parse(await fs.readFile(path.join(root, manifest.sources[0].recordsPath), 'utf8'));
-  assert.equal(Array.isArray(shard.records[0].embedding), true);
-  assert.equal(shard.records[0].embedding.length, 384);
-});
-
-test('large package source analysis skips unbounded all-pairs lexical graphs', () => {
-  const units = Array.from({ length: 5_001 }, (_, index) => ({
-    id: `chunk-${index.toString().padStart(5, '0')}`,
-    assetId: `asset-${index.toString().padStart(5, '0')}`,
-    dkbId: 'large-package',
-    storeId: 'files',
-    type: 'filesystem',
-    locator: { path: `file-${index}.txt` },
-    assetLocator: { path: `file-${index}.txt` },
-    title: `Source ${index}`,
-    text: 'Every record shares the same rarekeyword marker.',
-    keywords: ['rarekeyword'],
-    capabilities: { read: true, search: true },
-    hash: `sha256:${index}`,
-    updatedAt: '2026-08-25T00:00:00.000Z',
-    chunkOrdinal: 0,
-    chunkStart: 0,
-    chunkEnd: 49,
-  }));
-
-  const analysis = analyzeSourceUnits(units);
-  assert.equal(analysis.sourceUnits.length, 5_001);
-  assert.equal(analysis.sourceEdges.length, 0);
 });
 
 function resolvedProfile(model, dimensions) {
   const evidenceProfileDigest = stableHash({ evidence: '@dkb/evidence-docling-llamaindex', parser: 'docling', chunker: 'hybrid-v1' });
   const retrievalProfileDigest = stableHash({ evidenceProfileDigest, embedding: '@dkb/embedding-fastembed', model, dimensions, index: '@dkb/index-faiss' });
+  const providers = [
+    providerReceipt('@dkb/evidence-docling-llamaindex', 'evidence'),
+    providerReceipt('@dkb/embedding-fastembed', 'embedding'),
+    providerReceipt('@dkb/index-faiss', 'index'),
+    providerReceipt('@dkb/retrieval-hybrid', 'retrieval'),
+  ];
   return {
     target: 'test',
     evidenceProfileDigest,
     retrievalProfileDigest,
     configDigest: `config:${model}`,
     providerBuildDigest: `providers:${model}`,
-    providers: [],
+    providers,
     processors: [],
     compiler: '@dkb/evidence-docling-llamaindex',
     indexMode: 'packaged',
@@ -396,6 +352,17 @@ function resolvedProfile(model, dimensions) {
   };
 }
 
+function providerReceipt(id, kind) {
+  return {
+    id,
+    version: '1.0.0',
+    kind,
+    source: 'bundled',
+    sourcePath: `bundled:${id}`,
+    sourceDigest: stableHash({ id, kind, version: '1.0.0' }),
+  };
+}
+
 async function writeTestPipeline(root) {
   const pluginRoot = path.join(root, '.dkb', 'plugins', '@test', 'pipeline');
   await fs.mkdir(pluginRoot, { recursive: true });
@@ -413,6 +380,7 @@ async function writeTestPipeline(root) {
   await fs.writeFile(path.join(pluginRoot, 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
+export const apiVersion = 2;
 export const id = '@test/pipeline';
 export const version = '1.0.0';
 export function setup(context) {

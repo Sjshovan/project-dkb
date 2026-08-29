@@ -2,11 +2,11 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { readRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbIndexMutationResult, DkbIndexProvider } from '@sjshovan/dkb-pipeline/types.js';
 import { DKB_RETRIEVAL_BUILD_ARTIFACTS, resolveLibraryRuntimeBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import path from 'node:path';
+import type { DkbRuntimeContext } from '../runtime/context.js';
 
 export interface PreparedRuntimeIndexPackage {
   providerId: string;
@@ -17,6 +17,7 @@ export interface PreparedRuntimeIndexPackage {
 }
 
 export async function prepareRuntimeIndexPackage(input: {
+  runtime: DkbRuntimeContext;
   libraryRoot: string;
   libraryId: string;
   dkb: LoadedDkb;
@@ -25,7 +26,7 @@ export async function prepareRuntimeIndexPackage(input: {
 }): Promise<PreparedRuntimeIndexPackage> {
   const host = await DkbProviderHost.create({
     root: input.libraryRoot,
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution: input.runtime.distribution,
     ...(input.target ? { target: input.target } : {}),
   });
 
@@ -89,6 +90,7 @@ export async function prepareRuntimeIndexPackage(input: {
           return;
         }
         await cleanupRuntimeIndexPackage({
+          runtime: input.runtime,
           libraryRoot: input.libraryRoot,
           libraryId: input.libraryId,
           packageId: input.dkb.manifest.id,
@@ -102,6 +104,7 @@ export async function prepareRuntimeIndexPackage(input: {
 }
 
 export async function verifyRuntimeIndex(input: {
+  runtime: DkbRuntimeContext;
   libraryRoot: string;
   libraryId: string;
   packageId?: string;
@@ -111,7 +114,7 @@ export async function verifyRuntimeIndex(input: {
 }): Promise<DkbIndexMutationResult | null> {
   const host = await DkbProviderHost.create({
     root: input.libraryRoot,
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution: input.runtime.distribution,
     ...(input.target ? { target: input.target } : {}),
   });
 
@@ -139,13 +142,14 @@ export async function verifyRuntimeIndex(input: {
 }
 
 export async function cleanupRuntimeIndexPackage(input: {
+  runtime: DkbRuntimeContext;
   libraryRoot: string;
   libraryId: string;
   packageId: string;
   packageVersion: string;
   signal?: AbortSignal;
 }): Promise<DkbIndexMutationResult | null> {
-  const host = await DkbProviderHost.create({ root: input.libraryRoot, distribution: DEFAULT_DKB_DISTRIBUTION });
+  const host = await DkbProviderHost.create({ root: input.libraryRoot, distribution: input.runtime.distribution });
 
   try {
     const provider = host.provider<DkbIndexProvider>('index');

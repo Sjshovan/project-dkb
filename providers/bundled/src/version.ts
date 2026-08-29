@@ -1,1 +1,0 @@
-export const DKB_BUNDLED_PROVIDERS_VERSION = '0.1.0';

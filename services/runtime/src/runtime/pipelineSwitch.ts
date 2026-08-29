@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { mergeStoredPackageBuilds, listPackageBuilds, activateStoredPackageBuild, maybeReadRuntimeLock, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
-import { snapshotLibraryArtifacts } from '@sjshovan/dkb-library/artifactSnapshot.js';
+import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { DKB_RUNTIME_LOCK_FORMAT, validateRuntimeLock, type DkbRuntimeLock, type DkbRuntimeLockEntry } from '@sjshovan/dkb-protocol/builds.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
@@ -12,12 +12,12 @@ import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 import { DKB_CONFIG_FORMAT, DKB_CONFIG_PATH, readDkbContextConfig, writeDkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { resolveProviderRetrievalProfile, maybeReadRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
-import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { materializeDkbInstallPlan } from './registryInstall.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { closeRuntimeQuerySnapshot, ensureRuntimeState, invalidateRuntimeQuerySnapshot } from './state.js';
 import { prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
+import type { DkbRuntimeContext } from './context.js';
 
 export interface DkbRuntimePipelineSwitchResult {
   status: 'pipeline_switched';
@@ -55,6 +55,7 @@ interface PreparedPackage {
  * package. The caller must serialize Runtime mutations around this operation.
  */
 export async function switchRuntimePipelineFromRegistry(options: {
+  runtime: DkbRuntimeContext;
   stateRoot?: string;
   target: string;
   registryUrl: string;
@@ -69,7 +70,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
   const backupRoot = path.join(runtime.stateDir, `pipeline-backup-${process.pid}-${Date.now().toString(36)}`);
   const configPath = path.join(runtime.stateRoot, ...DKB_CONFIG_PATH.split('/'));
   let host: DkbProviderHost | null = null;
-  let artifactSnapshot: Awaited<ReturnType<typeof snapshotLibraryArtifacts>> | null = null;
+  let artifactSnapshot: Awaited<ReturnType<typeof snapshotRuntimeReceipts>> | null = null;
   let previousRuntime: DkbRuntimeLock | null = null;
   let previousConfigBytes: Buffer | null = null;
   const prepared: PreparedPackage[] = [];
@@ -77,8 +78,8 @@ export async function switchRuntimePipelineFromRegistry(options: {
   let configWritten = false;
 
   try {
-    host = await DkbProviderHost.create({ root: runtime.stateRoot, target, distribution: DEFAULT_DKB_DISTRIBUTION });
-    artifactSnapshot = await snapshotLibraryArtifacts(runtime.stateRoot);
+    host = await DkbProviderHost.create({ root: runtime.stateRoot, target, distribution: options.runtime.distribution });
+    artifactSnapshot = await snapshotRuntimeReceipts(runtime.stateRoot);
     previousRuntime = await maybeReadRuntimeLock(runtime.stateRoot);
     previousConfigBytes = await fs.readFile(configPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null;
@@ -122,6 +123,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
       const runtimeEntry = graph.runtime.packages[entry.identity];
       if (!runtimeEntry) throw new DkbError(`Prepared Runtime lock does not contain ${entry.identity}`);
       const index = await prepareRuntimeIndexPackage({
+        runtime: options.runtime,
         libraryRoot: runtime.stateRoot,
         libraryId: library.manifest.id,
         dkb,
@@ -176,6 +178,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
     await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot);
     for (const item of prepared) {
       await verifyRuntimeIndex({
+        runtime: options.runtime,
         libraryRoot: runtime.stateRoot,
         libraryId: library.manifest.id,
         packageId: item.id,

@@ -1,6 +1,6 @@
 {
   "name": "@sjshovan/dkb-pipeline",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -9,10 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./*": {
-      "types": "./dist/*",
-      "import": "./dist/*"
-    }
+    "./buildProfiles.js": { "types": "./dist/buildProfiles.d.ts", "import": "./dist/buildProfiles.js" },
+    "./config.js": { "types": "./dist/config.d.ts", "import": "./dist/config.js" },
+    "./host.js": { "types": "./dist/host.d.ts", "import": "./dist/host.js" },
+    "./profile.js": { "types": "./dist/profile.d.ts", "import": "./dist/profile.js" },
+    "./types.js": { "types": "./dist/types.d.ts", "import": "./dist/types.js" }
   },
   "files": [
     "dist/",
@@ -23,7 +24,7 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@sjshovan/dkb-protocol": "1.0.0"
+    "@sjshovan/dkb-protocol": "2.0.0"
   },
   "engines": {
     "node": ">=22.15.0"

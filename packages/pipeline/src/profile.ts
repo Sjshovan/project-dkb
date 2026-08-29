@@ -3,26 +3,27 @@ import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import {
+  DKB_RETRIEVAL_PROFILE_FORMAT,
+  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+  validateRetrievalProfileLock,
+  type DkbRetrievalCompatibilityReceipt,
+  type DkbRetrievalProfileLock,
+} from '@sjshovan/dkb-protocol/retrievalProfile.js';
 import type { DkbProviderHost, DkbProviderHostDescription } from './host.js';
-import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
+import type { DkbCompiledPipeline, DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
 import { resolveBuildProfiles } from './buildProfiles.js';
 
-const DEFAULT_INDEX_PROVIDER_ID = '@dkb/index-faiss';
-const DEFAULT_RETRIEVAL_PROVIDER_ID = '@dkb/retrieval-hybrid';
-
-export interface DkbCompilerProfileResult {
-  compiler: {
-    id: string;
-    image: string;
-    model: string;
-  };
-  records: ReadonlyArray<{
-    embedding?: ArrayLike<number>;
-  }>;
-}
-
-export const DKB_RETRIEVAL_PROFILE_LOCK_PATH = 'dkb-profile.lock.json';
-export const DKB_RETRIEVAL_PROFILE_FORMAT = 'dkb.retrieval-profile.v2';
+export {
+  DKB_RETRIEVAL_PROFILE_FORMAT,
+  DKB_RETRIEVAL_PROFILE_LOCK_PATH,
+  assertMatchingRetrievalProfiles,
+  validateRetrievalProfileLock,
+} from '@sjshovan/dkb-protocol/retrievalProfile.js';
+export type {
+  DkbRetrievalCompatibilityReceipt,
+  DkbRetrievalProfileLock,
+} from '@sjshovan/dkb-protocol/retrievalProfile.js';
 
 export interface DkbResolvedRetrievalProfile {
   target: string;
@@ -39,71 +40,7 @@ export interface DkbResolvedRetrievalProfile {
     model: string;
     dimensions: number;
   };
-  compatibility: {
-    evidenceProfileDigest: string;
-    embeddingProvider: string;
-    embeddingSpace: string;
-    dimensions: number;
-    metric: string;
-    normalized: boolean;
-    modelRevision?: string;
-    queryTransformDigest: string;
-    documentTransformDigest: string;
-    indexFormat: string;
-    protocol: string;
-  };
-}
-
-export interface DkbRetrievalProfileLock {
-  format: typeof DKB_RETRIEVAL_PROFILE_FORMAT;
-  profile: {
-    compiler: {
-      adapter: string;
-      id: string;
-      image: string;
-      imageDigest: string | null;
-    };
-    embedding: {
-      adapter: string;
-      model: string;
-      modelRevision: string | null;
-      modelDigest: string | null;
-      dimensions: number;
-      metric: string;
-      normalized: boolean;
-      queryMode: string;
-      documentMode: string;
-    };
-    extraction: {
-      richParser: string;
-      richChunker: string;
-      fallbackParser: string;
-      fallbackChunker: string;
-    };
-    evidence: {
-      profileDigest: string;
-    };
-    target: string;
-    configDigest: string;
-    providerBuildDigest: string;
-    providers: DkbProviderHostDescription['providers'];
-    processors: DkbProviderHostDescription['processors'];
-    index: {
-      provider: string;
-      mode: 'packaged' | 'managed';
-      format: string;
-    };
-    retrieval: {
-      provider: string;
-      protocol: string;
-      profileDigest: string;
-    };
-  };
-  buildDigest: string;
-  compatibility: DkbResolvedRetrievalProfile['compatibility'];
-  compatibilityDigest: string;
-  profileDigest: string;
-  generatedAt: string;
+  compatibility: DkbRetrievalCompatibilityReceipt;
 }
 
 export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Promise<DkbResolvedRetrievalProfile> {
@@ -129,9 +66,9 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
   };
 }
 
-export function retrievalProfileLockForCompilerResults(
+export function retrievalProfileLockForCompiledPipelines(
   desired: DkbResolvedRetrievalProfile,
-  results: readonly DkbCompilerProfileResult[],
+  results: readonly DkbCompiledPipeline[],
   options: {
     compilerImageDigest?: string | null;
     modelRevision?: string | null;
@@ -146,32 +83,29 @@ export function retrievalProfileLockForCompilerResults(
   for (const result of results) {
     const dimensions = result.records.find((record) => (record.embedding?.length ?? 0) > 0)?.embedding?.length ?? 0;
 
-    if (result.compiler.model !== desired.embedding.model) {
-      throw new DkbError(`Compiler model mismatch: expected ${desired.embedding.model}, got ${result.compiler.model}`);
-    }
     if (dimensions !== desired.embedding.dimensions) {
-      throw new DkbError(`Compiler dimension mismatch for ${result.compiler.model}: expected ${desired.embedding.dimensions}, got ${dimensions}`);
+      throw new DkbError(`Embedding dimension mismatch for ${desired.embedding.model}: expected ${desired.embedding.dimensions}, got ${dimensions}`);
     }
   }
 
-  const compilerImages = [...new Set(results.map((result) => result.compiler.image))];
-  const compilerIds = [...new Set(results.map((result) => result.compiler.id))];
-
-  if (compilerImages.length !== 1 || compilerIds.length !== 1) {
-    throw new DkbError(`Compiler implementation mismatch across packages: ${compilerIds.join(', ')} / ${compilerImages.join(', ')}`);
-  }
   const evidence = desired.providers.find((provider) => provider.kind === 'evidence');
   const parser = desired.providers.find((provider) => provider.kind === 'parser');
   const chunker = desired.providers.find((provider) => provider.kind === 'chunker');
+  const index = desired.providers.find((provider) => provider.kind === 'index');
+  const retrieval = desired.providers.find((provider) => provider.kind === 'retrieval');
+  if ((!evidence && (!parser || !chunker)) || !index || !retrieval) {
+    throw new DkbError(`Resolved target ${desired.target} is missing required provider receipts`);
+  }
   const parserId = evidence?.id ?? parser?.id ?? desired.compiler;
   const chunkerId = evidence?.id ?? chunker?.id ?? desired.compiler;
+  const evidenceImplementation = evidence ?? parser!;
 
   const profile: DkbRetrievalProfileLock['profile'] = {
     compiler: {
       adapter: desired.compiler,
-      id: compilerIds[0] ?? desired.compiler,
-      image: compilerImages[0] ?? `plugin:${desired.compiler}`,
-      imageDigest: options.compilerImageDigest ?? null,
+      id: evidenceImplementation.id,
+      image: evidenceImplementation.sourcePath,
+      imageDigest: options.compilerImageDigest ?? evidenceImplementation.sourceDigest,
     },
     embedding: {
       adapter: desired.embedding.adapter,
@@ -199,12 +133,12 @@ export function retrievalProfileLockForCompilerResults(
     providers: desired.providers,
     processors: desired.processors,
     index: {
-      provider: desired.providers.find((provider) => provider.kind === 'index')?.id ?? DEFAULT_INDEX_PROVIDER_ID,
+      provider: index.id,
       mode: desired.indexMode,
       format: desired.compatibility.indexFormat,
     },
     retrieval: {
-      provider: desired.providers.find((provider) => provider.kind === 'retrieval')?.id ?? DEFAULT_RETRIEVAL_PROVIDER_ID,
+      provider: retrieval.id,
       protocol: desired.compatibility.protocol,
       profileDigest: desired.retrievalProfileDigest,
     },
@@ -253,51 +187,6 @@ export async function maybeReadRetrievalProfileLock(root: string): Promise<DkbRe
       return null;
     }
     throw error;
-  }
-}
-
-export function validateRetrievalProfileLock(value: unknown, source = DKB_RETRIEVAL_PROFILE_LOCK_PATH): DkbRetrievalProfileLock {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected object`);
-  }
-
-  const candidate = value as Partial<DkbRetrievalProfileLock>;
-  const profile = candidate.profile;
-
-  if (candidate.format !== DKB_RETRIEVAL_PROFILE_FORMAT || !profile || typeof candidate.profileDigest !== 'string') {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: unsupported format or missing profile`);
-  }
-  if (!profile.compiler || !profile.embedding || !profile.extraction) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: incomplete profile`);
-  }
-  if (!Number.isInteger(profile.embedding.dimensions) || profile.embedding.dimensions <= 0) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: dimensions must be a positive integer`);
-  }
-
-  if (!candidate.compatibility || typeof candidate.buildDigest !== 'string' || typeof candidate.compatibilityDigest !== 'string') {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: missing build or compatibility receipt`);
-  }
-  const actualBuildDigest = stableHash(profile);
-  const compatibilityDigest = stableHash(candidate.compatibility);
-
-  if (candidate.compatibilityDigest !== compatibilityDigest) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected digest ${compatibilityDigest}, got ${candidate.compatibilityDigest}`);
-  }
-  if (candidate.profileDigest !== profile.retrieval.profileDigest) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected profile digest ${profile.retrieval.profileDigest}, got ${candidate.profileDigest}`);
-  }
-  if (candidate.buildDigest !== actualBuildDigest) {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: expected build digest ${actualBuildDigest}, got ${candidate.buildDigest}`);
-  }
-
-  return candidate as DkbRetrievalProfileLock;
-}
-
-export function assertMatchingRetrievalProfiles(expected: DkbRetrievalProfileLock, actual: DkbRetrievalProfileLock, label = 'package'): void {
-  if (expected.compatibilityDigest !== actual.compatibilityDigest) {
-    throw new DkbError(
-      `Retrieval profile mismatch for ${label}: registry uses ${expected.profile.embedding.model}/${expected.profile.embedding.dimensions} (${expected.profileDigest}), package uses ${actual.profile.embedding.model}/${actual.profile.embedding.dimensions} (${actual.profileDigest})`,
-    );
   }
 }
 

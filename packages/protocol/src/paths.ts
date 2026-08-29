@@ -1,13 +1,12 @@
 ﻿import path from 'node:path';
 
 export const DKB_STATE_DIR = '.dkb';
-export const DKB_ARTIFACTS_DIR = '.dkb/artifacts';
-export const DKB_ARTIFACT_LOCK_PATH = `${DKB_ARTIFACTS_DIR}/dkb-artifact.lock.json`;
 export const DKB_BUILDS_DIR = '.dkb/builds';
 export const DKB_EVIDENCE_BUILDS_DIR = `${DKB_BUILDS_DIR}/evidence`;
 export const DKB_RETRIEVAL_BUILDS_DIR = `${DKB_BUILDS_DIR}/retrieval`;
 export const DKB_RUNTIME_LOCK_PATH = '.dkb/runtime.lock.json';
 export const DKB_CACHE_DIR = '.dkb/cache';
+export const DKB_COMPILE_RECEIPT_PATH = `${DKB_CACHE_DIR}/compiler/compile.receipt.json`;
 export const DKB_LOCKS_DIR = '.dkb/locks';
 export const DKB_RUNS_DIR = '.dkb/runs';
 export const DKB_WRITE_QUEUE_DIR = '.dkb/runs/write-queue';
@@ -36,8 +35,8 @@ export function defaultStatePath(root: string, relativePath: string): string {
   return path.resolve(root, relativePath);
 }
 
-export function artifactLockPath(root: string): string {
-  return resolveFrom(root, DKB_ARTIFACT_LOCK_PATH);
+export function compileReceiptPath(root: string): string {
+  return resolveFrom(root, DKB_COMPILE_RECEIPT_PATH);
 }
 
 export function evidenceBuildPath(root: string, evidenceProfileDigest: string, evidenceDigest: string): string {

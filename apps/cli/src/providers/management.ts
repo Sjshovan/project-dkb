@@ -14,8 +14,7 @@ import {
   type DkbContextConfig,
   type DkbPipelineTargetConfig,
 } from '@sjshovan/dkb-pipeline/config.js';
-import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
-import { DkbProviderHost, pluginPath } from '@sjshovan/dkb-pipeline/host.js';
+import { DkbProviderHost, pluginPath, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbPluginModule } from '@sjshovan/dkb-pipeline/types.js';
 import { maybeReadRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
@@ -33,14 +32,14 @@ export interface DkbPluginListEntry {
   error?: string;
 }
 
-export async function listPipelineTargets(input: { root: string; globalRoot?: string }): Promise<{
+export async function listPipelineTargets(input: { distribution: DkbDistribution; root: string; globalRoot?: string }): Promise<{
   root: string;
   activeTarget: string;
   targets: Array<{ name: string; active: boolean; providers: string[] }>;
 }> {
-  const resolved = await resolveContextConfig(input.root, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const resolved = await resolveContextConfig(input.root, { defaults: input.distribution.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
   const names = [...new Set([
-    ...Object.keys(DEFAULT_DKB_DISTRIBUTION.defaults.targets ?? {}),
+    ...Object.keys(input.distribution.defaults.targets ?? {}),
     ...Object.keys(resolved.global.targets ?? {}),
     ...Object.keys(resolved.local.targets ?? {}),
   ])];
@@ -48,13 +47,13 @@ export async function listPipelineTargets(input: { root: string; globalRoot?: st
     root: resolved.root,
     activeTarget: resolved.activeTarget,
     targets: names.map((name) => {
-      const target = resolveContextConfigDocuments(resolved.root, resolved.globalRoot, DEFAULT_DKB_DISTRIBUTION.defaults, resolved.global, resolved.local, name).target;
+      const target = resolveContextConfigDocuments(resolved.root, resolved.globalRoot, input.distribution.defaults, resolved.global, resolved.local, name).target;
       return { name, active: name === resolved.activeTarget, providers: selectedPluginIds(target) };
     }).sort((left, right) => left.name.localeCompare(right.name)),
   };
 }
 
-export async function activatePipelineTarget(input: { root: string; name: string; globalRoot?: string }): Promise<ReturnType<DkbProviderHost['describe']>> {
+export async function activatePipelineTarget(input: { distribution: DkbDistribution; root: string; name: string; globalRoot?: string }): Promise<ReturnType<DkbProviderHost['describe']>> {
   const root = path.resolve(input.root);
   const globalRoot = path.resolve(input.globalRoot ?? defaultDkbGlobalRoot());
   const targetPath = path.join(root, DKB_CONFIG_PATH);
@@ -63,8 +62,8 @@ export async function activatePipelineTarget(input: { root: string; name: string
     readDkbContextConfig(targetPath),
   ]);
   const candidate: DkbContextConfig = { ...local, format: DKB_CONFIG_FORMAT, activeTarget: input.name };
-  const resolved = resolveContextConfigDocuments(root, globalRoot, DEFAULT_DKB_DISTRIBUTION.defaults, global, candidate, input.name);
-  const host = await DkbProviderHost.createFromConfig(resolved, DEFAULT_DKB_DISTRIBUTION);
+  const resolved = resolveContextConfigDocuments(root, globalRoot, input.distribution.defaults, global, candidate, input.name);
+  const host = await DkbProviderHost.createFromConfig(resolved, input.distribution);
 
   try {
     const selected = await resolveProviderRetrievalProfile(host);
@@ -136,6 +135,7 @@ export async function linkPlugin(input: {
 }
 
 export async function removePlugin(input: {
+  distribution: DkbDistribution;
   root: string;
   id: string;
   scope?: DkbPluginScope;
@@ -146,7 +146,7 @@ export async function removePlugin(input: {
   }
   const scope = input.scope ?? 'local';
   const destination = pluginDirectory(input.root, input.id, scope, input.globalRoot);
-  const selected = await resolveContextConfig(input.root, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const selected = await resolveContextConfig(input.root, { defaults: input.distribution.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
   const selectedIds = selectedPluginIds(selected.target);
 
   if (selectedIds.includes(input.id)) {
@@ -162,15 +162,16 @@ export async function removePlugin(input: {
 }
 
 export async function listPlugins(input: {
+  distribution: DkbDistribution;
   root: string;
   globalRoot?: string;
 }): Promise<DkbPluginListEntry[]> {
-  const resolved = await resolveContextConfig(input.root, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
+  const resolved = await resolveContextConfig(input.root, { defaults: input.distribution.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
   const selected = new Set(selectedPluginIds(resolved.target));
   const entries = [
     ...(await scanPlugins(path.join(resolved.globalRoot, 'plugins'), 'global', selected)),
     ...(await scanPlugins(path.join(resolved.root, '.dkb/plugins'), 'local', selected)),
-    ...DEFAULT_DKB_DISTRIBUTION.plugins.map((plugin) => ({
+    ...input.distribution.plugins.map((plugin) => ({
       id: plugin.id,
       version: plugin.version,
       scope: 'bundled' as const,
@@ -184,6 +185,7 @@ export async function listPlugins(input: {
 }
 
 export async function setPipelineTarget(input: {
+  distribution: DkbDistribution;
   root: string;
   name: string;
   patch: Partial<DkbPipelineTargetConfig>;
@@ -212,8 +214,8 @@ export async function setPipelineTarget(input: {
       },
     },
   };
-  const resolved = resolveContextConfigDocuments(root, globalRoot, DEFAULT_DKB_DISTRIBUTION.defaults, global, candidate, input.activate ? input.name : undefined);
-  const host = await DkbProviderHost.createFromConfig(resolved, DEFAULT_DKB_DISTRIBUTION);
+  const resolved = resolveContextConfigDocuments(root, globalRoot, input.distribution.defaults, global, candidate, input.activate ? input.name : undefined);
+  const host = await DkbProviderHost.createFromConfig(resolved, input.distribution);
 
   try {
     const unhealthy = (await host.health()).filter((result) => !result.ok && result.kind !== 'embedding' && result.kind !== 'evidence');
@@ -243,7 +245,7 @@ export async function setPipelineTarget(input: {
   }
 }
 
-export async function verifyPipeline(input: { root: string; globalRoot?: string; target?: string }): Promise<{
+export async function verifyPipeline(input: { distribution: DkbDistribution; root: string; globalRoot?: string; target?: string }): Promise<{
   ok: boolean;
   pipeline: ReturnType<DkbProviderHost['describe']>;
   health: Awaited<ReturnType<DkbProviderHost['health']>>;
@@ -252,7 +254,7 @@ export async function verifyPipeline(input: { root: string; globalRoot?: string;
     root: input.root,
     ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}),
     ...(input.target ? { target: input.target } : {}),
-    distribution: DEFAULT_DKB_DISTRIBUTION,
+    distribution: input.distribution,
   });
 
   try {
@@ -286,8 +288,8 @@ async function inspectPlugin(target: string): Promise<{ id: string; version: str
     url.searchParams.set('dkb-inspect', `${Date.now()}-${Math.random()}`);
     const plugin = await import(url.href) as Partial<DkbPluginModule>;
 
-    if (!isPluginId(plugin.id) || typeof plugin.version !== 'string' || plugin.version.trim().length === 0 || typeof plugin.setup !== 'function') {
-      throw new DkbError(`expected exports id, version, and setup(context)`);
+    if (plugin.apiVersion !== 2 || !isPluginId(plugin.id) || typeof plugin.version !== 'string' || plugin.version.trim().length === 0 || typeof plugin.setup !== 'function') {
+      throw new DkbError(`expected exports apiVersion=2, id, version, and setup(context)`);
     }
     return { id: plugin.id, version: plugin.version };
   } catch (error) {

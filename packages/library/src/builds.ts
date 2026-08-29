@@ -28,7 +28,7 @@ import { materializeEvidenceCatalog } from './evidenceCatalog.js';
 import {
   validateRetrievalProfileLock,
   type DkbRetrievalProfileLock,
-} from '@sjshovan/dkb-pipeline/profile.js';
+} from '@sjshovan/dkb-protocol/retrievalProfile.js';
 import {
   DKB_EVIDENCE_BUILDS_DIR,
   DKB_RETRIEVAL_BUILDS_DIR,
@@ -392,6 +392,16 @@ export async function validatePackageBuildGraph(root: string, runtimeLock?: DkbR
   return { evidence, retrieval, runtime, evidencePath, retrievalPath };
 }
 
+export async function readEvidenceBuild(evidenceRoot: string): Promise<DkbEvidenceIr> {
+  const target = path.join(path.resolve(evidenceRoot), DKB_EVIDENCE_BUILD_IR);
+  return validateEvidenceIr(JSON.parse(await fs.readFile(target, 'utf8')), target);
+}
+
+export async function readRetrievalBuildProfile(retrievalRoot: string): Promise<DkbRetrievalProfileLock> {
+  const target = path.join(path.resolve(retrievalRoot), DKB_RETRIEVAL_BUILD_PROFILE_LOCK);
+  return validateRetrievalProfileLock(JSON.parse(await fs.readFile(target, 'utf8')), target);
+}
+
 /**
  * Validate the active, immutable Evidence/Retrieval Build chain for a package.
  * This is the provider-neutral package verification boundary used by the CLI,
@@ -616,12 +626,5 @@ function normalizeDigest(value: string): string {
 
 function isRetrievalArtifact(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, '/');
-  return normalized !== DKB_EVIDENCE_BUILD_IR
-    && normalized !== 'dkb-artifact.json'
-    && normalized !== 'dkb-artifact.lock.json'
-    && normalized !== 'dkb-artifact.manifest.json'
-    && normalized !== 'source.index'
-    && normalized !== 'source.index.graph'
-    && normalized !== 'source.index.vector.json'
-    && !normalized.startsWith('llamaindex/');
+  return normalized !== DKB_EVIDENCE_BUILD_IR;
 }

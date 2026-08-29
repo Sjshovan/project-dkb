@@ -10,7 +10,7 @@ import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
 import { evidenceBuildPath, retrievalBuildPath } from '@sjshovan/dkb-protocol/paths.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
-import type { DkbLockArtifact, DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { validateCompiledPackage } from '@sjshovan/dkb-library/builds.js';
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
@@ -25,6 +25,7 @@ import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { ensureRuntimeState, importCompiledDkbArtifactIntoRuntime } from './state.js';
+import type { DkbRuntimeContext } from './context.js';
 
 export interface DkbInstallCandidate {
   packageId: string;
@@ -60,6 +61,7 @@ export interface DkbRegistryInstallResult {
 }
 
 export async function installDkbFromRegistry(options: {
+  runtime: DkbRuntimeContext;
   registryUrl: string;
   registryToken?: string;
   packageId: string;
@@ -89,6 +91,7 @@ export async function installDkbFromRegistry(options: {
       await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
     }
     return await installDkbPlanIntoRuntime({
+      runtime: options.runtime,
       plan,
       layerRoot: downloadRoot,
       trustedKeys: publicKeys.keys,
@@ -102,6 +105,7 @@ export async function installDkbFromRegistry(options: {
 }
 
 export async function installDkbPlanIntoRuntime(options: {
+  runtime: DkbRuntimeContext;
   plan: DkbInstallPlan;
   layerRoot: string;
   runtimeRoot?: string;
@@ -122,6 +126,7 @@ export async function installDkbPlanIntoRuntime(options: {
       progress: options.progress,
     });
     const imported = await importCompiledDkbArtifactIntoRuntime({
+      runtime: options.runtime,
       sourcePath: extractedRoot,
       id: materialized.verification.packageId,
       force: options.force,
@@ -332,6 +337,7 @@ export async function preflightDkbInstall(options: {
 }
 
 export async function installDkbArchiveIntoRuntime(options: {
+  runtime: DkbRuntimeContext;
   archivePath: string;
   runtimeRoot?: string;
   trustedKeys: DkbSigningKeyRecord[];
@@ -355,6 +361,7 @@ export async function installDkbArchiveIntoRuntime(options: {
     }
 
     const imported = await importCompiledDkbArtifactIntoRuntime({
+      runtime: options.runtime,
       sourcePath: extractedRoot,
       id: verification.packageId,
       force: options.force,
@@ -453,29 +460,31 @@ async function verifyExtractedPackage(
 }
 
 async function verifyLockArtifacts(root: string, lock: DkbLockManifest) {
-  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
-  for (const [name, artifact] of Object.entries(lock.artifacts) as Array<[string, DkbLockArtifact | undefined]>) {
-    if (!artifact || artifact.status !== 'built') continue;
-    const target = containedPath(root, artifact.path);
-    const actual = await hashPath(target);
-    checks.push({
-      name: `artifact.${name}`,
-      ok: actual === artifact.hash,
-      detail: actual === artifact.hash ? `${name} hash matches lockfile` : `expected ${artifact.hash}, got ${actual ?? 'missing'}`,
-    });
-  }
-  if (lock.compiled?.path && lock.compiled.artifactHash) {
-    const target = containedPath(root, lock.compiled.path);
-    const actual = await hashPath(target);
-    checks.push({
-      name: 'artifact.compiled',
-      ok: actual === lock.compiled.artifactHash,
-      detail: actual === lock.compiled.artifactHash
-        ? 'compiled artifact hash matches lockfile'
-        : `expected ${lock.compiled.artifactHash}, got ${actual ?? 'missing'}`,
-    });
-  }
-  return checks;
+  const verification = await validateCompiledPackage(root);
+  const graph = verification.graph;
+  if (!graph) return verification.checks;
+  const runtimeDigest = stableHash(graph.runtime);
+  return [
+    {
+      name: 'build.evidence',
+      ok: lock.builds.evidence.digest === graph.evidence.evidenceDigest
+        && lock.builds.evidence.profileDigest === graph.evidence.evidenceProfileDigest,
+      detail: `${graph.evidence.evidenceProfileDigest}/${graph.evidence.evidenceDigest}`,
+    },
+    {
+      name: 'build.retrieval',
+      ok: lock.builds.retrieval.digest === graph.retrieval.retrievalBuildDigest
+        && lock.builds.retrieval.profileDigest === graph.retrieval.retrievalProfileDigest
+        && lock.builds.retrieval.compatibilityDigest === graph.retrieval.compatibilityDigest,
+      detail: `${graph.retrieval.retrievalProfileDigest}/${graph.retrieval.retrievalBuildDigest}`,
+    },
+    {
+      name: 'build.runtime',
+      ok: lock.builds.runtime.target === graph.runtime.target
+        && lock.builds.runtime.digest === runtimeDigest,
+      detail: `${graph.runtime.target}/${runtimeDigest}`,
+    },
+  ];
 }
 
 async function installedPackageRoots(stateRoot: string, packageId: string): Promise<string[]> {

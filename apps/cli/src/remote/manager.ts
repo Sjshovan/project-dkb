@@ -25,6 +25,7 @@ import type {
 } from '@sjshovan/dkb-runtime/remote/types.js';
 import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '@sjshovan/dkb-runtime/read/runtime.js';
 import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '@sjshovan/dkb-runtime/defaultComposition.js';
 
 export async function addDirectRemote(input: {
   url: string;
@@ -203,6 +204,7 @@ export async function installRegisteredRemote(input: {
     await client.writePackageArchive(packageId, archivePath, release.version);
     const publicKeys = signingKeys(await client.publicKeys());
     const result = await installDkbArchiveIntoRuntime({
+      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
       archivePath,
       runtimeRoot: input.runtimeRoot,
       trustedKeys: publicKeys,

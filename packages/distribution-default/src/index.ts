@@ -40,14 +40,36 @@ export const DEFAULT_TARGETS: DkbContextConfig = {
 
 export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
   id: '@dkb/distribution-default',
-  version: '0.1.0',
+  version: '0.2.0',
   defaults: DEFAULT_TARGETS,
   plugins: [EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN, FASTEMBED_PLUGIN, TEI_PLUGIN, FAISS_PLUGIN, MEILISEARCH_PLUGIN, HYBRID_RETRIEVAL_PLUGIN],
   services: [
-    { id: 'evidence-docling-llamaindex', kind: 'docker', requiredBy: ['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'] },
-    { id: 'embedding-fastembed', kind: 'docker', requiredBy: ['fastembed-faiss', 'fastembed-faiss-768'] },
-    { id: 'embedding-tei', kind: 'docker', requiredBy: ['default', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'] },
-    { id: 'index-meilisearch', kind: 'docker', requiredBy: ['tei-meilisearch'] },
+    {
+      id: 'evidence-docling-llamaindex',
+      kind: 'docker',
+      providerId: '@dkb/evidence-docling-llamaindex',
+      image: 'dkb-compiler-llamaindex:0.4.0',
+      version: '0.4.0',
+      requiredBy: ['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'],
+    },
+    {
+      id: 'embedding-fastembed',
+      kind: 'docker',
+      providerId: '@dkb/embedding-fastembed',
+      requiredBy: ['fastembed-faiss', 'fastembed-faiss-768'],
+    },
+    {
+      id: 'embedding-tei',
+      kind: 'docker',
+      providerId: '@dkb/embedding-tei',
+      requiredBy: ['default', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'],
+    },
+    {
+      id: 'index-meilisearch',
+      kind: 'docker',
+      providerId: '@dkb/index-meilisearch',
+      requiredBy: ['tei-meilisearch'],
+    },
   ],
 };
 

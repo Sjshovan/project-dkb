@@ -6,8 +6,10 @@ import { getQueryContext } from '../indexes/queryContext.js';
 import { readDkb } from '../read/runtime.js';
 import { semanticSearch } from '../read/navigation.js';
 import { withRuntimeQuery } from '../runtime/mutation.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
 
 export function createDkbReadOnlyMcpServer(options: {
+  runtime: DkbRuntimeContext;
   libraryPath: string;
   publicBaseUrl?: string;
 }): McpServer {
@@ -30,7 +32,7 @@ export function createDkbReadOnlyMcpServer(options: {
       annotations: readOnlyAnnotations,
     },
     async ({ query, limit, dkbId }) => withRuntimeQuery(options.libraryPath, async () => {
-      const context = await queryContext(options.libraryPath);
+      const context = await queryContext(options.libraryPath, options.runtime);
       const result = await semanticSearch(
         options.libraryPath,
         query,
@@ -70,15 +72,15 @@ export function createDkbReadOnlyMcpServer(options: {
     },
     async ({ id }) => withRuntimeQuery(
       options.libraryPath,
-      async () => toolResult(await fetchRemoteEvidence(options.libraryPath, id, options.publicBaseUrl)),
+      async () => toolResult(await fetchRemoteEvidence(options.libraryPath, id, options.publicBaseUrl, options.runtime)),
     ),
   );
 
   return server;
 }
 
-export async function fetchRemoteEvidence(libraryPath: string, id: string, publicBaseUrl?: string) {
-  const context = await queryContext(libraryPath);
+export async function fetchRemoteEvidence(libraryPath: string, id: string, publicBaseUrl: string | undefined, runtime: DkbRuntimeContext) {
+  const context = await queryContext(libraryPath, runtime);
   const result = await readDkb(libraryPath, {
     queries: [{ id: 'fetch', target: id, operation: 'fetch' }],
   }, context);
@@ -98,9 +100,9 @@ export async function fetchRemoteEvidence(libraryPath: string, id: string, publi
   };
 }
 
-async function queryContext(libraryPath: string) {
+async function queryContext(libraryPath: string, runtime: DkbRuntimeContext) {
   const library = await loadLibrary(libraryPath);
-  return getQueryContext(libraryPath, library.manifest.id);
+  return getQueryContext(libraryPath, library.manifest.id, runtime);
 }
 
 const readOnlyAnnotations = {

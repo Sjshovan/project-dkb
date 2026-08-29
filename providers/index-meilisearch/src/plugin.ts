@@ -1,4 +1,5 @@
 import type { DkbBundledPlugin } from '@sjshovan/dkb-pipeline/host.js';
+import { DKB_PLUGIN_API_VERSION } from '@sjshovan/dkb-pipeline/types.js';
 import {
   MEILISEARCH_INDEX_FORMAT,
   MEILISEARCH_PROVIDER_ID,
@@ -14,6 +15,7 @@ import {
 export const MEILISEARCH_PROVIDER_VERSION = '0.1.0';
 
 export const MEILISEARCH_PLUGIN: DkbBundledPlugin = {
+  apiVersion: DKB_PLUGIN_API_VERSION,
   id: MEILISEARCH_PROVIDER_ID,
   version: MEILISEARCH_PROVIDER_VERSION,
   setup(context) {

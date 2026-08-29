@@ -1,6 +1,6 @@
 {
   "name": "@sjshovan/dkb-library",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -9,10 +9,26 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./*": {
-      "types": "./dist/*",
-      "import": "./dist/*"
-    }
+    "./adapters/adapter.js": { "types": "./dist/adapters/adapter.d.ts", "import": "./dist/adapters/adapter.js" },
+    "./adapters/compose.js": { "types": "./dist/adapters/compose.d.ts", "import": "./dist/adapters/compose.js" },
+    "./adapters/folder.js": { "types": "./dist/adapters/folder.d.ts", "import": "./dist/adapters/folder.js" },
+    "./adapters/index.js": { "types": "./dist/adapters/index.d.ts", "import": "./dist/adapters/index.js" },
+    "./adapters/postgres.js": { "types": "./dist/adapters/postgres.d.ts", "import": "./dist/adapters/postgres.js" },
+    "./adapters/sqlite.js": { "types": "./dist/adapters/sqlite.d.ts", "import": "./dist/adapters/sqlite.js" },
+    "./archive.js": { "types": "./dist/archive.d.ts", "import": "./dist/archive.js" },
+    "./builds.js": { "types": "./dist/builds.d.ts", "import": "./dist/builds.js" },
+    "./collections.js": { "types": "./dist/collections.d.ts", "import": "./dist/collections.js" },
+    "./evidenceCatalog.js": { "types": "./dist/evidenceCatalog.d.ts", "import": "./dist/evidenceCatalog.js" },
+    "./oci.js": { "types": "./dist/oci.d.ts", "import": "./dist/oci.js" },
+    "./overview.js": { "types": "./dist/overview.d.ts", "import": "./dist/overview.js" },
+    "./packageInfo.js": { "types": "./dist/packageInfo.d.ts", "import": "./dist/packageInfo.js" },
+    "./packageTree.js": { "types": "./dist/packageTree.d.ts", "import": "./dist/packageTree.js" },
+    "./resolver.js": { "types": "./dist/resolver.d.ts", "import": "./dist/resolver.js" },
+    "./root.js": { "types": "./dist/root.d.ts", "import": "./dist/root.js" },
+    "./runtimeSnapshot.js": { "types": "./dist/runtimeSnapshot.d.ts", "import": "./dist/runtimeSnapshot.js" },
+    "./signing.js": { "types": "./dist/signing.d.ts", "import": "./dist/signing.js" },
+    "./state.js": { "types": "./dist/state.d.ts", "import": "./dist/state.js" },
+    "./storage.js": { "types": "./dist/storage.d.ts", "import": "./dist/storage.js" }
   },
   "files": [
     "dist/",
@@ -23,9 +39,7 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@sjshovan/dkb-pipeline": "0.1.0",
-    "@sjshovan/dkb-protocol": "1.0.0",
-    "@sjshovan/dkb-providers-bundled": "0.1.0",
+    "@sjshovan/dkb-protocol": "2.0.0",
     "tar": "^7.5.22"
   },
   "engines": {

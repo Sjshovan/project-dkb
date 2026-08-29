@@ -322,7 +322,7 @@ def docling_chunk_record_base(
     metadata = source_metadata(request, store_id, f"file:{relative}", "filesystem", target)
     metadata.update({
         "dkb_rich_parser": "docling",
-        "docling": {
+        "dkb_docling": {
             "headings": headings,
             "captions": captions,
             "itemRefs": item_refs,

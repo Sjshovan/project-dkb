@@ -4,8 +4,11 @@ import { hostHeaderValidation, NodeStreamableHTTPServerTransport, originValidati
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { defaultRuntimeStateRoot } from '../runtime/state.js';
 import { createDkbReadOnlyMcpServer, fetchRemoteEvidence } from './readOnly.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
 
 export interface ServeDkbMcpHttpOptions {
+  runtime?: DkbRuntimeContext;
   host?: string;
   port?: number;
   path?: string;
@@ -32,6 +35,7 @@ export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = 
   const publicBaseUrl = options.publicBaseUrl ?? process.env.DKB_MCP_PUBLIC_BASE_URL;
   const publicDocuments = options.publicDocuments ?? process.env.DKB_MCP_PUBLIC_DOCUMENTS === 'true';
   const allowInsecureNoAuth = options.allowInsecureNoAuth ?? process.env.DKB_MCP_ALLOW_INSECURE_NO_AUTH === 'true';
+  const runtime = options.runtime ?? DEFAULT_DKB_RUNTIME_CONTEXT;
 
   if (!bearerToken && !allowInsecureNoAuth) {
     throw new DkbError('Authenticated HTTP MCP requires DKB_MCP_BEARER_TOKEN. Set DKB_MCP_ALLOW_INSECURE_NO_AUTH=true only for a disposable synthetic-data proof.');
@@ -45,7 +49,7 @@ export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = 
     ...(options.allowedOrigins ?? csv(process.env.DKB_MCP_ALLOWED_ORIGINS)),
     'localhost', '127.0.0.1', '[::1]',
   ]));
-  const mcp = createDkbReadOnlyMcpServer({ libraryPath, publicBaseUrl });
+  const mcp = createDkbReadOnlyMcpServer({ runtime, libraryPath, publicBaseUrl });
   const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -60,7 +64,7 @@ export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = 
       const documentId = requestUrl.pathname.match(/^\/documents\/([^/]+)$/)?.[1];
 
       if (documentId && request.method === 'GET' && publicDocuments) {
-        sendJson(response, 200, await fetchRemoteEvidence(libraryPath, decodeURIComponent(documentId), publicBaseUrl));
+        sendJson(response, 200, await fetchRemoteEvidence(libraryPath, decodeURIComponent(documentId), publicBaseUrl, runtime));
         return true;
       }
       if (requestUrl.pathname !== endpointPath) return false;

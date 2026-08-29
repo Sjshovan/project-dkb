@@ -1,75 +1,74 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://codename-dkb.local/schemas/dkb-lock.schema.json",
-  "title": "DKB Lock Manifest",
+  "title": "DKB Compile Receipt",
   "type": "object",
   "additionalProperties": false,
-  "required": ["registry", "packages", "artifacts"],
+  "required": ["format", "registry", "packages", "builds"],
   "properties": {
+    "format": { "const": "dkb.compile-receipt.v2" },
     "registry": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "name", "version"],
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "version": {
-          "type": "string"
-        }
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "string" }
       }
     },
-    "packages": {
-      "type": "object",
-      "additionalProperties": true
-    },
-    "artifacts": {
+    "packages": { "type": "object", "additionalProperties": true },
+    "builds": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceIndex", "sourceGraph", "sourceVector"],
+      "required": ["evidence", "retrieval", "runtime"],
       "properties": {
-        "sourceIndex": { "$ref": "#/$defs/artifact" },
-        "sourceGraph": { "$ref": "#/$defs/artifact" },
-        "sourceVector": { "$ref": "#/$defs/artifact" }
+        "evidence": { "$ref": "#/$defs/build" },
+        "retrieval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "profileDigest", "digest", "compatibilityDigest", "status"],
+          "properties": {
+            "path": { "type": "string" },
+            "profileDigest": { "type": ["string", "null"] },
+            "digest": { "type": ["string", "null"] },
+            "compatibilityDigest": { "type": ["string", "null"] },
+            "status": { "enum": ["built", "not_built", "missing"] }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "target", "digest", "status"],
+          "properties": {
+            "path": { "type": "string" },
+            "target": { "type": "string" },
+            "digest": { "type": ["string", "null"] },
+            "status": { "enum": ["built", "not_built", "missing"] }
+          }
+        }
       }
     },
     "compiled": {
       "type": "object",
-      "additionalProperties": true
-    },
-    "retrievalProfile": {
-      "type": "object",
       "additionalProperties": false,
-      "required": ["path", "profileDigest"],
+      "required": ["recordCount", "compiledAt"],
       "properties": {
-        "path": {
-          "type": "string"
-        },
-        "profileDigest": {
-          "type": "string",
-          "pattern": "^sha256:[a-f0-9]{64}$"
-        }
+        "recordCount": { "type": "integer", "minimum": 0 },
+        "compiledAt": { "type": "string" }
       }
     }
   },
   "$defs": {
-    "artifact": {
+    "build": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "hash", "status"],
+      "required": ["path", "profileDigest", "digest", "status"],
       "properties": {
-        "path": {
-          "type": "string"
-        },
-        "hash": {
-          "type": ["string", "null"]
-        },
-        "status": {
-          "enum": ["built", "not_built", "missing"]
-        }
+        "path": { "type": "string" },
+        "profileDigest": { "type": ["string", "null"] },
+        "digest": { "type": ["string", "null"] },
+        "status": { "enum": ["built", "not_built", "missing"] }
       }
     }
   }

@@ -1,5 +1,5 @@
 import type { DkbBundledPlugin } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbEmbeddingProvider } from '@sjshovan/dkb-pipeline/types.js';
+import { DKB_PLUGIN_API_VERSION, type DkbEmbeddingProvider } from '@sjshovan/dkb-pipeline/types.js';
 import {
   DKB_TEI_PLUGIN_ID,
   doctorTeiService,
@@ -13,6 +13,7 @@ import {
 export const DKB_TEI_PLUGIN_VERSION = '0.1.0';
 
 export const TEI_PLUGIN: DkbBundledPlugin = {
+  apiVersion: DKB_PLUGIN_API_VERSION,
   id: DKB_TEI_PLUGIN_ID,
   version: DKB_TEI_PLUGIN_VERSION,
   setup(context) {

@@ -1,6 +1,6 @@
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbBundledPlugin } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbEvidenceProvider } from '@sjshovan/dkb-pipeline/types.js';
+import { DKB_PLUGIN_API_VERSION, type DkbEvidenceProvider } from '@sjshovan/dkb-pipeline/types.js';
 import {
   LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
@@ -17,6 +17,7 @@ export const DKB_EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN_VERSION = '0.1.0';
 const DEFAULT_TOKENIZER_MODEL = 'BAAI/bge-small-en-v1.5';
 
 export const EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN: DkbBundledPlugin = {
+  apiVersion: DKB_PLUGIN_API_VERSION,
   id: DKB_EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN_ID,
   version: DKB_EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN_VERSION,
   setup(context) {
@@ -70,9 +71,10 @@ export const EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN: DkbBundledPlugin = {
               compilerImage: result.compiler.image,
               tokenizerModel: result.compiler.model,
               extraction: { richParser: 'docling', richChunker: 'docling.hybrid', fallbackParser: 'llamaindex', fallbackChunker: 'llamaindex.sentence' },
+              ...(result.execution ? { execution: result.execution } : {}),
+              ...(result.cache ? { cache: result.cache } : {}),
             },
           },
-          nativeResult: result,
         };
       },
       async health() {

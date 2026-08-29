@@ -171,6 +171,7 @@ export interface DkrManifest extends DkbSpaceFields {
 }
 
 export interface DkbLockManifest {
+  format: 'dkb.compile-receipt.v2';
   registry: {
     id: string;
     name: string;
@@ -183,7 +184,6 @@ export interface DkbLockManifest {
     path: string | null;
     manifestHash: string;
     sourceInventoryHash: string;
-    chunkRepositoryHash: string;
     recordCount: number;
     stores: Array<{
       id: string;
@@ -207,20 +207,19 @@ export interface DkbLockManifest {
     registryId?: string;
     installedAt?: string;
   }>;
-  artifacts: {
-    sourceIndex: DkbLockArtifact;
-    sourceGraph: DkbLockArtifact;
-    sourceVector: DkbLockArtifact;
-  };
-  retrievalProfile?: {
-    path: string;
-    profileDigest: string;
+  builds: {
+    evidence: DkbLockBuildReference;
+    retrieval: DkbLockBuildReference & {
+      compatibilityDigest: string | null;
+    };
+    runtime: {
+      path: string;
+      target: string;
+      digest: string | null;
+      status: DkbLockBuildStatus;
+    };
   };
   compiled?: {
-    path: string;
-    artifactHash: string | null;
-    chunkRepositoryHash: string;
-    indexHash: string;
     recordCount: number;
     compiledAt: string;
   };
@@ -334,10 +333,13 @@ export interface DkbPackageReceipt {
   registry: DkbRegistryReleaseSignature;
 }
 
-export interface DkbLockArtifact {
+export type DkbLockBuildStatus = 'built' | 'not_built' | 'missing';
+
+export interface DkbLockBuildReference {
   path: string;
-  hash: string | null;
-  status: 'built' | 'not_built' | 'missing';
+  profileDigest: string | null;
+  digest: string | null;
+  status: DkbLockBuildStatus;
 }
 
 export interface LoadedDkb {

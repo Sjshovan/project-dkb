@@ -4,6 +4,10 @@ import path from 'node:path';
 const root = path.resolve('.');
 const workspaceRoots = await discoverWorkspaces();
 const errors = [];
+const workspaceByName = new Map(workspaceRoots.map((workspace) => [workspace.manifest.name, workspace]));
+const providerPackageNames = new Set(workspaceRoots
+  .filter((workspace) => workspace.kind === 'providers')
+  .map((workspace) => workspace.manifest.name));
 const retiredProductPaths = [
   'apps/cli/src/registry/packageRegistry.ts',
   'apps/cli/src/registry/server.ts',
@@ -16,6 +20,10 @@ for (const retiredPath of retiredProductPaths) {
 }
 
 for (const workspace of workspaceRoots) {
+  for (const exportPath of Object.keys(workspace.manifest.exports ?? {})) {
+    if (exportPath.includes('*')) errors.push(`${relativePath(path.join(workspace.root, 'package.json'))} exposes wildcard export ${exportPath}`);
+  }
+
   const files = await listTypeScript(path.join(workspace.root, 'src'));
   const dependencies = new Set(Object.keys({
     ...(workspace.manifest.dependencies ?? {}),
@@ -37,7 +45,66 @@ for (const workspace of workspaceRoots) {
         if (packageName !== workspace.manifest.name && !dependencies.has(packageName)) {
           errors.push(`${relativePath(file)} imports undeclared dependency ${packageName}`);
         }
+        const dependencyWorkspace = workspaceByName.get(packageName);
+        if (dependencyWorkspace && packageName !== workspace.manifest.name) {
+          const subpath = specifier.slice(packageName.length);
+          const exportPath = subpath ? `.${subpath}` : '.';
+          if (!Object.hasOwn(dependencyWorkspace.manifest.exports ?? {}, exportPath)) {
+            errors.push(`${relativePath(file)} imports unexported workspace path ${specifier}`);
+          }
+        }
+        if (workspace.kind === 'providers' && packageName.startsWith('@sjshovan/dkb-') && providerPackageNames.has(packageName)) {
+          errors.push(`${relativePath(file)} imports provider package ${packageName}; providers may collaborate only through Pipeline contracts`);
+        }
       }
+    }
+  }
+}
+
+const genericCoreRoots = [
+  'packages/protocol/src',
+  'packages/pipeline/src',
+  'packages/library/src',
+  'services/compiler/src/compilerCore.ts',
+  'services/runtime/src/indexes',
+  'services/runtime/src/providers',
+  'services/runtime/src/read',
+  'services/runtime/src/router',
+  'services/runtime/src/runtime',
+];
+const concreteProviderPattern = /docling|llamaindex|fastembed|faiss|meilisearch|retrieval-hybrid|providers-bundled|@dkb\/(?:evidence|embedding|index|retrieval)-/iu;
+const legacyArtifactPattern = /\.dkb[\\/]artifacts|source\.index(?:\.graph|\.vector\.json)?|nativeResult/iu;
+
+for (const genericRoot of genericCoreRoots) {
+  for (const file of await sourceFiles(path.join(root, genericRoot))) {
+    const source = await fs.readFile(file, 'utf8');
+    if (concreteProviderPattern.test(source)) errors.push(`${relativePath(file)} contains a concrete provider identifier`);
+    if (legacyArtifactPattern.test(source)) errors.push(`${relativePath(file)} contains a retired artifact path or reader`);
+  }
+}
+
+const approvedDistributionImports = new Set([
+  'apps/cli/src/cli/index.ts',
+  'services/compiler/src/compile.ts',
+  'services/compiler/src/server.ts',
+  'services/runtime/src/defaultComposition.ts',
+]);
+for (const sourceRoot of ['apps/cli/src', 'services/compiler/src', 'services/runtime/src']) {
+  for (const file of await listTypeScript(path.join(root, sourceRoot))) {
+    const source = await fs.readFile(file, 'utf8');
+    if (source.includes('@sjshovan/dkb-distribution-default') && !approvedDistributionImports.has(relativePath(file))) {
+      errors.push(`${relativePath(file)} imports the default distribution outside an approved composition root`);
+    }
+  }
+}
+
+for (const sourceRoot of ['apps', 'services', 'packages', 'providers']) {
+  for (const file of await sourceFiles(path.join(root, sourceRoot))) {
+    const relative = relativePath(file);
+    if (relative === 'apps/cli/src/cli/commandLifecycle.ts') continue;
+    const source = await fs.readFile(file, 'utf8');
+    if (/\b(?:TODO|FIXME|HACK)\b|not (?:yet )?implemented/iu.test(source)) {
+      errors.push(`${relative} contains deferred-work language outside the structured capability boundary`);
     }
   }
 }
@@ -53,7 +120,7 @@ async function discoverWorkspaces() {
       if (!entry.isDirectory()) continue;
       const workspaceRoot = path.join(parent, entry.name);
       const manifest = await fs.readFile(path.join(workspaceRoot, 'package.json'), 'utf8').then(JSON.parse).catch(() => null);
-      if (manifest?.name) result.push({ root: workspaceRoot, manifest });
+      if (manifest?.name) result.push({ root: workspaceRoot, manifest, kind: parentName });
     }
   }
   return result;
@@ -65,6 +132,16 @@ async function listTypeScript(directory) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) return listTypeScript(target);
     return entry.isFile() && entry.name.endsWith('.ts') ? [target] : [];
+  }));
+  return nested.flat();
+}
+
+async function sourceFiles(directory) {
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory() && !['node_modules', 'dist', 'graphify-out'].includes(entry.name)) return sourceFiles(target);
+    return entry.isFile() && /\.(?:ts|mjs|py)$/u.test(entry.name) ? [target] : [];
   }));
   return nested.flat();
 }

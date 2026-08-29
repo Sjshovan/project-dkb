@@ -1,7 +1,7 @@
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbBundledPlugin } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbEmbeddingProvider } from '@sjshovan/dkb-pipeline/types.js';
+import { DKB_PLUGIN_API_VERSION, type DkbEmbeddingProvider } from '@sjshovan/dkb-pipeline/types.js';
 import {
   DEFAULT_FASTEMBED_MODEL,
   doctorFastEmbedService,
@@ -19,6 +19,7 @@ const MAX_BATCH_SIZE = 128;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 export const FASTEMBED_PLUGIN: DkbBundledPlugin = {
+  apiVersion: DKB_PLUGIN_API_VERSION,
   id: DKB_FASTEMBED_PLUGIN_ID,
   version: DKB_FASTEMBED_PLUGIN_VERSION,
   setup(context) {

@@ -19,7 +19,6 @@ import {
 } from '../apps/cli/dist/cli/registryConfig.js';
 import { preflightDkbInstall } from '../services/runtime/dist/runtime/registryInstall.js';
 import { applyLibraryLock } from '@sjshovan/dkb-library/state.js';
-import { sourceAssetsFromChunks } from '@sjshovan/dkb-providers-bundled/sourceIndex.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'apps', 'cli', 'dist', 'cli', 'index.js');
@@ -330,7 +329,7 @@ test('serve initialization uses the same offline-safe registry configuration pat
     });
 
     assert.equal(result.initialized, true);
-    assert.equal(result.compiled, true);
+    assert.equal(result.compiled, false);
     assert.equal(result.registry.url, registryUrl);
     assert.match(result.warning, /was not verified because verification was skipped/);
     assert.equal(result.retryCommand, `dkb registry use ${registryUrl}`);
@@ -340,48 +339,6 @@ test('serve initialization uses the same offline-safe registry configuration pat
     restoreEnvironment('DKB_HOST_INVENTORY', previousHostInventory);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
-});
-
-test('source assets are grouped in one pass without mixing identical asset ids across packages', () => {
-  const units = [
-    sourceUnit({ dkbId: 'beta', assetId: 'shared', chunkOrdinal: 1, hash: 'beta-1', title: 'Beta - Details', heading: 'Details' }),
-    sourceUnit({ dkbId: 'alpha', assetId: 'shared', chunkOrdinal: 2, hash: 'alpha-2', title: 'Alpha - Later', heading: 'Later' }),
-    sourceUnit({ dkbId: 'alpha', assetId: 'shared', chunkOrdinal: 0, hash: 'alpha-0', title: 'Alpha - Intro', heading: 'Intro' }),
-    sourceUnit({ dkbId: 'beta', assetId: 'shared', chunkOrdinal: 0, hash: 'beta-0', title: 'Beta - Intro', heading: 'Intro' }),
-  ];
-
-  const assets = sourceAssetsFromChunks(units);
-
-  assert.deepEqual(assets.map((asset) => ({ dkbId: asset.dkbId, id: asset.id, title: asset.title })), [
-    { dkbId: 'alpha', id: 'shared', title: 'Alpha' },
-    { dkbId: 'beta', id: 'shared', title: 'Beta' },
-  ]);
-  assert.notEqual(assets[0].hash, assets[1].hash);
-});
-
-test('source asset grouping visits a large chunk input linearly', () => {
-  const units = Array.from({ length: 32_639 }, (_, index) => sourceUnit({
-    dkbId: 'large-package',
-    assetId: `asset-${Math.floor(index / 6)}`,
-    chunkOrdinal: index % 6,
-    hash: `hash-${index}`,
-    title: `Asset ${Math.floor(index / 6)}`,
-  }));
-  let indexedReads = 0;
-  const trackedUnits = new Proxy(units, {
-    get(target, property, receiver) {
-      if (typeof property === 'string' && /^\d+$/u.test(property)) {
-        indexedReads += 1;
-      }
-
-      return Reflect.get(target, property, receiver);
-    },
-  });
-
-  const assets = sourceAssetsFromChunks(trackedUnits);
-
-  assert.equal(assets.length, Math.ceil(units.length / 6));
-  assert.ok(indexedReads <= units.length * 2, `expected linear input access, observed ${indexedReads} indexed reads`);
 });
 
 test('--no-progress keeps human output and --json is the explicit machine-output switch', async () => {
@@ -1200,6 +1157,7 @@ test('runtime import removes its staged copy after a successful activation', asy
     await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index', 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
+export const apiVersion = 2;
 export const id = '@test/index';
 export const version = '1.0.0';
 export function setup(context) {
@@ -1393,35 +1351,6 @@ test('runtime connection failures name the target service', async () => {
   assert.equal(result.stderr, '');
   assert.match(JSON.parse(result.stdout).error.message, /Unable to reach DKB Runtime http:\/\/127\.0\.0\.1:1/);
 });
-
-function sourceUnit(overrides) {
-  return {
-    id: `${overrides.dkbId}-${overrides.assetId}-${overrides.chunkOrdinal}`,
-    assetId: overrides.assetId,
-    dkbId: overrides.dkbId,
-    storeId: 'root',
-    type: 'filesystem',
-    locator: { path: `${overrides.assetId}.md`, chunk: overrides.chunkOrdinal },
-    assetLocator: { path: `${overrides.assetId}.md` },
-    title: overrides.title,
-    text: overrides.hash,
-    keywords: [],
-    capabilities: {
-      evidence: 'full',
-      records: 'none',
-      exactCount: 'none',
-      approximateCount: 'partial',
-      structuredFilter: 'none',
-      operations: ['fetch', 'search'],
-    },
-    hash: overrides.hash,
-    updatedAt: '2026-08-26T00:00:00.000Z',
-    chunkOrdinal: overrides.chunkOrdinal,
-    chunkStart: 0,
-    chunkEnd: 1,
-    heading: overrides.heading,
-  };
-}
 
 async function writeLibraryManifest(root, roots = {}) {
   await fs.mkdir(root, { recursive: true });

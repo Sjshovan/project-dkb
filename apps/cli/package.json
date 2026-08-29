@@ -1,6 +1,6 @@
 {
   "name": "@sjshovan/dkb-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -24,13 +24,13 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@sjshovan/dkb-compiler": "0.1.0",
-    "@sjshovan/dkb-distribution-default": "0.1.0",
-    "@sjshovan/dkb-library": "0.1.0",
-    "@sjshovan/dkb-pipeline": "0.1.0",
-    "@sjshovan/dkb-protocol": "1.0.0",
-    "@sjshovan/dkb-registry-client": "0.1.0",
-    "@sjshovan/dkb-runtime": "0.1.0",
+    "@sjshovan/dkb-compiler": "0.2.0",
+    "@sjshovan/dkb-distribution-default": "0.2.0",
+    "@sjshovan/dkb-library": "0.2.0",
+    "@sjshovan/dkb-pipeline": "0.2.0",
+    "@sjshovan/dkb-protocol": "2.0.0",
+    "@sjshovan/dkb-registry-client": "0.2.0",
+    "@sjshovan/dkb-runtime": "0.2.0",
     "chokidar": "^5.0.0",
     "cli-progress": "^3.12.0",
     "commander": "^12.1.0",

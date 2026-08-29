@@ -18,7 +18,7 @@ import { resolveKnowledgeTarget } from '../apps/cli/dist/knowledge/target.js';
 import { healthReport } from '../apps/cli/dist/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { snapshotLibraryArtifacts } from '@sjshovan/dkb-library/artifactSnapshot.js';
+import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
 import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
@@ -172,23 +172,25 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   assert.equal(removed.packageCount, 0);
 });
 
-test('failed Library mutations restore aggregate artifacts byte for byte', async (t) => {
-  const root = await tempDirectory(t, 'dkb-library-artifact-rollback-');
-  const lockPath = path.join(root, '.dkb', 'artifacts', 'dkb-artifact.lock.json');
+test('failed Library mutations restore mutable Runtime receipts byte for byte', async (t) => {
+  const root = await tempDirectory(t, 'dkb-runtime-receipt-rollback-');
+  const lockPath = path.join(root, '.dkb', 'runtime.lock.json');
   const profilePath = path.join(root, 'dkb-profile.lock.json');
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await fs.writeFile(lockPath, 'original-lock\n', 'utf8');
   await fs.writeFile(profilePath, 'original-profile\n', 'utf8');
 
-  const snapshot = await snapshotLibraryArtifacts(root);
+  const snapshot = await snapshotRuntimeReceipts(root);
   await fs.writeFile(lockPath, 'mutated-lock\n', 'utf8');
   await fs.rm(profilePath);
-  await fs.writeFile(path.join(root, '.dkb', 'artifacts', 'new-index.bin'), 'new\n', 'utf8');
+  const cachePath = path.join(root, '.dkb', 'cache', 'compile-cache.json');
+  await fs.mkdir(path.dirname(cachePath), { recursive: true });
+  await fs.writeFile(cachePath, 'new-cache\n', 'utf8');
   await snapshot.rollback();
 
   assert.equal(await fs.readFile(lockPath, 'utf8'), 'original-lock\n');
   assert.equal(await fs.readFile(profilePath, 'utf8'), 'original-profile\n');
-  await assert.rejects(fs.access(path.join(root, '.dkb', 'artifacts', 'new-index.bin')));
+  await assert.rejects(fs.access(cachePath));
 });
 
 async function tempDirectory(t, prefix) {
@@ -232,6 +234,7 @@ async function writeTestPipeline(root) {
   await fs.writeFile(path.join(pluginRoot, 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
+export const apiVersion = 2;
 export const id = '@test/pipeline';
 export const version = '1.0.0';
 export function setup(context) {

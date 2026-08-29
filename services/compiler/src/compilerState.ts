@@ -1,0 +1,38 @@
+import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import type { DkbRetrievalProfileLock, DkbResolvedRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
+import type { DkbCompiledPipeline } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
+import type { DkbLockManifest } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbCorpusStatistics } from './buildStatistics.js';
+import type { DkbDiskCapacityCheck } from './diskCapacity.js';
+import type { IndexedSourceUnit } from '@sjshovan/dkb-pipeline/types.js';
+
+export interface AtomicCompileArtifactTimings {
+  stagePrepare: number;
+  retrievalArtifacts: number;
+  lock: number;
+  buildGraph: number;
+  validation: number;
+  promotion: number;
+  cleanup: number;
+  total: number;
+}
+
+export interface CompilerArtifactState {
+  dkb: LoadedDkb;
+  dkbRoot: string;
+  compiled: DkbCompiledPipeline;
+  evidence: DkbEvidenceIr;
+  corpus: DkbCorpusStatistics;
+  diskCapacity: DkbDiskCapacityCheck;
+}
+
+export interface RegistryCompileState {
+  sourceUnits: IndexedSourceUnit[];
+  packages: DkbLockManifest['packages'];
+  compilerArtifacts: CompilerArtifactState[];
+  retrievalProfileLock?: DkbRetrievalProfileLock;
+  resolvedProfile?: DkbResolvedRetrievalProfile;
+  providerHost?: DkbProviderHost;
+}

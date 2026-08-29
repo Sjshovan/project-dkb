@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import { readEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
+import { readEvidenceBuild, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import {
   ensureFastEmbedService,
@@ -60,7 +60,8 @@ try {
     target: 'tei-faiss',
     contextRoot: contextRoots['tei-faiss'],
   });
-  const evidence = await readEvidenceIr(templateRoot);
+  const evidenceGraph = await validatePackageBuildGraph(templateRoot);
+  const evidence = await readEvidenceBuild(evidenceGraph.evidencePath);
   assert.ok(evidence.evidence.length > 0, 'benchmark Evidence Build is empty');
 
   const providers = {};

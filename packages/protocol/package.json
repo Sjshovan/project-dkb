@@ -1,6 +1,6 @@
 {
   "name": "@sjshovan/dkb-protocol",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "license": "Apache-2.0",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -9,11 +9,33 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./*": {
-      "types": "./dist/*",
-      "import": "./dist/*"
-    },
-    "./schemas/*": "./schemas/*"
+    "./artifacts.js": { "types": "./dist/artifacts.d.ts", "import": "./dist/artifacts.js" },
+    "./builds.js": { "types": "./dist/builds.d.ts", "import": "./dist/builds.js" },
+    "./capabilities.js": { "types": "./dist/capabilities.d.ts", "import": "./dist/capabilities.js" },
+    "./contracts/hash.js": { "types": "./dist/contracts/hash.d.ts", "import": "./dist/contracts/hash.js" },
+    "./contracts/index.js": { "types": "./dist/contracts/index.d.ts", "import": "./dist/contracts/index.js" },
+    "./contracts/validation.js": { "types": "./dist/contracts/validation.d.ts", "import": "./dist/contracts/validation.js" },
+    "./errors.js": { "types": "./dist/errors.d.ts", "import": "./dist/errors.js" },
+    "./evidence/catalog.js": { "types": "./dist/evidence/catalog.d.ts", "import": "./dist/evidence/catalog.js" },
+    "./evidence/ir.js": { "types": "./dist/evidence/ir.d.ts", "import": "./dist/evidence/ir.js" },
+    "./identity.js": { "types": "./dist/identity.d.ts", "import": "./dist/identity.js" },
+    "./manifest.js": { "types": "./dist/manifest.d.ts", "import": "./dist/manifest.js" },
+    "./paths.js": { "types": "./dist/paths.d.ts", "import": "./dist/paths.js" },
+    "./progress.js": { "types": "./dist/progress.d.ts", "import": "./dist/progress.js" },
+    "./retrievalProfile.js": { "types": "./dist/retrievalProfile.d.ts", "import": "./dist/retrievalProfile.js" },
+    "./security/sourceContent.js": { "types": "./dist/security/sourceContent.d.ts", "import": "./dist/security/sourceContent.js" },
+    "./space.js": { "types": "./dist/space.d.ts", "import": "./dist/space.js" },
+    "./types.js": { "types": "./dist/types.d.ts", "import": "./dist/types.js" },
+    "./validation.js": { "types": "./dist/validation.d.ts", "import": "./dist/validation.js" },
+    "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" },
+    "./writeGate.js": { "types": "./dist/writeGate.d.ts", "import": "./dist/writeGate.js" },
+    "./schemas/dkb-host.schema.json": "./schemas/dkb-host.schema.json",
+    "./schemas/dkb-library-lock.schema.json": "./schemas/dkb-library-lock.schema.json",
+    "./schemas/dkb-lock.schema.json": "./schemas/dkb-lock.schema.json",
+    "./schemas/dkb-read-request.schema.json": "./schemas/dkb-read-request.schema.json",
+    "./schemas/dkb.schema.json": "./schemas/dkb.schema.json",
+    "./schemas/query.schema.json": "./schemas/query.schema.json",
+    "./schemas/result.schema.json": "./schemas/result.schema.json"
   },
   "files": [
     "dist/",

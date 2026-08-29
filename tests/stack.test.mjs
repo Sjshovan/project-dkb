@@ -97,7 +97,7 @@ test('changing the compiler target preserves a populated Runtime target until pi
     const evidenceProfileDigest = stableHash({ evidence: 'default' });
     const retrievalProfileDigest = stableHash({ retrieval: 'fastembed' });
     await fs.writeFile(path.join(first.root, 'runtime', '.dkb', 'runtime.lock.json'), `${JSON.stringify({
-      format: 'dkb.runtime-lock.v1',
+      format: 'dkb.runtime-lock.v2',
       target: 'fastembed-faiss',
       evidenceProfileDigest,
       retrievalProfileDigest,

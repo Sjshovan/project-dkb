@@ -21,6 +21,7 @@ import type {
 } from './types.js';
 
 export interface DkbBundledPlugin {
+  apiVersion: DkbPluginModule['apiVersion'];
   id: string;
   version: string;
   setup: DkbPluginModule['setup'];
@@ -30,7 +31,9 @@ export interface DkbDistributionService {
   id: string;
   kind: 'process' | 'docker' | 'remote';
   requiredBy: string[];
+  providerId?: string;
   image?: string;
+  version?: string;
   healthPath?: string;
 }
 
@@ -254,7 +257,7 @@ export class DkbProviderHost {
       plugin = selected;
       source = 'bundled';
       sourcePath = `bundled:${id}`;
-      sourceDigest = stableHash({ id: selected.id, version: selected.version, setup: String(selected.setup) });
+      sourceDigest = stableHash({ apiVersion: selected.apiVersion, id: selected.id, version: selected.version, setup: String(selected.setup) });
     }
 
     validatePluginModule(plugin, id, sourcePath);
@@ -356,8 +359,8 @@ async function importPlugin(target: string, contextRoot: string): Promise<DkbPlu
 }
 
 function validatePluginModule(plugin: DkbPluginModule, selectedId: string, source: string): void {
-  if (!plugin || plugin.id !== selectedId || typeof plugin.version !== 'string' || plugin.version.length === 0 || typeof plugin.setup !== 'function') {
-    throw new DkbError(`Invalid plugin at ${source}: expected exports id=${selectedId}, version, and setup(context)`);
+  if (!plugin || plugin.apiVersion !== 2 || plugin.id !== selectedId || typeof plugin.version !== 'string' || plugin.version.length === 0 || typeof plugin.setup !== 'function') {
+    throw new DkbError(`Invalid plugin at ${source}: expected exports apiVersion=2, id=${selectedId}, version, and setup(context)`);
   }
 }
 

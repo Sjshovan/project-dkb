@@ -10,7 +10,7 @@ import {
 } from 'node:crypto';
 import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { artifactLockPath, manifestPath } from '@sjshovan/dkb-protocol/paths.js';
+import { compileReceiptPath, manifestPath } from '@sjshovan/dkb-protocol/paths.js';
 import { validateLayerReceipt, type DkbLayerReceipt } from '@sjshovan/dkb-protocol/builds.js';
 import { validateDkbLockManifest } from '@sjshovan/dkb-protocol/validation.js';
 import type {
@@ -347,7 +347,7 @@ function layerReceiptSigningContent(receipt: DkbLayerReceipt): Record<string, un
 
 export async function signComposeProject(root: string, options: SignComposeProjectOptions = {}) {
   const resolvedRoot = path.resolve(root);
-  const lockPath = artifactLockPath(resolvedRoot);
+  const lockPath = compileReceiptPath(resolvedRoot);
   const releasePath = manifestPath(resolvedRoot, DKB_RELEASE_PATH);
   const publisherKeyEnv = options.publisherKeyEnv ?? options.keyEnv ?? 'DKB_SIGNING_PRIVATE_KEY';
   const registryKeyEnv = options.registryKeyEnv ?? options.keyEnv ?? publisherKeyEnv;
@@ -408,7 +408,7 @@ export async function verifyComposeRelease(root: string, options: VerifyComposeR
   }
 
   const release = parseReleaseEnvelope(JSON.parse(await fs.readFile(releasePath, 'utf8')), releasePath);
-  const lockPath = artifactLockPath(resolvedRoot);
+  const lockPath = compileReceiptPath(resolvedRoot);
   const lock = validateDkbLockManifest(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
   const payloadMatchesLock = stableHash(releasePayloadForLock(lock)) === release.payloadHash
     && canonicalJson(lock) === canonicalJson(release.payload.lock);

@@ -61,7 +61,7 @@ export async function prepareServeLibrary(options: PrepareServeOptions = {}): Pr
     return {
       root: targetRoot,
       initialized: false,
-      compiled: true,
+      compiled: Boolean(compileResult),
       registry,
       compileResult,
     };
@@ -86,7 +86,7 @@ export async function prepareServeLibrary(options: PrepareServeOptions = {}): Pr
   return {
     root,
     initialized: true,
-    compiled: true,
+    compiled: Boolean(compileResult),
     registry,
     compileResult,
     ...(selectedRegistry.verification ? { verification: selectedRegistry.verification } : {}),
@@ -201,8 +201,12 @@ export function libraryManifestForFolder(root: string) {
   };
 }
 
-async function compileLibraryForServe(root: string): Promise<Awaited<ReturnType<typeof compileComposeProject>>> {
+async function compileLibraryForServe(root: string): Promise<Awaited<ReturnType<typeof compileComposeProject>> | undefined> {
   try {
+    const library = await loadLibrary(root);
+    if (library.dkbs.length === 0 && library.collections.every((collection) => collection.dkbs.length === 0)) {
+      return undefined;
+    }
     return await compileComposeProject(root);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

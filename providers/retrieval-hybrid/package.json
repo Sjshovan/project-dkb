@@ -7,7 +7,7 @@
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }, "./plugin.js": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" } },
   "files": ["dist/", "!dist/.tsbuildinfo"],
   "scripts": { "build": "tsc -b", "check": "tsc -b --pretty false" },
-  "dependencies": { "@sjshovan/dkb-pipeline": "0.1.0" },
+  "dependencies": { "@sjshovan/dkb-pipeline": "0.2.0" },
   "engines": { "node": ">=22.15.0" },
   "private": true
 }

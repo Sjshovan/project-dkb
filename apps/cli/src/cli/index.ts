@@ -9,7 +9,6 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { identityDisplayName, parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadCollection, loadDkb, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_ARTIFACTS_DIR } from '@sjshovan/dkb-protocol/paths.js';
 import { DKB_PROTOCOL_VERSION } from '@sjshovan/dkb-protocol/version.js';
 import { DKB_PROTOCOL_COMPATIBILITY } from '@sjshovan/dkb-protocol/version.js';
 import { DKB_CLI_VERSION } from '../version.js';
@@ -443,6 +442,7 @@ collection
     const registryConfig = await configuredRegistry({ url: options.url, root });
 
     await presenter().run(`Installing Collection ${identity}`, async (progress) => installRegistryCollection({
+      runtime: await defaultRuntimeContext(),
       client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
       collectionId: identity,
       revision: options.revision,
@@ -467,6 +467,7 @@ collection
     const registryConfig = await configuredRegistry({ url: options.url, root });
 
     await presenter().run(`Updating Collection ${identity}`, async (progress) => installRegistryCollection({
+      runtime: await defaultRuntimeContext(),
       client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
       collectionId: identity,
       revision: options.revision,
@@ -1295,6 +1296,7 @@ program
       if (options.target) throw new DkbError('--target applies to DKBs. Install the Collection, then run dkb pipeline use <target>.');
       const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
       await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
+        runtime: await defaultRuntimeContext(),
         client,
         collectionId: packageId,
         revision: options.revision,
@@ -1319,6 +1321,7 @@ program
     }
 
     await presenter().run('Installing DKB', async (progress) => installDkbFromRegistry({
+      runtime: await defaultRuntimeContext(),
       registryUrl: registryConfig.url,
       registryToken: options.token,
       packageId,
@@ -1354,6 +1357,7 @@ registerPackageLifecycleCommands(program, {
   presenter,
   resolveLibraryRoot: currentLibraryRoot,
   runtimeAdminClient: currentRuntimeAdminClient,
+  runtimeContext: defaultRuntimeContext,
 });
 
 const remote = program
@@ -1645,7 +1649,7 @@ program
 
     const { removeDkbFromRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
 
-    await presenter().run(`Uninstalling ${identity}`, async (progress) => removeDkbFromRuntime(identity, libraryRoot, { progress }), summarizeRemoveResult);
+    await presenter().run(`Uninstalling ${identity}`, async (progress) => removeDkbFromRuntime(identity, libraryRoot, { runtime: await defaultRuntimeContext(), progress }), summarizeRemoveResult);
   });
 
 program
@@ -1712,6 +1716,7 @@ program
       const libraryRoot = await currentLibraryRoot(options.library);
 
       await presenter().run('Installing compiled artifact', async (progress) => importCompiledDkbArtifactIntoRuntime({
+        runtime: await defaultRuntimeContext(),
         sourcePath: path.resolve(target),
         id: options.id,
         force: Boolean(options.force),
@@ -1726,7 +1731,7 @@ program
       const { removeDkbFromRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
       const libraryRoot = await currentLibraryRoot(options.library);
 
-      await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, libraryRoot, { progress }), summarizeRemoveResult);
+      await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, libraryRoot, { runtime: await defaultRuntimeContext(), progress }), summarizeRemoveResult);
     }))
   .addCommand(new Command('tools')
     .description('Inspect OCI transport and signing tool availability')
@@ -1865,6 +1870,7 @@ plugin
   .action(async (id: string, options: { root: string; global?: boolean }) => {
     const { removePlugin } = await import('../providers/management.js');
     await presenter().run('Removing plugin', async () => removePlugin({
+      distribution: await defaultDistribution(),
       root: path.resolve(options.root),
       id,
       scope: options.global ? 'global' : 'local',
@@ -1877,7 +1883,7 @@ plugin
   .argument('[path]', 'Library or Runtime root', '.')
   .action(async (target: string) => {
     const { listPlugins } = await import('../providers/management.js');
-    presenter().print(await listPlugins({ root: path.resolve(target) }), summarizePluginList);
+    presenter().print(await listPlugins({ distribution: await defaultDistribution(), root: path.resolve(target) }), summarizePluginList);
   });
 
 const pipeline = program
@@ -1890,7 +1896,7 @@ pipeline
   .argument('[path]', 'Library, Runtime, or DKB root', '.')
   .action(async (target: string) => {
     const { listPipelineTargets } = await import('../providers/management.js');
-    presenter().print(await listPipelineTargets({ root: path.resolve(target) }), summarizePipelineList);
+    presenter().print(await listPipelineTargets({ distribution: await defaultDistribution(), root: path.resolve(target) }), summarizePipelineList);
   });
 
 pipeline
@@ -1952,7 +1958,7 @@ pipeline
           await host.dispose();
         }
         const { activatePipelineTarget } = await import('../providers/management.js');
-        return activatePipelineTarget({ root, name });
+        return activatePipelineTarget({ distribution: await defaultDistribution(), root, name });
       }
       if (manifest.type !== 'library') {
         throw new DkbError(`Pipeline activation requires a DKB or Library root, got ${manifest.type}`);
@@ -2026,6 +2032,7 @@ pipeline
       : {};
     const { setPipelineTarget } = await import('../providers/management.js');
     await presenter().run('Updating pipeline', async () => setPipelineTarget({
+      distribution: await defaultDistribution(),
       root: path.resolve(options.root),
       name,
       activate: options.activate,
@@ -2048,6 +2055,7 @@ pipeline
   .action(async (target: string, options: { target?: string }) => {
     const { verifyPipeline } = await import('../providers/management.js');
     const result = await presenter().check('Pipeline verification', async () => verifyPipeline({
+      distribution: await defaultDistribution(),
       root: path.resolve(target),
       ...(options.target ? { target: options.target } : {}),
     }), (value) => value.ok, summarizePipelineVerification);
@@ -2239,7 +2247,7 @@ program
   .action(async (target: string, query: string, options: { limit?: number }) => {
     const { queryKnowledgeTarget } = await import('../knowledge/target.js');
 
-    presenter().print((await queryKnowledgeTarget(target, query, { limit: options.limit })).response, summarizeQueryResult);
+    presenter().print((await queryKnowledgeTarget(target, query, { limit: options.limit, runtime: await defaultRuntimeContext() })).response, summarizeQueryResult);
   });
 
 program
@@ -2251,7 +2259,7 @@ program
   .action(async (target: string, query: string, options: { limit: number }) => {
     const { describeQueryTargets } = await import('@sjshovan/dkb-runtime/read/runtime.js');
 
-    printJson(await describeQueryTargets(target, query, options.limit));
+    printJson(await describeQueryTargets(target, query, options.limit, undefined, await defaultRuntimeContext()));
   });
 
 program
@@ -2263,7 +2271,7 @@ program
     const fs = await import('node:fs/promises');
     const { readDkb } = await import('@sjshovan/dkb-runtime/read/runtime.js');
 
-    printJson(await readDkb(target, JSON.parse(await fs.readFile(requestPath, 'utf8'))));
+    printJson(await readDkb(target, JSON.parse(await fs.readFile(requestPath, 'utf8')), undefined, await defaultRuntimeContext()));
   });
 
 program
@@ -2379,7 +2387,7 @@ try {
     const message = error instanceof DkbError || error instanceof Error ? error.message : String(error);
 
     if (jsonRequested) {
-      printJsonValue({ ok: false, error: { code: 'DKB_ERROR', message } });
+      printJsonValue({ ok: false, error: { code: error instanceof DkbError ? error.code : 'DKB_ERROR', message } });
     } else {
       console.error(`${failureLine('Error:')} ${message}`);
     }
@@ -2497,7 +2505,7 @@ function summarizeCompileResult(value: unknown): string[] {
     registryId?: unknown;
     recordCount?: unknown;
     cacheHit?: unknown;
-    artifactManifestPath?: unknown;
+    retrievalManifestPath?: unknown;
     profile?: {
       timingsMs?: Record<string, unknown>;
       aggregateTimingsMs?: Record<string, unknown>;
@@ -2539,7 +2547,7 @@ function summarizeCompileResult(value: unknown): string[] {
     finiteBytes(storage?.totalDerivedBytes)
       ? `derived storage: ${formatBytes(Number(storage?.totalDerivedBytes))}${typeof storage?.sourceToDerivedRatio === 'number' ? ` (${storage.sourceToDerivedRatio}x source)` : ''}`
       : '',
-    typeof result.artifactManifestPath === 'string' ? `artifact: ${result.artifactManifestPath}` : '',
+    typeof result.retrievalManifestPath === 'string' ? `retrieval build: ${result.retrievalManifestPath}` : '',
   ];
 }
 
@@ -3546,6 +3554,16 @@ async function exists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function defaultRuntimeContext() {
+  return import('@sjshovan/dkb-runtime/defaultComposition.js')
+    .then((module) => module.DEFAULT_DKB_RUNTIME_CONTEXT);
+}
+
+async function defaultDistribution() {
+  return import('@sjshovan/dkb-distribution-default')
+    .then((module) => module.DEFAULT_DKB_DISTRIBUTION);
 }
 
 function safeCliId(value: string): string {

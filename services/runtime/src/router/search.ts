@@ -1,11 +1,14 @@
 import { getQueryContext, type QueryContext } from '../indexes/queryContext.js';
 import type { LoadedCollection, QueryHit, QueryResponse } from '@sjshovan/dkb-protocol/types.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
 
 export interface QueryOptions {
   limit?: number;
   minScore?: number;
   resultProbabilityCutoff?: number;
   queryContext?: QueryContext;
+  runtime?: DkbRuntimeContext;
   profile?: boolean;
 }
 
@@ -15,7 +18,7 @@ export async function queryCollection(
   options: QueryOptions = {},
 ): Promise<QueryResponse> {
   const limit = options.limit ?? 10;
-  const context = options.queryContext ?? await getQueryContext(collection.root, collection.manifest.id);
+  const context = options.queryContext ?? await getQueryContext(collection.root, collection.manifest.id, requiredRuntime(options.runtime));
   const includedDkbs = new Set(collection.dkbs.map((dkb) => dkb.manifest.id));
   const records = context.evidenceRecords.filter((record) => includedDkbs.has(record.packageId));
   const result = await context.retrieval.search({ query, limit });
@@ -79,4 +82,9 @@ export async function queryCollection(
       hits: results.length,
     }],
   };
+}
+
+function requiredRuntime(runtime: DkbRuntimeContext | undefined): DkbRuntimeContext {
+  if (!runtime) throw new DkbError('A DKB Runtime context is required when no query context is supplied.');
+  return runtime;
 }

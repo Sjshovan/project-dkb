@@ -12,13 +12,15 @@ import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
 import { manifestPath } from '@sjshovan/dkb-protocol/paths.js';
 import { DKB_ARTIFACT_MANIFEST_FILENAME } from '@sjshovan/dkb-protocol/artifacts.js';
-import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import {
+  DKB_RETRIEVAL_BUILD_PROFILE_LOCK,
+  readRetrievalBuildProfile,
+  validatePackageBuildGraph,
+} from '@sjshovan/dkb-library/builds.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
-import { DKB_RETRIEVAL_PROFILE_LOCK_PATH, readRetrievalProfileLock } from '@sjshovan/dkb-pipeline/profile.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
-import { LLAMAINDEX_COMPILER_IMAGE } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 import { resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { DKB_COMPILER_VERSION } from './version.js';
@@ -182,7 +184,9 @@ async function compileRegistryPackage(
   if (target !== contextConfig.activeTarget) {
     throw new DkbError(`Registry compiler accepts only its active target "${contextConfig.activeTarget}", not "${target}"`);
   }
-  const compilerImage = process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
+  const compilerImage = DEFAULT_DKB_DISTRIBUTION.services.find((service) => (
+    service.providerId === contextConfig.target.evidence && service.requiredBy.includes(target)
+  ))?.image;
 
   try {
     await fs.writeFile(uploadPath, sourceArchive);
@@ -206,7 +210,8 @@ async function compileRegistryPackage(
           target,
           contextRoot,
         });
-    const retrievalProfile = await readRetrievalProfileLock(buildRoot);
+    const graph = await validatePackageBuildGraph(buildRoot);
+    const retrievalProfile = await readRetrievalBuildProfile(graph.retrievalPath);
 
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
 
@@ -214,8 +219,7 @@ async function compileRegistryPackage(
 
     await createDkbPackageArchive(buildRoot, archivePath);
 
-    const buildGraph = await validatePackageBuildGraph(buildRoot);
-    const artifactManifestPath = path.join(buildGraph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
+    const artifactManifestPath = path.join(graph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
     const artifactManifest = await fs.readFile(artifactManifestPath);
     const archiveHash = `sha256:${await hashFile(archivePath)}`;
     const archiveSize = (await fs.stat(archivePath)).size;
@@ -223,7 +227,7 @@ async function compileRegistryPackage(
     const payload: Record<string, unknown> = {
       compiler: {
         id: 'dkb.registry.package',
-        image: compilerImage,
+        ...(compilerImage ? { image: compilerImage } : {}),
         model: retrievalProfile.profile.embedding.model,
         target,
         profile: target,
@@ -479,7 +483,7 @@ function isDkbSystemArtifactPath(sourceRoot: string, candidate: string): boolean
 
   return parts.includes('.dkb')
     || name === 'dkb-lock.json'
-    || name === DKB_RETRIEVAL_PROFILE_LOCK_PATH
+    || name === DKB_RETRIEVAL_BUILD_PROFILE_LOCK
     || name === 'dkb-release.json'
     || name === DKB_PACKAGE_RECEIPT_PATH;
 }

@@ -1,8 +1,10 @@
 import type { DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRetrievalScope } from '@sjshovan/dkb-pipeline/types.js';
 import { renderUntrustedSourceBlock, renderUntrustedSourceInline, SOURCE_DATA_POLICY_LINE } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 import { getQueryContext, type QueryContext } from '../indexes/queryContext.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
 
 export interface DkbNavigationScope extends DkbRetrievalScope {}
 
@@ -67,8 +69,9 @@ export async function semanticSearch(
   limit = 10,
   scope?: DkbNavigationScope,
   queryContext?: QueryContext,
+  runtime?: DkbRuntimeContext,
 ): Promise<DkbSemanticSearchResponse> {
-  const context = queryContext ?? await contextFor(root);
+  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
   const result = await context.retrieval.search({ query, limit: clampLimit(limit), ...(scope ? { scope } : {}) });
   const references = result.hits.flatMap((hit) => {
     const record = context.evidenceById.get(hit.evidenceId);
@@ -89,8 +92,9 @@ export async function lexicalSearch(
   limit = 10,
   scope?: DkbNavigationScope,
   queryContext?: QueryContext,
+  runtime?: DkbRuntimeContext,
 ): Promise<DkbLexicalSearchResponse> {
-  const context = queryContext ?? await contextFor(root);
+  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
   const result = await context.retrieval.search({ query, limit: Math.min(clampLimit(limit) * 5, 500), ...(scope ? { scope } : {}) });
   const references = result.hits
     .filter((hit) => hit.channels.includes('lexical'))
@@ -112,8 +116,9 @@ export async function readNavigationChunks(
   root: string,
   targets: string[],
   queryContext?: QueryContext,
+  runtime?: DkbRuntimeContext,
 ): Promise<DkbReadNavigationResponse> {
-  const context = queryContext ?? await contextFor(root);
+  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
   const byTarget = new Map<string, DkbEvidenceCatalogRecord>();
   for (const record of context.evidenceRecords) {
     byTarget.set(record.evidenceId, record);
@@ -143,8 +148,8 @@ export async function readNavigationChunks(
   };
 }
 
-export async function describeSources(root: string, queryContext?: QueryContext): Promise<DkbSourceDescription[]> {
-  const context = queryContext ?? await contextFor(root);
+export async function describeSources(root: string, queryContext?: QueryContext, runtime?: DkbRuntimeContext): Promise<DkbSourceDescription[]> {
+  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
   return context.evidenceAssets.map((asset) => ({
     id: asset.id,
     dkbId: asset.packageId,
@@ -182,9 +187,14 @@ function navigationReference(record: DkbEvidenceCatalogRecord, score: number, ma
   };
 }
 
-async function contextFor(root: string): Promise<QueryContext> {
+async function contextFor(root: string, runtime: DkbRuntimeContext): Promise<QueryContext> {
   const library = await loadLibrary(root);
-  return getQueryContext(library.root, library.manifest.id);
+  return getQueryContext(library.root, library.manifest.id, runtime);
+}
+
+function requiredRuntime(runtime: DkbRuntimeContext | undefined): DkbRuntimeContext {
+  if (!runtime) throw new DkbError('A DKB Runtime context is required when no query context is supplied.');
+  return runtime;
 }
 
 function clampLimit(limit: number): number {

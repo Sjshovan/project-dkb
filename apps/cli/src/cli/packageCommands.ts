@@ -5,6 +5,7 @@ import type { CliPresenter } from './presentation.js';
 import { humanSummary } from './presentation.js';
 import { summarizePackageListing } from './packagePresentation.js';
 import { configuredRegistry } from './registryConfig.js';
+import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
 
 interface RuntimeInstaller {
   installRegistryDkb(input: {
@@ -21,6 +22,7 @@ export interface PackageCommandDependencies {
   presenter(): CliPresenter;
   resolveLibraryRoot(explicit?: string): Promise<string>;
   runtimeAdminClient(explicit?: string): Promise<RuntimeInstaller>;
+  runtimeContext(): Promise<DkbRuntimeContext>;
 }
 
 export function registerPackageLifecycleCommands(
@@ -129,6 +131,7 @@ export function registerPackageLifecycleCommands(
 
         const { installDkbFromRegistry } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
         return installDkbFromRegistry({
+          runtime: await dependencies.runtimeContext(),
           registryUrl,
           registryToken: options.token,
           packageId: normalizedIdentity,

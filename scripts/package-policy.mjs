@@ -3,7 +3,6 @@ export const distributableWorkspaces = [
   '@sjshovan/dkb-library',
   '@sjshovan/dkb-pipeline',
   '@sjshovan/dkb-registry-client',
-  '@sjshovan/dkb-providers-bundled',
   '@sjshovan/dkb-evidence-docling-llamaindex',
   '@sjshovan/dkb-embedding-fastembed',
   '@sjshovan/dkb-embedding-tei',

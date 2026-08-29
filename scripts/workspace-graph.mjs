@@ -82,11 +82,10 @@ function assertBoundaries(graph) {
     '@sjshovan/dkb-index-faiss': ['@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol'],
     '@sjshovan/dkb-index-meilisearch': ['@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol'],
     '@sjshovan/dkb-retrieval-hybrid': ['@sjshovan/dkb-pipeline'],
-    '@sjshovan/dkb-providers-bundled': ['@sjshovan/dkb-evidence-docling-llamaindex', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol'],
     '@sjshovan/dkb-distribution-default': ['@sjshovan/dkb-embedding-fastembed', '@sjshovan/dkb-embedding-tei', '@sjshovan/dkb-evidence-docling-llamaindex', '@sjshovan/dkb-index-faiss', '@sjshovan/dkb-index-meilisearch', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-retrieval-hybrid'],
-    '@sjshovan/dkb-library': ['@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-providers-bundled'],
+    '@sjshovan/dkb-library': ['@sjshovan/dkb-protocol'],
     '@sjshovan/dkb-registry-client': ['@sjshovan/dkb-library', '@sjshovan/dkb-protocol'],
-    '@sjshovan/dkb-compiler': ['@sjshovan/dkb-distribution-default', '@sjshovan/dkb-evidence-docling-llamaindex', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-providers-bundled', '@sjshovan/dkb-registry-client'],
+    '@sjshovan/dkb-compiler': ['@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client'],
     '@sjshovan/dkb-runtime': ['@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client'],
     '@sjshovan/dkb-cli': ['@sjshovan/dkb-compiler', '@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client', '@sjshovan/dkb-runtime'],
   };

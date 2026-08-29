@@ -1,4 +1,4 @@
-import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { DkbUnsupportedCapabilityError } from '@sjshovan/dkb-protocol/errors.js';
 
 /**
  * Keeps an intentional public command visible without pretending its backing
@@ -6,10 +6,9 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
  * currently supported workflow.
  */
 export function notYetImplemented(command: string, detail: string, currentWorkflow?: string): never {
-  throw new DkbError([
+  throw new DkbUnsupportedCapabilityError(command, [
     `Not yet implemented: ${command}.`,
     detail,
     currentWorkflow ? `Current workflow: ${currentWorkflow}` : '',
   ].filter(Boolean).join(' '));
 }
-

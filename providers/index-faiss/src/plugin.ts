@@ -1,6 +1,6 @@
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbBundledPlugin } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbIndexRuntime } from '@sjshovan/dkb-pipeline/types.js';
+import { DKB_PLUGIN_API_VERSION, type DkbIndexRuntime } from '@sjshovan/dkb-pipeline/types.js';
 import {
   buildFaissRuntimeSnapshot,
   closeFaissSnapshot,
@@ -15,6 +15,7 @@ export const FAISS_PLUGIN_ID = '@dkb/index-faiss';
 export const FAISS_PROVIDER_VERSION = '0.1.0';
 
 export const FAISS_PLUGIN: DkbBundledPlugin = {
+  apiVersion: DKB_PLUGIN_API_VERSION,
   id: FAISS_PLUGIN_ID,
   version: FAISS_PROVIDER_VERSION,
   setup(context) {

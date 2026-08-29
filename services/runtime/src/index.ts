@@ -9,3 +9,4 @@ export * from './read/runtime.js';
 export * from './mcp/http.js';
 export * from './mcp/readOnly.js';
 export * from './mcp/stdio.js';
+export * from './defaultComposition.js';

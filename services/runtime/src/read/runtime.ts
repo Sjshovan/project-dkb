@@ -1,7 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { getQueryContext, type QueryContext } from '../indexes/queryContext.js';
-import type { DkbEvidenceCatalogAsset, DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { validateDkbReadRequest } from '@sjshovan/dkb-protocol/validation.js';
 import type {
   DkbEvidence,
@@ -13,6 +12,23 @@ import type {
 } from '@sjshovan/dkb-protocol/types.js';
 import { renderUntrustedSourceBlock, SOURCE_DATA_POLICY_LINE } from '@sjshovan/dkb-protocol/security/sourceContent.js';
 import { readNavigationChunks, semanticSearch } from './navigation.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
+import {
+  compactPathLabel,
+  matchForUnit,
+  normalizeIdentifierText,
+  queryEvidenceForRequest,
+  registryIdForSourceUnit,
+  runtimeEvidenceAsset,
+  runtimeEvidenceUnit,
+  sourceOriginForSourceUnit,
+  type RuntimeEvidenceAsset,
+  type RuntimeEvidenceUnit,
+  type SourceUnitMatch,
+  type SourceUnitQueryEvidence,
+} from './evidenceModel.js';
+import { evaluateEvidenceSufficiency } from './evidenceSufficiency.js';
 
 export interface DkbRetrieveKnowledgeRequest {
   need: string;
@@ -89,51 +105,8 @@ export interface DkbQueryTargetResponse {
   trace: unknown[];
 }
 
-type RuntimeEvidenceUnit = {
-  id: string;
-  evidenceId: string;
-  sourceId: string;
-  assetId: string;
-  dkbId: string;
-  packageVersion: string;
-  storeId: string;
-  type: DkbEvidenceCatalogRecord['sourceType'];
-  locator: Record<string, unknown>;
-  assetLocator: Record<string, unknown>;
-  title: string;
-  text: string;
-  keywords: string[];
-  capabilities: DkbEvidenceCatalogRecord['capabilities'];
-  queryable?: DkbEvidenceCatalogRecord['queryable'];
-  hash: string;
-  sourceHash: string;
-  provenance: Record<string, unknown>;
-  updatedAt: string;
-  chunkOrdinal: number;
-  chunkStart: number;
-  chunkEnd: number;
-  heading?: string;
-};
-
-type RuntimeEvidenceAsset = {
-  id: string;
-  dkbId: string;
-  storeId: string;
-  type: DkbEvidenceCatalogAsset['type'];
-  locator: Record<string, unknown>;
-  title: string;
-  hash: string;
-  updatedAt: string;
-};
-
-type SourceUnitQueryEvidence = { tokens: string[]; phrases: string[]; identifiers: string[] };
-type SourceUnitMatch = {
-  unit: RuntimeEvidenceUnit;
-  evidence: { phrases: string[]; identifiers: string[]; keywords: string[]; tokens: string[] };
-};
-
-export async function describeQueryTargets(root: string, query: string, limit = 10, queryContext?: QueryContext): Promise<DkbQueryTargetResponse> {
-  const context = queryContext ?? await contextFor(root);
+export async function describeQueryTargets(root: string, query: string, limit = 10, queryContext?: QueryContext, runtime?: DkbRuntimeContext): Promise<DkbQueryTargetResponse> {
+  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
   const result = await semanticSearch(root, query, limit, undefined, context);
   const unitsById = new Map(context.evidenceRecords.map(runtimeEvidenceUnit).map((unit) => [unit.id, unit]));
   const targets = result.results
@@ -167,17 +140,18 @@ export async function retrieveKnowledge(
   root: string,
   request: DkbRetrieveKnowledgeRequest,
   queryContext?: QueryContext,
+  runtime?: DkbRuntimeContext,
 ): Promise<DkbRetrieveKnowledgeResponse> {
-  const context = queryContext ?? await contextFor(root);
+  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
   const query = retrievalQueryText(request);
   const limit = Math.max(1, Math.min(request.limit ?? 8, 100));
-  const sourceIndex = {
+  const evidenceCatalog = {
     assets: context.evidenceAssets.map(runtimeEvidenceAsset),
     units: context.evidenceRecords.map(runtimeEvidenceUnit),
   };
-  const sourceUnits = sourceIndex.units;
-  const sourceIndexQuery = sourceIndexRetrievalQuery(query, request);
-  const queryEvidence = queryEvidenceForRequest(sourceIndexQuery);
+  const sourceUnits = evidenceCatalog.units;
+  const evidenceQuery = evidenceRetrievalQuery(query, request);
+  const queryEvidence = queryEvidenceForRequest(evidenceQuery);
 
   if (sourceUnits.length === 0) {
     return blockedRetrievalResponse(request, query);
@@ -249,16 +223,16 @@ export async function retrieveKnowledge(
       sourceUnitsMatched: directChunkMatches.length,
       sourceUnitsRead: chunkMatchesForRead.length,
       adapterGroups: adapterGroupsForSourceMatches(chunkMatchesForRead),
-      sourceUnitMatches: sourceUnitMatchesForMatches(chunkMatchesForRead, sourceIndex.assets),
+      sourceUnitMatches: sourceUnitMatchesForMatches(chunkMatchesForRead, evidenceCatalog.assets),
       retrievalProfile: profile,
     },
   };
 }
 
-export async function readDkb(root: string, request: DkbReadRequest, queryContext?: QueryContext): Promise<DkbReadResult> {
+export async function readDkb(root: string, request: DkbReadRequest, queryContext?: QueryContext, runtime?: DkbRuntimeContext): Promise<DkbReadResult> {
   const validatedRequest = validateDkbReadRequest(request, 'DKB read request');
   const fetchQueries = validatedRequest.queries.filter((query) => query.operation === 'fetch');
-  const direct = await readNavigationChunks(root, fetchQueries.map((query) => query.target), queryContext);
+  const direct = await readNavigationChunks(root, fetchQueries.map((query) => query.target), queryContext, runtime);
 
   const queries = validatedRequest.queries.map((query) => {
     if (query.operation !== 'fetch') {
@@ -571,7 +545,7 @@ function redactEvidenceSource(evidence: DkbEvidence): DkbEvidence {
   };
 }
 
-function sourceIndexRetrievalQuery(queryText: string, request: DkbRetrieveKnowledgeRequest): DkbReadQuery {
+function evidenceRetrievalQuery(queryText: string, request: DkbRetrieveKnowledgeRequest): DkbReadQuery {
   return {
     id: 'source-index-select',
     target: 'source-index/global',
@@ -610,188 +584,17 @@ function retrievalRequestId(request: DkbRetrieveKnowledgeRequest): string {
   return `retrieve:${normalizeIdentifierText(retrievalQueryText(request)).slice(0, 24) || 'knowledge'}`;
 }
 
-function evaluateEvidenceSufficiency(result: DkbReadResult, needText: string): DkbEvidenceSufficiency {
-  const evidence = result.queries.flatMap((query) => query.evidence);
-
-  if (evidence.length === 0) {
-    return {
-      status: 'blocked',
-      confidence: 0,
-      matchedNeed: false,
-      expanded: false,
-      reason: 'no_evidence',
-      passes: 1,
-    };
-  }
-
-  const tokens = tokenize(needText).filter((token) => token.length > 2 && !SUFFICIENCY_STOPWORDS.has(token));
-
-  if (tokens.length === 0) {
-    return {
-      status: result.status,
-      confidence: 1,
-      matchedNeed: true,
-      expanded: false,
-      reason: 'no_need',
-      passes: 1,
-    };
-  }
-
-  const evidenceTokens = new Set(tokenize(evidence.map(evidenceToText).join(' ')));
-  const matchedCount = tokens.filter((token) => evidenceTokens.has(token)).length;
-  const confidence = roundConfidence(matchedCount / tokens.length);
-  const matchedNeed = confidence >= 0.5;
-
-  return {
-    status: confidence >= 0.75 && result.status === 'complete' ? 'complete' : 'partial',
-    confidence,
-    matchedNeed,
-    expanded: false,
-    reason: matchedNeed ? 'matched_need' : 'weak_match',
-    passes: 1,
-  };
-}
-
-function evidenceToText(evidence: DkbEvidence): string {
-  const label = evidence.label ? `${evidence.label} ` : '';
-
-  if (typeof evidence.text === 'string') {
-    return `${label}${evidence.text}`;
-  }
-
-  if (evidence.rows) {
-    return `${label}${JSON.stringify(evidence.rows)}`;
-  }
-
-  if (evidence.value !== undefined) {
-    return `${label}${String(evidence.value)}`;
-  }
-
-  return evidence.label;
-}
-
-function registryIdForSourceUnit(unit: RuntimeEvidenceUnit): string | undefined {
-  return unit.dkbId.endsWith('.local') || /\.local-[a-f0-9]{8}$/.test(unit.dkbId)
-    ? unit.dkbId.replace(/\.local(?:-[a-f0-9]{8})?$/, '')
-    : undefined;
-}
-
-function sourceOriginForSourceUnit(unit: RuntimeEvidenceUnit): string | undefined {
-  return registryIdForSourceUnit(unit) ? 'registry-local' : undefined;
-}
-
-function compactPathLabel(value: string): string {
-  return value.split(/[\\/]+/g).filter(Boolean).at(-1) ?? value;
-}
-
-function normalizeIdentifierText(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
-function roundConfidence(value: number): number {
-  return Math.round(Math.max(0, Math.min(1, value)) * 10000) / 10000;
-}
-
 function roundMs(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function runtimeEvidenceUnit(record: DkbEvidenceCatalogRecord): RuntimeEvidenceUnit {
-  return {
-    id: record.evidenceId,
-    evidenceId: record.evidenceId,
-    sourceId: record.sourceId,
-    assetId: record.assetId,
-    dkbId: record.packageId,
-    packageVersion: record.packageVersion,
-    storeId: record.storeId,
-    type: record.sourceType,
-    locator: record.locator,
-    assetLocator: record.assetLocator,
-    title: record.title,
-    text: record.text,
-    keywords: record.keywords,
-    capabilities: record.capabilities,
-    ...(record.queryable ? { queryable: record.queryable } : {}),
-    hash: record.textHash,
-    sourceHash: record.sourceHash,
-    provenance: record.provenance,
-    updatedAt: record.updatedAt,
-    chunkOrdinal: record.chunkOrdinal,
-    chunkStart: record.chunkStart,
-    chunkEnd: record.chunkEnd,
-    ...(record.heading ? { heading: record.heading } : {}),
-  };
-}
-
-function runtimeEvidenceAsset(asset: DkbEvidenceCatalogAsset): RuntimeEvidenceAsset {
-  return {
-    id: asset.id,
-    dkbId: asset.packageId,
-    storeId: asset.storeId,
-    type: asset.type,
-    locator: asset.locator,
-    title: asset.title,
-    hash: asset.sourceHash,
-    updatedAt: asset.updatedAt,
-  };
-}
-
-function queryEvidenceForRequest(query: DkbReadQuery): SourceUnitQueryEvidence {
-  const phrases = (query.filters ?? [])
-    .filter((filter) => filter.field === 'content' && filter.op === 'contains' && typeof filter.value === 'string')
-    .map((filter) => String(filter.value).toLowerCase().replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-  const tokens = [...new Set(tokenize(phrases.join(' ')))];
-  const identifiers = [...new Set(phrases.flatMap((phrase) => phrase.match(/\b[A-Za-z0-9][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\b/g) ?? []))]
-    .map((value) => value.toLowerCase());
-  return { phrases, tokens, identifiers };
-}
-
-function matchForUnit(unit: RuntimeEvidenceUnit, query: SourceUnitQueryEvidence, matchedTokens: string[]): SourceUnitMatch {
-  const normalized = `${unit.title}\n${unit.text}\n${unit.keywords.join(' ')}`.toLowerCase();
-  const tokens = [...new Set(matchedTokens.filter(Boolean).map((token) => token.toLowerCase()))];
-  return {
-    unit,
-    evidence: {
-      phrases: query.phrases.filter((phrase) => normalized.includes(phrase)),
-      identifiers: query.identifiers.filter((identifier) => normalized.includes(identifier)),
-      keywords: unit.keywords.filter((keyword) => tokens.includes(keyword.toLowerCase())),
-      tokens,
-    },
-  };
-}
-
-async function contextFor(root: string): Promise<QueryContext> {
+async function contextFor(root: string, runtime: DkbRuntimeContext): Promise<QueryContext> {
   const { loadLibrary } = await import('@sjshovan/dkb-protocol/manifest.js');
   const library = await loadLibrary(root);
-  return getQueryContext(library.root, library.manifest.id);
+  return getQueryContext(library.root, library.manifest.id, runtime);
 }
 
-function tokenize(value: string): string[] {
-  return (value.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/gu) ?? [])
-    .flatMap((token) => token.includes('-') ? [token, ...token.split('-')] : [token]);
+function requiredRuntime(runtime: DkbRuntimeContext | undefined): DkbRuntimeContext {
+  if (!runtime) throw new DkbError('A DKB Runtime context is required when no query context is supplied.');
+  return runtime;
 }
-
-const SUFFICIENCY_STOPWORDS = new Set([
-  'what',
-  'which',
-  'where',
-  'when',
-  'who',
-  'how',
-  'does',
-  'find',
-  'show',
-  'tell',
-  'about',
-  'record',
-  'records',
-  'mention',
-  'mentions',
-  'that',
-  'this',
-  'with',
-  'from',
-  'the',
-]);

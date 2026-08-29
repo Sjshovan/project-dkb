@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { DKB_ARTIFACT_PACKAGE_MEDIA_TYPE } from './artifacts.js';
+import { DKB_PACKAGE_MEDIA_TYPE } from './archive.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -73,7 +73,7 @@ export async function orasPushArtifact(input: {
     'push',
     '--plain-http',
     toolRef,
-    `${path.basename(archivePath)}:${DKB_ARTIFACT_PACKAGE_MEDIA_TYPE}`,
+    `${path.basename(archivePath)}:${DKB_PACKAGE_MEDIA_TYPE}`,
   ], {
     mountDir: path.dirname(archivePath),
   });

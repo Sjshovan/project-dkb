@@ -1,13 +1,13 @@
 import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import type { DkbEvidenceCatalogAsset, DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
-import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime, DkbRetrievalProvider, DkbRetrievalRuntime } from '@sjshovan/dkb-pipeline/types.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { maybeReadRuntimeLock, resolveLibraryRuntimeBuilds } from '@sjshovan/dkb-library/builds.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
 
 export interface QueryContext {
   root: string;
@@ -28,10 +28,10 @@ export interface QueryContext {
 
 const residentContexts = new Map<string, QueryContext>();
 
-export async function createQueryContext(root: string, collectionId: string): Promise<QueryContext> {
+export async function createQueryContext(root: string, collectionId: string, runtime: DkbRuntimeContext): Promise<QueryContext> {
   const resolvedRoot = path.resolve(root);
   const artifactHash = await queryArtifactHash(resolvedRoot);
-  const providerHost = await DkbProviderHost.create({ root: resolvedRoot, distribution: DEFAULT_DKB_DISTRIBUTION });
+  const providerHost = await DkbProviderHost.create({ root: resolvedRoot, distribution: runtime.distribution });
   let indexRuntime: DkbIndexRuntime | null = null;
   let retrievalRuntime: DkbRetrievalRuntime | null = null;
 
@@ -76,7 +76,7 @@ export async function createQueryContext(root: string, collectionId: string): Pr
     return {
       root: resolvedRoot,
       collectionId,
-      cacheKey: queryContextCacheKey(resolvedRoot, collectionId, artifactHash),
+      cacheKey: queryContextCacheKey(resolvedRoot, collectionId, artifactHash, runtime),
       artifactHash,
       evidenceAssets,
       evidenceRecords,
@@ -121,10 +121,10 @@ function identifiersForEvidence(record: DkbEvidenceCatalogRecord): string[] {
     .filter(Boolean) ?? [])];
 }
 
-export async function getQueryContext(root: string, collectionId: string): Promise<QueryContext> {
+export async function getQueryContext(root: string, collectionId: string, runtime: DkbRuntimeContext): Promise<QueryContext> {
   const resolvedRoot = path.resolve(root);
   const artifactHash = await queryArtifactHash(resolvedRoot);
-  const cacheKey = queryContextCacheKey(resolvedRoot, collectionId, artifactHash);
+  const cacheKey = queryContextCacheKey(resolvedRoot, collectionId, artifactHash, runtime);
   const cached = residentContexts.get(cacheKey);
 
   if (cached) {
@@ -133,7 +133,7 @@ export async function getQueryContext(root: string, collectionId: string): Promi
     return cached;
   }
 
-  const context = await createQueryContext(resolvedRoot, collectionId);
+  const context = await createQueryContext(resolvedRoot, collectionId, runtime);
 
   residentContexts.set(context.cacheKey, context);
 
@@ -193,10 +193,11 @@ export async function queryArtifactHash(root: string): Promise<string> {
   return stableHash(runtimeLock ?? { root: path.resolve(root), status: 'uncompiled' });
 }
 
-function queryContextCacheKey(root: string, collectionId: string, artifactHash: string): string {
+function queryContextCacheKey(root: string, collectionId: string, artifactHash: string, runtime: DkbRuntimeContext): string {
   return stableHash({
     root,
     collectionId,
     artifactHash,
+    distribution: `${runtime.distribution.id}@${runtime.distribution.version}`,
   });
 }

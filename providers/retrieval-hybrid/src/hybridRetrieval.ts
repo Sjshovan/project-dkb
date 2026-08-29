@@ -2,7 +2,10 @@ import type {
   DkbRetrievalHit,
   DkbRetrievalProvider,
   DkbRetrievalRuntime,
+  DkbRetrievalScope,
 } from '@sjshovan/dkb-pipeline/types.js';
+
+type DkbRetrievalEvidenceRecord = Parameters<DkbRetrievalProvider['openRuntime']>[0]['evidence']['records'][number];
 
 export const DKB_HYBRID_RETRIEVAL_PROTOCOL = 'dkb.evidence.v1';
 
@@ -49,10 +52,10 @@ export function createHybridRetrievalProvider(providerId: string): DkbRetrievalP
 }
 
 function searchEvidenceLexically(
-  records: readonly import('@sjshovan/dkb-protocol/evidence/catalog.js').DkbEvidenceCatalogRecord[],
+  records: readonly DkbRetrievalEvidenceRecord[],
   query: string,
   limit: number,
-  scope?: import('@sjshovan/dkb-pipeline/types.js').DkbRetrievalScope,
+  scope?: DkbRetrievalScope,
 ): Array<{ unitId: string; score: number; matchedTokens: string[] }> {
   const tokens = [...new Set(tokenize(query))];
   if (tokens.length === 0) return [];

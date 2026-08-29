@@ -1,5 +1,4 @@
-import type { IndexedSourceUnit } from '@sjshovan/dkb-pipeline/types.js';
-import type { DkbReadQuery, DkbReadResult, DkbStore, DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 
 export interface DkbReader {
   readRecords(dkb: LoadedDkb): Promise<DkbRecord[]>;
@@ -9,26 +8,8 @@ export interface DkbWriter {
   appendRecord(dkb: LoadedDkb, record: DkbRecord): Promise<DkbRecord>;
 }
 
-export interface DkbExecuteReadPlanInput {
-  dkb: LoadedDkb;
-  store: DkbStore;
-  record: any;
-  query: DkbReadQuery;
-  sourceUnits?: IndexedSourceUnit[];
-}
-
-export type DkbReadPlanResult = DkbReadResult['queries'][number];
-
-export interface DkbSourceAdapter {
-  executeReadPlan(input: DkbExecuteReadPlanInput): Promise<DkbReadPlanResult>;
-}
-
-export type DkbAdapterHandle = DkbReader & Partial<DkbWriter> & Partial<DkbSourceAdapter>;
+export type DkbAdapterHandle = DkbReader & Partial<DkbWriter>;
 
 export function canWrite(adapter: DkbAdapterHandle): adapter is DkbReader & DkbWriter {
   return typeof adapter.appendRecord === 'function';
-}
-
-export function canExecuteReadPlan(adapter: DkbAdapterHandle): adapter is DkbAdapterHandle & DkbSourceAdapter {
-  return typeof adapter.executeReadPlan === 'function';
 }

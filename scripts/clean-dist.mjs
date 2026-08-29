@@ -10,9 +10,13 @@ for (const target of [
   'packages/library/dist',
   'packages/pipeline/dist',
   'packages/registry-client/dist',
-  'providers/bundled/dist',
+  'providers/evidence-docling-llamaindex/dist',
+  'providers/embedding-fastembed/dist',
+  'providers/embedding-tei/dist',
   'providers/index-faiss/dist',
   'providers/index-meilisearch/dist',
+  'providers/retrieval-hybrid/dist',
+  'packages/distribution-default/dist',
 ]) {
   await fs.rm(path.resolve(target), { recursive: true, force: true });
 }

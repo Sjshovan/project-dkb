@@ -185,14 +185,15 @@ function fileDigest(bytes) {
 }
 
 function minimalLock() {
-  const missing = (name) => ({ path: `.dkb/artifacts/${name}`, hash: null, status: 'not_built' });
+  const missing = (path) => ({ path, profileDigest: null, digest: null, status: 'not_built' });
   return {
+    format: 'dkb.compile-receipt.v2',
     registry: { id: packageIdentity.id, name: packageIdentity.id, version: packageIdentity.version },
     packages: {},
-    artifacts: {
-      sourceIndex: missing('source-index.json'),
-      sourceGraph: missing('source-graph.json'),
-      sourceVector: missing('source-vector.json'),
+    builds: {
+      evidence: missing('.dkb/builds/evidence'),
+      retrieval: { ...missing('.dkb/builds/retrieval'), compatibilityDigest: null },
+      runtime: { path: '.dkb/runtime.lock.json', target: '', digest: null, status: 'not_built' },
     },
   };
 }

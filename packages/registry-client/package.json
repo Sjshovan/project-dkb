@@ -1,6 +1,6 @@
 {
   "name": "@sjshovan/dkb-registry-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -9,10 +9,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./*": {
-      "types": "./dist/*",
-      "import": "./dist/*"
-    }
+    "./client.js": { "types": "./dist/client.d.ts", "import": "./dist/client.js" },
+    "./collections.js": { "types": "./dist/collections.d.ts", "import": "./dist/collections.js" },
+    "./config.js": { "types": "./dist/config.d.ts", "import": "./dist/config.js" },
+    "./credentials.js": { "types": "./dist/credentials.d.ts", "import": "./dist/credentials.js" }
   },
   "files": [
     "dist/",
@@ -23,8 +23,8 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@sjshovan/dkb-library": "0.1.0",
-    "@sjshovan/dkb-protocol": "1.0.0",
+    "@sjshovan/dkb-library": "0.2.0",
+    "@sjshovan/dkb-protocol": "2.0.0",
     "tar": "^7.5.22"
   },
   "engines": {

@@ -18,6 +18,7 @@ import { listPackageBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-libr
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 
 const allPlugin = {
+  apiVersion: 2,
   id: '@test/all',
   version: '1.0.0',
   setup(context) {
@@ -183,12 +184,28 @@ test('a broken local override fails instead of falling back', async (t) => {
   await writeAllPlugin(pluginPath(path.join(globalRoot, 'plugins'), '@test/all'), '2.0.0', 'global');
   const local = pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/all');
   await fs.mkdir(path.dirname(local), { recursive: true });
-  await fs.writeFile(local, 'export const id = "@test/wrong"; export const version = "1"; export function setup() {}\n', 'utf8');
+  await fs.writeFile(local, 'export const apiVersion = 2; export const id = "@test/wrong"; export const version = "1"; export function setup() {}\n', 'utf8');
   await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
 
   await assert.rejects(
     DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) }),
-    /Invalid plugin.*expected exports id=@test\/all/i,
+    /Invalid plugin.*expected exports apiVersion=2, id=@test\/all/i,
+  );
+});
+
+test('plugin API v1 is rejected instead of being loaded through a compatibility path', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-api-v1-'));
+  const globalRoot = path.join(root, 'global');
+  const contextRoot = path.join(root, 'library');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const local = pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/all');
+  await fs.mkdir(path.dirname(local), { recursive: true });
+  await fs.writeFile(local, 'export const apiVersion = 1; export const id = "@test/all"; export const version = "1"; export function setup() {}\n', 'utf8');
+  await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
+
+  await assert.rejects(
+    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) }),
+    /Invalid plugin.*expected exports apiVersion=2, id=@test\/all/i,
   );
 });
 
@@ -199,6 +216,7 @@ test('processor order is deterministic and hosts dispose independently', async (
   const secondRoot = path.join(root, 'second');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const processor = (id, suffix) => ({
+    apiVersion: 2,
     id,
     version: '1.0.0',
     setup(context) {
@@ -229,7 +247,7 @@ test('separate parser, chunker, embedder, and middleware providers share one com
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-separate-'));
   const library = path.join(root, 'library');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const provider = (id, setup) => ({ id, version: '1.0.0', setup });
+  const provider = (id, setup) => ({ apiVersion: 2, id, version: '1.0.0', setup });
   const bundled = [
     provider('@test/parser', (context) => context.registerProvider({ kind: 'parser', async parse() { return [{ id: 'doc', path: 'proof.md', text: 'parsed', metadata: {} }]; } })),
     provider('@test/chunker', (context) => context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'chunk', documentId: documents[0].id, text: `${documents[0].text}-chunked`, metadata: {} }]; } })),
@@ -304,6 +322,7 @@ test('separate providers compile a complete package without a LlamaIndex-native 
   await fs.writeFile(plugin, `
 import fs from 'node:fs/promises';
 import path from 'node:path';
+export const apiVersion = 2;
 export const id = '@test/separate';
 export const version = '1.0.0';
 export function setup(context) {
@@ -327,6 +346,7 @@ export function setup(context) {
   const initialEmbedding = pluginPath(path.join(root, '.dkb/plugins'), '@test/initial-embedding');
   await fs.mkdir(path.dirname(initialEmbedding), { recursive: true });
   await fs.writeFile(initialEmbedding, `
+export const apiVersion = 2;
 export const id = '@test/initial-embedding';
 export const version = '1.0.0';
 export function setup(context) {
@@ -336,6 +356,7 @@ export function setup(context) {
   const alternate = pluginPath(path.join(root, '.dkb/plugins'), '@test/alternate');
   await fs.mkdir(path.dirname(alternate), { recursive: true });
   await fs.writeFile(alternate, `
+export const apiVersion = 2;
 export const id = '@test/alternate';
 export const version = '1.0.0';
 export function setup(context) {
@@ -432,6 +453,7 @@ test('embedding cache reuses exact text within one space and misses after a spac
   await fs.writeFile(core, `
 import fs from 'node:fs/promises';
 import path from 'node:path';
+export const apiVersion = 2;
 export const id = '@test/cache-core';
 export const version = '1.0.0';
 export function setup(context) {
@@ -450,6 +472,7 @@ export function setup(context) {
   await fs.mkdir(path.dirname(embedding), { recursive: true });
   await fs.writeFile(embedding, `
 import fs from 'node:fs/promises';
+export const apiVersion = 2;
 export const id = '@test/cache-embedding';
 export const version = '1.0.0';
 export function setup(context) {
@@ -496,13 +519,13 @@ test('plugin add, link, list, and guarded removal operate within the selected sc
   assert.equal(await fs.readFile(path.join(path.dirname(copied.path), 'helper.txt'), 'utf8'), 'support');
   assert.ok((await fs.lstat(path.dirname(linked.path))).isSymbolicLink());
 
-  const listed = await listPlugins({ root: library, globalRoot });
+  const listed = await listPlugins({ distribution: DEFAULT_DKB_DISTRIBUTION, root: library, globalRoot });
   assert.ok(listed.some((entry) => entry.id === '@test/copied' && entry.scope === 'local' && entry.valid));
   assert.ok(listed.some((entry) => entry.id === '@test/linked' && entry.scope === 'global' && entry.valid));
   assert.ok(listed.some((entry) => entry.id === '@dkb/index-faiss' && entry.scope === 'bundled' && entry.selected));
 
-  assert.equal((await removePlugin({ root: library, globalRoot, id: '@test/copied' })).removed, true);
-  assert.equal((await removePlugin({ root: library, globalRoot, id: '@test/linked', scope: 'global' })).removed, true);
+  assert.equal((await removePlugin({ distribution: DEFAULT_DKB_DISTRIBUTION, root: library, globalRoot, id: '@test/copied' })).removed, true);
+  assert.equal((await removePlugin({ distribution: DEFAULT_DKB_DISTRIBUTION, root: library, globalRoot, id: '@test/linked', scope: 'global' })).removed, true);
 });
 
 test('pipeline changes validate before atomic promotion and preserve the prior configuration on failure', async (t) => {
@@ -513,6 +536,7 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   const promoted = await setPipelineTarget({
+    distribution: DEFAULT_DKB_DISTRIBUTION,
     root: library,
     globalRoot,
     name: 'default',
@@ -529,6 +553,7 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   assert.equal(promoted.target, 'default');
 
   await assert.rejects(setPipelineTarget({
+    distribution: DEFAULT_DKB_DISTRIBUTION,
     root: library,
     globalRoot,
     name: 'broken',
@@ -551,6 +576,7 @@ test('pipeline activation rejects incompatible installed artifacts without chang
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   await setPipelineTarget({
+    distribution: DEFAULT_DKB_DISTRIBUTION,
     root: library,
     globalRoot,
     name: 'default',
@@ -601,6 +627,7 @@ test('pipeline activation rejects incompatible installed artifacts without chang
   });
 
   await assert.rejects(setPipelineTarget({
+    distribution: DEFAULT_DKB_DISTRIBUTION,
     root: library,
     globalRoot,
     name: 'base',
@@ -634,6 +661,7 @@ async function writeJson(target, value) {
 async function writeAllPlugin(target, version, source) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, `
+export const apiVersion = 2;
 export const id = '@test/all';
 export const version = '${version}';
 export function setup(context) {
@@ -649,6 +677,7 @@ async function writePluginSource(target, id, version) {
   await fs.mkdir(target, { recursive: true });
   await fs.writeFile(path.join(target, 'helper.txt'), 'support', 'utf8');
   await fs.writeFile(path.join(target, 'plugin.mjs'), `
+export const apiVersion = 2;
 export const id = '${id}';
 export const version = '${version}';
 export function setup(context) {

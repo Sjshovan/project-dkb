@@ -11,6 +11,7 @@ import type {
 
 export type DkbProviderKind = 'evidence' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
 export type DkbProcessorStage = 'document' | 'chunk' | 'record';
+export const DKB_PLUGIN_API_VERSION = 2;
 
 export interface DkbPipelineDocument {
   id: string;
@@ -40,7 +41,6 @@ export interface DkbCompiledPipeline {
   chunks: DkbPipelineChunk[];
   records: DkbPipelineRecord[];
   receipts: DkbProviderBuildReceipt[];
-  nativeResult?: unknown;
 }
 
 export interface DkbProviderBuildReceipt {
@@ -96,7 +96,6 @@ export interface DkbEvidenceProvider {
     chunks?: DkbPipelineChunk[];
     records: DkbPipelineRecord[];
     receipt: DkbProviderBuildReceipt;
-    nativeResult?: unknown;
   }>;
   health?(): Promise<DkbProviderHealth>;
   dispose?(): Promise<void> | void;
@@ -313,6 +312,7 @@ export interface DkbPluginSetupContext {
 }
 
 export interface DkbPluginModule {
+  apiVersion: typeof DKB_PLUGIN_API_VERSION;
   id: string;
   version: string;
   setup(context: DkbPluginSetupContext): Promise<void> | void;

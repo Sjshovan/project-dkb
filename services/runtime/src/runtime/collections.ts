@@ -9,11 +9,12 @@ import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import type { DkbLibraryLockManifest, DkbSourceManifest } from '@sjshovan/dkb-protocol/types.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
-import { snapshotLibraryArtifacts, type LibraryArtifactSnapshot } from '@sjshovan/dkb-library/artifactSnapshot.js';
+import { snapshotRuntimeReceipts, type RuntimeReceiptSnapshot } from '@sjshovan/dkb-library/runtimeSnapshot.js';
 import { DKB_PACKAGE_EXTENSION } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient, type DkbRegistryCollectionRevision } from '@sjshovan/dkb-registry-client/client.js';
 import { installDkbArchiveIntoRuntime, preflightDkbInstall } from './registryInstall.js';
 import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
+import type { DkbRuntimeContext } from './context.js';
 
 export interface CollectionInstallResult {
   status: 'installed' | 'updated' | 'already_installed';
@@ -25,6 +26,7 @@ export interface CollectionInstallResult {
 }
 
 export async function installRegistryCollection(options: {
+  runtime: DkbRuntimeContext;
   client: DkbRegistryClient;
   collectionId: string;
   revision?: number;
@@ -111,6 +113,7 @@ export async function installRegistryCollection(options: {
       const archivePath = path.join(tempRoot, `${safeFilename(release.packageId)}-${release.version}${DKB_PACKAGE_EXTENSION}`);
       await options.client.writePackageArchive(release.packageId, archivePath, release.version, { progress: options.progress });
       await installDkbArchiveIntoRuntime({
+        runtime: options.runtime,
         archivePath,
         runtimeRoot: libraryRoot,
         trustedKeys: trustedKeys as Parameters<typeof installDkbArchiveIntoRuntime>[0]['trustedKeys'],
@@ -262,7 +265,7 @@ async function snapshotLibraryMutation(libraryRoot: string, identities: string[]
   const manifestSource = await fs.readFile(path.join(libraryRoot, 'dkb.json'), 'utf8');
   const lock = await maybeReadLibraryLock(libraryRoot);
   const snapshots: Array<{ identity: string; source: string; snapshot: string; existed: boolean }> = [];
-  let artifactSnapshot: LibraryArtifactSnapshot;
+  let artifactSnapshot: RuntimeReceiptSnapshot;
 
   try {
     for (const identity of [...new Set(identities)]) {
@@ -272,7 +275,7 @@ async function snapshotLibraryMutation(libraryRoot: string, identities: string[]
       if (existed) await fs.cp(source, snapshot, { recursive: true });
       snapshots.push({ identity, source, snapshot, existed });
     }
-    artifactSnapshot = await snapshotLibraryArtifacts(libraryRoot);
+    artifactSnapshot = await snapshotRuntimeReceipts(libraryRoot);
   } catch (error) {
     await fs.rm(transactionRoot, { recursive: true, force: true });
     throw error;

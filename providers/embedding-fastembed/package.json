@@ -12,8 +12,8 @@
   "files": ["dist/", "!dist/.tsbuildinfo", "python/embedder.py", "python/requirements.txt", "python/Dockerfile"],
   "scripts": { "build": "tsc -b", "check": "tsc -b --pretty false" },
   "dependencies": {
-    "@sjshovan/dkb-pipeline": "0.1.0",
-    "@sjshovan/dkb-protocol": "1.0.0"
+    "@sjshovan/dkb-pipeline": "0.2.0",
+    "@sjshovan/dkb-protocol": "2.0.0"
   },
   "engines": { "node": ">=22.15.0" },
   "private": true

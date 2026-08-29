@@ -43,7 +43,6 @@ export async function ingestDkbWithProviderHost(
       receipts: [
         compiled.receipt,
       ],
-      ...(compiled.nativeResult !== undefined ? { nativeResult: compiled.nativeResult } : {}),
     };
   } else {
     const parserId = target.parser;

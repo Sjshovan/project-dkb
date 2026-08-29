@@ -14,10 +14,12 @@ import { serveDkbRuntime } from '../services/runtime/dist/runtime/server.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
 
 test('remote MCP exposes only read-only search and fetch tools', async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createDkbReadOnlyMcpServer({
+    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
     libraryPath: '.',
     publicBaseUrl: 'https://knowledge.example',
   });
@@ -144,7 +146,7 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
   try {
     const health = await fetch(`${origin}/health`);
     assert.equal(health.status, 200);
-    assert.equal((await health.json()).runtime.version, '0.1.0');
+    assert.equal((await health.json()).runtime.version, '0.2.0');
 
     const listed = await fetch(`${origin}/mcp`, {
       method: 'POST',

@@ -22,8 +22,11 @@ import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js'
 import { installDkbFromRegistry } from './registryInstall.js';
 import { switchRuntimePipelineFromRegistry } from './pipelineSwitch.js';
 import { withRuntimeMutation } from './mutation.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
+import type { DkbRuntimeContext } from './context.js';
 
 export interface ServeRuntimeOptions {
+  runtime?: DkbRuntimeContext;
   host?: string;
   port?: number;
   stateRoot?: string;
@@ -35,6 +38,7 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
   const host = options.host ?? process.env.DKB_RUNTIME_HOST ?? '127.0.0.1';
   const port = options.port ?? Number.parseInt(process.env.DKB_RUNTIME_PORT ?? '7331', 10);
   const adminToken = options.adminToken ?? process.env.DKB_RUNTIME_ADMIN_TOKEN;
+  const runtime = options.runtime ?? DEFAULT_DKB_RUNTIME_CONTEXT;
 
   if (!adminToken && !isLoopbackHost(host)) {
     throw new DkbError(
@@ -44,7 +48,8 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
 
   await ensureRuntimeState(stateRoot);
   const mcp = process.env.DKB_MCP_HTTP_ENABLED === 'true'
-    ? await createDkbMcpHttpHandler({
+      ? await createDkbMcpHttpHandler({
+        runtime,
         host,
         libraryPath: stateRoot,
       })
@@ -53,7 +58,7 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
   const server = http.createServer(async (request, response) => {
     try {
       if (mcp && await mcp.handle(request, response)) return;
-      await routeRequest(request, response, stateRoot, adminToken);
+      await routeRequest(request, response, stateRoot, runtime, adminToken);
     } catch (error) {
       if (!response.headersSent) {
         sendJson(response, 500, {
@@ -86,6 +91,7 @@ async function routeRequest(
   request: IncomingMessage,
   response: ServerResponse,
   stateRoot: string,
+  runtime: DkbRuntimeContext,
   adminToken?: string,
 ): Promise<void> {
   setCommonHeaders(response);
@@ -132,6 +138,7 @@ async function routeRequest(
       }>(request);
 
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => switchRuntimePipelineFromRegistry({
+        runtime,
         stateRoot,
         target: requiredString(body.target, 'target'),
         registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
@@ -150,7 +157,7 @@ async function routeRequest(
         force?: boolean;
       }>(request);
 
-      return sendJson(response, 201, await withRuntimeMutation(stateRoot, () => importCompiledDkbArtifactIntoRuntime(body, stateRoot)));
+      return sendJson(response, 201, await withRuntimeMutation(stateRoot, () => importCompiledDkbArtifactIntoRuntime({ runtime, ...body }, stateRoot)));
     }
 
     if (request.method === 'POST' && pathName === '/api/dkbs/install-registry') {
@@ -164,6 +171,7 @@ async function routeRequest(
       }>(request);
 
       return sendJson(response, 201, await withRuntimeMutation(stateRoot, () => installDkbFromRegistry({
+        runtime,
         registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
         registryToken: body.registryToken,
         packageId: requiredString(body.packageId, 'packageId'),
@@ -177,13 +185,13 @@ async function routeRequest(
     const dkbMatch = pathName.match(/^\/api\/dkbs\/([^/]+)$/);
 
     if (dkbMatch && request.method === 'DELETE') {
-      return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => removeDkbFromRuntime(decodeURIComponent(dkbMatch[1]!), stateRoot)));
+      return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => removeDkbFromRuntime(decodeURIComponent(dkbMatch[1]!), stateRoot, { runtime })));
     }
 
     if (request.method === 'POST' && pathName === '/api/retrieve') {
       const body = await readJsonBody<DkbRetrieveKnowledgeRequest>(request);
 
-      return sendJson(response, 200, await retrieveFromRuntime(body, stateRoot));
+      return sendJson(response, 200, await retrieveFromRuntime(body, stateRoot, runtime));
     }
 
     if (request.method === 'GET' && pathName === '/api/traces/latest') {
