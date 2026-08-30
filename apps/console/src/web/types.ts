@@ -1,5 +1,14 @@
 export type ResourceKind = 'libraries' | 'runtimes' | 'registries' | 'stacks';
 
+export interface ResourceCheck {
+  name?: string;
+  component?: string;
+  ok?: boolean;
+  status?: string | number;
+  required?: boolean;
+  message?: string;
+}
+
 export interface ResourceRow {
   name: string;
   selected?: boolean;
@@ -16,6 +25,7 @@ export interface ResourceRow {
   stateRoot?: string;
   usedBy?: string[];
   message?: string;
+  checks?: ResourceCheck[];
   authenticated?: boolean;
   credential?: {
     user?: string;

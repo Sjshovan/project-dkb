@@ -63,6 +63,11 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.equal(libraries.status, 200);
     assert.equal((await libraries.json()).selected, 'personal');
 
+    const checkedLibraries = await fetch(`${server.url}/api/v1/resources/libraries?check=1`, { headers: { cookie } });
+    assert.equal(checkedLibraries.status, 200);
+    const checkedRuntimes = await fetch(`${server.url}/api/v1/resources/runtimes?check=1`, { headers: { cookie } });
+    assert.equal(checkedRuntimes.status, 200);
+
     const missingCsrf = await fetch(`${server.url}/api/v1/operations`, {
       method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ commandId: 'library.use', input: { name: 'personal' } }),
     });
@@ -105,9 +110,11 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.equal(missingOperation.status, 404);
     const invocations = (await fs.readFile(argvLog, 'utf8')).trim().split(/\r?\n/u).map((line) => JSON.parse(line));
     assert.deepEqual(invocations[0], ['--json-stream', 'library', 'list']);
-    assert.deepEqual(invocations[1], ['--json-stream', 'library', 'use', 'personal']);
-    assert.deepEqual(invocations[2], ['--json-stream', 'registry', 'register', 'proof-registry', 'http://127.0.0.1:8018', '--no-verify']);
-    assert.deepEqual(invocations[3], ['--json-stream', 'registry', 'login', '--url', 'http://127.0.0.1:8018', '--scope', 'registry:read']);
+    assert.deepEqual(invocations[1], ['--json-stream', 'library', 'list']);
+    assert.deepEqual(invocations[2], ['--json-stream', 'runtime', 'list', '--check']);
+    assert.deepEqual(invocations[3], ['--json-stream', 'library', 'use', 'personal']);
+    assert.deepEqual(invocations[4], ['--json-stream', 'registry', 'register', 'proof-registry', 'http://127.0.0.1:8018', '--no-verify']);
+    assert.deepEqual(invocations[5], ['--json-stream', 'registry', 'login', '--url', 'http://127.0.0.1:8018', '--scope', 'registry:read']);
     assert.equal(invocations.some((argv) => argv.includes('whoami')), false);
   } finally {
     await server.close();

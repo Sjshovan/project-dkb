@@ -37,7 +37,7 @@ const readTimeout = 30_000;
 const mutationTimeout = 30 * 60_000;
 
 const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
-  'library.list': read('library.list', ['library', 'list'], checkInput),
+  'library.list': read('library.list', ['library', 'list'], checkInput, () => []),
   'library.packages': read('library.packages', ['list'], libraryInput, (input) => ['--library', text(input.library)]),
   'runtime.list': read('runtime.list', ['runtime', 'list'], checkInput),
   'registry.list': read('registry.list', ['registry', 'list'], checkInput),

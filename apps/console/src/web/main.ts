@@ -1,4 +1,5 @@
 import '@fontsource-variable/instrument-sans';
+import 'vue-sonner/style.css';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { createApp } from 'vue';
 import { Toaster } from 'vue-sonner';
