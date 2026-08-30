@@ -39,6 +39,24 @@ export function summarizeStackStatus(value: unknown): string[] {
   ];
 }
 
+export function summarizeStackListing(value: unknown): string[] {
+  const listing = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const stacks = Array.isArray(listing.stacks)
+    ? listing.stacks.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  return humanSummary({
+    results: stacks.map((stack) => ({
+      default: stack.default ? '*' : '',
+      name: stack.name ?? '-',
+      status: humanStatus(stack.status ?? '-').toUpperCase(),
+      target: stack.target ?? '-',
+      library: stack.library ?? '-',
+      runtime: stack.runtime ?? '-',
+      state: stack.stateRoot ?? '-',
+    })),
+  });
+}
+
 function stackComponentLabel(value: unknown): string {
   switch (String(value)) {
     case 'registry-web': return 'Registry';

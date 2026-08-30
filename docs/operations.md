@@ -9,22 +9,27 @@ its own deployment and administration guidance.
 ## Credentials
 
 Registry tokens are host credentials, not DKB state. Interactive users should
-authenticate once with masked input:
+authenticate once through browser PKCE and a loopback callback:
 
 ```powershell
 dkb registry login
 dkb registry whoami
 ```
 
+On a headless host, use `dkb registry login --device`. The default interactive
+credential lasts twelve hours and requests `registry:read`; publish or build
+work requests explicit additional scopes.
+
 Automation can keep using process input:
 
 ```powershell
-$env:DKB_REGISTRY_TOKEN = '<token>'
+$token | dkb registry login --token-stdin
 dkb registry packages
 ```
 
-Use `--token` only when shell-history exposure is acceptable. Tokens, MCP bearer
-secrets, Meilisearch keys, and service credentials must not be written to
+`DKB_REGISTRY_TOKEN` remains available to isolated automation. Secret-bearing
+command arguments are rejected. Tokens, MCP bearer secrets, Meilisearch keys,
+and service credentials must not be written to
 `dkb.json`, `.dkb/config.json`, `dkb-lock.json`, Runtime locks, build receipts,
 host inventory, or Git.
 
@@ -129,3 +134,18 @@ knowledge, stop services, or remove remote resources.
 `dkb stack down` preserves volumes and secrets. Treat volume deletion as a
 separate, explicitly destructive operator action; the current CLI does not
 delete stack data implicitly.
+
+## Host Console
+
+`dkb console` starts a loopback-only operator interface. It invokes the exact
+bundled CLI with typed inputs and `shell: false`; it is not a remote shell or a
+second lifecycle implementation. Use `dkb console status` to inspect the
+process and `dkb console stop` to stop only the interface. Console activity is
+redacted and stored locally; authoritative state remains in the Library,
+Runtime, Registry, and host inventory.
+
+Runtime installation does not receive the host Registry token. The CLI obtains
+a grant bound to one signed source/Evidence/Retrieval plan. The grant must be
+redeemed within five minutes; after redemption, only that exact three-layer
+transfer may complete within its bounded transfer window. Expired, replayed,
+cross-package, or cross-build use is rejected.

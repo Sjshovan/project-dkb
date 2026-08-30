@@ -21,11 +21,29 @@ import { registerLibraryCommands } from './libraryCommands.js';
 import { registerPipelineCommands } from './pipelineCommands.js';
 import { registerRegistryCommands } from './registryCommands.js';
 import { registerRuntimeCommands } from './runtimeCommands.js';
+import { registerConsoleCommands } from './consoleCommands.js';
+import { createCliEventWriter } from './eventStream.js';
 
 installWarningFilter();
 
 const program = new Command();
-const jsonRequested = process.argv.includes('--json');
+const jsonDocumentRequested = process.argv.includes('--json');
+const jsonStreamRequested = process.argv.includes('--json-stream');
+const machineOutputRequested = jsonDocumentRequested || jsonStreamRequested;
+const eventWriter = jsonStreamRequested ? createCliEventWriter() : undefined;
+
+if (jsonDocumentRequested && jsonStreamRequested) {
+  process.stderr.write("dkb: --json and --json-stream cannot be used together.\n");
+  process.exit(2);
+}
+
+if (eventWriter) {
+  process.once('SIGINT', () => {
+    eventWriter.cancel('Interrupted by operator.');
+    eventWriter.complete('cancelled');
+    process.exit(130);
+  });
+}
 
 program
   .name('dkb')
@@ -33,12 +51,13 @@ program
   .version(DKB_CLI_VERSION, '-V, --version')
   .enablePositionalOptions()
   .option('--json', 'Emit one machine-readable JSON document')
+  .option('--json-stream', 'Emit newline-delimited operation events')
   .option('--no-progress', 'Keep human output but disable spinners and progress bars')
   .showSuggestionAfterError(true)
   .showHelpAfterError("Run 'dkb --help' for usage.")
   .configureOutput({
     writeErr: (message) => {
-      if (!jsonRequested) {
+      if (!machineOutputRequested) {
         process.stderr.write(message);
       }
     },
@@ -108,7 +127,7 @@ const runtime = registerRuntimeCommands(program, {
   defaultDistribution,
   runtimeCatalogUrl,
   runDockerCompose,
-  jsonRequested,
+  jsonRequested: machineOutputRequested,
 });
 registerRegistryCommands(program, {
   presenter,
@@ -147,6 +166,8 @@ registerDiagnosticCommands(program, {
   defaultRuntimeContext,
 });
 
+registerConsoleCommands(program, presenter);
+
 configureCommandTree(program);
 
 try {
@@ -155,7 +176,10 @@ try {
   if (error instanceof CommanderError && (error.code === 'commander.helpDisplayed' || error.code === 'commander.version')) {
     process.exitCode = error.exitCode;
   } else if (error instanceof CommanderError) {
-    if (jsonRequested) {
+    if (jsonStreamRequested) {
+      eventWriter?.failure(error.code, error.message.replace(/^error:\s*/i, ''));
+      eventWriter?.complete('failed');
+    } else if (jsonDocumentRequested) {
       printJsonValue({
         ok: false,
         error: {
@@ -168,7 +192,10 @@ try {
   } else {
     const message = error instanceof DkbError || error instanceof Error ? error.message : String(error);
 
-    if (jsonRequested) {
+    if (jsonStreamRequested) {
+      eventWriter?.failure(error instanceof DkbError ? error.code : 'DKB_ERROR', message);
+      eventWriter?.complete('failed');
+    } else if (jsonDocumentRequested) {
       printJsonValue({ ok: false, error: { code: error instanceof DkbError ? error.code : 'DKB_ERROR', message } });
     } else {
       console.error(`${failureLine('Error:')} ${message}`);
@@ -178,11 +205,13 @@ try {
 }
 
 function presenter(): CliPresenter {
-  const options = program.opts<{ json?: boolean; progress?: boolean }>();
+  const options = program.opts<{ json?: boolean; jsonStream?: boolean; progress?: boolean }>();
 
   return createCliPresenter({
     json: Boolean(options.json),
+    jsonStream: Boolean(options.jsonStream),
     progress: options.progress,
+    eventWriter,
   });
 }
 
@@ -252,7 +281,7 @@ function configureCommandTree(command: Command): void {
     .showHelpAfterError(`\nRun '${usagePath} --help' for usage.`)
     .configureOutput({
       writeErr: (message) => {
-        if (!jsonRequested) {
+        if (!machineOutputRequested) {
           process.stderr.write(message.replace(/^error:/m, terminalText(['bold', 'red'], 'dkb:', process.stderr)));
         }
       },

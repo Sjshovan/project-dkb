@@ -24,13 +24,12 @@ export function registerRemoteCommands(program: Command, context: RemoteCommandC
     .description('Search packages that may have verified hosted runtimes')
     .argument('[query]', 'Package search query')
     .option('--registry-url <url>', 'Registry API URL')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (query: string | undefined, options: { registryUrl?: string; token?: string }) => {
+    .action(async (query: string | undefined, options: { registryUrl?: string }) => {
       const { configuredRegistry } = await import('./registryConfig.js');
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const registryConfig = await configuredRegistry({ url: options.registryUrl });
 
-      presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }).searchPackages(query), summarizePackageListing);
+      presenter().print(await new DkbRegistryClient({ baseUrl: registryConfig.url }).searchPackages(query), summarizePackageListing);
     });
 
   remote
@@ -40,8 +39,7 @@ export function registerRemoteCommands(program: Command, context: RemoteCommandC
     .option('--version <version>', 'Package version')
     .option('--endpoint <url>', 'Specific verified endpoint URL')
     .option('--registry-url <url>', 'Registry API URL')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (target: string, options: { version?: string; endpoint?: string; registryUrl?: string; token?: string }) => {
+    .action(async (target: string, options: { version?: string; endpoint?: string; registryUrl?: string }) => {
       const { addDirectRemote, addRegisteredRemote } = await import('../remote/manager.js');
       await presenter().run('Adding remote', async () => /^https?:\/\//i.test(target)
         ? addDirectRemote({ url: target })
@@ -50,7 +48,6 @@ export function registerRemoteCommands(program: Command, context: RemoteCommandC
           version: options.version,
           endpointUrl: options.endpoint,
           registryUrl: options.registryUrl,
-          token: options.token,
         }));
     });
 

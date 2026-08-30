@@ -19,6 +19,38 @@ import { loadRegistryCredentialSync } from './credentials.js';
 export interface DkbRegistryClientOptions {
   baseUrl?: string;
   token?: string;
+  installGrant?: string;
+}
+
+export interface DkbRegistryBrowserAuthorization {
+  authorizationId: string;
+  authorizeUrl: string;
+  expiresAt: string;
+}
+
+export interface DkbRegistryDeviceAuthorization {
+  authorizationId: string;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresIn: number;
+  interval: number;
+}
+
+export interface DkbRegistryTokenExchange {
+  tokenType: 'Bearer';
+  accessToken: string;
+  expiresIn: number;
+  abilities: string[];
+  user: { id: number; name: string; email: string };
+  team: { id: number; name: string; slug: string };
+}
+
+export interface DkbRegistryInstallGrant {
+  plan: DkbInstallPlan;
+  installGrant: string;
+  expiresAt: string;
 }
 
 export interface DkbRegistryRelease {
@@ -79,12 +111,36 @@ export interface DkbRegistryIdentity {
 export class DkbRegistryClient {
   readonly baseUrl: string;
   readonly token?: string;
+  readonly installGrant?: string;
 
   constructor(options: DkbRegistryClientOptions = {}) {
     this.baseUrl = normalizeRegistryUrl(options.baseUrl ?? process.env.DKB_REGISTRY_URL ?? DEFAULT_REGISTRY_URL);
     this.token = options.token
       ?? process.env.DKB_REGISTRY_TOKEN
       ?? loadRegistryCredentialSync(this.baseUrl)?.token;
+    this.installGrant = options.installGrant;
+  }
+
+  async startBrowserAuthorization(input: {
+    callbackUri: string;
+    state: string;
+    codeChallenge: string;
+    abilities?: string[];
+  }): Promise<DkbRegistryBrowserAuthorization> {
+    return await this.post('/api/registry/auth/authorize', input) as DkbRegistryBrowserAuthorization;
+  }
+
+  async startDeviceAuthorization(abilities?: string[]): Promise<DkbRegistryDeviceAuthorization> {
+    return await this.post('/api/registry/auth/device', { ...(abilities ? { abilities } : {}) }) as DkbRegistryDeviceAuthorization;
+  }
+
+  async exchangeAuthorization(input: {
+    grantType: 'authorization_code' | 'device_code';
+    code?: string;
+    codeVerifier?: string;
+    deviceCode?: string;
+  }): Promise<DkbRegistryTokenExchange> {
+    return await this.post('/api/registry/auth/exchange', input) as DkbRegistryTokenExchange;
   }
 
   health() {
@@ -265,6 +321,21 @@ export class DkbRegistryClient {
     return plan;
   }
 
+  async createInstallGrant(packageId: string, version: string, target?: string): Promise<DkbRegistryInstallGrant> {
+    const value = await this.post(
+      `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/install-grant`,
+      { ...(target ? { target } : {}) },
+    );
+    if (!isRecord(value) || typeof value.installGrant !== 'string' || typeof value.expiresAt !== 'string') {
+      throw new DkbError(`Registry returned an invalid Runtime install grant for ${packageId}@${version}.`);
+    }
+    return {
+      plan: validateInstallPlan(value.plan, `Registry Runtime install grant for ${packageId}@${version}`),
+      installGrant: value.installGrant,
+      expiresAt: value.expiresAt,
+    };
+  }
+
   async requestBuild(packageId: string, version: string, target: string): Promise<DkbRegistryBuildRequest> {
     const value = await this.post(
       `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/builds`,
@@ -319,7 +390,9 @@ export class DkbRegistryClient {
     try {
       const response = await openRegistryDownload(
         new URL(artifact.url, `${this.baseUrl}/`),
-        this.authorizationHeader(),
+        this.installGrant
+          ? { authorization: `DKB-Install-Grant ${this.installGrant}` }
+          : this.authorizationHeader(),
         artifact.mediaType,
         positiveDuration(process.env.DKB_REGISTRY_DOWNLOAD_TIMEOUT_MS, 30 * 60_000),
       );
@@ -948,10 +1021,13 @@ function registryHttpError(baseUrl: string, status: number, method: string, requ
     );
   }
 
+  const errorCode = isRecord(parsed) && typeof parsed.error === 'string' ? parsed.error : 'REGISTRY_HTTP_ERROR';
   const message = isRecord(parsed) && 'message' in parsed
     ? String(parsed.message)
-    : `${method} ${requestPath} failed with HTTP ${status}`;
-  return new DkbError(message);
+    : errorCode !== 'REGISTRY_HTTP_ERROR'
+      ? errorCode
+      : `${method} ${requestPath} failed with HTTP ${status}`;
+  return new DkbError(message, errorCode);
 }
 
 function versionStatus(value: unknown): string | null {

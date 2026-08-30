@@ -378,6 +378,35 @@ test('--no-progress keeps human output and --json is the explicit machine-output
   }
 });
 
+test('--json-stream emits ordered operation events and a terminal completion', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-events-'));
+  try {
+    const result = await runCli(['--json-stream', 'init', '@test/stream-demo', '--dir', tempRoot, '--yes']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const events = result.stdout.trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    assert.deepEqual(events.map((event) => event.sequence), events.map((_, index) => index));
+    assert.equal(events[0].event, 'start');
+    assert.equal(events.at(-2).event, 'result');
+    assert.deepEqual(events.at(-1), {
+      format: 'dkb.command-event.v1',
+      sequence: events.length - 1,
+      timestamp: events.at(-1).timestamp,
+      event: 'completion',
+      status: 'succeeded',
+    });
+
+    const failed = await runCli(['--json-stream', 'definitely-not-a-command']);
+    const failureEvents = failed.stdout.trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    assert.equal(failed.code, 1);
+    assert.equal(failed.stderr, '');
+    assert.equal(failureEvents.at(-2).event, 'failure');
+    assert.equal(failureEvents.at(-1).status, 'failed');
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('human terminal output is compact and colored while JSON remains ANSI-free', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-color-'));
 
@@ -523,6 +552,15 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
       return;
     }
 
+    if (request.method === 'POST' && request.url === '/api/registry/packages/acct-test/knowledge/versions/1.1.0/install-grant') {
+      response.end(JSON.stringify({
+        plan: fakeInstallPlan('@acct-test/knowledge', '1.1.0'),
+        installGrant: `dkb_grant_${'g'.repeat(64)}`,
+        expiresAt: '2026-08-26T00:05:00.000Z',
+      }));
+      return;
+    }
+
     if (request.url === '/api/registry/packages?q=knowledge') {
       response.end(JSON.stringify({
         data: [{
@@ -652,8 +690,8 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     assert.equal(JSON.parse(applied.stdout).version, '1.1.0');
     assert.deepEqual(upgradeRequest, {
       registryUrl,
-      packageId: '@acct-test/knowledge',
-      version: '1.1.0',
+      installGrant: `dkb_grant_${'g'.repeat(64)}`,
+      plan: fakeInstallPlan('@acct-test/knowledge', '1.1.0'),
       force: true,
     });
     assert.deepEqual(requests, [
@@ -661,6 +699,7 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
       '/api/registry/packages/acct-test/knowledge',
       '/api/registry/packages/acct-test/knowledge',
       '/api/registry/packages/acct-test/knowledge',
+      '/api/registry/packages/acct-test/knowledge/versions/1.1.0/install-grant',
       '/api/dkbs/install-registry',
     ]);
   } finally {
@@ -668,6 +707,43 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+function fakeInstallPlan(packageId, version) {
+  const digest = (label) => `sha256:${label.repeat(64).slice(0, 64)}`;
+  const signature = (role) => ({
+    ...(role === 'publisher' ? { accountId: '@acct-test' } : { registryId: 'test-registry' }),
+    keyId: `${role}-key`,
+    publicKeyFingerprint: digest(role === 'publisher' ? 'a' : 'b'),
+    algorithm: 'ed25519',
+    value: 'signature',
+    signedAt: '2026-08-26T00:00:00.000Z',
+  });
+  const receipt = (type) => ({
+    type,
+    version: 1,
+    package: { id: packageId, version, sourceHash: digest('c') },
+    payloadHash: digest('d'),
+    payload: {},
+    publisher: signature('publisher'),
+    registry: signature('registry'),
+  });
+  const payload = {
+    format: 'dkb.install-plan.v1',
+    package: { id: packageId, version, sourceDigest: digest('c') },
+    target: 'default',
+    evidenceProfileDigest: digest('e'),
+    evidenceDigest: digest('f'),
+    retrievalProfileDigest: digest('1'),
+    compatibilityDigest: digest('2'),
+    retrievalBuildDigest: digest('3'),
+    artifacts: [
+      { kind: 'source', digest: digest('4'), mediaType: 'application/vnd.dkb.source+gzip', bytes: 1, url: '/source', receiptHash: digest('5'), receipt: receipt('dkb.evidence.receipt') },
+      { kind: 'evidence', digest: digest('6'), mediaType: 'application/vnd.dkb.evidence+gzip', bytes: 1, url: '/evidence', receiptHash: digest('7'), receipt: receipt('dkb.evidence.receipt') },
+      { kind: 'retrieval', digest: digest('8'), mediaType: 'application/vnd.dkb.retrieval-build+gzip', bytes: 1, url: '/retrieval', receiptHash: digest('9'), receipt: receipt('dkb.retrieval.receipt') },
+    ],
+  };
+  return { ...payload, receipt: { ...receipt('dkb.install-plan.receipt'), payload } };
+}
 
 test('archive extraction reports a single indeterminate pass with an explicit completion', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-extract-'));
@@ -1335,8 +1411,10 @@ test('registry help exposes the implemented credential lifecycle', async () => {
   assert.match(group.stdout, /login \[options\]\s+Authenticate this host with a Registry/);
   assert.match(group.stdout, /whoami \[options\]\s+Show the account and team/);
   assert.match(group.stdout, /logout \[options\]\s+Remove the saved Registry credential/);
-  assert.match(packages.stdout, /--token <token>/);
+  assert.doesNotMatch(packages.stdout, /--token <token>/);
   assert.match(login.stdout, /--token-stdin/);
+  assert.match(login.stdout, /--device/);
+  assert.match(login.stdout, /--scope <scope\.\.\.>/);
   assert.match(logout.stdout, /--revoke/);
 });
 

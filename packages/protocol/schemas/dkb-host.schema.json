@@ -4,16 +4,17 @@
   "title": "DKB host inventory",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "selected", "libraries", "registries", "runtimes"],
+  "required": ["format", "defaults", "libraries", "registries", "runtimes", "stacks"],
   "properties": {
-    "format": { "const": "dkb.host.v1" },
-    "selected": {
+    "format": { "const": "dkb.host.v2" },
+    "defaults": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "library": { "$ref": "#/$defs/name" },
         "registry": { "$ref": "#/$defs/name" },
-        "runtime": { "$ref": "#/$defs/name" }
+        "runtime": { "$ref": "#/$defs/name" },
+        "stack": { "$ref": "#/$defs/name" }
       }
     },
     "libraries": {
@@ -27,6 +28,10 @@
     "runtimes": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/runtime" }
+    },
+    "stacks": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/stack" }
     }
   },
   "$defs": {
@@ -74,6 +79,19 @@
         "library": { "$ref": "#/$defs/name" },
         "stateRoot": { "type": "string", "minLength": 1 },
         "composeFile": { "type": "string", "minLength": 1 },
+        "registeredAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stateRoot", "registeredAt", "updatedAt"],
+      "properties": {
+        "stateRoot": { "type": "string", "minLength": 1 },
+        "library": { "$ref": "#/$defs/name" },
+        "registry": { "$ref": "#/$defs/name" },
+        "runtime": { "$ref": "#/$defs/name" },
         "registeredAt": { "$ref": "#/$defs/timestamp" },
         "updatedAt": { "$ref": "#/$defs/timestamp" }
       }

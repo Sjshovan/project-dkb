@@ -26,7 +26,7 @@ const ROOT_COMMAND_GROUPS = [
   },
   {
     title: 'Management Commands',
-    names: ['artifact', 'build', 'collection', 'compiler', 'library', 'mcp', 'pipeline', 'plugin', 'registry', 'remote', 'runtime', 'stack', 'trace'],
+    names: ['artifact', 'build', 'collection', 'compiler', 'console', 'library', 'mcp', 'pipeline', 'plugin', 'registry', 'remote', 'runtime', 'stack', 'trace'],
   },
   {
     title: 'Advanced Commands',

@@ -19,3 +19,4 @@ Statuses:
 - [0004 - Monorepo release units and local stack](0004-monorepo-release-units-and-local-stack.md) — Provider/composition details superseded by 0006; release-unit decisions retained.
 - [0005 - Evidence and Retrieval Build graph](0005-evidence-and-retrieval-build-graph.md) — Build graph retained; active-artifact details superseded by 0006.
 - [0006 - Final provider architecture and storage cutover](0006-final-provider-architecture-and-storage-cutover.md) — Implemented.
+- [0007 - Host Console, CLI control, and authentication](0007-host-console-cli-control-and-authentication.md) — Implemented for the developer preview.

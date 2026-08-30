@@ -87,7 +87,8 @@ function assertBoundaries(graph) {
     '@sjshovan/dkb-registry-client': ['@sjshovan/dkb-library', '@sjshovan/dkb-protocol'],
     '@sjshovan/dkb-compiler': ['@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client'],
     '@sjshovan/dkb-runtime': ['@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client'],
-    '@sjshovan/dkb-cli': ['@sjshovan/dkb-compiler', '@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client', '@sjshovan/dkb-runtime'],
+    '@sjshovan/dkb-console': ['@sjshovan/dkb-protocol'],
+    '@sjshovan/dkb-cli': ['@sjshovan/dkb-compiler', '@sjshovan/dkb-console', '@sjshovan/dkb-distribution-default', '@sjshovan/dkb-library', '@sjshovan/dkb-pipeline', '@sjshovan/dkb-protocol', '@sjshovan/dkb-registry-client', '@sjshovan/dkb-runtime'],
   };
 
   for (const [name, dependencies] of Object.entries(graph)) {

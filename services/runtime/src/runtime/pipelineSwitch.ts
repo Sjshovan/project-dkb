@@ -3,7 +3,7 @@ import path from 'node:path';
 import { mergeStoredPackageBuilds, listPackageBuilds, activateStoredPackageBuild, maybeReadRuntimeLock, readRetrievalBuildProfile, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
-import { DKB_RUNTIME_LOCK_FORMAT, validateRuntimeLock, type DkbRuntimeLock, type DkbRuntimeLockEntry } from '@sjshovan/dkb-protocol/builds.js';
+import { DKB_RUNTIME_LOCK_FORMAT, validateRuntimeLock, type DkbInstallPlan, type DkbRuntimeLock, type DkbRuntimeLockEntry } from '@sjshovan/dkb-protocol/builds.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
@@ -59,13 +59,13 @@ export async function switchRuntimePipelineFromRegistry(options: {
   stateRoot?: string;
   target: string;
   registryUrl: string;
-  registryToken?: string;
+  grants?: Record<string, { plan: DkbInstallPlan; installGrant: string }>;
   timeoutMs?: number;
   progress?: DkbProgressReporter;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const runtime = await ensureRuntimeState(options.stateRoot);
   const target = requiredTarget(options.target);
-  const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: options.registryToken });
+  const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: '' });
   const stageRoot = path.join(runtime.stateDir, `pipeline-stage-${process.pid}-${Date.now().toString(36)}`);
   const backupRoot = path.join(runtime.stateDir, `pipeline-backup-${process.pid}-${Date.now().toString(36)}`);
   const configPath = path.join(runtime.stateRoot, ...DKB_CONFIG_PATH.split('/'));
@@ -128,6 +128,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
         compatibilityDigest,
         timeoutMs: options.timeoutMs,
         progress: options.progress,
+        grant: options.grants?.[entry.identity],
       });
       const dkb = await loadDkbPackage(stagedRoot, entry.identity);
       const graph = await validatePackageBuildGraph(stagedRoot);
@@ -259,6 +260,7 @@ async function preparePackage(input: {
   compatibilityDigest: string;
   timeoutMs?: number;
   progress?: DkbProgressReporter;
+  grant?: { plan: DkbInstallPlan; installGrant: string };
 }): Promise<'retained' | 'downloaded'> {
   await fs.cp(input.currentRoot, input.stagedRoot, { recursive: true, errorOnExist: true, force: false });
   const builds = await listPackageBuilds(input.stagedRoot);
@@ -279,13 +281,12 @@ async function preparePackage(input: {
     );
   }
 
-  const requested = await input.client.requestBuild(input.id, input.version, input.target);
-  if (requested.status === 'queued') {
-    if (!requested.jobId) throw new DkbError(`Registry queued ${input.id}@${input.version} without a build job id`);
-    await waitForBuild(input.client, input.id, input.version, requested.jobId, input.timeoutMs);
+  if (!input.grant) {
+    throw new DkbError(`No exact Runtime install grant was provided for ${input.id}@${input.version}. Re-run the pipeline switch from an authenticated DKB CLI.`);
   }
-  const plan = await input.client.installPlan(input.id, input.version, input.target);
+  const plan = input.grant.plan;
   assertPlanMatchesTarget(planIdentity(plan), input);
+  const downloadClient = new DkbRegistryClient({ baseUrl: input.client.baseUrl, token: '', installGrant: input.grant.installGrant });
   const layerRoot = `${input.stagedRoot}.layers`;
   const downloadedRoot = `${input.stagedRoot}.downloaded`;
   await fs.rm(input.stagedRoot, { recursive: true, force: true });
@@ -293,7 +294,7 @@ async function preparePackage(input: {
   try {
     for (const artifact of plan.artifacts) {
       const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
-      await input.client.writeInstallLayer(artifact, path.join(layerRoot, `${artifact.kind}${extension}`), { progress: input.progress });
+      await downloadClient.writeInstallLayer(artifact, path.join(layerRoot, `${artifact.kind}${extension}`), { progress: input.progress });
     }
     await materializeDkbInstallPlan({
       plan,
@@ -309,25 +310,6 @@ async function preparePackage(input: {
     await fs.rm(downloadedRoot, { recursive: true, force: true }).catch(() => undefined);
   }
   return 'downloaded';
-}
-
-async function waitForBuild(
-  client: DkbRegistryClient,
-  packageId: string,
-  version: string,
-  jobId: number,
-  timeoutMs = 30 * 60_000,
-): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const job = await client.buildJob(packageId, version, jobId);
-    if (job.status === 'published') return;
-    if (job.status === 'failed' || job.status === 'revoked') {
-      throw new DkbError(`Registry build failed for ${packageId}@${version} (${job.target}): ${job.error ?? job.status}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  throw new DkbError(`Timed out waiting for Registry build ${jobId} for ${packageId}@${version}`);
 }
 
 async function trustedRegistryKeys(client: DkbRegistryClient): Promise<DkbSigningKeyRecord[]> {

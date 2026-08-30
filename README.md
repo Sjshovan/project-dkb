@@ -84,16 +84,19 @@ no-op. Upgrade and uninstall preserve the previous active Runtime snapshot when
 validation or activation fails.
 
 Registry authentication uses scoped, expiring bearer tokens. Run
-`dkb registry login` for masked entry, `dkb registry whoami` to inspect the
-active identity, and `dkb registry logout --revoke` to revoke and remove it.
-Automation may continue to use `DKB_REGISTRY_TOKEN`; command-line `--token`
-values are supported but can be exposed through shell history.
+`dkb registry login` for browser authorization with PKCE and a loopback
+callback, `dkb registry login --device` on a headless host, and
+`dkb registry whoami` to inspect the active identity. `dkb registry logout
+--revoke` revokes and removes the credential. Automation may use
+`--token-stdin` or `DKB_REGISTRY_TOKEN`; secret-bearing command arguments are
+not accepted.
 
 ## Context and host inventory
 
-DKB records known resources in `~/.dkb/host.json` so commands work outside a
-Library. This file stores names, paths, URLs, and defaults only—never tokens,
-knowledge, or pipeline configuration.
+DKB records known resources in the versioned `dkb.host.v2` document at
+`~/.dkb/host.json` so commands work outside a Library. This file stores names,
+paths, URLs, Stacks, and defaults only—never tokens, knowledge, or pipeline
+configuration.
 
 ```powershell
 dkb library list
@@ -102,6 +105,7 @@ dkb registry list --check
 dkb registry use team
 dkb runtime list --check
 dkb runtime use local
+dkb stack list --check
 dkb library storage
 ```
 
@@ -109,6 +113,25 @@ Library resolution is explicit `--library`, `DKB_LIBRARY_PATH`, nearest parent
 Library, then the host default. Runtime resolution is explicit `--url`,
 `DKB_RUNTIME_URL`, host default, then localhost. DKB never scans disks or
 networks for resources.
+
+## Host Console
+
+The mobile-complete Console manages the same host inventory and package
+lifecycle through the exact bundled CLI. It binds only to loopback, accepts
+typed allowlisted operations instead of command strings, streams long-running
+CLI events, and keeps Registry and Runtime credentials server-side.
+
+```powershell
+dkb console
+dkb console status
+dkb console stop
+```
+
+The Console registers and selects Libraries, Runtimes, Registries, and Stacks;
+authenticates the host to a Registry; installs, upgrades, and uninstalls
+knowledge; switches pipelines atomically; and records redacted local activity.
+Opening a resource never changes the default, and forgetting a host entry does
+not delete or stop that resource.
 
 ## Build and pipeline model
 

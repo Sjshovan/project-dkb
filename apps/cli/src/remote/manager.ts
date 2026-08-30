@@ -49,7 +49,6 @@ export async function addRegisteredRemote(input: {
   version?: string;
   endpointUrl?: string;
   registryUrl?: string;
-  token?: string;
   stateRoot?: string;
 }): Promise<{
   remote: DkbPersistentRemote;
@@ -60,7 +59,7 @@ export async function addRegisteredRemote(input: {
     url: input.registryUrl,
     root: input.stateRoot ?? defaultRuntimeStateRoot(),
   });
-  const client = new DkbRegistryClient({ baseUrl: registry.url, token: input.token });
+  const client = new DkbRegistryClient({ baseUrl: registry.url });
   const packageResponse = await client.download(input.packageId, input.version);
   const packageData = recordField(packageResponse, 'data');
   const version = input.version ?? stringField(packageData, 'latestVersion');
@@ -172,7 +171,6 @@ export async function installRegisteredRemote(input: {
   id: string;
   confirm: true;
   runtimeRoot?: string;
-  token?: string;
   stateRoot?: string;
 }) {
   const stateRoot = input.stateRoot ?? defaultRuntimeStateRoot();
@@ -195,7 +193,7 @@ export async function installRegisteredRemote(input: {
     throw new DkbError('Verified remote lost its package or registry identity during lease refresh.');
   }
 
-  const client = new DkbRegistryClient({ baseUrl: registryUrl, token: input.token });
+  const client = new DkbRegistryClient({ baseUrl: registryUrl });
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-remote-install-'));
   const archivePath = path.join(tempRoot, packageId.replace(/[^a-zA-Z0-9._-]+/g, '-') + '.dkbpkg');
 

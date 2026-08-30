@@ -7,6 +7,7 @@ import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import {
   summarizeHostMutation,
   summarizeHostRuntimes,
+  summarizeStackListing,
   summarizeStackStatus,
 } from './summaries.js';
 import type { DkbStackTarget } from '../stack/manager.js';
@@ -204,6 +205,15 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
   const stack = program
     .command('stack')
     .description('Operate a complete local DKB developer-preview stack');
+
+  stack
+    .command('list')
+    .description('List local DKB stacks registered to this host')
+    .option('--check', 'Probe the services for every known Stack')
+    .action(async (options: { check?: boolean }) => {
+      const { listDkbStacks } = await import('../stack/manager.js');
+      context.presenter().print(await listDkbStacks(await context.defaultDistribution(), Boolean(options.check)), summarizeStackListing);
+    });
 
   stack
     .command('up')

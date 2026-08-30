@@ -1,6 +1,7 @@
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import type { DkbRemoteAttachInput } from '../remote/types.js';
+import type { DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
 
 export interface DkbRuntimeClientOptions {
   baseUrl?: string;
@@ -37,10 +38,8 @@ export class DkbRuntimeClient {
 
   installRegistryDkb(input: {
     registryUrl: string;
-    registryToken?: string;
-    packageId: string;
-    version?: string;
-    target?: string;
+    installGrant: string;
+    plan: DkbInstallPlan;
     force?: boolean;
   }) {
     return this.post('/api/dkbs/install-registry', input, true);
@@ -49,7 +48,7 @@ export class DkbRuntimeClient {
   switchPipeline(input: {
     target: string;
     registryUrl: string;
-    registryToken?: string;
+    grants?: Record<string, { plan: DkbInstallPlan; installGrant: string }>;
   }) {
     return this.post('/api/runtime/pipeline', input, true);
   }

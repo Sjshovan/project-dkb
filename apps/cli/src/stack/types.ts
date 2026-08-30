@@ -35,6 +35,22 @@ export interface DkbStackStatus {
   checks?: Array<{ component: string; status: 'ok' | 'failed'; message: string }>;
 }
 
+export interface DkbStackListing {
+  checked: boolean;
+  default?: string;
+  stacks: Array<{
+    name: string;
+    default: boolean;
+    stateRoot: string;
+    library?: string;
+    registry?: string;
+    runtime?: string;
+    target?: string;
+    status: 'known' | 'online' | 'offline' | 'missing' | 'invalid';
+    message?: string;
+  }>;
+}
+
 export interface DkbStackBackup {
   status: 'backed_up';
   name: string;

@@ -104,6 +104,47 @@ export async function installDkbFromRegistry(options: {
   }
 }
 
+export async function installDkbFromRuntimeGrant(options: {
+  runtime: DkbRuntimeContext;
+  registryUrl: string;
+  installGrant: string;
+  plan: DkbInstallPlan;
+  runtimeRoot?: string;
+  force?: boolean;
+  progress?: DkbProgressReporter;
+}): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
+  const runtime = await ensureRuntimeState(options.runtimeRoot);
+  const existing = await preflightDkbInstall({
+    runtimeRoot: runtime.stateRoot,
+    candidate: {
+      packageId: options.plan.package.id,
+      version: options.plan.package.version,
+    },
+    force: options.force,
+  });
+  if (existing) return existing;
+  const client = new DkbRegistryClient({ baseUrl: options.registryUrl, installGrant: options.installGrant, token: '' });
+  const downloadRoot = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-registry-grant-download-'));
+  try {
+    const publicKeys = await client.publicKeys() as { keys: DkbSigningKeyRecord[] };
+    for (const artifact of options.plan.artifacts) {
+      const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
+      await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
+    }
+    return await installDkbPlanIntoRuntime({
+      runtime: options.runtime,
+      plan: options.plan,
+      layerRoot: downloadRoot,
+      trustedKeys: publicKeys.keys,
+      runtimeRoot: runtime.stateRoot,
+      force: options.force,
+      progress: options.progress,
+    });
+  } finally {
+    await fs.rm(downloadRoot, { recursive: true, force: true });
+  }
+}
+
 export async function installDkbPlanIntoRuntime(options: {
   runtime: DkbRuntimeContext;
   plan: DkbInstallPlan;

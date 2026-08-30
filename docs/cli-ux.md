@@ -109,11 +109,13 @@ unreachable Registry rather than claiming the Library is current. `upgrade
 --dry-run` resolves the exact latest version without mutating the Library.
 
 Registry authentication uses `dkb registry login`, `whoami`, and `logout`.
-Login validates an existing scoped Registry token before storing it in the
-machine-local credentials file, never in a Library, host inventory, package, or
-Git. Interactive login masks input; automation can use `--token-stdin` or
-`DKB_REGISTRY_TOKEN`. `logout --revoke` invalidates the remote token before
-removing the local credential.
+Login defaults to authorization code plus PKCE through the system browser and
+an ephemeral loopback callback. `--device` supports headless interactive login;
+automation can use `--token-stdin` or `DKB_REGISTRY_TOKEN`. The scoped token is
+stored in the machine-local credentials file, never in a Library, host
+inventory, package, or Git. `logout --revoke` invalidates the remote token
+before removing the local credential. Secret-bearing command arguments are not
+part of the CLI surface.
 
 ## Command lifecycle
 
@@ -134,7 +136,7 @@ backing service is planned but unfinished. Cleanup must not silently delete it.
 
 ## Host inventory and selection
 
-`~/.dkb/host.json` is a disposable catalog of known resources on one machine.
+`~/.dkb/host.json` is a disposable `dkb.host.v2` catalog of known resources on one machine.
 Set `DKB_HOST_INVENTORY` to isolate automation or tests. The catalog stores only
 names, canonical Library paths, endpoint URLs, selections, and optional local
 Runtime launch metadata. It never stores credentials, knowledge, installed
@@ -154,6 +156,8 @@ dkb runtime list [--check]
 dkb runtime register <name> <url> [--library <name-or-path>] [--no-verify]
 dkb runtime unregister <name>
 dkb runtime use <name>
+
+dkb stack list [--check]
 ```
 
 Library lists validate local manifests immediately. Registry and Runtime lists

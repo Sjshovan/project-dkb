@@ -200,8 +200,7 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--url <url>', 'Registry API URL')
     .option('--public', 'Publish the Collection and owned missing DKBs publicly')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (target: string, options: { library?: string; url?: string; public?: boolean; token?: string }) => {
+    .action(async (target: string, options: { library?: string; url?: string; public?: boolean }) => {
       const { configuredRegistry } = await import('./registryConfig.js');
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { publishCollectionFromLibrary } = await import('@sjshovan/dkb-registry-client/collections.js');
@@ -211,7 +210,7 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
       await context.presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
         collectionPath,
         libraryRoot: root,
-        client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
+        client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
         visibility: options.public ? 'public' : 'private',
       }), summarizeCollectionRevision);
     });
@@ -223,8 +222,7 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
     .option('--revision <revision>', 'Immutable Collection revision', context.parsePositiveInteger)
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--url <url>', 'Registry API URL')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
+    .action(async (identity: string, options: { revision?: number; library?: string; url?: string }) => {
       const { configuredRegistry } = await import('./registryConfig.js');
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
@@ -232,7 +230,7 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
       const registryConfig = await configuredRegistry({ url: options.url, root });
       await context.presenter().run(`Installing Collection ${identity}`, async (progress) => installRegistryCollection({
         runtime: await context.defaultRuntimeContext(),
-        client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
+        client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
         collectionId: identity,
         revision: options.revision,
         libraryRoot: root,
@@ -247,8 +245,7 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
     .option('--revision <revision>', 'Target immutable revision; defaults to latest', context.parsePositiveInteger)
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--url <url>', 'Registry API URL')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (identity: string, options: { revision?: number; library?: string; url?: string; token?: string }) => {
+    .action(async (identity: string, options: { revision?: number; library?: string; url?: string }) => {
       const { configuredRegistry } = await import('./registryConfig.js');
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
@@ -256,7 +253,7 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
       const registryConfig = await configuredRegistry({ url: options.url, root });
       await context.presenter().run(`Updating Collection ${identity}`, async (progress) => installRegistryCollection({
         runtime: await context.defaultRuntimeContext(),
-        client: new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token }),
+        client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
         collectionId: identity,
         revision: options.revision,
         libraryRoot: root,

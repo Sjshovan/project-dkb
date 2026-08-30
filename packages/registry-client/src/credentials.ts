@@ -12,6 +12,8 @@ export interface RegistryCredential {
   savedAt: string;
   user?: string;
   team?: string;
+  abilities?: string[];
+  expiresAt?: string | null;
 }
 
 interface RegistryCredentialDocument {
@@ -86,6 +88,10 @@ function validateDocument(value: unknown, target: string): RegistryCredentialDoc
       savedAt: raw.savedAt,
       ...(typeof raw.user === 'string' ? { user: raw.user } : {}),
       ...(typeof raw.team === 'string' ? { team: raw.team } : {}),
+      ...(Array.isArray(raw.abilities) && raw.abilities.every((ability) => typeof ability === 'string')
+        ? { abilities: raw.abilities }
+        : {}),
+      ...(typeof raw.expiresAt === 'string' || raw.expiresAt === null ? { expiresAt: raw.expiresAt } : {}),
     };
   }
 

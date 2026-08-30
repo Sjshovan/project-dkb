@@ -11,6 +11,7 @@ import {
   registerHostLibrary,
   registerHostRegistry,
   registerHostRuntime,
+  registerHostStack,
   registeredHostLibrary,
   selectHostLibrary,
   selectHostRuntime,
@@ -33,7 +34,7 @@ test('host inventory registers Libraries and Registries without storing secrets'
 
     assert.equal(registered.name, 'personal');
     assert.equal(repeated.name, 'personal');
-    assert.equal(inventory.selected.library, 'personal');
+    assert.equal(inventory.defaults.library, 'personal');
     assert.equal(inventory.libraries.personal.path, await fs.realpath(libraryRoot));
     assert.equal(inventory.libraries.personal.registry, registered.registry.name);
     if (process.platform === 'win32') {
@@ -100,6 +101,49 @@ test('host inventory rejects malformed or secret-bearing documents', async () =>
       runtimes: {},
     })}\n`);
     await assert.rejects(readHostInventory(), /unexpected fields token/);
+  });
+});
+
+test('host inventory upgrades v1 atomically and preserves resource defaults', async () => {
+  await withInventory(async ({ inventoryPath, root }) => {
+    const libraryRoot = await writeLibrary(path.join(root, 'legacy'), 'Legacy');
+    const now = new Date().toISOString();
+    await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
+    await fs.writeFile(inventoryPath, `${JSON.stringify({
+      format: 'dkb.host.v1',
+      selected: { library: 'legacy' },
+      libraries: { legacy: { path: libraryRoot, displayName: 'Legacy', registeredAt: now, updatedAt: now } },
+      registries: {},
+      runtimes: {},
+    })}\n`);
+
+    const inventory = await readHostInventory();
+    assert.equal(inventory.format, 'dkb.host.v2');
+    assert.equal(inventory.defaults.library, 'legacy');
+    assert.deepEqual(inventory.stacks, {});
+    const persisted = JSON.parse(await fs.readFile(inventoryPath, 'utf8'));
+    assert.equal(persisted.format, 'dkb.host.v2');
+    assert.equal(persisted.selected, undefined);
+  });
+});
+
+test('host inventory registers named Stacks without storing Stack secrets', async () => {
+  await withInventory(async ({ inventoryPath, root }) => {
+    const libraryRoot = await writeLibrary(path.join(root, 'library'), 'Library');
+    const stackRoot = path.join(root, 'stack');
+    await fs.mkdir(stackRoot, { recursive: true });
+    await registerHostRegistry('registry', 'http://127.0.0.1:8018');
+    await registerHostLibrary(libraryRoot, { name: 'library' });
+    await registerHostRuntime('runtime', 'http://127.0.0.1:7331', { library: 'library' });
+    const result = await registerHostStack('local', stackRoot, {
+      library: 'library', registry: 'registry', runtime: 'runtime', select: true,
+    });
+
+    const inventory = await readHostInventory();
+    assert.equal(result.name, 'local');
+    assert.equal(inventory.defaults.stack, 'local');
+    assert.equal(inventory.stacks.local.runtime, 'runtime');
+    assert.doesNotMatch(await fs.readFile(inventoryPath, 'utf8'), /token|password|secret/iu);
   });
 });
 

@@ -13,7 +13,8 @@
     { "path": "../../packages/registry-client" },
     { "path": "../../packages/distribution-default" },
     { "path": "../../services/compiler" },
-    { "path": "../../services/runtime" }
+    { "path": "../../services/runtime" },
+    { "path": "../console/tsconfig.server.json" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["src/testing/**/*.ts"]

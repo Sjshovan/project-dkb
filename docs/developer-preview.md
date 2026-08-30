@@ -12,6 +12,9 @@ about whether core package retrieval works.
 - Provider discovery and operator-controlled local/global overrides.
 - Atomic Runtime activation and read-only MCP `search` and `fetch`.
 - Scoped Registry credentials with expiry and revocation.
+- Browser PKCE and headless device login, optional Registry OIDC, and exact-plan
+  Runtime download grants.
+- A loopback-only mobile and desktop Host Console driven by typed CLI commands.
 - Private, independently versioned packages and images with digest-pinned stack
   assembly.
 - Checksummed local-stack backup, restore, upgrade, and automatic rollback.
@@ -28,7 +31,8 @@ about whether core package retrieval works.
   remote deployment still requires HTTPS, a production HTTP serving layer,
   PostgreSQL, Redis, private object storage, backups, monitoring, and operator
   incident procedures.
-- The future localhost management Console is researched but not implemented.
+- The Host Console is single-user and loopback-only. It is not a remote,
+  multi-user administration service and does not replace the Registry admin.
 - Remote MCP is read-only. Knowledge mutation stays behind operator-controlled
   CLI and Registry workflows.
 - Performance depends on corpus bytes, parser complexity, chunk count, selected

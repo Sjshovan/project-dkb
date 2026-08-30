@@ -2,10 +2,13 @@ import cliProgress from 'cli-progress';
 import ora from 'ora';
 import { styleText } from 'node:util';
 import type { DkbProgressEvent, DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
+import type { CliEventWriter } from './eventStream.js';
 
 export interface CliPresentationOptions {
   json?: boolean;
+  jsonStream?: boolean;
   progress?: boolean;
+  eventWriter?: CliEventWriter;
 }
 
 export interface CliPresenter {
@@ -18,7 +21,7 @@ export interface CliPresenter {
 }
 
 export function createCliPresenter(options: CliPresentationOptions): CliPresenter {
-  const interactive = !options.json;
+  const interactive = !options.json && !options.jsonStream;
   const animated = interactive
     && options.progress !== false
     && (process.env.DKB_FORCE_TTY === '1' || (process.stdout.isTTY && process.stderr.isTTY));
@@ -27,7 +30,8 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
     interactive,
     progressEnabled: animated,
     async run<T>(label: string, action: (progress?: DkbProgressReporter) => Promise<T>, summary?: (value: T) => string[]): Promise<T> {
-      const progress = createProgressReporter({ interactive: animated, enabled: animated });
+      options.eventWriter?.start(label);
+      const progress = createProgressReporter({ interactive: animated, enabled: animated, eventWriter: options.eventWriter });
       const spinner = animated ? ora({ text: label, stream: process.stderr }).start() : null;
       let progressRendered = false;
       const reporter: DkbProgressReporter = (event) => {
@@ -39,7 +43,7 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
       };
 
       try {
-        const value = await action(animated ? reporter : undefined);
+        const value = await action(animated || options.jsonStream ? reporter : undefined);
 
         progress.close();
         if (interactive) {
@@ -52,6 +56,9 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
           }
           printSummary(summary?.(value) ?? defaultSummary(value));
           console.log(terminalText(['bold', 'green'], 'Done.', process.stdout));
+        } else if (options.jsonStream) {
+          options.eventWriter?.result(value);
+          options.eventWriter?.complete('succeeded');
         } else {
           printJson(value);
         }
@@ -67,7 +74,8 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
       }
     },
     async check<T>(label: string, action: (progress?: DkbProgressReporter) => Promise<T>, passed: (value: T) => boolean, summary?: (value: T) => string[]): Promise<T> {
-      const progress = createProgressReporter({ interactive: animated, enabled: animated });
+      options.eventWriter?.start(label);
+      const progress = createProgressReporter({ interactive: animated, enabled: animated, eventWriter: options.eventWriter });
       const spinner = animated ? ora({ text: label, stream: process.stderr }).start() : null;
       let progressRendered = false;
       const reporter: DkbProgressReporter = (event) => {
@@ -79,7 +87,7 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
       };
 
       try {
-        const value = await action(animated ? reporter : undefined);
+        const value = await action(animated || options.jsonStream ? reporter : undefined);
         const ok = passed(value);
 
         progress.close();
@@ -97,6 +105,9 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
           if (ok) {
             console.log(terminalText(['bold', 'green'], 'Done.', process.stdout));
           }
+        } else if (options.jsonStream) {
+          options.eventWriter?.result(value);
+          options.eventWriter?.complete(ok ? 'succeeded' : 'failed');
         } else {
           printJson(value);
         }
@@ -114,12 +125,16 @@ export function createCliPresenter(options: CliPresentationOptions): CliPresente
     print(value: unknown, summary?: (value: unknown) => string[]): void {
       if (interactive) {
         printSummary(summary?.(value) ?? defaultSummary(value));
+      } else if (options.jsonStream) {
+        options.eventWriter?.start('Reading DKB state');
+        options.eventWriter?.result(value);
+        options.eventWriter?.complete('succeeded');
       } else {
         printJson(value);
       }
     },
     progress(): DkbProgressReporter {
-      return createProgressReporter({ interactive: animated, enabled: animated });
+      return createProgressReporter({ interactive: animated, enabled: animated, eventWriter: options.eventWriter });
     },
   };
 }
@@ -271,7 +286,7 @@ export function humanSummary(value: unknown): string[] {
 
 const defaultSummary = humanSummary;
 
-function createProgressReporter(options: { interactive: boolean; enabled: boolean }): DkbProgressReporter & { close: () => void } {
+function createProgressReporter(options: { interactive: boolean; enabled: boolean; eventWriter?: CliEventWriter }): DkbProgressReporter & { close: () => void } {
   let bar: cliProgress.SingleBar | null = null;
   let spinner: ReturnType<typeof ora> | null = null;
   let currentPhase = '';
@@ -288,6 +303,7 @@ function createProgressReporter(options: { interactive: boolean; enabled: boolea
     }
   };
   const reporter = ((event: DkbProgressEvent) => {
+    options.eventWriter?.progress(event);
     if (!options.enabled) {
       return;
     }

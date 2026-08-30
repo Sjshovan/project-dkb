@@ -19,7 +19,6 @@ import { closeQueryAuditQueue } from './queryAudit.js';
 import { resolveRegistryContext } from '@sjshovan/dkb-registry-client/config.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js';
-import { installDkbFromRegistry } from './registryInstall.js';
 import { switchRuntimePipelineFromRegistry } from './pipelineSwitch.js';
 import { withRuntimeMutation } from './mutation.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
@@ -134,15 +133,21 @@ async function routeRequest(
       const body = await readJsonBody<{
         target: string;
         registryUrl: string;
-        registryToken?: string;
+        grants?: Record<string, { plan: unknown; installGrant: string }>;
       }>(request);
+
+      const { validateInstallPlan } = await import('@sjshovan/dkb-protocol/builds.js');
+      const grants = Object.fromEntries(Object.entries(body.grants ?? {}).map(([identity, grant]) => [identity, {
+        installGrant: requiredString(grant.installGrant, `grants.${identity}.installGrant`),
+        plan: validateInstallPlan(grant.plan, `Runtime pipeline grant for ${identity}`),
+      }]));
 
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => switchRuntimePipelineFromRegistry({
         runtime,
         stateRoot,
         target: requiredString(body.target, 'target'),
         registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
-        registryToken: body.registryToken,
+        grants,
       })));
     }
 
@@ -163,20 +168,21 @@ async function routeRequest(
     if (request.method === 'POST' && pathName === '/api/dkbs/install-registry') {
       const body = await readJsonBody<{
         registryUrl: string;
-        registryToken?: string;
-        packageId: string;
-        version?: string;
-        target?: string;
+        installGrant: string;
+        plan: unknown;
         force?: boolean;
       }>(request);
 
-      return sendJson(response, 201, await withRuntimeMutation(stateRoot, () => installDkbFromRegistry({
+      const [{ validateInstallPlan }, { installDkbFromRuntimeGrant }] = await Promise.all([
+        import('@sjshovan/dkb-protocol/builds.js'),
+        import('./registryInstall.js'),
+      ]);
+
+      return sendJson(response, 201, await withRuntimeMutation(stateRoot, () => installDkbFromRuntimeGrant({
         runtime,
         registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
-        registryToken: body.registryToken,
-        packageId: requiredString(body.packageId, 'packageId'),
-        version: body.version,
-        target: body.target,
+        installGrant: requiredString(body.installGrant, 'installGrant'),
+        plan: validateInstallPlan(body.plan, 'Runtime install plan'),
         force: body.force,
         runtimeRoot: stateRoot,
       })));

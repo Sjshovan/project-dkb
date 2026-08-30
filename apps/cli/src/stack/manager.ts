@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime } from '../host/inventory.js';
+import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime, registerHostStack } from '../host/inventory.js';
 import { backupDkbStack, restoreDkbStack } from './backups.js';
 import {
   pathExists,
@@ -21,17 +21,70 @@ import {
   runCompose,
 } from './docker.js';
 import { upgradeDkbStackRelease } from './release.js';
-import type { DkbStackStatus, DkbStackTarget, DkbStackUpgrade } from './types.js';
+import type { DkbStackListing, DkbStackStatus, DkbStackTarget, DkbStackUpgrade } from './types.js';
 
 export type {
   DkbStackBackup,
   DkbStackContext,
   DkbStackRestore,
+  DkbStackListing,
   DkbStackStatus,
   DkbStackTarget,
   DkbStackUpgrade,
 } from './types.js';
 export { backupDkbStack, composeArguments, prepareDkbStack, restoreDkbStack, runtimeAdminTokenForUrl };
+
+export async function listDkbStacks(distribution: DkbDistribution, check = false): Promise<DkbStackListing> {
+  const inventory = await readHostInventory();
+  const stacks = await Promise.all(Object.entries(inventory.stacks).map(async ([name, stack]) => {
+    try {
+      const context = await readDkbStack(distribution, name);
+      if (!check) {
+        return {
+          name,
+          default: inventory.defaults.stack === name,
+          stateRoot: stack.stateRoot,
+          ...(stack.library ? { library: stack.library } : {}),
+          ...(stack.registry ? { registry: stack.registry } : {}),
+          ...(stack.runtime ? { runtime: stack.runtime } : {}),
+          target: context.target,
+          status: 'known' as const,
+        };
+      }
+      const status = await statusDkbStack(distribution, name, true);
+      const healthy = status.checks?.every((item) => item.status === 'ok') ?? false;
+      return {
+        name,
+        default: inventory.defaults.stack === name,
+        stateRoot: stack.stateRoot,
+        ...(stack.library ? { library: stack.library } : {}),
+        ...(stack.registry ? { registry: stack.registry } : {}),
+        ...(stack.runtime ? { runtime: stack.runtime } : {}),
+        target: status.target,
+        status: healthy ? 'online' as const : 'offline' as const,
+        ...(!healthy ? { message: status.checks?.filter((item) => item.status === 'failed').map((item) => item.message).join('; ') || 'One or more services are unavailable.' } : {}),
+      };
+    } catch (error) {
+      const missing = !await pathExists(stack.stateRoot);
+      return {
+        name,
+        default: inventory.defaults.stack === name,
+        stateRoot: stack.stateRoot,
+        ...(stack.library ? { library: stack.library } : {}),
+        ...(stack.registry ? { registry: stack.registry } : {}),
+        ...(stack.runtime ? { runtime: stack.runtime } : {}),
+        status: missing ? 'missing' as const : check ? 'offline' as const : 'invalid' as const,
+        message: errorMessage(error),
+      };
+    }
+  }));
+
+  return {
+    checked: check,
+    ...(inventory.defaults.stack ? { default: inventory.defaults.stack } : {}),
+    stacks: stacks.sort((left, right) => left.name.localeCompare(right.name)),
+  };
+}
 
 export async function upDkbStack(
   distribution: DkbDistribution,
@@ -96,6 +149,12 @@ export async function upDkbStack(
     library: library.name,
     stateRoot: runtimeStateRoot,
     composeFile: context.composeFile,
+    select: 'if-empty',
+  });
+  await registerHostStack(context.name, context.root, {
+    library: library.name,
+    registry: registry.name,
+    runtime: runtime.name,
     select: 'if-empty',
   });
 

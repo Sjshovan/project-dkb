@@ -96,10 +96,10 @@ an already compiled version must not reparse, rechunk, or re-embed its source.
 The built-in TypeScript registry login route remains a development fixture and
 is not used by the product CLI. The Laravel Registry issues scoped, expiring,
 revocable team tokens server-side and exposes authenticated identity and
-self-revocation endpoints. `dkb registry login` validates an existing token
-against that contract and stores it in the machine-local credential file;
-`whoami` and `logout --revoke` complete the lifecycle. Automation can still use
-`DKB_REGISTRY_TOKEN` or `--token`.
+self-revocation endpoints. ADR 0007 supersedes the original paste-in login:
+`dkb registry login` now uses browser PKCE by default, while automation uses
+`DKB_REGISTRY_TOKEN` or `--token-stdin`. Secret-bearing command arguments are
+not supported.
 
 More generally, planned command names are retained as honest nonzero stubs, and
 renamed commands keep a working compatibility entry, until a separate product

@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
-export const DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v1';
+export const DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v2';
+const LEGACY_DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v1';
 
 const processMutationTails = new Map<string, Promise<void>>();
 
@@ -34,16 +35,27 @@ export interface DkbHostRuntimeRecord {
   updatedAt: string;
 }
 
+export interface DkbHostStackRecord {
+  stateRoot: string;
+  library?: string;
+  registry?: string;
+  runtime?: string;
+  registeredAt: string;
+  updatedAt: string;
+}
+
 export interface DkbHostInventory {
   format: typeof DKB_HOST_INVENTORY_FORMAT;
-  selected: {
+  defaults: {
     library?: string;
     registry?: string;
     runtime?: string;
+    stack?: string;
   };
   libraries: Record<string, DkbHostLibraryRecord>;
   registries: Record<string, DkbHostRegistryRecord>;
   runtimes: Record<string, DkbHostRuntimeRecord>;
+  stacks: Record<string, DkbHostStackRecord>;
 }
 
 export interface RegisterHostLibraryOptions {
@@ -62,6 +74,13 @@ export interface RegisterHostRuntimeOptions {
   library?: string;
   stateRoot?: string;
   composeFile?: string;
+  select?: boolean | 'if-empty';
+}
+
+export interface RegisterHostStackOptions {
+  library?: string;
+  registry?: string;
+  runtime?: string;
   select?: boolean | 'if-empty';
 }
 
@@ -86,6 +105,11 @@ export async function readHostInventory(target = hostInventoryPath()): Promise<D
     }
 
     try {
+      if (isRecord(parsed) && parsed.format === LEGACY_DKB_HOST_INVENTORY_FORMAT) {
+        const migrated = migrateHostInventoryV1(parsed, target);
+        await writeHostInventory(target, migrated);
+        return migrated;
+      }
       return validateHostInventory(parsed, target);
     } catch (error) {
       if (error instanceof DkbError) {
@@ -141,7 +165,7 @@ export async function registerHostLibrary(
       updatedAt: now,
     };
     inventory.libraries[name] = record;
-    applySelection(inventory.selected, 'library', name, options.select);
+    applyDefault(inventory.defaults, 'library', name, options.select);
 
     return {
       value: {
@@ -163,14 +187,20 @@ export async function unregisterHostLibrary(nameOrPath: string): Promise<{ name:
     }
 
     delete inventory.libraries[resolved.name];
-    const selectedCleared = inventory.selected.library === resolved.name;
+    const selectedCleared = inventory.defaults.library === resolved.name;
     if (selectedCleared) {
-      delete inventory.selected.library;
+      delete inventory.defaults.library;
     }
     for (const runtime of Object.values(inventory.runtimes)) {
       if (runtime.library === resolved.name) {
         delete runtime.library;
         runtime.updatedAt = new Date().toISOString();
+      }
+    }
+    for (const stack of Object.values(inventory.stacks)) {
+      if (stack.library === resolved.name) {
+        delete stack.library;
+        stack.updatedAt = new Date().toISOString();
       }
     }
 
@@ -190,7 +220,7 @@ export async function selectHostLibrary(nameOrPath: string): Promise<{ name: str
     }
 
     await inspectLibraryPath(resolved.record.path);
-    inventory.selected.library = resolved.name;
+    inventory.defaults.library = resolved.name;
 
     return { value: { name: resolved.name, library: resolved.record }, inventory };
   });
@@ -198,7 +228,7 @@ export async function selectHostLibrary(nameOrPath: string): Promise<{ name: str
 
 export async function selectedHostLibrary(): Promise<{ name: string; library: DkbHostLibraryRecord } | null> {
   const inventory = await readHostInventory();
-  const name = inventory.selected.library;
+  const name = inventory.defaults.library;
 
   return name && inventory.libraries[name] ? { name, library: inventory.libraries[name] } : null;
 }
@@ -218,7 +248,7 @@ export async function registerHostRegistry(
   return mutateHostInventory(async (inventory) => {
     const now = new Date().toISOString();
     const result = ensureRegistryRecord(inventory, url, name, now);
-    applySelection(inventory.selected, 'registry', result.name, options.select);
+    applyDefault(inventory.defaults, 'registry', result.name, options.select);
 
     return { value: result, inventory };
   });
@@ -238,15 +268,19 @@ export async function unregisterHostRegistry(name: string): Promise<{ name: stri
       .filter(([, library]) => library.registry === normalizedName)
       .map(([libraryName]) => libraryName)
       .sort();
+    const stacksUsing = Object.entries(inventory.stacks)
+      .filter(([, stack]) => stack.registry === normalizedName)
+      .map(([stackName]) => `stack:${stackName}`)
+      .sort();
 
-    if (usedBy.length > 0) {
-      throw new DkbError(`Registry ${normalizedName} is still used by ${usedBy.join(', ')}. Configure or unregister those Libraries first.`);
+    if (usedBy.length > 0 || stacksUsing.length > 0) {
+      throw new DkbError(`Registry ${normalizedName} is still used by ${[...usedBy, ...stacksUsing].join(', ')}. Reconfigure those resources first.`);
     }
 
     delete inventory.registries[normalizedName];
-    const selectedCleared = inventory.selected.registry === normalizedName;
+    const selectedCleared = inventory.defaults.registry === normalizedName;
     if (selectedCleared) {
-      delete inventory.selected.registry;
+      delete inventory.defaults.registry;
     }
 
     return { value: { name: normalizedName, url: registry.url, selectedCleared }, inventory };
@@ -263,14 +297,14 @@ export async function selectHostRegistry(name: string): Promise<{ name: string; 
       throw new DkbError(`Unknown host Registry: ${name}. Run: dkb registry list`);
     }
 
-    inventory.selected.registry = normalizedName;
+    inventory.defaults.registry = normalizedName;
     return { value: { name: normalizedName, registry }, inventory };
   });
 }
 
 export async function selectedHostRegistry(): Promise<{ name: string; registry: DkbHostRegistryRecord } | null> {
   const inventory = await readHostInventory();
-  const name = inventory.selected.registry;
+  const name = inventory.defaults.registry;
 
   return name && inventory.registries[name] ? { name, registry: inventory.registries[name] } : null;
 }
@@ -315,7 +349,7 @@ export async function registerHostRuntime(
       updatedAt: now,
     };
     inventory.runtimes[normalizedName] = record;
-    applySelection(inventory.selected, 'runtime', normalizedName, options.select);
+    applyDefault(inventory.defaults, 'runtime', normalizedName, options.select);
 
     return { value: { name: normalizedName, runtime: record }, inventory };
   });
@@ -332,9 +366,15 @@ export async function unregisterHostRuntime(name: string): Promise<{ name: strin
     }
 
     delete inventory.runtimes[normalizedName];
-    const selectedCleared = inventory.selected.runtime === normalizedName;
+    const selectedCleared = inventory.defaults.runtime === normalizedName;
     if (selectedCleared) {
-      delete inventory.selected.runtime;
+      delete inventory.defaults.runtime;
+    }
+    for (const stack of Object.values(inventory.stacks)) {
+      if (stack.runtime === normalizedName) {
+        delete stack.runtime;
+        stack.updatedAt = new Date().toISOString();
+      }
     }
 
     return { value: { name: normalizedName, url: runtime.url, selectedCleared }, inventory };
@@ -351,16 +391,64 @@ export async function selectHostRuntime(name: string): Promise<{ name: string; r
       throw new DkbError(`Unknown host Runtime: ${name}. Run: dkb runtime list`);
     }
 
-    inventory.selected.runtime = normalizedName;
+    inventory.defaults.runtime = normalizedName;
     return { value: { name: normalizedName, runtime }, inventory };
   });
 }
 
 export async function selectedHostRuntime(): Promise<{ name: string; runtime: DkbHostRuntimeRecord } | null> {
   const inventory = await readHostInventory();
-  const name = inventory.selected.runtime;
+  const name = inventory.defaults.runtime;
 
   return name && inventory.runtimes[name] ? { name, runtime: inventory.runtimes[name] } : null;
+}
+
+export async function registerHostStack(
+  name: string,
+  stateRoot: string,
+  options: RegisterHostStackOptions = {},
+): Promise<{ name: string; stack: DkbHostStackRecord }> {
+  const normalizedName = normalizeHostName(name, 'Stack name');
+  const normalizedRoot = await canonicalExistingPath(stateRoot, 'Stack state root');
+
+  return mutateHostInventory(async (inventory) => {
+    assertStackReferences(inventory, normalizedName, options);
+    const duplicate = entryByStateRoot(inventory.stacks, normalizedRoot);
+    if (duplicate && duplicate.name !== normalizedName) {
+      throw new DkbError(`Stack ${normalizedRoot} is already registered as ${duplicate.name}.`);
+    }
+
+    const now = new Date().toISOString();
+    const existing = inventory.stacks[normalizedName];
+    const record: DkbHostStackRecord = {
+      stateRoot: normalizedRoot,
+      ...(options.library ? { library: options.library } : existing?.library ? { library: existing.library } : {}),
+      ...(options.registry ? { registry: options.registry } : existing?.registry ? { registry: existing.registry } : {}),
+      ...(options.runtime ? { runtime: options.runtime } : existing?.runtime ? { runtime: existing.runtime } : {}),
+      registeredAt: existing?.registeredAt ?? now,
+      updatedAt: now,
+    };
+    inventory.stacks[normalizedName] = record;
+    applyDefault(inventory.defaults, 'stack', normalizedName, options.select);
+
+    return { value: { name: normalizedName, stack: record }, inventory };
+  });
+}
+
+export async function selectHostStack(name: string): Promise<{ name: string; stack: DkbHostStackRecord }> {
+  const normalizedName = normalizeHostName(name, 'Stack name');
+  return mutateHostInventory(async (inventory) => {
+    const stack = inventory.stacks[normalizedName];
+    if (!stack) throw new DkbError(`Unknown host Stack: ${name}. Run: dkb stack list`);
+    inventory.defaults.stack = normalizedName;
+    return { value: { name: normalizedName, stack }, inventory };
+  });
+}
+
+export async function defaultHostStack(): Promise<{ name: string; stack: DkbHostStackRecord } | null> {
+  const inventory = await readHostInventory();
+  const name = inventory.defaults.stack;
+  return name && inventory.stacks[name] ? { name, stack: inventory.stacks[name] } : null;
 }
 
 export function normalizeHostName(value: string, label = 'Host resource name'): string {
@@ -404,14 +492,14 @@ export function validateHostInventory(value: unknown, source = hostInventoryPath
   if (!isRecord(value)) {
     throw new DkbError(`Invalid DKB host inventory at ${source}: expected an object.`);
   }
-  assertOnlyKeys(value, ['format', 'selected', 'libraries', 'registries', 'runtimes'], source);
+  assertOnlyKeys(value, ['format', 'defaults', 'libraries', 'registries', 'runtimes', 'stacks'], source);
   if (value.format !== DKB_HOST_INVENTORY_FORMAT) {
     throw new DkbError(`Invalid DKB host inventory at ${source}: format must be ${DKB_HOST_INVENTORY_FORMAT}.`);
   }
-  if (!isRecord(value.selected) || !isRecord(value.libraries) || !isRecord(value.registries) || !isRecord(value.runtimes)) {
-    throw new DkbError(`Invalid DKB host inventory at ${source}: selected, libraries, registries, and runtimes must be objects.`);
+  if (!isRecord(value.defaults) || !isRecord(value.libraries) || !isRecord(value.registries) || !isRecord(value.runtimes) || !isRecord(value.stacks)) {
+    throw new DkbError(`Invalid DKB host inventory at ${source}: defaults, libraries, registries, runtimes, and stacks must be objects.`);
   }
-  assertOnlyKeys(value.selected, ['library', 'registry', 'runtime'], `${source} selected`);
+  assertOnlyKeys(value.defaults, ['library', 'registry', 'runtime', 'stack'], `${source} defaults`);
 
   const libraries: Record<string, DkbHostLibraryRecord> = {};
   for (const [name, item] of Object.entries(value.libraries)) {
@@ -428,6 +516,11 @@ export function validateHostInventory(value: unknown, source = hostInventoryPath
     assertCanonicalHostKey(name, 'Runtime name');
     runtimes[name] = validateRuntimeRecord(item, `${source} Runtime ${name}`);
   }
+  const stacks: Record<string, DkbHostStackRecord> = {};
+  for (const [name, item] of Object.entries(value.stacks)) {
+    assertCanonicalHostKey(name, 'Stack name');
+    stacks[name] = validateStackRecord(item, `${source} Stack ${name}`);
+  }
   for (const [name, library] of Object.entries(libraries)) {
     if (library.registry && !registries[library.registry]) {
       throw new DkbError(`Invalid DKB host inventory at ${source}: Library ${name} references unknown Registry ${library.registry}.`);
@@ -438,24 +531,31 @@ export function validateHostInventory(value: unknown, source = hostInventoryPath
       throw new DkbError(`Invalid DKB host inventory at ${source}: Runtime ${name} references unknown Library ${runtime.library}.`);
     }
   }
-  const selected = validateSelected(value.selected, { libraries, registries, runtimes }, source);
+  for (const [name, stack] of Object.entries(stacks)) {
+    if (stack.library && !libraries[stack.library]) throw new DkbError(`Invalid DKB host inventory at ${source}: Stack ${name} references unknown Library ${stack.library}.`);
+    if (stack.registry && !registries[stack.registry]) throw new DkbError(`Invalid DKB host inventory at ${source}: Stack ${name} references unknown Registry ${stack.registry}.`);
+    if (stack.runtime && !runtimes[stack.runtime]) throw new DkbError(`Invalid DKB host inventory at ${source}: Stack ${name} references unknown Runtime ${stack.runtime}.`);
+  }
+  const defaults = validateDefaults(value.defaults, { libraries, registries, runtimes, stacks }, source);
 
   return {
     format: DKB_HOST_INVENTORY_FORMAT,
-    selected,
+    defaults,
     libraries,
     registries,
     runtimes,
+    stacks,
   };
 }
 
 function emptyHostInventory(): DkbHostInventory {
   return {
     format: DKB_HOST_INVENTORY_FORMAT,
-    selected: {},
+    defaults: {},
     libraries: {},
     registries: {},
     runtimes: {},
+    stacks: {},
   };
 }
 
@@ -675,19 +775,28 @@ function entryByPath<T extends { path: string }>(
   return found ? { name: found[0], record: found[1] } : null;
 }
 
+function entryByStateRoot<T extends { stateRoot: string }>(
+  entries: Record<string, T>,
+  candidate: string,
+): { name: string; record: T } | null {
+  const key = comparablePath(candidate);
+  const found = Object.entries(entries).find(([, entry]) => comparablePath(entry.stateRoot) === key);
+  return found ? { name: found[0], record: found[1] } : null;
+}
+
 function comparablePath(value: string): string {
   const resolved = path.resolve(value);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function applySelection(
-  selected: DkbHostInventory['selected'],
-  key: keyof DkbHostInventory['selected'],
+function applyDefault(
+  defaults: DkbHostInventory['defaults'],
+  key: keyof DkbHostInventory['defaults'],
   name: string,
   selection: boolean | 'if-empty' | undefined,
 ): void {
-  if (selection === true || (selection === 'if-empty' && !selected[key])) {
-    selected[key] = name;
+  if (selection === true || (selection === 'if-empty' && !defaults[key])) {
+    defaults[key] = name;
   }
 }
 
@@ -730,24 +839,82 @@ function validateRuntimeRecord(value: unknown, source: string): DkbHostRuntimeRe
   };
 }
 
-function validateSelected(
-  value: Record<string, unknown>,
-  records: Pick<DkbHostInventory, 'libraries' | 'registries' | 'runtimes'>,
-  source: string,
-): DkbHostInventory['selected'] {
-  const selected: DkbHostInventory['selected'] = {};
+function validateStackRecord(value: unknown, source: string): DkbHostStackRecord {
+  assertRecord(value, source);
+  assertOnlyKeys(value, ['stateRoot', 'library', 'registry', 'runtime', 'registeredAt', 'updatedAt'], source);
+  return {
+    stateRoot: requiredString(value.stateRoot, `${source} stateRoot`),
+    ...(value.library === undefined ? {} : { library: normalizeHostName(requiredString(value.library, `${source} library`), 'Library name') }),
+    ...(value.registry === undefined ? {} : { registry: normalizeHostName(requiredString(value.registry, `${source} registry`), 'Registry name') }),
+    ...(value.runtime === undefined ? {} : { runtime: normalizeHostName(requiredString(value.runtime, `${source} runtime`), 'Runtime name') }),
+    registeredAt: requiredTimestamp(value.registeredAt, `${source} registeredAt`),
+    updatedAt: requiredTimestamp(value.updatedAt, `${source} updatedAt`),
+  };
+}
 
-  for (const key of ['library', 'registry', 'runtime'] as const) {
+function validateDefaults(
+  value: Record<string, unknown>,
+  records: Pick<DkbHostInventory, 'libraries' | 'registries' | 'runtimes' | 'stacks'>,
+  source: string,
+): DkbHostInventory['defaults'] {
+  const defaults: DkbHostInventory['defaults'] = {};
+
+  for (const key of ['library', 'registry', 'runtime', 'stack'] as const) {
     if (value[key] === undefined) continue;
-    const name = normalizeHostName(requiredString(value[key], `${source} selected ${key}`), `${key} name`);
-    const collection = key === 'library' ? records.libraries : key === 'registry' ? records.registries : records.runtimes;
+    const name = normalizeHostName(requiredString(value[key], `${source} default ${key}`), `${key} name`);
+    const collection = key === 'library'
+      ? records.libraries
+      : key === 'registry'
+        ? records.registries
+        : key === 'runtime'
+          ? records.runtimes
+          : records.stacks;
     if (!collection[name]) {
-      throw new DkbError(`Invalid DKB host inventory at ${source}: selected ${key} ${name} is not registered.`);
+      throw new DkbError(`Invalid DKB host inventory at ${source}: default ${key} ${name} is not registered.`);
     }
-    selected[key] = name;
+    defaults[key] = name;
   }
 
-  return selected;
+  return defaults;
+}
+
+function assertStackReferences(inventory: DkbHostInventory, name: string, options: RegisterHostStackOptions): void {
+  if (options.library && !inventory.libraries[options.library]) throw new DkbError(`Unknown host Library for Stack ${name}: ${options.library}.`);
+  if (options.registry && !inventory.registries[options.registry]) throw new DkbError(`Unknown host Registry for Stack ${name}: ${options.registry}.`);
+  if (options.runtime && !inventory.runtimes[options.runtime]) throw new DkbError(`Unknown host Runtime for Stack ${name}: ${options.runtime}.`);
+}
+
+function migrateHostInventoryV1(value: Record<string, unknown>, source: string): DkbHostInventory {
+  assertOnlyKeys(value, ['format', 'selected', 'libraries', 'registries', 'runtimes'], source);
+  if (!isRecord(value.selected) || !isRecord(value.libraries) || !isRecord(value.registries) || !isRecord(value.runtimes)) {
+    throw new DkbError(`Invalid DKB host inventory at ${source}: selected, libraries, registries, and runtimes must be objects.`);
+  }
+
+  const migrated = validateHostInventory({
+    format: DKB_HOST_INVENTORY_FORMAT,
+    defaults: value.selected,
+    libraries: value.libraries,
+    registries: value.registries,
+    runtimes: value.runtimes,
+    stacks: {},
+  }, source);
+  const now = new Date().toISOString();
+  for (const [runtimeName, runtime] of Object.entries(migrated.runtimes)) {
+    if (runtime.kind !== 'docker' || !runtime.stateRoot) continue;
+    const stateRoot = path.dirname(runtime.stateRoot);
+    const name = normalizeHostName(path.basename(stateRoot), 'Stack name');
+    migrated.stacks[name] = {
+      stateRoot,
+      ...(runtime.library ? { library: runtime.library } : {}),
+      ...(runtime.library && migrated.libraries[runtime.library]?.registry ? { registry: migrated.libraries[runtime.library].registry } : {}),
+      runtime: runtimeName,
+      registeredAt: runtime.registeredAt ?? now,
+      updatedAt: runtime.updatedAt ?? now,
+    };
+  }
+  if (migrated.stacks.local) migrated.defaults.stack = 'local';
+  else if (Object.keys(migrated.stacks).length === 1) migrated.defaults.stack = Object.keys(migrated.stacks)[0];
+  return validateHostInventory(migrated, source);
 }
 
 function assertRecord(value: unknown, source: string): asserts value is Record<string, unknown> {

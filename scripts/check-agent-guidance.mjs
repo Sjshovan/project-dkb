@@ -5,6 +5,7 @@ const root = path.resolve('.');
 const required = [
   'AGENTS.md',
   'apps/cli/AGENTS.md',
+  'apps/console/AGENTS.md',
   'services/runtime/AGENTS.md',
   'services/compiler/AGENTS.md',
   'packages/protocol/AGENTS.md',

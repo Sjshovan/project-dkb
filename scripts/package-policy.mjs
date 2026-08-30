@@ -12,6 +12,7 @@ export const distributableWorkspaces = [
   '@sjshovan/dkb-distribution-default',
   '@sjshovan/dkb-compiler',
   '@sjshovan/dkb-runtime',
+  '@sjshovan/dkb-console',
   '@sjshovan/dkb-cli',
 ];
 

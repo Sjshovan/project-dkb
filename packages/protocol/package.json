@@ -12,6 +12,7 @@
     "./artifacts.js": { "types": "./dist/artifacts.d.ts", "import": "./dist/artifacts.js" },
     "./builds.js": { "types": "./dist/builds.d.ts", "import": "./dist/builds.js" },
     "./capabilities.js": { "types": "./dist/capabilities.d.ts", "import": "./dist/capabilities.js" },
+    "./command-events.js": { "types": "./dist/command-events.d.ts", "import": "./dist/command-events.js" },
     "./contracts/hash.js": { "types": "./dist/contracts/hash.d.ts", "import": "./dist/contracts/hash.js" },
     "./contracts/index.js": { "types": "./dist/contracts/index.d.ts", "import": "./dist/contracts/index.js" },
     "./contracts/validation.js": { "types": "./dist/contracts/validation.d.ts", "import": "./dist/contracts/validation.js" },

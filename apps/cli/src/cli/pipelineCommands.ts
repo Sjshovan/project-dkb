@@ -127,8 +127,7 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
     .argument('[path]', 'Library, Runtime, or DKB root', '.')
     .option('--runtime-url <url>', 'Owning Runtime URL')
     .option('--registry-url <url>', 'Registry API URL used to fetch missing signed builds')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (name: string, target: string, options: { runtimeUrl?: string; registryUrl?: string; token?: string }) => {
+    .action(async (name: string, target: string, options: { runtimeUrl?: string; registryUrl?: string }) => {
       const root = path.resolve(target);
       const manifest = await loadManifest(root);
 
@@ -180,11 +179,26 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
         }
         const { configuredRegistry } = await import('./registryConfig.js');
         const registry = await configuredRegistry({ url: options.registryUrl, root });
+        const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+        const registryClient = new DkbRegistryClient({ baseUrl: registry.url });
+        const grants: Record<string, { plan: import('@sjshovan/dkb-protocol/builds.js').DkbInstallPlan; installGrant: string }> = {};
+        for (const entry of Object.values(state.entries)
+          .filter((item) => item.kind === 'dkb' && item.source === 'registry' && item.status === 'installed')
+          .sort((left, right) => left.identity.localeCompare(right.identity))) {
+          if (!entry.version) throw new DkbError(`Installed Registry DKB ${entry.identity} has no resolved version.`);
+          const request = await registryClient.requestBuild(entry.identity, entry.version, name);
+          if (request.status === 'queued') {
+            if (!request.jobId) throw new DkbError(`Registry queued ${entry.identity}@${entry.version} without a build job id.`);
+            await waitForRegistryBuild(registryClient, entry.identity, entry.version, request.jobId);
+          }
+          const grant = await registryClient.createInstallGrant(entry.identity, entry.version, name);
+          grants[entry.identity] = { plan: grant.plan, installGrant: grant.installGrant };
+        }
         const runtime = await currentRuntimeAdminClient(options.runtimeUrl, 40 * 60_000);
         const switched = await runtime.switchPipeline({
           target: name,
           registryUrl: registry.url,
-          registryToken: options.token,
+          grants,
         });
         if (!switched || typeof switched !== 'object' || Array.isArray(switched)) {
           throw new DkbError('Runtime returned an invalid pipeline-switch response');
@@ -375,6 +389,25 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
           process.exitCode = 1;
         }
       }));
+}
+
+async function waitForRegistryBuild(
+  client: import('@sjshovan/dkb-registry-client/client.js').DkbRegistryClient,
+  packageId: string,
+  version: string,
+  jobId: number,
+  timeoutMs = 30 * 60_000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const job = await client.buildJob(packageId, version, jobId);
+    if (job.status === 'published') return;
+    if (job.status === 'failed' || job.status === 'revoked') {
+      throw new DkbError(`Registry build failed for ${packageId}@${version} (${job.target}): ${job.error ?? job.status}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new DkbError(`Timed out waiting for Registry build ${jobId} for ${packageId}@${version}.`);
 }
 
 async function runEvidenceLifecycle(

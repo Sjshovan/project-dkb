@@ -55,8 +55,7 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .option('--force', 'Replace an existing package version')
     .option('--remote-url <url>', 'Register a public hosted runtime after publishing')
     .option('--public', 'Publish the package to the public catalog')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (target: string, options: { url?: string; account?: string; name?: string; email?: string; force?: boolean; remoteUrl?: string; public?: boolean; token?: string }) => {
+    .action(async (target: string, options: { url?: string; account?: string; name?: string; email?: string; force?: boolean; remoteUrl?: string; public?: boolean }) => {
       const sourcePath = path.resolve(target);
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { configuredRegistry } = await import('./registryConfig.js');
@@ -65,7 +64,7 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         ? await currentLibraryRoot(undefined, sourcePath)
         : undefined;
       const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
-      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+      const client = new DkbRegistryClient({ baseUrl: registryConfig.url });
       if (sourceManifest.type === 'collection') {
         const { publishCollectionFromLibrary } = await import('@sjshovan/dkb-registry-client/collections.js');
         await presenter().run('Publishing Collection', async () => publishCollectionFromLibrary({
@@ -101,14 +100,13 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .option('--runtime-url <url>', 'Owning Runtime URL; closes live retrieval handles before installation')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--force', 'Repair an incomplete install or replace an installed DKB')
-    .option('--token <token>', 'Registry API bearer token', process.env.DKB_REGISTRY_TOKEN)
-    .action(async (packageId: string, options: { version?: string; revision?: number; target?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean; token?: string }) => {
+    .action(async (packageId: string, options: { version?: string; revision?: number; target?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean }) => {
       const libraryRoot = await currentLibraryRoot(options.library);
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { installDkbFromRegistry } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
       const { configuredRegistry } = await import('./registryConfig.js');
       const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
-      const client = new DkbRegistryClient({ baseUrl: registryConfig.url, token: options.token });
+      const client = new DkbRegistryClient({ baseUrl: registryConfig.url });
       const kind = await client.entryKind(packageId);
 
       if (kind === 'collection') {
@@ -129,21 +127,22 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
 
       if (options.runtimeUrl) {
         const runtime = await currentRuntimeAdminClient(options.runtimeUrl);
-        await presenter().run('Installing DKB', async () => runtime.installRegistryDkb({
+        await presenter().run('Installing DKB', async () => {
+          const version = options.version ?? await client.latestPackageVersion(packageId);
+          const grant = await client.createInstallGrant(packageId, version, options.target);
+          return runtime.installRegistryDkb({
           registryUrl: registryConfig.url,
-          registryToken: options.token,
-          packageId,
-          version: options.version,
-          target: options.target,
+          installGrant: grant.installGrant,
+          plan: grant.plan,
           force: Boolean(options.force),
-        }), summarizeInstallResult);
+          });
+        }, summarizeInstallResult);
         return;
       }
 
       await presenter().run('Installing DKB', async (progress) => installDkbFromRegistry({
         runtime: await defaultRuntimeContext(),
         registryUrl: registryConfig.url,
-        registryToken: options.token,
         packageId,
         version: options.version,
         target: options.target,

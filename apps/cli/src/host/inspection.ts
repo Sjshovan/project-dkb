@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { verifyRegistryEndpoint } from '@sjshovan/dkb-registry-client/config.js';
+import { loadRegistryCredentialSync } from '@sjshovan/dkb-registry-client/credentials.js';
 import { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import { hostInventoryPath, readHostInventory } from './inventory.js';
 
@@ -28,6 +29,14 @@ export interface DkbHostRegistryListing {
     url: string;
     usedBy: string[];
     status: 'known' | 'ready' | 'degraded' | 'unavailable';
+    authenticated: boolean;
+    credential?: {
+      user?: string;
+      team?: string;
+      abilities?: string[];
+      savedAt: string;
+      expiresAt?: string | null;
+    };
     checks?: Awaited<ReturnType<typeof verifyRegistryEndpoint>>['checks'];
   }>;
 }
@@ -57,7 +66,7 @@ export async function inspectHostLibraries(): Promise<DkbHostLibraryListing> {
 
     return {
       name,
-      selected: inventory.selected.library === name,
+      selected: inventory.defaults.library === name,
       displayName: library.displayName,
       path: library.path,
       ...(library.registry ? { registry: library.registry } : {}),
@@ -67,7 +76,7 @@ export async function inspectHostLibraries(): Promise<DkbHostLibraryListing> {
 
   return {
     inventoryPath: hostInventoryPath(),
-    ...(inventory.selected.library ? { selected: inventory.selected.library } : {}),
+    ...(inventory.defaults.library ? { selected: inventory.defaults.library } : {}),
     libraries: libraries.sort((left, right) => left.name.localeCompare(right.name)),
   };
 }
@@ -80,14 +89,28 @@ export async function inspectHostRegistries(options: { check?: boolean } = {}): 
       .filter(([, library]) => library.registry === name)
       .map(([libraryName]) => libraryName)
       .sort();
+    const credential = loadRegistryCredentialSync(registry.url);
+    const auth = {
+      authenticated: Boolean(credential && (!credential.expiresAt || Date.parse(credential.expiresAt) > Date.now())),
+      ...(credential ? {
+        credential: {
+          ...(credential.user ? { user: credential.user } : {}),
+          ...(credential.team ? { team: credential.team } : {}),
+          ...(credential.abilities ? { abilities: credential.abilities } : {}),
+          savedAt: credential.savedAt,
+          ...(credential.expiresAt !== undefined ? { expiresAt: credential.expiresAt } : {}),
+        },
+      } : {}),
+    };
 
     if (!checked) {
       return {
         name,
-        selected: inventory.selected.registry === name,
+        selected: inventory.defaults.registry === name,
         url: registry.url,
         usedBy,
         status: 'known' as const,
+        ...auth,
       };
     }
 
@@ -96,17 +119,18 @@ export async function inspectHostRegistries(options: { check?: boolean } = {}): 
 
     return {
       name,
-      selected: inventory.selected.registry === name,
+      selected: inventory.defaults.registry === name,
       url: registry.url,
       usedBy,
       status: verification.ok ? 'ready' as const : reached ? 'degraded' as const : 'unavailable' as const,
       checks: verification.checks,
+      ...auth,
     };
   }));
 
   return {
     inventoryPath: hostInventoryPath(),
-    ...(inventory.selected.registry ? { selected: inventory.selected.registry } : {}),
+    ...(inventory.defaults.registry ? { selected: inventory.defaults.registry } : {}),
     checked,
     registries: registries.sort((left, right) => left.name.localeCompare(right.name)),
   };
@@ -118,7 +142,7 @@ export async function inspectHostRuntimes(options: { check?: boolean } = {}): Pr
   const runtimes = await Promise.all(Object.entries(inventory.runtimes).map(async ([name, runtime]) => {
     const common = {
       name,
-      selected: inventory.selected.runtime === name,
+      selected: inventory.defaults.runtime === name,
       kind: runtime.kind,
       url: runtime.url,
       ...(runtime.library ? { library: runtime.library } : {}),
@@ -153,7 +177,7 @@ export async function inspectHostRuntimes(options: { check?: boolean } = {}): Pr
 
   return {
     inventoryPath: hostInventoryPath(),
-    ...(inventory.selected.runtime ? { selected: inventory.selected.runtime } : {}),
+    ...(inventory.defaults.runtime ? { selected: inventory.defaults.runtime } : {}),
     checked,
     runtimes: runtimes.sort((left, right) => left.name.localeCompare(right.name)),
   };
