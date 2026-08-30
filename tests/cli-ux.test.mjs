@@ -630,20 +630,21 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
 
     const shown = await runCli(['--json', 'show', '@acct-test/knowledge', '--library', tempRoot]);
     assert.equal(shown.code, 0, shown.stderr);
-    assert.deepEqual(JSON.parse(shown.stdout), {
-      identity: '@acct-test/knowledge',
-      kind: 'dkb',
-      source: 'registry',
-      status: 'installed',
-      version: '1.0.0',
-      digest: `sha256:${'c'.repeat(64)}`,
-      path: packageRoot,
-      requiredBy: ['root:@acct-test/knowledge'],
-      installedAt: '2026-08-26T00:00:00.000Z',
-      displayName: 'Knowledge',
-      artifactStatus: 'missing',
-      receiptStatus: 'missing',
-    });
+    const shownPackage = JSON.parse(shown.stdout);
+    assert.equal(shownPackage.format, 'dkb.installed-entry-detail.v1');
+    assert.equal(shownPackage.identity, '@acct-test/knowledge');
+    assert.equal(shownPackage.kind, 'dkb');
+    assert.equal(shownPackage.source, 'registry');
+    assert.equal(shownPackage.status, 'installed');
+    assert.equal(shownPackage.version, '1.0.0');
+    assert.equal(shownPackage.digest, `sha256:${'c'.repeat(64)}`);
+    assert.equal(shownPackage.path, packageRoot);
+    assert.deepEqual(shownPackage.requiredBy, ['root:@acct-test/knowledge']);
+    assert.equal(shownPackage.installedAt, '2026-08-26T00:00:00.000Z');
+    assert.equal(shownPackage.manifest.displayName, 'Knowledge');
+    assert.equal(shownPackage.provenance.receiptStatus, 'missing');
+    assert.equal(shownPackage.provenance.installChainStatus, 'missing');
+    assert.equal(shownPackage.activeBuild, undefined);
 
     const storage = await runCli(['--json', 'library', 'storage', '--library', tempRoot]);
     assert.equal(storage.code, 0, storage.stderr);
@@ -1374,7 +1375,7 @@ test('root help separates common, management, and advanced commands', async () =
   assert.match(plain, /Common Commands:/);
   assert.match(plain, /add \[options\] <path>\s+Compile a local DKB and activate/);
   assert.match(plain, /search \[options\] \[query\]\s+Search the configured Registry/);
-  assert.match(plain, /show \[options\] <identity>\s+Show one installed DKB/);
+  assert.match(plain, /show \[options\] <identity>\s+Inspect one installed DKB/);
   assert.match(plain, /outdated \[options\] \[identity\]\s+Check installed Registry DKBs/);
   assert.match(plain, /upgrade \[options\] <identity>\s+Upgrade one installed Registry DKB/);
   assert.match(plain, /Management Commands:/);

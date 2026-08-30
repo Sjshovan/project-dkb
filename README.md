@@ -71,6 +71,9 @@ dkb search handbook
 dkb install @my-team/handbook --version 1.0.0
 dkb list
 dkb show @my-team/handbook
+dkb show @my-team/handbook --contents .
+dkb show @my-team/handbook --preview README.md
+dkb show @my-team/handbook --verify
 dkb retrieve "How are production incidents escalated?"
 dkb outdated
 dkb upgrade @my-team/handbook --dry-run
@@ -130,8 +133,12 @@ dkb console stop
 The Console registers and selects Libraries, Runtimes, Registries, and Stacks;
 authenticates the host to a Registry; installs, upgrades, and uninstalls
 knowledge; switches pipelines atomically; and records redacted local activity.
-Opening a resource never changes the default, and forgetting a host entry does
-not delete or stop that resource.
+An installed DKB has bounded Contents, Builds, Provenance, and Integrity views;
+a Collection has exact member and provenance views. File previews are inert
+source text and never render package HTML, Markdown, or SVG. Verification is an
+explicit one-time operation with check-level recovery steps. Opening a resource
+never changes the default, and forgetting a host entry does not delete or stop
+that resource.
 
 ## Build and pipeline model
 

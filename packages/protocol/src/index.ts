@@ -2,6 +2,7 @@ export * from './capabilities.js';
 export * from './errors.js';
 export * from './identity.js';
 export * from './manifest.js';
+export * from './packageInspection.js';
 export * from './paths.js';
 export * from './progress.js';
 export * from './retrievalProfile.js';

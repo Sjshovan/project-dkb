@@ -92,6 +92,38 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     security.session(request);
     return resultOf(await runner.run('library.packages', { library: request.params.name }));
   });
+  app.get<{
+    Params: { library: string; namespace: string; name: string };
+    Querystring: { path?: string; cursor?: string; limit?: string };
+  }>('/api/v1/libraries/:library/entries/:namespace/:name/contents', async (request) => {
+    security.session(request);
+    return resultOf(await runner.run('package.contents', {
+      library: request.params.library,
+      identity: installedEntryIdentity(request.params.namespace, request.params.name),
+      directory: request.query.path ?? '.',
+      ...(request.query.cursor ? { cursor: request.query.cursor } : {}),
+      ...(request.query.limit ? { limit: Number(request.query.limit) } : {}),
+    }));
+  });
+  app.get<{
+    Params: { library: string; namespace: string; name: string };
+    Querystring: { path?: string };
+  }>('/api/v1/libraries/:library/entries/:namespace/:name/preview', async (request) => {
+    security.session(request);
+    if (!request.query.path) throw new ConsoleInputError('Package preview path is required.');
+    return resultOf(await runner.run('package.preview', {
+      library: request.params.library,
+      identity: installedEntryIdentity(request.params.namespace, request.params.name),
+      file: request.query.path,
+    }));
+  });
+  app.get<{ Params: { library: string; namespace: string; name: string } }>('/api/v1/libraries/:library/entries/:namespace/:name', async (request) => {
+    security.session(request);
+    return resultOf(await runner.run('package.show', {
+      library: request.params.library,
+      identity: installedEntryIdentity(request.params.namespace, request.params.name),
+    }));
+  });
   app.get('/api/v1/activity', async (request) => {
     security.session(request);
     return { activities: activity.list() };
@@ -180,6 +212,15 @@ function resultOf(operation: ConsoleOperation): unknown {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function installedEntryIdentity(namespace: string, name: string): string {
+  const normalizedNamespace = namespace.replace(/^@/u, '').toLowerCase();
+  const normalizedName = name.toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(normalizedNamespace) || !/^[a-z0-9][a-z0-9._-]*$/u.test(normalizedName)) {
+    throw new ConsoleInputError('Installed entry identity is invalid.');
+  }
+  return `@${normalizedNamespace}/${normalizedName}`;
 }
 
 async function availableLoopbackPort(preferred: number): Promise<number> {

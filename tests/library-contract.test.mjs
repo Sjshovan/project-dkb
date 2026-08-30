@@ -20,6 +20,12 @@ import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
 import { validatePackageBuildGraph, verifyKnowledgeBuilds, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import {
+  inspectInstalledPackage,
+  listInstalledPackageContents,
+  previewInstalledPackageFile,
+  verifyInstalledPackage,
+} from '@sjshovan/dkb-library/packageInfo.js';
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
   const root = await tempDirectory(t, 'dkb-manifest-cutover-');
@@ -82,6 +88,33 @@ test('active Collection roots resolve exact member versions without copying DKBs
   assert.deepEqual(library.collections[0].dkbs.map((dkb) => `${dkb.manifest.id}@${dkb.manifest.version}`), [
     '@test/core@1.3.0',
     '@vendor/reference@2.4.1',
+  ]);
+
+  await applyLibraryLock(root, {
+    library: { name: 'Test Library' },
+    generation: 1,
+    entries: {
+      '@test/toolbox': {
+        identity: '@test/toolbox', kind: 'collection', source: 'local', revision: 1, path: 'toolbox',
+        requiredBy: ['root:@test/toolbox'], installedAt: '2026-08-30T12:00:00.000Z',
+      },
+      '@test/core': {
+        identity: '@test/core', kind: 'dkb', source: 'local', version: '1.3.0', path: 'core',
+        requiredBy: ['collection:@test/toolbox'], installedAt: '2026-08-30T12:00:00.000Z',
+      },
+      '@vendor/reference': {
+        identity: '@vendor/reference', kind: 'dkb', source: 'registry', version: '2.4.1', digest: `sha256:${'d'.repeat(64)}`,
+        path: 'vendor/@vendor/reference', requiredBy: ['collection:@test/toolbox'], installedAt: '2026-08-30T12:00:00.000Z',
+      },
+    },
+    resolvedAt: '2026-08-30T12:00:00.000Z',
+  });
+  const collectionDetail = await inspectInstalledPackage(root, '@test/toolbox');
+  assert.equal(collectionDetail.kind, 'collection');
+  assert.equal(collectionDetail.activeBuild, undefined);
+  assert.deepEqual(collectionDetail.members.map((member) => [member.identity, member.resolved, member.status, member.direct]), [
+    ['@test/core', '1.3.0', 'installed', true],
+    ['@vendor/reference', '2.4.1', 'installed', true],
   ]);
 
   await writeDkb(path.join(root, 'vendor', '@vendor', 'reference'), '@vendor/reference', '3.0.0');
@@ -156,6 +189,22 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   await writeDkb(dkbRoot, '@test/core', '1.0.0');
   await writeTestPipeline(dkbRoot);
   await compileComposeProject(dkbRoot, { force: true, mode: 'package' });
+  await fs.mkdir(path.join(dkbRoot, 'guides'), { recursive: true });
+  await fs.writeFile(path.join(dkbRoot, 'guides', 'usage.md'), '# Safe preview\n\n<script>alert(1)</script>\n', 'utf8');
+  await fs.writeFile(path.join(dkbRoot, 'diagram.svg'), '<svg onload="alert(1)"></svg>\n', 'utf8');
+  await fs.writeFile(path.join(dkbRoot, 'large.txt'), 'x'.repeat((256 * 1024) + 100), 'utf8');
+  await fs.writeFile(path.join(dkbRoot, '.dkb', 'private.txt'), 'not portable\n', 'utf8');
+  await applyLibraryLock(root, {
+    library: { name: 'Test Library' },
+    generation: 1,
+    entries: {
+      '@test/core': {
+        identity: '@test/core', kind: 'dkb', source: 'local', version: '1.0.0', path: 'core',
+        requiredBy: ['root:@test/core'], installedAt: '2026-08-30T12:00:00.000Z',
+      },
+    },
+    resolvedAt: '2026-08-30T12:00:00.000Z',
+  });
   const graph = await validatePackageBuildGraph(dkbRoot);
   const packageLockPath = path.join(graph.retrievalPath, 'retrieval.lock.json');
   const packageLock = await fs.readFile(packageLockPath, 'utf8');
@@ -170,6 +219,42 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   assert.equal(verified.ok, true, JSON.stringify(verified.checks));
   assert.equal(verified.type, 'library');
   assert.equal(verified.checks.some((check) => check.name === 'build.@test/core' && check.ok), true);
+
+  const detail = await inspectInstalledPackage(root, '@test/core');
+  assert.equal(detail.format, 'dkb.installed-entry-detail.v1');
+  assert.equal(detail.activeBuild.evidenceDigest, graph.evidence.evidenceDigest);
+  assert.equal(detail.sourceSummary.evidenceRecords, 1);
+  assert.equal(detail.provenance.receiptStatus, 'not_applicable');
+  assert.equal(detail.integrity.status, 'passed');
+
+  const contents = await listInstalledPackageContents({ libraryRoot: root, identity: '@test/core', directory: '.' });
+  assert.deepEqual(contents.entries.map((entry) => entry.name), ['diagram.svg', 'dkb.json', 'guides', 'knowledge.md', 'large.txt']);
+  assert.equal(contents.entries.some((entry) => entry.name === '.dkb'), false);
+  assert.equal(contents.entries.find((entry) => entry.name === 'diagram.svg').previewable, false);
+  assert.equal(contents.entries.find((entry) => entry.name === 'knowledge.md').evidenceRecords, 1);
+  const firstPage = await listInstalledPackageContents({ libraryRoot: root, identity: '@test/core', directory: '.', limit: 2 });
+  assert.deepEqual(firstPage.entries.map((entry) => entry.name), ['diagram.svg', 'dkb.json']);
+  assert.equal(firstPage.nextCursor, 'dkb.json');
+  const secondPage = await listInstalledPackageContents({ libraryRoot: root, identity: '@test/core', directory: '.', cursor: firstPage.nextCursor, limit: 2 });
+  assert.deepEqual(secondPage.entries.map((entry) => entry.name), ['guides', 'knowledge.md']);
+
+  const preview = await previewInstalledPackageFile({ libraryRoot: root, identity: '@test/core', file: 'guides/usage.md' });
+  assert.equal(preview.previewable, true);
+  assert.match(preview.content, /<script>alert\(1\)<\/script>/u);
+  const image = await previewInstalledPackageFile({ libraryRoot: root, identity: '@test/core', file: 'diagram.svg' });
+  assert.equal(image.previewable, false);
+  assert.equal(image.content, undefined);
+  const truncated = await previewInstalledPackageFile({ libraryRoot: root, identity: '@test/core', file: 'large.txt' });
+  assert.equal(truncated.truncated, true);
+  assert.equal(truncated.bytesRead, 256 * 1024);
+  await assert.rejects(
+    previewInstalledPackageFile({ libraryRoot: root, identity: '@test/core', file: '../outside.txt' }),
+    /not part of the portable package tree/u,
+  );
+
+  const packageVerification = await verifyInstalledPackage({ libraryRoot: root, identity: '@test/core' });
+  assert.equal(packageVerification.status, 'passed');
+  assert.equal(packageVerification.checks.find((check) => check.id === 'package.receipt').status, 'not_applicable');
 
   await writeLibrary(root, {});
   const removed = await refreshRuntimeCatalogFromInstalledArtifacts(root);

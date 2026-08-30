@@ -17,7 +17,12 @@ shown beside a list when space permits and as a dedicated page when it does not.
 - **Overview:** defaults, attention queue, health, installed knowledge, builds,
   and recent activity.
 - **Libraries:** host Libraries; detail owns installed DKBs, Collections,
-  dependencies, pipelines, builds, storage, and provenance.
+  dependencies, pipelines, builds, storage, and provenance. A DKB detail page
+  has Overview, Contents, Builds, Provenance, and Integrity sections. A
+  Collection uses Overview, Members, Provenance, and Integrity. Contents use a
+  bounded directory browser and escaped, inert preview; active content is never
+  rendered. Integrity is refreshed only when the user runs Verify and exposes
+  check-level recovery context.
 - **Runtimes:** endpoints, Library association, version, health, and available
   local controls.
 - **Registries:** endpoints, authentication state, health, Library usage, and

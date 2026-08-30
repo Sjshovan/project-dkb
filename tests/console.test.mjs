@@ -17,8 +17,17 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
   process.env.DKB_CONSOLE_STATE_ROOT = path.join(root, 'console-state');
   await fs.writeFile(cli, `
     import fs from 'node:fs';
-    fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');
-    const result = process.argv.includes('library') && process.argv.includes('list')
+    const args = process.argv.slice(2);
+    fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + '\\n');
+    const result = args.includes('show') && args.includes('--verify')
+      ? { format: 'dkb.package-verification.v1', identity: '@proof/alpha', status: 'passed', checkedAt: '2026-08-30T12:00:00.000Z', checks: [], recovery: [] }
+      : args.includes('show') && args.includes('--preview')
+        ? { format: 'dkb.package-preview.v1', identity: '@proof/alpha', path: 'readme.md', bytes: 6, sha256: 'sha256:test', mediaType: 'text/markdown', previewable: true, truncated: false, bytesRead: 6, content: '# Test', evidenceRecords: 1 }
+        : args.includes('show') && args.includes('--contents')
+          ? { format: 'dkb.package-contents.v1', identity: '@proof/alpha', directory: '.', entries: [{ name: 'readme.md', path: 'readme.md', kind: 'file', bytes: 6, contentKind: 'text', previewable: true, searchable: true, evidenceRecords: 1 }] }
+          : args.includes('show')
+            ? { format: 'dkb.installed-entry-detail.v1', identity: '@proof/alpha', kind: 'dkb', status: 'installed' }
+            : process.argv.includes('library') && process.argv.includes('list')
       ? { selected: 'personal', libraries: [{ name: 'personal', selected: true, status: 'ready', path: 'C:/knowledge' }] }
       : { status: 'selected' };
     const base = { format: 'dkb.command-event.v1', timestamp: new Date().toISOString() };
@@ -68,6 +77,18 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     const checkedRuntimes = await fetch(`${server.url}/api/v1/resources/runtimes?check=1`, { headers: { cookie } });
     assert.equal(checkedRuntimes.status, 200);
 
+    const packageDetail = await fetch(`${server.url}/api/v1/libraries/personal/entries/proof/alpha`, { headers: { cookie } });
+    assert.equal(packageDetail.status, 200);
+    assert.equal((await packageDetail.json()).identity, '@proof/alpha');
+    const packageContents = await fetch(`${server.url}/api/v1/libraries/personal/entries/proof/alpha/contents?path=.`, { headers: { cookie } });
+    assert.equal(packageContents.status, 200);
+    assert.equal((await packageContents.json()).entries[0].path, 'readme.md');
+    const packagePreview = await fetch(`${server.url}/api/v1/libraries/personal/entries/proof/alpha/preview?path=readme.md`, { headers: { cookie } });
+    assert.equal(packagePreview.status, 200);
+    assert.equal((await packagePreview.json()).content, '# Test');
+    const escapedPreview = await fetch(`${server.url}/api/v1/libraries/personal/entries/proof/alpha/preview?path=../secret.txt`, { headers: { cookie } });
+    assert.equal(escapedPreview.status, 400);
+
     const missingCsrf = await fetch(`${server.url}/api/v1/operations`, {
       method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ commandId: 'library.use', input: { name: 'personal' } }),
     });
@@ -79,6 +100,13 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     const { operationId } = await mutation.json();
     const operation = await waitForOperation(server.url, cookie, operationId);
     assert.equal(operation.status, 'succeeded');
+
+    const verification = await fetch(`${server.url}/api/v1/operations`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({ commandId: 'package.verify', input: { library: 'personal', identity: '@proof/alpha' } }),
+    });
+    assert.equal(verification.status, 202);
+    const verified = await waitForOperation(server.url, cookie, (await verification.json()).operationId);
+    assert.equal(verified.result.status, 'passed');
 
     const registerRegistry = await fetch(`${server.url}/api/v1/operations`, {
       method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({
@@ -112,9 +140,13 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.deepEqual(invocations[0], ['--json-stream', 'library', 'list']);
     assert.deepEqual(invocations[1], ['--json-stream', 'library', 'list']);
     assert.deepEqual(invocations[2], ['--json-stream', 'runtime', 'list', '--check']);
-    assert.deepEqual(invocations[3], ['--json-stream', 'library', 'use', 'personal']);
-    assert.deepEqual(invocations[4], ['--json-stream', 'registry', 'register', 'proof-registry', 'http://127.0.0.1:8018', '--no-verify']);
-    assert.deepEqual(invocations[5], ['--json-stream', 'registry', 'login', '--url', 'http://127.0.0.1:8018', '--scope', 'registry:read']);
+    assert.deepEqual(invocations[3], ['--json-stream', 'show', '@proof/alpha', '--library', 'personal']);
+    assert.deepEqual(invocations[4], ['--json-stream', 'show', '@proof/alpha', '--library', 'personal', '--contents', '.', '--limit', '100']);
+    assert.deepEqual(invocations[5], ['--json-stream', 'show', '@proof/alpha', '--library', 'personal', '--preview', 'readme.md']);
+    assert.deepEqual(invocations[6], ['--json-stream', 'library', 'use', 'personal']);
+    assert.deepEqual(invocations[7], ['--json-stream', 'show', '@proof/alpha', '--library', 'personal', '--verify']);
+    assert.deepEqual(invocations[8], ['--json-stream', 'registry', 'register', 'proof-registry', 'http://127.0.0.1:8018', '--no-verify']);
+    assert.deepEqual(invocations[9], ['--json-stream', 'registry', 'login', '--url', 'http://127.0.0.1:8018', '--scope', 'registry:read']);
     assert.equal(invocations.some((argv) => argv.includes('whoami')), false);
   } finally {
     await server.close();

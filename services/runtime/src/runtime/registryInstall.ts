@@ -14,6 +14,7 @@ import type { DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb
 import { validateCompiledPackage } from '@sjshovan/dkb-library/builds.js';
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
+  DKB_INSTALL_PLAN_RECEIPT_PATH,
   DKB_PACKAGE_RECEIPT_PATH,
   packageReceiptPayloadForLock,
   parsePackageReceipt,
@@ -275,6 +276,9 @@ export async function materializeDkbInstallPlan(options: {
   await extractDkbPackageArchive(evidencePath, evidenceTarget, { progress: options.progress });
   await extractDkbPackageArchive(retrievalPath, retrievalTarget, { progress: options.progress });
   await fs.writeFile(path.join(destinationRoot, DKB_PACKAGE_RECEIPT_PATH), `${JSON.stringify(sourceReceipt, null, 2)}\n`, 'utf8');
+  const installReceiptPath = path.join(destinationRoot, ...DKB_INSTALL_PLAN_RECEIPT_PATH.split('/'));
+  await fs.mkdir(path.dirname(installReceiptPath), { recursive: true });
+  await fs.writeFile(installReceiptPath, `${JSON.stringify(options.plan, null, 2)}\n`, 'utf8');
   await activateStoredPackageBuild({
     root: destinationRoot,
     target: options.plan.target,

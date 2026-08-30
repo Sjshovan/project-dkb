@@ -30,6 +30,7 @@ import type {
 
 export const DKB_RELEASE_PATH = 'dkb-release.json';
 export const DKB_PACKAGE_RECEIPT_PATH = '.dkb-package.json';
+export const DKB_INSTALL_PLAN_RECEIPT_PATH = '.dkb/receipts/install-plan.json';
 
 export interface DkbSigningKeyPair {
   privateKeyPem: string;

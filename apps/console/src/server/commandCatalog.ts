@@ -20,6 +20,10 @@ export type ConsoleCommandId =
   | 'stack.up'
   | 'stack.down'
   | 'package.install'
+  | 'package.show'
+  | 'package.contents'
+  | 'package.preview'
+  | 'package.verify'
   | 'package.uninstall'
   | 'package.upgrade'
   | 'pipeline.use';
@@ -34,6 +38,7 @@ export interface ConsoleCommandDefinition {
 }
 
 const readTimeout = 30_000;
+const verificationTimeout = 5 * 60_000;
 const mutationTimeout = 30 * 60_000;
 
 const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
@@ -42,6 +47,17 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   'runtime.list': read('runtime.list', ['runtime', 'list'], checkInput),
   'registry.list': read('registry.list', ['registry', 'list'], checkInput),
   'stack.list': read('stack.list', ['stack', 'list'], checkInput),
+  'package.show': read('package.show', ['show'], packageMutationInput, (input) => [text(input.identity), '--library', text(input.library)]),
+  'package.contents': read('package.contents', ['show'], packageContentsInput, (input) => [
+    text(input.identity), '--library', text(input.library), '--contents', text(input.directory), '--limit', text(input.limit),
+    ...(input.cursor ? ['--cursor', text(input.cursor)] : []),
+  ]),
+  'package.preview': read('package.preview', ['show'], packagePreviewInput, (input) => [
+    text(input.identity), '--library', text(input.library), '--preview', text(input.file),
+  ]),
+  'package.verify': read('package.verify', ['show'], packageMutationInput, (input) => [
+    text(input.identity), '--library', text(input.library), '--verify',
+  ], verificationTimeout),
   'library.register': mutation('library.register', ['library', 'register'], libraryRegistrationInput, (input) => [
     text(input.path), ...(input.name ? ['--name', text(input.name)] : []),
   ], (input) => `host:library:${text(input.name ?? input.path)}`),
@@ -98,8 +114,9 @@ function read(
   prefix: string[],
   parse: (value: unknown) => Record<string, unknown>,
   suffix: (input: Record<string, unknown>) => string[] = (input) => input.check ? ['--check'] : [],
+  timeoutMs = readTimeout,
 ): ConsoleCommandDefinition {
-  return { id, mutation: false, timeoutMs: readTimeout, parse, argv: (input) => [...prefix, ...suffix(input)], resourceKey: () => 'read' };
+  return { id, mutation: false, timeoutMs, parse, argv: (input) => [...prefix, ...suffix(input)], resourceKey: () => 'read' };
 }
 
 function mutation(
@@ -204,6 +221,30 @@ function packageInstallInput(value: unknown): Record<string, unknown> {
   };
 }
 
+function packageContentsInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['library', 'identity', 'directory', 'cursor', 'limit']);
+  const limit = input.limit === undefined ? 100 : Number(input.limit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new ConsoleInputError('Package contents limit must be between 1 and 100.');
+  return {
+    library: hostNameOrAbsolutePath(input.library, 'Library'),
+    identity: packageIdentity(input.identity),
+    directory: portablePackagePath(input.directory ?? '.', true),
+    ...(input.cursor === undefined || input.cursor === '' ? {} : { cursor: portablePackagePath(input.cursor, false) }),
+    limit,
+  };
+}
+
+function packagePreviewInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['library', 'identity', 'file']);
+  return {
+    library: hostNameOrAbsolutePath(input.library, 'Library'),
+    identity: packageIdentity(input.identity),
+    file: portablePackagePath(input.file, false),
+  };
+}
+
 function pipelineInput(value: unknown): Record<string, unknown> {
   const input = record(value);
   exactKeys(input, ['library', 'target']);
@@ -254,6 +295,20 @@ function packageIdentity(value: unknown): string {
   const result = safeValue(value, 'Package identity').toLowerCase();
   if (!/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u.test(result)) throw new ConsoleInputError('Package identity must be @namespace/name.');
   return result;
+}
+
+function portablePackagePath(value: unknown, allowRoot: boolean): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096 || /[\0\r\n]/u.test(value)) {
+    throw new ConsoleInputError('Package content path is invalid.');
+  }
+  const portable = value.trim().replace(/\\/gu, '/');
+  if ((portable === '.' || portable === './') && allowRoot) return '.';
+  if (path.posix.isAbsolute(portable) || path.win32.isAbsolute(portable)) throw new ConsoleInputError('Package content path must be relative.');
+  const parts = portable.split('/').filter((part) => part && part !== '.');
+  if (parts.length === 0 || parts.some((part) => part === '..' || part === '.dkb')) {
+    throw new ConsoleInputError('Package content path is outside the portable package tree.');
+  }
+  return parts.join('/');
 }
 
 function safeValue(value: unknown, label: string): string {

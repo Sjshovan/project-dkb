@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import type { CliPresenter } from './presentation.js';
-import { humanSummary } from './presentation.js';
+import { formatBytes, humanSummary } from './presentation.js';
 import { summarizePackageListing } from './packagePresentation.js';
 import { configuredRegistry } from './registryConfig.js';
 import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
@@ -44,14 +44,59 @@ export function registerPackageLifecycleCommands(
 
   program
     .command('show')
-    .description('Show one installed DKB or Collection and its active build')
+    .description('Inspect one installed DKB or Collection, its contents, provenance, and builds')
     .argument('<identity>', 'Scoped @namespace/name identity')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
-    .action(async (identity: string, options: { library?: string }) => {
+    .option('--contents <directory>', 'List one portable package directory; use . for the root')
+    .option('--preview <file>', 'Read a bounded inert text preview of one portable package file')
+    .option('--verify', 'Recheck portable-tree, build, receipt-chain, and Registry signatures')
+    .option('--cursor <path>', 'Continue a directory listing after this relative path')
+    .option('--limit <number>', 'Maximum directory entries, from 1 to 100', parseContentsLimit, 100)
+    .action(async (identity: string, options: { library?: string; contents?: string; preview?: string; verify?: boolean; cursor?: string; limit: number }) => {
       const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
-      const { inspectInstalledPackage } = await import('@sjshovan/dkb-library/packageInfo.js');
+      const selected = [options.contents !== undefined, options.preview !== undefined, Boolean(options.verify)].filter(Boolean).length;
+      if (selected > 1) throw new DkbError('--contents, --preview, and --verify cannot be combined.');
+      if ((options.cursor || options.limit !== 100) && options.contents === undefined) {
+        throw new DkbError('--cursor and --limit require --contents.');
+      }
+      const inspection = await import('@sjshovan/dkb-library/packageInfo.js');
 
-      dependencies.presenter().print(await inspectInstalledPackage(libraryRoot, identity), summarizeInstalledPackage);
+      if (options.contents !== undefined) {
+        dependencies.presenter().print(await inspection.listInstalledPackageContents({
+          libraryRoot, identity, directory: options.contents, cursor: options.cursor, limit: options.limit,
+        }), summarizePackageContents);
+        return;
+      }
+      if (options.preview !== undefined) {
+        dependencies.presenter().print(await inspection.previewInstalledPackageFile({ libraryRoot, identity, file: options.preview }), summarizePackagePreview);
+        return;
+      }
+      if (options.verify) {
+        const detail = await inspection.inspectInstalledPackage(libraryRoot, identity);
+        let trustedKeys: import('@sjshovan/dkb-protocol/types.js').DkbSigningKeyRecord[] | undefined;
+        let keyWarning: string | undefined;
+        if (detail.source === 'registry') {
+          try {
+            const registry = await configuredRegistry({ url: detail.registryUrl, root: libraryRoot });
+            const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+            const response = await new DkbRegistryClient({ baseUrl: registry.url }).publicKeys() as { keys?: unknown };
+            if (!Array.isArray(response.keys)) throw new DkbError('Registry returned an invalid signing-key document.');
+            trustedKeys = response.keys as import('@sjshovan/dkb-protocol/types.js').DkbSigningKeyRecord[];
+          } catch (error) {
+            keyWarning = `Registry signing keys could not be loaded: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+        const result = await dependencies.presenter().check(
+          `Verifying ${detail.identity}`,
+          async () => inspection.verifyInstalledPackage({ libraryRoot, identity, trustedKeys, keyWarning }),
+          (value) => value.status !== 'failed',
+          summarizePackageVerification,
+        );
+        if (result.status === 'failed') process.exitCode = 1;
+        return;
+      }
+
+      dependencies.presenter().print(await inspection.inspectInstalledPackage(libraryRoot, identity), summarizeInstalledPackage);
     });
 
   program
@@ -204,26 +249,70 @@ async function inspectOutdatedPackages(
 function summarizeInstalledPackage(value: unknown): string[] {
   const result = asRecord(value);
   const build = isRecord(result.activeBuild) ? result.activeBuild : {};
+  const source = isRecord(result.sourceSummary) ? result.sourceSummary : {};
+  const provenance = isRecord(result.provenance) ? result.provenance : {};
+  const integrity = isRecord(result.integrity) ? result.integrity : {};
+  const manifest = isRecord(result.manifest) ? result.manifest : {};
 
   return [
     `package: ${String(result.identity ?? '-')}`,
-    result.displayName ? `name: ${String(result.displayName)}` : '',
-    result.description ? `description: ${String(result.description)}` : '',
+    manifest.displayName ? `name: ${String(manifest.displayName)}` : '',
+    manifest.description ? `description: ${String(manifest.description)}` : '',
     `kind: ${String(result.kind ?? '-')}`,
     `source: ${String(result.source ?? '-')}`,
     `status: ${String(result.status ?? '-')}`,
     result.version ? `version: ${String(result.version)}` : '',
     result.revision ? `revision: r${String(result.revision)}` : '',
-    `artifact: ${String(result.artifactStatus ?? '-')}`,
-    `receipt: ${String(result.receiptStatus ?? '-')}`,
-    typeof result.records === 'number' ? `records: ${result.records}` : '',
-    typeof result.sources === 'number' ? `sources: ${result.sources}` : '',
+    `integrity: ${String(integrity.status ?? '-')}`,
+    `receipt: ${String(provenance.receiptStatus ?? '-')}`,
+    `install chain: ${String(provenance.installChainStatus ?? '-')}`,
+    typeof source.files === 'number' ? `source files: ${source.files}` : '',
+    typeof source.bytes === 'number' ? `source size: ${formatBytes(source.bytes)}` : '',
+    typeof source.evidenceRecords === 'number' ? `Evidence records: ${source.evidenceRecords}` : '',
+    typeof source.searchableSources === 'number' ? `searchable sources: ${source.searchableSources}` : '',
     build.target ? `active pipeline: ${String(build.target)}` : 'active pipeline: none',
     build.evidenceDigest ? `evidence build: ${shortDigest(build.evidenceDigest)}` : '',
     build.retrievalBuildDigest ? `retrieval build: ${shortDigest(build.retrievalBuildDigest)}` : '',
     result.registryUrl ? `registry: ${String(result.registryUrl)}` : '',
     `installed: ${String(result.installedAt ?? '-')}`,
     `path: ${String(result.path ?? '-')}`,
+  ];
+}
+
+function summarizePackageContents(value: unknown): string[] {
+  const result = asRecord(value);
+  const entries = Array.isArray(result.entries) ? result.entries : [];
+  return [
+    `package: ${String(result.identity ?? '-')}`,
+    `directory: ${String(result.directory ?? '.')}`,
+    ...humanSummary(entries),
+    result.nextCursor ? `next: dkb show ${String(result.identity)} --contents ${String(result.directory)} --cursor "${String(result.nextCursor)}"` : '',
+  ];
+}
+
+function summarizePackagePreview(value: unknown): string[] {
+  const result = asRecord(value);
+  return [
+    `package: ${String(result.identity ?? '-')}`,
+    `path: ${String(result.path ?? '-')}`,
+    typeof result.bytes === 'number' ? `size: ${formatBytes(result.bytes)}` : '',
+    `type: ${String(result.mediaType ?? '-')}`,
+    `searchable: ${result.sourceId ? 'yes' : 'no'}`,
+    typeof result.evidenceRecords === 'number' ? `Evidence records: ${result.evidenceRecords}` : '',
+    result.previewable === false ? 'preview: binary or unsupported text encoding' : '',
+    result.truncated ? 'warning: preview is truncated to 256 KiB' : '',
+    typeof result.content === 'string' ? result.content : '',
+  ];
+}
+
+function summarizePackageVerification(value: unknown): string[] {
+  const result = asRecord(value);
+  const checks = Array.isArray(result.checks) ? result.checks : [];
+  return [
+    `package: ${String(result.identity ?? '-')}`,
+    `status: ${String(result.status ?? '-')}`,
+    `checked: ${String(result.checkedAt ?? '-')}`,
+    ...humanSummary(checks),
   ];
 }
 
@@ -265,6 +354,12 @@ function summarizeUpgradeResult(value: unknown): string[] {
 function shortDigest(value: unknown): string {
   const digest = String(value ?? '');
   return digest.length > 20 ? `${digest.slice(0, 18)}…` : digest;
+}
+
+function parseContentsLimit(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) throw new DkbError('Package contents limit must be between 1 and 100.');
+  return parsed;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

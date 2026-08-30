@@ -102,11 +102,24 @@ dkb uninstall <identity>
 ```
 
 `search` queries the configured Registry. `show` reports bounded operational
-metadata for an installed entry, including artifact/receipt state and the active
-Evidence/Retrieval Build when present; it never dumps source contents or secret
-configuration. `outdated` checks only Registry-installed DKBs and fails on an
-unreachable Registry rather than claiming the Library is current. `upgrade
---dry-run` resolves the exact latest version without mutating the Library.
+metadata for an installed entry, including receipt state and the active
+Evidence/Retrieval Build when present. Its explicit inspection modes are:
+
+```text
+dkb show <identity> --contents <directory> [--cursor <path>] [--limit <n>]
+dkb show <identity> --preview <file>
+dkb show <identity> --verify
+```
+
+Contents are restricted to the portable package tree; `.dkb`, receipts,
+configuration, traversal, and symlink escapes are excluded. Preview reads at
+most 256 KiB and treats the result as inert source data. Binary and image files
+are metadata-only. `--verify` performs a fresh one-time check of the manifest,
+portable tree, immutable build graph, and available signed receipt chain, then
+returns exact recovery commands. `outdated` checks only Registry-installed DKBs
+and fails on an unreachable Registry rather than claiming the Library is
+current. `upgrade --dry-run` resolves the exact latest version without mutating
+the Library.
 
 Registry authentication uses `dkb registry login`, `whoami`, and `logout`.
 Login defaults to authorization code plus PKCE through the system browser and

@@ -70,6 +70,10 @@ function upgrade(): void {
   void run('package.upgrade', { library: props.name, identity }, `${identity} upgraded.`, () => { pendingUpgrade.value = undefined; });
 }
 function packageIdentity(item: Record<string, unknown>): string { return String(item.id ?? item.identity ?? 'unknown'); }
+function packageRoute(item: Record<string, unknown>): string | undefined {
+  const match = /^@([^/]+)\/(.+)$/u.exec(packageIdentity(item));
+  return match ? `/libraries/${encodeURIComponent(props.name)}/entries/${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}` : undefined;
+}
 </script>
 
 <template>
@@ -82,7 +86,7 @@ function packageIdentity(item: Record<string, unknown>): string { return String(
     <div v-if="query.isPending.value" class="skeleton-stack"><span v-for="n in 4" :key="n" /></div>
     <section v-else-if="query.isError.value" class="recovery-panel"><div><h2>Library details unavailable</h2><p>{{ query.error.value?.message }}</p></div></section>
     <EmptyState v-else-if="!(query.data.value?.packages?.length)" title="No installed knowledge" message="Install a DKB or Collection from the configured Registry to populate this Library." />
-    <section v-else class="package-list"><article v-for="item in query.data.value?.packages" :key="packageIdentity(item)"><PackageOpen :size="19" /><div><strong>{{ packageIdentity(item) }}</strong><small>{{ item.version ?? item.revision ?? 'editable' }}</small></div><div class="package-actions"><StatusBadge :status="String(item.status ?? 'installed')" /><AppButton size="sm" variant="quiet" @click="pendingUpgrade = packageIdentity(item)"><RefreshCw :size="14" />Upgrade</AppButton><AppButton size="sm" variant="quiet" @click="pendingPackage = packageIdentity(item)">Uninstall</AppButton></div></article></section>
+    <section v-else class="package-list"><article v-for="item in query.data.value?.packages" :key="packageIdentity(item)"><PackageOpen :size="19" /><div><RouterLink v-if="packageRoute(item)" class="package-detail-link" :to="packageRoute(item)!"><strong>{{ packageIdentity(item) }}</strong><small>{{ item.version ?? item.revision ?? 'editable' }}</small></RouterLink><template v-else><strong>{{ packageIdentity(item) }}</strong><small>{{ item.version ?? item.revision ?? 'editable' }}</small></template></div><div class="package-actions"><StatusBadge :status="String(item.status ?? 'installed')" /><AppButton size="sm" variant="quiet" @click="pendingUpgrade = packageIdentity(item)"><RefreshCw :size="14" />Upgrade</AppButton><AppButton size="sm" variant="quiet" @click="pendingPackage = packageIdentity(item)">Uninstall</AppButton></div></article></section>
 
     <ActionDrawer :open="drawer === 'install'" title="Install knowledge" description="Download an exact signed package build from this Library’s Registry and activate it atomically." submit-label="Install" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
       <FormField label="Package" hint="Use the namespaced Registry identity." required><input v-model="install.identity" autocomplete="off" placeholder="@namespace/package" required /></FormField>
