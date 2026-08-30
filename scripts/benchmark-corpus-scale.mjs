@@ -5,6 +5,19 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { estimateIngestionWorkingBytes } from '@sjshovan/dkb-compiler/diskCapacity.js';
+import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
+import {
+  compilerServiceStatus,
+  stopLlamaIndexCompilerService,
+} from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
+import {
+  fastEmbedServiceStatus,
+  stopFastEmbedService,
+} from '@sjshovan/dkb-embedding-fastembed/service.js';
+import {
+  stopTeiService,
+  teiServiceStatus,
+} from '@sjshovan/dkb-embedding-tei/tei.js';
 
 const MEBIBYTE = 1024 ** 2;
 const tiers = {
@@ -15,9 +28,19 @@ const tiers = {
 };
 const selected = (process.env.DKB_SCALE_TIERS ?? 'smoke').split(',').map((value) => value.trim()).filter(Boolean);
 const target = process.env.DKB_SCALE_TARGET ?? 'tei-faiss';
+const targetRecipe = DEFAULT_DKB_DISTRIBUTION.defaults.targets[target];
+if (!targetRecipe) throw new Error(`Unknown DKB_SCALE_TARGET "${target}".`);
+const embeddingOptions = targetRecipe.options?.[targetRecipe.embedding] ?? {};
+const embeddingModel = typeof embeddingOptions.model === 'string' ? embeddingOptions.model : undefined;
 const maxProjectedMs = positiveNumber(process.env.DKB_SCALE_MAX_PROJECTED_MINUTES ?? '15', 'DKB_SCALE_MAX_PROJECTED_MINUTES') * 60_000;
 const maxWorkingBytes = positiveNumber(process.env.DKB_SCALE_MAX_WORKING_BYTES ?? String(8 * 1024 ** 3), 'DKB_SCALE_MAX_WORKING_BYTES');
 const benchmarkRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-corpus-scale-'));
+const initialEvidenceService = await compilerServiceStatus();
+const initialEmbeddingService = targetRecipe.embedding === '@dkb/embedding-fastembed'
+  ? await fastEmbedServiceStatus({ ...(embeddingModel ? { model: embeddingModel } : {}) })
+  : targetRecipe.embedding === '@dkb/embedding-tei'
+    ? await teiServiceStatus(embeddingOptions)
+    : null;
 const results = [];
 
 try {
@@ -76,6 +99,16 @@ try {
   if (output) await writeJson(path.resolve(output), report);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 } finally {
+  if (!initialEvidenceService.running) {
+    await stopLlamaIndexCompilerService().catch(() => undefined);
+  }
+  if (initialEmbeddingService && !initialEmbeddingService.running) {
+    if (targetRecipe.embedding === '@dkb/embedding-fastembed') {
+      await stopFastEmbedService({ ...(embeddingModel ? { model: embeddingModel } : {}) }).catch(() => undefined);
+    } else if (targetRecipe.embedding === '@dkb/embedding-tei') {
+      await stopTeiService(embeddingOptions).catch(() => undefined);
+    }
+  }
   await fs.rm(benchmarkRoot, { recursive: true, force: true });
 }
 

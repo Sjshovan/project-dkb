@@ -115,14 +115,15 @@ paths validate dimensions and finite values, honor cancellation/timeouts, and
 cache document vectors by Evidence digest, embedding-space digest, and
 normalized text hash.
 
-The 2026-08-28 promotion benchmark used one shared 178-record Evidence Build
-from a deterministic, sanitized 32-file real-project slice. Across three valid
-runs, TEI reduced fresh single-job median embedding time from 176.7 seconds to
-59.4 seconds (66.4%), increased two-job throughput from 1.692 to 3.094 records
-per second (82.8%), reduced query p50 from 770.8 ms to 470.3 ms, and reduced
-measured combined peak memory from 2.410 GiB to 0.817 GiB. Correctness and
-security lifecycle proofs also passed, so `tei-faiss` is the default recipe for
-new Libraries. Explicit FastEmbed Libraries remain unchanged and selectable.
+The fresh 2026-08-30 promotion gate used one shared 176-record Evidence Build
+from a deterministic, sanitized 32-file real-project slice (232,937 source
+bytes). Across three valid runs, TEI reduced fresh single-job median embedding
+time from 168.01 seconds to 67.77 seconds (59.7%), increased two-job throughput
+from 1.626 to 3.001 records per second (84.6%), reduced query p50 from 789.00 ms
+to 546.99 ms, and reduced measured combined peak memory from 2.495 GiB to
+0.776 GiB. Correctness and security lifecycle proofs also passed, so
+`tei-faiss` is the default recipe for new Libraries. Explicit FastEmbed
+Libraries remain unchanged and selectable.
 
 Corpus scale is measured after parsing by Evidence records and their text,
 not by file count alone. A compile result reports source files/bytes, Evidence
@@ -143,11 +144,12 @@ Markdown tables, and code only under a `dkb-corpus-scale-*` temporary root. It
 removes that root in `finally`, records no corpus in Git, and stops before the
 next tier when projected compilation exceeds 15 minutes or estimated working
 space exceeds 8 GiB unless an operator explicitly changes those limits. The
-checked-in 2026-08-28 reports show 88 records from 134 KiB in 33.4 seconds and
-682 records from 1.01 MiB in 3m27s. That historical implementation consumed
-about 31x source because active artifacts and immutable build layers coexisted.
-The 2026-08-29 hard cut stores only immutable Evidence and Retrieval Builds;
-its corrected derived-storage ratio is 6.216x on the same 1.01 MiB corpus.
+2026-08-30 confirmation produced 88 records from 136,870 source bytes in
+33.99 seconds and 682 records from 1,062,058 source bytes in 152.60 seconds.
+The hard cut stores only immutable Evidence and Retrieval Builds; the resulting
+derived-storage ratios were 6.563x and 6.216x respectively. The next 8 MiB tier
+was skipped because its 1,205,317 ms projection exceeded the 15-minute
+guardrail.
 
 Operational commands:
 

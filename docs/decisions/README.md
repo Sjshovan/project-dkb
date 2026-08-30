@@ -18,4 +18,4 @@ Statuses:
 - [0003 - Host inventory and context selection](0003-host-inventory-and-context-selection.md) — Implemented.
 - [0004 - Monorepo release units and local stack](0004-monorepo-release-units-and-local-stack.md) — Provider/composition details superseded by 0006; release-unit decisions retained.
 - [0005 - Evidence and Retrieval Build graph](0005-evidence-and-retrieval-build-graph.md) — Build graph retained; active-artifact details superseded by 0006.
-- [0006 - Final provider architecture and storage cutover](0006-final-provider-architecture-and-storage-cutover.md) — Accepted direction; implementation in progress.
+- [0006 - Final provider architecture and storage cutover](0006-final-provider-architecture-and-storage-cutover.md) — Implemented.

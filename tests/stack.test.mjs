@@ -49,6 +49,11 @@ test('stack preparation generates reusable local secrets without returning them'
     assert.match(firstEnvironment, /DKB_REGISTRY_BOOTSTRAP_NAMESPACE=proof-stack/);
     assert.match(firstEnvironment, /DKB_REGISTRY_BOOTSTRAP_TOKEN=dkb_/);
     assert.match(firstEnvironment, /DKB_MCP_BEARER_TOKEN=/);
+    assert.match(firstEnvironment, /DKB_PUBLIC_URL=http:\/\/127\.0\.0\.1:\d+/);
+    assert.match(firstEnvironment, /DKB_MCP_PUBLIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+/);
+    assert.match(firstEnvironment, /DKB_MCP_ALLOW_INSECURE_NO_AUTH=false/);
+    assert.match(firstEnvironment, /DKB_MCP_ALLOWED_HOSTS=127\.0\.0\.1,localhost/);
+    assert.match(firstEnvironment, /DKB_MCP_ALLOWED_ORIGINS=127\.0\.0\.1,localhost/);
     assert.doesNotMatch(JSON.stringify(first), /DKB_MCP_BEARER_TOKEN|DKB_REGISTRY_APP_KEY|DKB_REGISTRY_BOOTSTRAP_TOKEN/);
     assert.equal(first.composeFile.endsWith(path.join('dist', 'stack', 'compose.yaml')), true);
     assert.deepEqual(

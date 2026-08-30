@@ -73,6 +73,23 @@ export async function prepareDkbStack(
     }
   }
 
+  const runtimePort = values.DKB_RUNTIME_PORT ?? '7331';
+  values.DKB_PUBLIC_URL = process.env.DKB_PUBLIC_URL
+    ?? existing.DKB_PUBLIC_URL
+    ?? `http://127.0.0.1:${runtimePort}`;
+  values.DKB_MCP_PUBLIC_BASE_URL = process.env.DKB_MCP_PUBLIC_BASE_URL
+    ?? existing.DKB_MCP_PUBLIC_BASE_URL
+    ?? values.DKB_PUBLIC_URL;
+  values.DKB_MCP_ALLOW_INSECURE_NO_AUTH = process.env.DKB_MCP_ALLOW_INSECURE_NO_AUTH
+    ?? existing.DKB_MCP_ALLOW_INSECURE_NO_AUTH
+    ?? 'false';
+  values.DKB_MCP_ALLOWED_HOSTS = process.env.DKB_MCP_ALLOWED_HOSTS
+    ?? existing.DKB_MCP_ALLOWED_HOSTS
+    ?? '127.0.0.1,localhost';
+  values.DKB_MCP_ALLOWED_ORIGINS = process.env.DKB_MCP_ALLOWED_ORIGINS
+    ?? existing.DKB_MCP_ALLOWED_ORIGINS
+    ?? '127.0.0.1,localhost';
+
   await writeEnvironmentFile(envFile, values);
   await writePipelineConfig(path.join(root, 'compiler-context', '.dkb', 'config.json'), target);
   await writePipelineConfig(

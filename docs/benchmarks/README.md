@@ -49,25 +49,43 @@ double count. See
 [`corpus-scale-small-2026-08-29.json`](corpus-scale-small-2026-08-29.json) for
 the complete receipt.
 
-The external application proof is pending a fresh run after the corpus
-sanitizer was hardened to reject quoted literal secrets in configuration files.
-No real-corpus source or compiled artifact is retained in Git.
+The hardened real-corpus proof passed on 2026-08-30 using a sanitized
+real-project architecture slice: 102 files, 989,281 source bytes, and three
+credential-bearing files rejected before staging. The signed Registry install
+retrieved all three known answers, MCP search/fetch resolved the same evidence,
+uninstall removed the evidence immediately, and reinstall restored it without
+compilation. No real-corpus source or compiled artifact is retained in Git.
+
+A fresh bounded scale confirmation on 2026-08-30 produced:
+
+| Tier | Source bytes | Evidence records | Wall time | Derived bytes | Expansion |
+|---|---:|---:|---:|---:|---:|
+| smoke | 136,870 | 88 | 33.99 s | 898,289 | 6.563x |
+| small | 1,062,058 | 682 | 152.60 s | 6,601,888 | 6.216x |
+
+The next 8 MiB tier was skipped before materialization because its
+1,205,317 ms linear projection exceeded the 15-minute guardrail. The generated
+corpus and its services were removed after the run.
 
 ## Embedding provider result
 
-The three-run provider benchmark reused one byte-identical 178-record Evidence
-Build and compared only Retrieval compilation and query embedding. TEI passed
-every default-promotion gate:
+The fresh 2026-08-30 provider gate reused one byte-identical 176-record Evidence
+Build from 32 sanitized files (232,937 source bytes) and compared only
+Retrieval compilation and query embedding. TEI passed every default-promotion
+gate:
 
 | Measurement | FastEmbed + FAISS | TEI + FAISS | TEI change |
 |---|---:|---:|---:|
-| Fresh single-job median | 182.39 s | 52.34 s | 71.3% faster |
-| Two-job median throughput | 1.66 records/s | 3.42 records/s | 105.8% higher |
-| Query latency p50 | 797.09 ms | 563.84 ms | 29.3% lower |
-| Peak combined memory | 2.47 GiB | 0.81 GiB | 67.3% lower |
+| Fresh single-job median | 168.01 s | 67.77 s | 59.7% lower |
+| Two-job median throughput | 1.626 records/s | 3.001 records/s | 84.6% higher |
+| Query latency p50 | 789.00 ms | 546.99 ms | 30.7% lower |
+| Peak combined memory | 2.495 GiB | 0.776 GiB | 68.9% lower |
 
 The benchmark used three cold, fresh, cached, and concurrent samples for each
 provider plus 20 query samples. TEI remains the default for new Libraries;
-FastEmbed remains bundled as a separate selectable embedding space. See
+FastEmbed remains bundled as a separate selectable embedding space. The
+checked-in
 [`embedding-providers-2026-08-29.json`](embedding-providers-2026-08-29.json)
-for every raw sample and gate calculation.
+retains the preceding full raw report; the 2026-08-30 run was a fresh
+acceptance confirmation and did not retain a second private-corpus-derived raw
+report.

@@ -1,6 +1,6 @@
 # 0006 - Final Provider Architecture And Storage Cutover
 
-- **Status:** Accepted direction; implementation in progress
+- **Status:** Implemented
 - **Date:** 2026-08-29
 - **Scope:** provider ownership, composition, build storage, Runtime retrieval, and development-format cutover
 - **Supersedes:** provider/composition portions of 0004 and the active-artifact portions of 0005
@@ -84,5 +84,19 @@ This decision is implemented only when package-boundary enforcement, the full
 FAISS and Meilisearch lifecycles, local/Registry compilation equivalence,
 read-only MCP security, CLI distribution tests, Docker image inspection,
 Windows/Linux checks, performance limits, and derived-byte reduction all pass.
-Until then, repository documentation must describe this as an active cutover,
-not completed architecture.
+
+The developer-preview gate passed on 2026-08-30. The verified evidence includes
+cycle-free workspace boundaries, independently packaged providers, provider
+replacement fixtures, exact immutable build activation, FAISS and Meilisearch
+lifecycle and rollback proofs, signed Registry installation, global CLI
+distribution checks, container dependency inspection, Windows/Linux checks,
+and the bounded performance and storage gates.
+
+A temporary synthetic ChatGPT connection independently invoked Runtime-owned
+`search` followed by `fetch` for all three known-answer questions. It ignored
+the hostile source instruction, returned evidence-insufficient for an unrelated
+question, and exposed exactly those two read-only tools. The public document
+route returned the fetched citation and provenance with HTTP 200. Direct
+navigation to the temporary ngrok URL was blocked by the Codex in-app browser
+client, so that UI-specific behavior remains an external tunnel caveat rather
+than a DKB endpoint failure.

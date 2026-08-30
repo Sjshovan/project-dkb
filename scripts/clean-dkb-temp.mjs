@@ -16,6 +16,7 @@ const ownedFiles = entries
   .map((entry) => path.join(tempRoot, entry.name));
 const removableDirectories = [];
 const ownedDirectoryPatterns = [
+  /^dkb-chatgpt-final-proof-[A-Za-z\d_-]+$/u,
   /^dkb-cli-distribution-[A-Za-z\d_-]+$/u,
   /^dkb-cli-add-staging-[A-Za-z\d_-]+$/u,
   /^dkb-cli-global-windows-proof$/u,

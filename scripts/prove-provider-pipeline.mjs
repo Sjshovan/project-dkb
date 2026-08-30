@@ -14,6 +14,18 @@ import { prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/r
 import { serveDkbRegistryCompiler } from '@sjshovan/dkb-compiler/server.js';
 import { readEvidenceBuild, readRetrievalBuildProfile, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
+import {
+  compilerServiceStatus,
+  stopLlamaIndexCompilerService,
+} from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
+import {
+  fastEmbedServiceStatus,
+  stopFastEmbedService,
+} from '@sjshovan/dkb-embedding-fastembed/service.js';
+import {
+  stopTeiService,
+  teiServiceStatus,
+} from '@sjshovan/dkb-embedding-tei/tei.js';
 
 const configuredCompilerUrl = process.env.DKB_PROOF_COMPILER_URL?.replace(/\/+$/, '');
 const target = process.env.DKB_PROOF_TARGET ?? 'default';
@@ -31,6 +43,12 @@ const sourceArchive = path.join(proofRoot, 'source.dkbpkg');
 const remoteArchive = path.join(proofRoot, 'remote.dkbpkg');
 const compilerContextRoot = path.join(proofRoot, 'compiler-context');
 const previousContextRoot = process.env.DKB_CONTEXT_ROOT;
+const initialEvidenceService = await compilerServiceStatus();
+const initialEmbeddingService = targetRecipe.embedding === '@dkb/embedding-fastembed'
+  ? await fastEmbedServiceStatus({ model: embeddingModel })
+  : targetRecipe.embedding === '@dkb/embedding-tei'
+    ? await teiServiceStatus(embeddingOptions)
+    : null;
 let compilerServer;
 let compilerUrl = configuredCompilerUrl;
 
@@ -165,6 +183,16 @@ try {
   }
   if (previousContextRoot === undefined) delete process.env.DKB_CONTEXT_ROOT;
   else process.env.DKB_CONTEXT_ROOT = previousContextRoot;
+  if (!initialEvidenceService.running) {
+    await stopLlamaIndexCompilerService().catch(() => undefined);
+  }
+  if (initialEmbeddingService && !initialEmbeddingService.running) {
+    if (targetRecipe.embedding === '@dkb/embedding-fastembed') {
+      await stopFastEmbedService({ model: embeddingModel }).catch(() => undefined);
+    } else if (targetRecipe.embedding === '@dkb/embedding-tei') {
+      await stopTeiService(embeddingOptions).catch(() => undefined);
+    }
+  }
   if (process.env.DKB_KEEP_PROOF_ROOT !== '1') {
     await fs.rm(proofRoot, { recursive: true, force: true });
   }

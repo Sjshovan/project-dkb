@@ -21,6 +21,10 @@ import {
   stopTeiService,
   teiServiceStatus,
 } from '@sjshovan/dkb-embedding-tei/tei.js';
+import {
+  compilerServiceStatus,
+  stopLlamaIndexCompilerService,
+} from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 
 const executeFile = promisify(execFile);
 const sourceRoot = path.resolve(required(process.env.DKB_BENCHMARK_CORPUS_ROOT, 'DKB_BENCHMARK_CORPUS_ROOT'));
@@ -34,6 +38,7 @@ const contextRoots = {
 };
 const initialFast = await fastEmbedServiceStatus();
 const initialTei = await teiServiceStatus();
+const initialEvidence = await compilerServiceStatus();
 const previousCacheSetting = process.env.DKB_EMBEDDING_CACHE;
 let sequence = 0;
 
@@ -116,6 +121,7 @@ try {
   else process.env.DKB_EMBEDDING_CACHE = previousCacheSetting;
   if (!initialFast.running) await stopFastEmbedService().catch(() => undefined);
   if (!initialTei.running) await stopTeiService({}).catch(() => undefined);
+  if (!initialEvidence.running) await stopLlamaIndexCompilerService().catch(() => undefined);
   await fs.rm(benchmarkRoot, { recursive: true, force: true });
 }
 

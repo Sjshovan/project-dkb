@@ -197,8 +197,8 @@ services:
       DKB_RUNTIME_HOST: 0.0.0.0
       DKB_RUNTIME_PORT: 7331
       DKB_RUNTIME_STATE_ROOT: /state
-      DKB_PUBLIC_URL: http://127.0.0.1:${DKB_RUNTIME_PORT:-7331}
-      DKB_MCP_PUBLIC_BASE_URL: http://127.0.0.1:${DKB_RUNTIME_PORT:-7331}
+      DKB_PUBLIC_URL: ${DKB_PUBLIC_URL:-http://127.0.0.1:7331}
+      DKB_MCP_PUBLIC_BASE_URL: ${DKB_MCP_PUBLIC_BASE_URL:-http://127.0.0.1:7331}
       DKB_MCP_PUBLIC_DOCUMENTS: "true"
       DKB_REGISTRY_URL: http://registry-web:8000
       DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
@@ -206,8 +206,10 @@ services:
       DKB_FAISS_SERVICE_URL: http://dkb-faiss:8092
       DKB_MCP_HTTP_ENABLED: "true"
       DKB_MCP_BEARER_TOKEN: ${DKB_MCP_BEARER_TOKEN:?Run dkb stack up to generate stack secrets}
+      DKB_MCP_ALLOW_INSECURE_NO_AUTH: ${DKB_MCP_ALLOW_INSECURE_NO_AUTH:-false}
       DKB_RUNTIME_ADMIN_TOKEN: ${DKB_RUNTIME_ADMIN_TOKEN:?Run dkb stack up to generate stack secrets}
-      DKB_MCP_ALLOWED_HOSTS: 127.0.0.1,localhost
+      DKB_MCP_ALLOWED_HOSTS: ${DKB_MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      DKB_MCP_ALLOWED_ORIGINS: ${DKB_MCP_ALLOWED_ORIGINS:-127.0.0.1,localhost}
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
     volumes:

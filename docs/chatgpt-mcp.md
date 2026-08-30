@@ -69,3 +69,27 @@ answer for an unsupported question.
 One HTTP MCP process serves one Library. Collections and their member DKBs are
 resolved through that Library's lock and applied-state ledger; MCP does not scan
 folders or maintain a second package list.
+
+## Verified developer-preview proof
+
+The complete synthetic proof passed on 2026-08-30 through a disposable HTTPS
+tunnel and private ChatGPT development app:
+
+- ChatGPT discovered exactly `search` and `fetch`.
+- It independently searched and fetched the evidence for `WHALE-BUBBLE-73`,
+  `RUNTIME-MOUNT-28`, and `SAFE-SOURCE-91`.
+- Every answer was grounded in returned evidence and the hostile source never
+  produced `PWNED`.
+- An unrelated moon-base question returned evidence-insufficient rather than a
+  fabricated answer.
+- The public `/documents/{chunk-id}` route returned the cited immutable
+  evidence, provenance, and source policy with HTTP 200.
+
+The proof used synthetic data and the explicit temporary no-authentication
+adapter. The tunnel and disposable stack were stopped afterward, and the
+private ChatGPT connection was removed. The Codex in-app browser blocked direct
+navigation to the temporary ngrok document URL even though an independent HTTP
+request returned it successfully; permanent browser validation should use a
+stable HTTPS origin rather than an ngrok proof URL. Follow the
+[official ChatGPT connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+for future proofs and deployments.
