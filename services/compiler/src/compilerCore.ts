@@ -4,13 +4,12 @@ import { performance } from 'node:perf_hooks';
 import { adapterFor } from '@sjshovan/dkb-library/adapters/index.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { loadCompose } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_COMPILE_RECEIPT_PATH, DKB_RUNTIME_LOCK_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_COMPILE_RECEIPT_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { LoadedCollection } from '@sjshovan/dkb-protocol/types.js';
 import {
   DKB_EVIDENCE_BUILD_IR,
   listPackageBuilds,
-  maybeReadActivePackageRetrievalProfile,
-  maybeReadRuntimeLock,
+  readRetrievalBuildProfile,
   mergeStoredPackageBuilds,
 } from '@sjshovan/dkb-library/builds.js';
 import { DKB_EVIDENCE_CATALOG_FILENAME } from '@sjshovan/dkb-protocol/evidence/catalog.js';
@@ -106,7 +105,9 @@ export async function compileComposeProject(
     const sourceStatistics = sourceStatisticsForSnapshot(sourceSnapshot);
     const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
     const cacheLookupStart = performance.now();
-    const existingProfile = await maybeReadActivePackageRetrievalProfile(resolvedRoot);
+    const existingBuilds = await listPackageBuilds(resolvedRoot);
+    const existingMatch = existingBuilds.retrieval.find((build) => build.profileDigest === desiredProfile.retrievalProfileDigest);
+    const existingProfile = existingMatch ? await readRetrievalBuildProfile(existingMatch.path) : null;
     const profileDrift = !existingProfile
       || existingProfile.profile.configDigest !== desiredProfile.configDigest
       || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;
@@ -167,7 +168,7 @@ export async function compileComposeProject(
         recordCount: state.sourceUnits.length,
         evidenceCatalogPath: path.join(written.buildGraph.evidencePath, DKB_EVIDENCE_CATALOG_FILENAME),
         retrievalManifestPath: path.join(written.buildGraph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME),
-        runtimeLockPath: resolveFrom(resolvedRoot, DKB_RUNTIME_LOCK_PATH),
+        retrievalBuildPath: written.buildGraph.retrievalPath,
         lockPath,
         lock: written.lock,
         cacheHit: false,
@@ -280,7 +281,7 @@ export async function compileRetrievalFromEvidence(
         recordCount: state.sourceUnits.length,
         evidenceCatalogPath: path.join(written.buildGraph.evidencePath, DKB_EVIDENCE_CATALOG_FILENAME),
         retrievalManifestPath: path.join(written.buildGraph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME),
-        runtimeLockPath: resolveFrom(resolvedRoot, DKB_RUNTIME_LOCK_PATH),
+        retrievalBuildPath: written.buildGraph.retrievalPath,
         lockPath,
         lock: written.lock,
         cacheHit: false,
@@ -315,7 +316,7 @@ export async function ensurePackageBuildForTarget(
 ): Promise<PreparedPackageBuildTarget> {
   const resolvedRoot = path.resolve(root);
   const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
-  const profile = await resolvedProviderProfile(contextRoot, options.distribution, options.target);
+  const profile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, options.libraryRoot);
   const builds = await listPackageBuilds(resolvedRoot);
   const matchingRetrieval = builds.retrieval.filter((build) => build.profileDigest === profile.retrievalProfileDigest);
   if (matchingRetrieval.length > 1) {
@@ -332,16 +333,8 @@ export async function ensurePackageBuildForTarget(
     };
   }
 
-  const current = await maybeReadRuntimeLock(resolvedRoot);
-  const currentEntry = current && current.evidenceProfileDigest === profile.evidenceProfileDigest
-    ? Object.values(current.packages)[0]
-    : undefined;
-  const exactEvidence = currentEntry
-    ? builds.evidence.find((build) => build.profileDigest === profile.evidenceProfileDigest
-      && build.evidenceDigest === currentEntry.evidenceDigest)
-    : undefined;
   const profileEvidence = builds.evidence.filter((build) => build.profileDigest === profile.evidenceProfileDigest);
-  const unambiguousEvidence = exactEvidence ?? (profileEvidence.length === 1 ? profileEvidence[0] : undefined);
+  const unambiguousEvidence = profileEvidence.length === 1 ? profileEvidence[0] : undefined;
   const stagingParent = await createCompilerWorkDirectory('dkb-package-build-');
   const stagingRoot = path.join(stagingParent, 'package');
 

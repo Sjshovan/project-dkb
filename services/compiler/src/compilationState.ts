@@ -139,8 +139,14 @@ export async function resolvedProviderProfile(
   root: string,
   distribution: DkbDistribution,
   target?: string,
+  libraryRoot?: string,
 ): Promise<DkbResolvedRetrievalProfile> {
-  const host = await DkbProviderHost.create({ root, distribution, ...(target ? { target } : {}) });
+  const host = await DkbProviderHost.create({
+    root,
+    distribution,
+    ...(target ? { target } : {}),
+    ...(libraryRoot ? { libraryRoot } : {}),
+  });
 
   try {
     return await resolveProviderRetrievalProfile(host);

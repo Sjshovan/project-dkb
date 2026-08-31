@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Command } from 'commander';
 import { loadCollection, loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
-import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
+import type { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import type { CliPresenter } from './presentation.js';
 import {
   summarizeArtifactTransport,
@@ -14,11 +14,11 @@ export interface ArtifactCommandContext {
   presenter(): CliPresenter;
   printJson(value: unknown): void;
   currentLibraryRoot(explicit?: string, cwd?: string): Promise<string>;
-  defaultRuntimeContext(): Promise<DkbRuntimeContext>;
+  currentRuntimeAdminClient(explicit?: string): Promise<DkbRuntimeClient>;
 }
 
 export function registerArtifactCommands(program: Command, context: ArtifactCommandContext): void {
-  const { presenter, printJson, currentLibraryRoot, defaultRuntimeContext } = context;
+  const { presenter, printJson, currentLibraryRoot, currentRuntimeAdminClient } = context;
   program
     .command('artifact')
     .description('Inspect, validate, and package immutable DKB Builds')
@@ -57,26 +57,33 @@ export function registerArtifactCommands(program: Command, context: ArtifactComm
       .option('--id <id>', 'Installed DKB id override')
       .option('--force', 'Replace an existing installed DKB with the same id')
       .action(async (target: string, options: { library?: string; id?: string; force?: boolean }) => {
-        const { importCompiledDkbArtifactIntoRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
+        const { importCompiledDkbArtifactIntoLibrary } = await import('@sjshovan/dkb-runtime/runtime/state.js');
         const libraryRoot = await currentLibraryRoot(options.library);
 
-        await presenter().run('Installing compiled artifact', async (progress) => importCompiledDkbArtifactIntoRuntime({
-          runtime: await defaultRuntimeContext(),
-          sourcePath: path.resolve(target),
-          id: options.id,
-          force: Boolean(options.force),
-          progress,
-        }, libraryRoot), summarizeInstallResult);
+        await presenter().run('Installing compiled artifact', async (progress) => {
+          const result = await importCompiledDkbArtifactIntoLibrary({
+            sourcePath: path.resolve(target),
+            id: options.id,
+            force: Boolean(options.force),
+            progress,
+          }, libraryRoot);
+          const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+          return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
+        }, summarizeInstallResult);
       }))
     .addCommand(new Command('uninstall')
       .description('Remove an installed compiled artifact from a local runtime')
       .argument('<id>', 'Installed DKB id')
       .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
       .action(async (id: string, options: { library?: string }) => {
-        const { removeDkbFromRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
+        const { removeDkbFromLibrary } = await import('@sjshovan/dkb-runtime/runtime/state.js');
         const libraryRoot = await currentLibraryRoot(options.library);
 
-        await presenter().run(`Uninstalling ${id}`, async (progress) => removeDkbFromRuntime(id, libraryRoot, { runtime: await defaultRuntimeContext(), progress }), summarizeRemoveResult);
+        await presenter().run(`Uninstalling ${id}`, async (progress) => {
+          const result = await removeDkbFromLibrary(id, libraryRoot, { progress });
+          const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+          return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
+        }, summarizeRemoveResult);
       }))
     .addCommand(new Command('tools')
       .description('Inspect OCI transport and signing tool availability')

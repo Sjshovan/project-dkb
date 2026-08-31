@@ -5,7 +5,7 @@ import { COMPILE_CACHE_PATH, compileComposeProject } from '@sjshovan/dkb-compile
 import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { invalidateQueryContext } from '@sjshovan/dkb-runtime/indexes/queryContext.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_BUILDS_DIR, DKB_RUNTIME_LOCK_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_BUILDS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { deriveKnowledgeSpace } from '@sjshovan/dkb-protocol/space.js';
 import type { DkbManifest, DkbSourceManifest, DkbStore, DkcManifest, DkrManifest, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { defaultWriteQueueRoot, listQueuedWrites } from '../writes/queue.js';
@@ -48,7 +48,6 @@ export interface RestoreIndexesResult {
 
 const ARTIFACTS = [
   DKB_BUILDS_DIR,
-  DKB_RUNTIME_LOCK_PATH,
   COMPILE_CACHE_PATH,
 ];
 

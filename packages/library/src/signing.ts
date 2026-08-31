@@ -485,6 +485,20 @@ export function parseReleaseEnvelope(value: unknown, source: string): DkbRelease
 }
 
 export function parsePackageReceipt(value: unknown, source: string): DkbPackageReceipt {
+  return parsePackageReceiptValue(value, source, true);
+}
+
+/**
+ * Parse an already-installed signed source receipt without reinterpreting its
+ * embedded compile lock using today's derived-build schema. The receipt's
+ * canonical payload hash and signatures remain authoritative; Runtime install
+ * paths continue to use parsePackageReceipt and strict current-format checks.
+ */
+export function parsePersistedPackageReceipt(value: unknown, source: string): DkbPackageReceipt {
+  return parsePackageReceiptValue(value, source, false);
+}
+
+function parsePackageReceiptValue(value: unknown, source: string, validateLock: boolean): DkbPackageReceipt {
   if (!isRecord(value)) {
     throw new DkbError(`Invalid package receipt at ${source}: expected object`);
   }
@@ -495,8 +509,13 @@ export function parsePackageReceipt(value: unknown, source: string): DkbPackageR
 
   const receiptPackage = parsePackageReceiptPackage(value.package, `${source}#package`);
   const payloadHash = asString(value.payloadHash, `${source}#payloadHash`);
+  if (!isRecord(value.payload.lock)) {
+    throw new DkbError(`Invalid package receipt at ${source}: payload lock must be an object`);
+  }
   const payload = {
-    lock: validateDkbLockManifest(value.payload.lock, `${source}#payload.lock`),
+    lock: validateLock
+      ? validateDkbLockManifest(value.payload.lock, `${source}#payload.lock`)
+      : value.payload.lock as unknown as DkbLockManifest,
     ...(typeof value.payload.packageTreeHash === 'string' ? { packageTreeHash: value.payload.packageTreeHash } : {}),
     ...(isSourceInventoryBinding(value.payload.sourceInventory) ? { sourceInventory: value.payload.sourceInventory } : {}),
   };

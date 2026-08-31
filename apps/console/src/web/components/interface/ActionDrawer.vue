@@ -9,7 +9,8 @@ withDefaults(defineProps<{
   description: string;
   submitLabel?: string;
   busy?: boolean;
-}>(), { submitLabel: 'Save', busy: false });
+  submitDisabled?: boolean;
+}>(), { submitLabel: 'Save', busy: false, submitDisabled: false });
 
 const emit = defineEmits<{ 'update:open': [value: boolean]; submit: [] }>();
 </script>
@@ -27,7 +28,7 @@ const emit = defineEmits<{ 'update:open': [value: boolean]; submit: [] }>();
           <div class="drawer-body"><slot /></div>
           <footer>
             <AppButton type="button" :disabled="busy" @click="emit('update:open', false)">Cancel</AppButton>
-            <AppButton type="submit" variant="primary" :loading="busy">{{ submitLabel }}</AppButton>
+            <AppButton type="submit" variant="primary" :disabled="busy || submitDisabled" :loading="busy">{{ submitLabel }}</AppButton>
           </footer>
         </form>
       </DialogContent>

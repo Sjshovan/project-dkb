@@ -35,10 +35,12 @@ export interface DkbResolvedPipelineTarget extends DkbPipelineTargetConfig {
 
 export interface DkbResolvedContextConfig {
   root: string;
+  libraryRoot?: string;
   globalRoot: string;
   activeTarget: string;
   target: DkbResolvedPipelineTarget;
   global: DkbContextConfig;
+  library: DkbContextConfig;
   local: DkbContextConfig;
 }
 
@@ -50,15 +52,19 @@ export function defaultDkbGlobalRoot(): string {
 
 export async function resolveContextConfig(
   root: string,
-  options: { defaults: DkbContextConfig; globalRoot?: string; target?: string },
+  options: { defaults: DkbContextConfig; globalRoot?: string; libraryRoot?: string; target?: string },
 ): Promise<DkbResolvedContextConfig> {
   const resolvedRoot = path.resolve(root);
   const globalRoot = path.resolve(options.globalRoot ?? defaultDkbGlobalRoot());
-  const [global, local] = await Promise.all([
+  const libraryRoot = options.libraryRoot ? path.resolve(options.libraryRoot) : undefined;
+  const [global, library, local] = await Promise.all([
     readDkbContextConfig(path.join(globalRoot, 'config.json')),
+    libraryRoot && libraryRoot !== resolvedRoot
+      ? readDkbContextConfig(path.join(libraryRoot, DKB_CONFIG_PATH))
+      : Promise.resolve({ format: DKB_CONFIG_FORMAT } as DkbContextConfig),
     readDkbContextConfig(path.join(resolvedRoot, DKB_CONFIG_PATH)),
   ]);
-  return resolveContextConfigDocuments(resolvedRoot, globalRoot, options.defaults, global, local, options.target);
+  return resolveContextConfigDocuments(resolvedRoot, globalRoot, options.defaults, global, local, options.target, library, libraryRoot);
 }
 
 export function resolveContextConfigDocuments(
@@ -68,26 +74,31 @@ export function resolveContextConfigDocuments(
   global: DkbContextConfig,
   local: DkbContextConfig,
   selectedTarget?: string,
+  library: DkbContextConfig = { format: DKB_CONFIG_FORMAT },
+  libraryRoot?: string,
 ): DkbResolvedContextConfig {
   const activeTarget = selectedTarget?.trim()
     || local.activeTarget?.trim()
+    || library.activeTarget?.trim()
     || global.activeTarget?.trim()
     || defaults.activeTarget
     || DEFAULT_PIPELINE_TARGET;
   const bundledTarget = defaults.targets?.[activeTarget]
     ?? (activeTarget === DEFAULT_PIPELINE_TARGET ? defaults.targets?.[DEFAULT_PIPELINE_TARGET] : undefined);
   const globalTarget = global.targets?.[activeTarget];
+  const libraryTarget = library.targets?.[activeTarget];
   const localTarget = local.targets?.[activeTarget];
 
-  if (!bundledTarget && !globalTarget && !localTarget) {
+  if (!bundledTarget && !globalTarget && !libraryTarget && !localTarget) {
     throw new DkbError(`Pipeline target "${activeTarget}" is not configured in ${resolvedRoot}, ${globalRoot}, or DKB's bundled defaults`);
   }
 
-  const merged = mergeTarget(mergeTarget(bundledTarget, globalTarget), localTarget);
+  const merged = mergeTarget(mergeTarget(mergeTarget(bundledTarget, globalTarget), libraryTarget), localTarget);
   const target = validateTarget(activeTarget, merged);
 
   return {
     root: resolvedRoot,
+    ...(libraryRoot ? { libraryRoot } : {}),
     globalRoot,
     activeTarget,
     target: {
@@ -96,6 +107,7 @@ export function resolveContextConfigDocuments(
       configDigest: stableHash(target),
     },
     global,
+    library,
     local,
   };
 }

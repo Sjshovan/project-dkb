@@ -80,16 +80,16 @@ The first release should have six destinations:
 
 1. **Overview** — selected Library, Runtime, and Registry; health; storage;
    installed knowledge; incomplete builds; and actions requiring attention.
-2. **Libraries** — registered Libraries, selected state, paths, package counts,
-   storage, active pipeline, and health. A Library detail shows installed DKBs,
-   Collections and dependencies, builds, provenance status, and upgrade state.
-3. **Runtimes** — known endpoints, Library associations, versions, health, and
-   start/stop controls only when local launch metadata makes those actions real.
+2. **Libraries** — registered Libraries, default state, paths, package counts,
+   storage, serving Runtimes, and health. A Library detail shows installed DKBs,
+   Collections and dependencies, immutable builds, provenance, and upgrade state.
+3. **Runtimes** — known endpoints, one Library binding, one independently active
+   Pipeline, versions, health, refresh, and local start/stop controls.
 4. **Registries** — known endpoints, selected state, health, Libraries using each
    endpoint, and package search. Registry administration stays in Laravel.
-5. **Builds and pipelines** — active pipeline, package coverage, Evidence and
-   Retrieval Builds, storage, missing builds, compile/switch progress, and safe
-   pruning.
+5. **Pipelines** — a Runtime-scoped catalog showing the active Pipeline,
+   provider chain, health, package coverage, compatibility, preparation/switch
+   progress, and recovery. Stored Evidence/Retrieval Builds remain Library-owned.
 6. **Activity** — current and recent install, upgrade, compile, switch, prune,
    and stack operations with stages, cancellation where supported, final status,
    and an exact recovery action.
@@ -158,4 +158,3 @@ The acceptance gate is one full lifecycle performed through the Console—regist
 and select context, install, inspect, retrieve, upgrade, switch pipeline,
 uninstall, and verify disappearance—while the CLI reports the same authoritative
 state throughout.
-

@@ -135,8 +135,8 @@ export async function summarizeBuildStorage(
   const artifactBytes = files.reduce((total, file) => total + file.size, 0);
   const buildSets = await Promise.all([...new Set(packageRoots)].map((packageRoot) => listPackageBuilds(packageRoot)));
   const [evidenceBuildBytes, retrievalBuildBytes] = await Promise.all([
-    sumUniqueDirectories(buildSets.flatMap((builds) => builds.evidence.filter((build) => build.active).map((build) => build.path))),
-    sumUniqueDirectories(buildSets.flatMap((builds) => builds.retrieval.filter((build) => build.active).map((build) => build.path))),
+    sumUniqueDirectories(buildSets.flatMap((builds) => builds.evidence.map((build) => build.path))),
+    sumUniqueDirectories(buildSets.flatMap((builds) => builds.retrieval.map((build) => build.path))),
   ]);
   // Provider artifacts live inside their immutable Retrieval Build. Report
   // their byte count as a useful subset without adding it twice to total disk

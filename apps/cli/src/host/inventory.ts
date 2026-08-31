@@ -178,6 +178,45 @@ export async function registerHostLibrary(
   });
 }
 
+export async function rebindMigratedStackLibrary(
+  stackName: string,
+  libraryName: string,
+  libraryPath: string,
+): Promise<{ name: string; library: DkbHostLibraryRecord }> {
+  const normalizedStackName = normalizeHostName(stackName, 'Stack name');
+  const normalizedLibraryName = normalizeHostName(libraryName, 'Library name');
+  const library = await inspectLibraryPath(libraryPath);
+
+  return mutateHostInventory(async (inventory) => {
+    const stack = inventory.stacks[normalizedStackName];
+    const existing = inventory.libraries[normalizedLibraryName];
+    if (!stack || stack.library !== normalizedLibraryName || !existing) {
+      throw new DkbError(`Stack ${normalizedStackName} does not own Library ${normalizedLibraryName}; its host entry cannot be rebound.`);
+    }
+
+    const expectedLegacyPath = path.join(stack.stateRoot, 'runtime');
+    const expectedLibraryPath = path.join(stack.stateRoot, 'library');
+    if (comparablePath(existing.path) !== comparablePath(expectedLegacyPath)
+      || comparablePath(library.path) !== comparablePath(expectedLibraryPath)) {
+      throw new DkbError(`Stack ${normalizedStackName} Library migration does not match its legacy Runtime and Library paths.`);
+    }
+
+    const duplicate = entryByPath(inventory.libraries, library.path);
+    if (duplicate && duplicate.name !== normalizedLibraryName) {
+      throw new DkbError(`Library ${library.path} is already registered as ${duplicate.name}.`);
+    }
+
+    const record: DkbHostLibraryRecord = {
+      ...existing,
+      path: library.path,
+      displayName: library.displayName,
+      updatedAt: new Date().toISOString(),
+    };
+    inventory.libraries[normalizedLibraryName] = record;
+    return { value: { name: normalizedLibraryName, library: record }, inventory };
+  });
+}
+
 export async function unregisterHostLibrary(nameOrPath: string): Promise<{ name: string; path: string; selectedCleared: boolean }> {
   return mutateHostInventory(async (inventory) => {
     const resolved = await resolveLibraryEntry(inventory, nameOrPath);
@@ -401,6 +440,13 @@ export async function selectedHostRuntime(): Promise<{ name: string; runtime: Dk
   const name = inventory.defaults.runtime;
 
   return name && inventory.runtimes[name] ? { name, runtime: inventory.runtimes[name] } : null;
+}
+
+export async function registeredHostRuntime(name: string): Promise<{ name: string; runtime: DkbHostRuntimeRecord } | null> {
+  const inventory = await readHostInventory();
+  const normalizedName = normalizeHostName(name, 'Runtime name');
+  const runtime = inventory.runtimes[normalizedName];
+  return runtime ? { name: normalizedName, runtime } : null;
 }
 
 export async function registerHostStack(

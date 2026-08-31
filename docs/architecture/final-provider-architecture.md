@@ -1,6 +1,7 @@
 # Final Provider Architecture
 
-The authoritative decision is [ADR 0006](../decisions/0006-final-provider-architecture-and-storage-cutover.md).
+The provider cut is defined by [ADR 0006](../decisions/0006-final-provider-architecture-and-storage-cutover.md),
+with Runtime ownership superseded by [ADR 0008](../decisions/0008-runtime-bound-pipelines-and-shared-libraries.md).
 This document is the canonical navigation map for the provider architecture.
 
 ## Ownership
@@ -44,7 +45,7 @@ LlamaIndex-shaped extraction schema.
 ## Query flow
 
 ```text
-Runtime lock -> immutable build roots -> query embedding -> index candidates
+Runtime activation -> Library immutable build roots -> query embedding -> index candidates
              -> retrieval ranking/fusion -> Evidence catalog -> search/fetch
 ```
 
@@ -54,13 +55,16 @@ text, source anchors, locators, and provenance from the Evidence catalog.
 ## Storage
 
 ```text
-.dkb/builds/evidence/<profile>/<digest>/
-.dkb/builds/retrieval/<profile>/<digest>/
-.dkb/runtime.lock.json
-.dkb/cache/runtime/<snapshot-digest>/
+<library>/.dkb/builds/evidence/<profile>/<digest>/
+<library>/.dkb/builds/retrieval/<profile>/<digest>/
+<runtime-state>/.dkb/runtime-binding.json
+<runtime-state>/.dkb/runtime-activation.lock.json
+<runtime-state>/.dkb/cache/runtime/<snapshot-digest>/
 ```
 
-There is no durable active `.dkb/artifacts` mirror. Cache content is disposable.
+There is no durable active `.dkb/artifacts` mirror. Libraries contain immutable
+builds but no active Pipeline. Each Runtime owns its binding, activation, and
+disposable cache, so multiple Runtimes may reuse one Library without copying it.
 
 ## Composition roots
 

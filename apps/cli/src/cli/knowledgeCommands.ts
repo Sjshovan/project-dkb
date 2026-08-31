@@ -5,7 +5,6 @@ import type { Command } from 'commander';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { identityDisplayName, parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
-import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
 import type { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import type { CliPresenter } from './presentation.js';
 import { registerPackageLifecycleCommands } from './packageCommands.js';
@@ -28,7 +27,6 @@ export interface KnowledgeCommandContext {
   currentLibraryRoot(explicit?: string, cwd?: string): Promise<string>;
   currentRuntimeUrl(explicit?: string): Promise<string>;
   currentRuntimeAdminClient(explicit?: string, timeoutMs?: number): Promise<DkbRuntimeClient>;
-  defaultRuntimeContext(): Promise<DkbRuntimeContext>;
   parsePositiveInteger(value: string): number;
   parseLimit(value: string): number;
 }
@@ -40,7 +38,6 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     currentLibraryRoot,
     currentRuntimeUrl,
     currentRuntimeAdminClient,
-    defaultRuntimeContext,
     parsePositiveInteger,
     parseLimit,
   } = context;
@@ -115,7 +112,6 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
         await presenter().run('Installing Collection', async (progress) => {
           const result = await installRegistryCollection({
-            runtime: await defaultRuntimeContext(),
             client,
             collectionId: packageId,
             revision: options.revision,
@@ -123,7 +119,8 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
             progress,
           });
           if (options.runtimeUrl) await (await currentRuntimeAdminClient(options.runtimeUrl)).reload();
-          return result;
+          const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+          return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
         }, summarizeCollectionInstall);
         return;
       }
@@ -144,16 +141,19 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         return;
       }
 
-      await presenter().run('Installing DKB', async (progress) => installDkbFromRegistry({
-        runtime: await defaultRuntimeContext(),
-        registryUrl: registryConfig.url,
-        packageId,
-        version: options.version,
-        target: options.target,
-        runtimeRoot: libraryRoot,
-        force: Boolean(options.force),
-        progress,
-      }), summarizeInstallResult);
+      await presenter().run('Installing DKB', async (progress) => {
+        const result = await installDkbFromRegistry({
+          registryUrl: registryConfig.url,
+          packageId,
+          version: options.version,
+          target: options.target,
+          libraryRoot,
+          force: Boolean(options.force),
+          progress,
+        });
+        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
+      }, summarizeInstallResult);
     });
 
   program
@@ -161,11 +161,11 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .description('List DKBs and Collections in the current Library')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .action(async (options: { library?: string }) => {
-      const { listRuntimePackages } = await import('@sjshovan/dkb-runtime/runtime/state.js');
+      const { listLibraryPackages } = await import('@sjshovan/dkb-runtime/runtime/state.js');
       const { configuredRegistry } = await import('./registryConfig.js');
       const libraryRoot = await currentLibraryRoot(options.library);
       const [listing, upstream] = await Promise.all([
-        listRuntimePackages(libraryRoot),
+        listLibraryPackages(libraryRoot),
         configuredRegistry({ root: libraryRoot }),
       ]);
 
@@ -180,7 +180,6 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     presenter,
     resolveLibraryRoot: currentLibraryRoot,
     runtimeAdminClient: currentRuntimeAdminClient,
-    runtimeContext: defaultRuntimeContext,
   });
 
   registerRemoteCommands(program, {
@@ -303,7 +302,8 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         await presenter().run(`Uninstalling Collection ${identity}`, async () => {
           const result = await uninstallRegistryCollection({ libraryRoot, collectionId: identity });
           if (options.url) await (await currentRuntimeAdminClient(options.url)).reload();
-          return result;
+          const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+          return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
         }, summarizeCollectionUninstall);
         return;
       }
@@ -321,9 +321,13 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         return;
       }
 
-      const { removeDkbFromRuntime } = await import('@sjshovan/dkb-runtime/runtime/state.js');
+      const { removeDkbFromLibrary } = await import('@sjshovan/dkb-runtime/runtime/state.js');
 
-      await presenter().run(`Uninstalling ${identity}`, async (progress) => removeDkbFromRuntime(identity, libraryRoot, { runtime: await defaultRuntimeContext(), progress }), summarizeRemoveResult);
+      await presenter().run(`Uninstalling ${identity}`, async (progress) => {
+        const result = await removeDkbFromLibrary(identity, libraryRoot, { progress });
+        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
+      }, summarizeRemoveResult);
     });
 
   program

@@ -5,7 +5,6 @@ import type { CliPresenter } from './presentation.js';
 import { formatBytes, humanSummary } from './presentation.js';
 import { summarizeRegistryCatalog } from './packagePresentation.js';
 import { configuredRegistry } from './registryConfig.js';
-import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
 
 interface RuntimeInstaller {
   installRegistryDkb(input: {
@@ -14,13 +13,13 @@ interface RuntimeInstaller {
     plan: import('@sjshovan/dkb-protocol/builds.js').DkbInstallPlan;
     force?: boolean;
   }): Promise<unknown>;
+  reload(): Promise<unknown>;
 }
 
 export interface PackageCommandDependencies {
   presenter(): CliPresenter;
   resolveLibraryRoot(explicit?: string): Promise<string>;
   runtimeAdminClient(explicit?: string): Promise<RuntimeInstaller>;
-  runtimeContext(): Promise<DkbRuntimeContext>;
 }
 
 export function registerPackageLifecycleCommands(
@@ -130,9 +129,8 @@ export function registerPackageLifecycleCommands(
     .action(async (identity: string, options: RegistryOptions & { dryRun?: boolean; runtimeUrl?: string }) => {
       const normalizedIdentity = parseDkbIdentity(identity, 'Installed package identity').identity;
       const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
-      const [{ readLibraryState }, { maybeReadRuntimeLock }, { DkbRegistryClient }] = await Promise.all([
+      const [{ readLibraryState }, { DkbRegistryClient }] = await Promise.all([
         import('@sjshovan/dkb-library/state.js'),
-        import('@sjshovan/dkb-library/builds.js'),
         import('@sjshovan/dkb-registry-client/client.js'),
       ]);
       const entry = (await readLibraryState(libraryRoot)).entries[normalizedIdentity];
@@ -147,8 +145,7 @@ export function registerPackageLifecycleCommands(
         throw new DkbError(`${normalizedIdentity} is editable local knowledge and has no Registry version to upgrade.`);
       }
 
-      const configured = await configuredRegistry({ url: options.url, root: libraryRoot });
-      const registryUrl = options.url ?? entry.registryUrl ?? configured.url;
+      const registryUrl = options.url ?? entry.registryUrl ?? (await configuredRegistry({ root: libraryRoot })).url;
       const client = new DkbRegistryClient({ baseUrl: registryUrl });
       const latestVersion = await client.latestPackageVersion(normalizedIdentity);
       const plan = {
@@ -165,10 +162,9 @@ export function registerPackageLifecycleCommands(
         return;
       }
 
-      const target = (await maybeReadRuntimeLock(libraryRoot))?.target;
       await dependencies.presenter().run(`Upgrading ${normalizedIdentity}`, async (progress) => {
         if (options.runtimeUrl) {
-          const grant = await client.createInstallGrant(normalizedIdentity, latestVersion, target);
+          const grant = await client.createInstallGrant(normalizedIdentity, latestVersion);
           return dependencies.runtimeAdminClient(options.runtimeUrl).then((runtime) => runtime.installRegistryDkb({
             registryUrl,
             installGrant: grant.installGrant,
@@ -178,16 +174,19 @@ export function registerPackageLifecycleCommands(
         }
 
         const { installDkbFromRegistry } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
-        return installDkbFromRegistry({
-          runtime: await dependencies.runtimeContext(),
+        const result = await installDkbFromRegistry({
           registryUrl,
           packageId: normalizedIdentity,
           version: latestVersion,
-          ...(target ? { target } : {}),
-          runtimeRoot: libraryRoot,
+          libraryRoot,
           force: true,
           progress,
         });
+        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(
+          libraryRoot,
+          async (url) => dependencies.runtimeAdminClient(url) as Promise<import('@sjshovan/dkb-runtime/runtime/client.js').DkbRuntimeClient>,
+        ));
       }, summarizeUpgradeResult);
     });
 }
@@ -257,7 +256,7 @@ async function inspectOutdatedPackages(
 
 function summarizeInstalledPackage(value: unknown): string[] {
   const result = asRecord(value);
-  const build = isRecord(result.activeBuild) ? result.activeBuild : {};
+  const builds = Array.isArray(result.builds) ? result.builds : [];
   const source = isRecord(result.sourceSummary) ? result.sourceSummary : {};
   const provenance = isRecord(result.provenance) ? result.provenance : {};
   const integrity = isRecord(result.integrity) ? result.integrity : {};
@@ -279,9 +278,7 @@ function summarizeInstalledPackage(value: unknown): string[] {
     typeof source.bytes === 'number' ? `source size: ${formatBytes(source.bytes)}` : '',
     typeof source.evidenceRecords === 'number' ? `Evidence records: ${source.evidenceRecords}` : '',
     typeof source.searchableSources === 'number' ? `searchable sources: ${source.searchableSources}` : '',
-    build.target ? `active pipeline: ${String(build.target)}` : 'active pipeline: none',
-    build.evidenceDigest ? `evidence build: ${shortDigest(build.evidenceDigest)}` : '',
-    build.retrievalBuildDigest ? `retrieval build: ${shortDigest(build.retrievalBuildDigest)}` : '',
+    `stored builds: ${builds.length}`,
     result.registryUrl ? `registry: ${String(result.registryUrl)}` : '',
     `installed: ${String(result.installedAt ?? '-')}`,
     `path: ${String(result.path ?? '-')}`,

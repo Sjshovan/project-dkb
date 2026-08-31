@@ -206,6 +206,7 @@ export async function installRegisteredRemote(input: {
       archivePath,
       runtimeRoot: input.runtimeRoot,
       trustedKeys: publicKeys,
+      registryUrl,
       expectedArchiveHash: release.archiveHash,
       force: true,
     });

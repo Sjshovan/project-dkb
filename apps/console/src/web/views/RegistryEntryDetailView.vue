@@ -51,9 +51,10 @@ const collectionDetail = computed(() => detail.value?.type === 'collection' ? de
 const release = computed(() => packageDetail.value?.selectedVersion);
 const revision = computed(() => collectionDetail.value?.selectedRevision);
 const matchingLibraries = computed(() => context.data.value?.libraries ?? []);
+const installLibraries = computed(() => allLibraries.data.value?.libraries ?? []);
 const disconnectedLibraries = computed(() => (allLibraries.data.value?.libraries ?? []).filter((library) => !matchingLibraries.value.some((matched) => matched.name === library.name)));
 const builds = computed(() => release.value?.builds ?? []);
-const targets = computed(() => [...new Set(builds.value.filter((build) => build.status === 'ready').map((build) => build.target))]);
+const targets = computed(() => [...new Set(builds.value.filter(isInstallableBuild).map((build) => build.target))]);
 const members = computed(() => {
   const manifest = revision.value?.manifest;
   return isRecord(manifest) && Array.isArray(manifest.members) ? manifest.members.filter(isRecord) : [];
@@ -65,17 +66,19 @@ const sections = computed(() => props.kind === 'dkb'
 watch(() => query.data.value, (value) => {
   if (value?.type === 'dkb') {
     if (!selectedVersion.value) selectedVersion.value = value.selectedVersion.version;
-    if (!selectedTarget.value || !value.selectedVersion.builds.some((build) => build.target === selectedTarget.value && build.status === 'ready')) {
-      selectedTarget.value = value.selectedVersion.defaultTarget ?? value.selectedVersion.builds.find((build) => build.status === 'ready')?.target ?? '';
+    const installableTargets = [...new Set(value.selectedVersion.builds.filter(isInstallableBuild).map((build) => build.target))];
+    if (!selectedTarget.value || !installableTargets.includes(selectedTarget.value)) {
+      selectedTarget.value = value.selectedVersion.defaultTarget && installableTargets.includes(value.selectedVersion.defaultTarget)
+        ? value.selectedVersion.defaultTarget
+        : installableTargets[0] ?? '';
     }
   } else if (value?.type === 'collection' && !selectedRevision.value) selectedRevision.value = value.selectedRevision.revision;
 }, { immediate: true });
-watch(matchingLibraries, (value) => { if (!installLibrary.value && value[0]) installLibrary.value = value[0].name; }, { immediate: true });
+watch(installLibraries, (value) => { if (!installLibrary.value && value[0]) installLibrary.value = value[0].name; }, { immediate: true });
 watch(disconnectedLibraries, (value) => { if (!connectLibrary.value && value[0]) connectLibrary.value = value[0].name; }, { immediate: true });
 
 function openInstall(): void {
-  if (!matchingLibraries.value.length) { drawer.value = 'connect'; return; }
-  installLibrary.value = matchingLibraries.value[0]?.name ?? '';
+  installLibrary.value = matchingLibraries.value[0]?.name ?? installLibraries.value[0]?.name ?? '';
   drawer.value = 'install';
 }
 
@@ -116,6 +119,10 @@ async function run(commandId: 'package.install' | 'library.registry.use', input:
 function submitInstall(): void {
   const registryUrl = context.data.value?.registry.url;
   if (!registryUrl || !installLibrary.value) return;
+  if (props.kind === 'dkb' && (!selectedVersion.value || !selectedTarget.value)) {
+    toast.error('Choose a published retrieval build before installing this DKB.');
+    return;
+  }
   void run('package.install', {
     library: installLibrary.value,
     identity: identity.value,
@@ -126,6 +133,7 @@ function submitInstall(): void {
 function submitConnect(): void { if (connectLibrary.value) void run('library.registry.use', { library: connectLibrary.value, registry: props.registry }); }
 async function cancelCurrent(): Promise<void> { if (operationId.value) await cancelOperation(operationId.value); }
 function selectVersion(value: string): void { selectedVersion.value = value; selectedTarget.value = ''; }
+function isInstallableBuild(build: DkbRegistryBuildSummary): boolean { return build.status === 'published' || build.status === 'ready'; }
 function shortDigest(value?: string | null): string { return value ? value.length > 32 ? `${value.slice(0, 29)}…` : value : 'Unavailable'; }
 function formatBytes(value?: number): string { if (value === undefined) return 'Unavailable'; return value < 1048576 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1048576).toFixed(1)} MiB`; }
 function formatBuildBytes(build: DkbRegistryBuildSummary): string {
@@ -144,7 +152,7 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
     <section v-else-if="query.isError.value" class="recovery-panel"><div><h2>Registry entry unavailable</h2><p>{{ query.error.value?.message }}</p><AppButton @click="query.refetch()">Try again</AppButton></div></section>
     <template v-else-if="detail">
       <PageHeader :title="detail.entry.id" :description="detail.entry.description || (props.kind === 'dkb' ? 'A signed, versioned Durable Knowledgebase.' : 'An immutable bundle of exact DKB releases.')">
-        <template #actions><AppButton variant="primary" :disabled="props.kind === 'dkb' && (!selectedVersion || !selectedTarget)" @click="openInstall"><Download :size="16" />Install</AppButton></template>
+        <template #actions><AppButton variant="primary" :disabled="props.kind === 'dkb' && (!selectedVersion || !selectedTarget)" @click="openInstall"><Download :size="16" />Install from this Registry</AppButton><AppButton :disabled="!disconnectedLibraries.length" @click="drawer = 'connect'"><Link2 :size="16" />Set Library default</AppButton></template>
       </PageHeader>
       <div class="entry-identity-strip"><StatusBadge :status="props.kind" /><StatusBadge :status="detail.entry.visibility" /><span>{{ detail.entry.id }}</span><span>{{ props.kind === 'dkb' ? `Version ${selectedVersion}` : `Revision ${selectedRevision}` }}</span></div>
       <OperationTimeline :events="events" :operation-id="operationId" @cancel="cancelCurrent" />
@@ -156,7 +164,7 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
           <article><component :is="props.kind === 'dkb' ? PackageOpen : UsersRound" :size="20" /><span><small>Release</small><strong>{{ props.kind === 'dkb' ? selectedVersion : `r${selectedRevision}` }}</strong><em>{{ detail.entry.visibility }}</em></span></article>
           <article><Database :size="20" /><span><small>{{ props.kind === 'dkb' ? 'Evidence records' : 'Members' }}</small><strong>{{ props.kind === 'dkb' ? release?.recordCount ?? 0 : members.length }}</strong><em>{{ props.kind === 'dkb' ? `${builds.length} retrieval build${builds.length === 1 ? '' : 's'}` : 'Exact signed dependencies' }}</em></span></article>
           <article><ShieldCheck :size="20" /><span><small>Status</small><strong>{{ props.kind === 'dkb' ? release?.status : 'published' }}</strong><em>{{ props.kind === 'dkb' ? formatDate(release?.publishedAt) : formatDate(revision?.publishedAt) }}</em></span></article>
-          <article><Boxes :size="20" /><span><small>Install options</small><strong>{{ matchingLibraries.length }}</strong><em>connected {{ matchingLibraries.length === 1 ? 'Library' : 'Libraries' }}</em></span></article>
+          <article><Boxes :size="20" /><span><small>Install options</small><strong>{{ installLibraries.length }}</strong><em>registered {{ installLibraries.length === 1 ? 'Library' : 'Libraries' }}</em></span></article>
         </div>
         <div class="overview-grid">
           <article class="detail-card"><header><FileStack :size="19" /><div><h2>Release identity</h2><p>The immutable source release selected for inspection.</p></div></header><dl class="detail-list"><div><dt>Identity</dt><dd><code>{{ detail.entry.id }}</code></dd></div><div><dt>{{ props.kind === 'dkb' ? 'Version' : 'Revision' }}</dt><dd>{{ props.kind === 'dkb' ? selectedVersion : selectedRevision }}</dd></div><div><dt>Published</dt><dd>{{ props.kind === 'dkb' ? formatDate(release?.publishedAt) : formatDate(revision?.publishedAt) }}</dd></div><div><dt>Registry</dt><dd>{{ props.registry }}</dd></div></dl></article>
@@ -188,14 +196,14 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
       </section>
     </template>
 
-    <ActionDrawer :open="drawer === 'install'" :title="`Install ${identity}`" description="Choose an exact release, compatible build target, and Library connected to this Registry." submit-label="Install signed release" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
-      <FormField label="Library" hint="Only Libraries connected to this Registry are available." required><select v-model="installLibrary" required><option v-for="library in matchingLibraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}</option></select></FormField>
+    <ActionDrawer :open="drawer === 'install'" :title="`Install ${identity}`" description="Choose an exact release, compatible build target, and any registered destination Library." submit-label="Install signed release" :submit-disabled="props.kind === 'dkb' && (!selectedVersion || !selectedTarget)" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
+      <FormField label="Library" hint="This install records the current Registry as package origin without changing the Library default." required><select v-model="installLibrary" required><option v-for="library in installLibraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}{{ matchingLibraries.some((matched) => matched.name === library.name) ? ' · default Registry' : '' }}</option></select></FormField>
       <FormField v-if="props.kind === 'dkb'" label="Version" hint="The exact immutable source release." required><select v-model="selectedVersion" required><option v-for="item in packageDetail?.versions" :key="item.version" :value="item.version">{{ item.version }} · {{ item.status }}</option></select></FormField>
-      <FormField v-if="props.kind === 'dkb'" label="Retrieval target" hint="Only ready signed builds are installable." required><select v-model="selectedTarget" required><option v-for="target in targets" :key="target" :value="target">{{ target }}</option></select></FormField>
+      <FormField v-if="props.kind === 'dkb'" label="Retrieval target" hint="Only published signed builds are installable." required><select v-model="selectedTarget" required><option v-for="target in targets" :key="target" :value="target">{{ target }}</option></select></FormField>
       <FormField v-else label="Revision" hint="Collection revisions are immutable." required><select v-model.number="selectedRevision" required><option v-for="item in collectionDetail?.entry.revisions" :key="item.revision" :value="item.revision">Revision {{ item.revision }} · {{ formatDate(item.publishedAt) }}</option></select></FormField>
       <p class="form-notice">The Registry credential stays on this host. The browser never receives it.</p>
     </ActionDrawer>
-    <ActionDrawer :open="drawer === 'connect'" :title="`Connect a Library to ${props.registry}`" description="This explicitly changes the selected Library’s upstream Registry. Installed knowledge and local files are not moved." submit-label="Connect Library" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitConnect">
+    <ActionDrawer :open="drawer === 'connect'" :title="`Set ${props.registry} as Library default`" description="This changes only the selected Library’s default package source. Existing packages keep their exact Registry origins." submit-label="Set as default" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitConnect">
       <FormField label="Library" hint="Choose a host Library that is not currently connected to this Registry." required><select v-model="connectLibrary" required><option v-for="library in disconnectedLibraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}</option></select></FormField>
       <p class="form-notice"><Link2 :size="16" /> Future Registry browsing and installs for this Library will use {{ props.registry }}. This is an explicit configuration change.</p>
       <EmptyState v-if="!disconnectedLibraries.length" title="No Library is available to connect" message="Register a Library first, then return to this Registry entry." />

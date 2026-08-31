@@ -681,7 +681,7 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     const shown = await runCli(['--json', 'show', '@acct-test/knowledge', '--library', tempRoot]);
     assert.equal(shown.code, 0, shown.stderr);
     const shownPackage = JSON.parse(shown.stdout);
-    assert.equal(shownPackage.format, 'dkb.installed-entry-detail.v1');
+    assert.equal(shownPackage.format, 'dkb.installed-entry-detail.v2');
     assert.equal(shownPackage.identity, '@acct-test/knowledge');
     assert.equal(shownPackage.kind, 'dkb');
     assert.equal(shownPackage.source, 'registry');
@@ -849,7 +849,7 @@ test('package archives retain immutable builds while excluding operator-controll
     await assert.rejects(fs.access(path.join(outputRoot, 'private.pem')), (error) => error?.code === 'ENOENT');
     await assert.rejects(fs.access(path.join(outputRoot, 'node_modules/unsafe/index.js')), (error) => error?.code === 'ENOENT');
     assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/builds/evidence/profile/digest/evidence.ir.json'), 'utf8'), '{"portable":true}\n');
-    assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/runtime.lock.json'), 'utf8'), '{"format":"dkb.runtime.lock.v2"}\n');
+    await assert.rejects(fs.access(path.join(outputRoot, '.dkb/runtime.lock.json')), (error) => error?.code === 'ENOENT');
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -891,7 +891,7 @@ test('install preflight rejects version digest drift and incomplete runtime stat
 
     await assert.rejects(
       preflightDkbInstall({
-        runtimeRoot: tempRoot,
+        libraryRoot: tempRoot,
         candidate: { packageId: '@acct-test/example', version: '1.0.0', packageTreeHash: `sha256:${'b'.repeat(64)}` },
       }),
       /Published versions must be immutable/,
@@ -901,7 +901,7 @@ test('install preflight rejects version digest drift and incomplete runtime stat
     await fs.rm(path.join(tempRoot, '.dkb', 'state.sqlite'));
     await assert.rejects(
       preflightDkbInstall({
-        runtimeRoot: tempRoot,
+        libraryRoot: tempRoot,
         candidate: { packageId: '@acct-test/example', version: '1.0.0' },
       }),
       /incomplete installation.*Use --force to repair/s,

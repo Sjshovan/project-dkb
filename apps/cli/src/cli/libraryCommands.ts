@@ -233,7 +233,6 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
       const registryConfig = await configuredRegistry({ url: options.url, root });
       await context.presenter().run(`Installing Collection ${identity}`, async (progress) => {
         const result = await installRegistryCollection({
-          runtime: await context.defaultRuntimeContext(),
           client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
           collectionId: identity,
           revision: options.revision,
@@ -241,7 +240,8 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
           progress,
         });
         if (options.runtimeUrl) await (await context.currentRuntimeAdminClient(options.runtimeUrl)).reload();
-        return result;
+        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(root, context.currentRuntimeAdminClient));
       }, summarizeCollectionInstall);
     });
 
@@ -258,15 +258,18 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
       const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
       const root = await context.currentLibraryRoot(options.library);
       const registryConfig = await configuredRegistry({ url: options.url, root });
-      await context.presenter().run(`Updating Collection ${identity}`, async (progress) => installRegistryCollection({
-        runtime: await context.defaultRuntimeContext(),
-        client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
-        collectionId: identity,
-        revision: options.revision,
-        libraryRoot: root,
-        update: true,
-        progress,
-      }), summarizeCollectionInstall);
+      await context.presenter().run(`Updating Collection ${identity}`, async (progress) => {
+        const result = await installRegistryCollection({
+          client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
+          collectionId: identity,
+          revision: options.revision,
+          libraryRoot: root,
+          update: true,
+          progress,
+        });
+        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(root, context.currentRuntimeAdminClient));
+      }, summarizeCollectionInstall);
     });
 
   collection
@@ -281,7 +284,8 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
       await context.presenter().run(`Uninstalling Collection ${identity}`, async () => {
         const result = await uninstallRegistryCollection({ collectionId: identity, libraryRoot: root });
         if (options.runtimeUrl) await (await context.currentRuntimeAdminClient(options.runtimeUrl)).reload();
-        return result;
+        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
+        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(root, context.currentRuntimeAdminClient));
       }, summarizeCollectionUninstall);
     });
 }

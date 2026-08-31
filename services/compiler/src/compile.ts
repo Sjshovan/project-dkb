@@ -53,7 +53,7 @@ export async function compileRetrievalFromEvidence(
 
 export async function ensurePackageBuildForTarget(
   root: string,
-  options: { target: string; contextRoot?: string },
+  options: { target: string; contextRoot?: string; libraryRoot?: string },
 ) {
   return ensurePackageBuildForTargetCore(root, {
     ...options,

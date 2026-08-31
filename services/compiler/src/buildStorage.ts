@@ -5,13 +5,11 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   DKB_CACHE_DIR,
-  DKB_RUNTIME_LOCK_PATH,
   manifestPath,
   resolveFrom,
 } from '@sjshovan/dkb-protocol/paths.js';
 import type { DkbLockManifest } from '@sjshovan/dkb-protocol/types.js';
 import {
-  maybeReadRuntimeLock,
   validatePackageBuildGraph,
   writePackageBuildGraph,
   type DkbPackageBuildGraph,
@@ -42,8 +40,6 @@ export async function writeAtomicCompileArtifacts(
   };
   const stageParent = resolveFrom(root, `${DKB_CACHE_DIR}/compile-stage-${process.pid}-${Date.now().toString(36)}`);
   const stageRoot = path.join(stageParent, 'root');
-  const runtimeLockPath = resolveFrom(root, DKB_RUNTIME_LOCK_PATH);
-  const runtimeLockBackup = `${runtimeLockPath}.replace-${process.pid}-${Date.now().toString(36)}`;
 
   await fs.rm(stageParent, { recursive: true, force: true });
   await fs.mkdir(stageRoot, { recursive: true });
@@ -63,12 +59,12 @@ export async function writeAtomicCompileArtifacts(
     timings.retrievalArtifacts = elapsedMs(retrievalStart);
 
     const buildGraphStart = performance.now();
-    const buildGraph = await writeBuildGraph(stageRoot, root, stagedArtifactsRoot, state);
-    await validatePackageBuildGraph(stageRoot, buildGraph.runtime);
+    const buildGraph = await writeBuildGraph(stageRoot, stagedArtifactsRoot, state);
+    await validatePackageBuildGraph(stageRoot, buildGraph.selection);
     timings.buildGraph = elapsedMs(buildGraphStart);
 
     const validationStart = performance.now();
-    await validatePackageBuildGraph(stageRoot, buildGraph.runtime);
+    await validatePackageBuildGraph(stageRoot, buildGraph.selection);
     timings.validation = elapsedMs(validationStart);
 
     if (process.env.DKB_TEST_ABORT_COMPILE_AFTER_STAGE_VALIDATION === '1') {
@@ -80,7 +76,6 @@ export async function writeAtomicCompileArtifacts(
     timings.lock = elapsedMs(lockStart);
 
     const promotionStart = performance.now();
-    await moveIfExists(runtimeLockPath, runtimeLockBackup);
     const promotedBuilds: string[] = [];
 
     try {
@@ -88,19 +83,16 @@ export async function writeAtomicCompileArtifacts(
         const target = path.join(root, path.relative(stageRoot, source));
         if (await promoteBuildDirectory(source, target)) promotedBuilds.push(target);
       }
-      await fs.rename(resolveFrom(stageRoot, DKB_RUNTIME_LOCK_PATH), runtimeLockPath);
-      await fs.rm(runtimeLockBackup, { force: true });
     } catch (error) {
-      await fs.rm(runtimeLockPath, { force: true });
       await Promise.all(promotedBuilds.map((target) => fs.rm(target, { recursive: true, force: true })));
-      await moveIfExists(runtimeLockBackup, runtimeLockPath);
       throw error;
     }
 
+    const promotedBuildGraph = await validatePackageBuildGraph(root, buildGraph.selection);
     timings.promotion = elapsedMs(promotionStart);
     timings.total = elapsedMs(totalStart);
 
-    return { lock, timings, buildGraph };
+    return { lock, timings, buildGraph: promotedBuildGraph };
   } finally {
     const cleanupStart = performance.now();
     await fs.rm(stageParent, { recursive: true, force: true });
@@ -110,7 +102,6 @@ export async function writeAtomicCompileArtifacts(
 
 async function writeBuildGraph(
   stageRoot: string,
-  destinationRoot: string,
   artifactsRoot: string,
   state: RegistryCompileState,
 ): Promise<DkbPackageBuildGraph> {
@@ -121,7 +112,6 @@ async function writeBuildGraph(
   const artifact = state.compilerArtifacts[0]!;
   const packageReceipt = state.packages[artifact.dkb.manifest.id];
   if (!packageReceipt) throw new DkbError(`Compiled package receipt is missing for ${artifact.dkb.manifest.id}`);
-  const previous = await maybeReadRuntimeLock(destinationRoot);
   const sourceDigest = stableHash({
     manifestHash: packageReceipt.manifestHash,
     sourceInventoryHash: packageReceipt.sourceInventoryHash,
@@ -138,7 +128,6 @@ async function writeBuildGraph(
     retrievalProfile: state.retrievalProfileLock,
     artifactsRoot,
     target: state.resolvedProfile.target,
-    generation: (previous?.generation ?? 0) + 1,
   });
 }
 
@@ -185,15 +174,6 @@ async function promoteBuildDirectory(source: string, target: string): Promise<bo
     const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
     if (code === 'EEXIST' || code === 'ENOTEMPTY') return false;
     throw error;
-  }
-}
-
-async function moveIfExists(source: string, target: string): Promise<void> {
-  try {
-    await fs.rename(source, target);
-  } catch (error) {
-    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : '';
-    if (code !== 'ENOENT') throw error;
   }
 }
 

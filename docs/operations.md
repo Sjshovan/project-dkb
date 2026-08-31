@@ -48,6 +48,7 @@ them. Run `dkb registry logout --revoke` on a lost or retired host.
 | `.dkb/state.sqlite` | Library transaction layer | with the Library |
 | `.dkb/builds/` | compiler | optional; reproducible from source/Evidence IR |
 | `vendor/` | Registry installer | optional; reinstallable from signed releases |
+| Runtime state root | Runtime operator | yes for bindings; caches are disposable |
 | `~/.dkb/host.json` | CLI convenience inventory | no; disposable |
 | `.dkb/plugins/` | trusted operator | yes, separately from knowledge packages |
 
@@ -69,8 +70,8 @@ dkb stack restore C:\secure\local-2026-08-28.tar.gz --replace
 dkb stack up local
 ```
 
-The archive includes the Registry SQLite database, package storage, Runtime
-Library, stack configuration, and stack secrets. It is sensitive. Restore
+The archive includes the Registry SQLite database, package storage, selected
+Library, separate Runtime state, stack configuration, and stack secrets. It is sensitive. Restore
 requires the adjacent `.sha256` file, pre-scans archive paths, stages extraction,
 and atomically replaces an existing stopped stack only when `--replace` is
 explicit.
@@ -95,7 +96,8 @@ For an individual Library:
 3. Back up `vendor/` and `.dkb/builds/` only when faster recovery is worth the
    additional storage.
 4. Restore the files to one canonical Library path.
-5. Run `dkb health <library>`, `dkb library status`, and `dkb pipeline verify`.
+5. Run `dkb health <library>`, `dkb library status`, and
+   `dkb pipeline verify <pipeline> --runtime <runtime>` for each serving Runtime.
 6. Run `dkb restore <library>` when derived artifacts are absent or invalid.
 
 Do not reconstruct installed state by copying folders into `vendor/`. Use

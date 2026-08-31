@@ -21,29 +21,19 @@
     "builds": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidence", "retrieval", "runtime"],
+      "required": ["evidence", "retrieval"],
       "properties": {
         "evidence": { "$ref": "#/$defs/build" },
         "retrieval": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path", "profileDigest", "digest", "compatibilityDigest", "status"],
-          "properties": {
-            "path": { "type": "string" },
-            "profileDigest": { "type": ["string", "null"] },
-            "digest": { "type": ["string", "null"] },
-            "compatibilityDigest": { "type": ["string", "null"] },
-            "status": { "enum": ["built", "not_built", "missing"] }
-          }
-        },
-        "runtime": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["path", "target", "digest", "status"],
+          "required": ["path", "target", "profileDigest", "digest", "compatibilityDigest", "status"],
           "properties": {
             "path": { "type": "string" },
             "target": { "type": "string" },
+            "profileDigest": { "type": ["string", "null"] },
             "digest": { "type": ["string", "null"] },
+            "compatibilityDigest": { "type": ["string", "null"] },
             "status": { "enum": ["built", "not_built", "missing"] }
           }
         }

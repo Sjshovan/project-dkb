@@ -4,237 +4,124 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { compileComposeProject, ensurePackageBuildForTarget } from '@sjshovan/dkb-compiler/compile.js';
-import {
-  activateStoredPackageBuild,
-  listPackageBuilds,
-  readRuntimeLock,
-  writeRuntimeLock,
-} from '@sjshovan/dkb-library/builds.js';
+import { listPackageBuilds } from '@sjshovan/dkb-library/builds.js';
 import { applyLibraryLock } from '@sjshovan/dkb-library/state.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
+import { DKB_RUNTIME_ACTIVATION_PATH } from '@sjshovan/dkb-protocol/paths.js';
+import { ensureRuntimeState, writeRuntimeBinding } from '../services/runtime/dist/runtime/activation.js';
+import { runtimeStatus } from '../services/runtime/dist/runtime/libraryState.js';
 import { switchRuntimePipelineFromRegistry } from '../services/runtime/dist/runtime/pipelineSwitch.js';
+import { getOrOpenRuntimeQueryContext } from '../services/runtime/dist/runtime/querySnapshot.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
 
-test('Runtime switches retained Registry package builds atomically without contacting the Registry', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-pipeline-switch-'));
+test('two Runtimes share one Library while keeping independent Pipeline activation and rollback', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-shared-library-runtimes-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const packageRoot = path.join(root, 'knowledge');
+  const libraryRoot = path.join(root, 'library');
+  const packageRoot = path.join(libraryRoot, 'knowledge');
+  const fastRuntimeRoot = path.join(root, 'runtime-fast');
+  const teiRuntimeRoot = path.join(root, 'runtime-tei');
   const packageId = '@test/runtime-switch';
 
-  await writeJson(path.join(root, 'dkb.json'), {
-    type: 'library',
-    name: 'Runtime switch proof',
-    roots: { [packageId]: { path: 'knowledge' } },
+  await writeJson(path.join(libraryRoot, 'dkb.json'), {
+    type: 'library', name: 'Shared Runtime Library', roots: { [packageId]: { path: 'knowledge' } },
   });
   await writeJson(path.join(packageRoot, 'dkb.json'), {
-    manifestVersion: 1,
-    type: 'dkb',
-    name: packageId,
-    version: '1.0.0',
-    permissions: { read: true, write: false },
+    manifestVersion: 1, type: 'dkb', name: packageId, version: '1.0.0', permissions: { read: true, write: false },
   });
   await fs.writeFile(path.join(packageRoot, 'knowledge.md'), 'The retained build marker is PIPELINE-SWITCH-42.\n', 'utf8');
-  await writePipelinePlugins(root);
+  await writePipelinePlugins(libraryRoot);
 
-  await compileComposeProject(packageRoot, { mode: 'package', force: true, target: 'fast', contextRoot: root });
-  const fast = await readRuntimeLock(packageRoot);
-  const localPreparation = await ensurePackageBuildForTarget(packageRoot, { target: 'tei', contextRoot: root });
-  assert.equal(localPreparation.preparation, 'retrieval_compiled');
-  assert.equal((await readRuntimeLock(packageRoot)).target, 'fast');
-  const preparedBuilds = await listPackageBuilds(packageRoot);
-  const preparedTei = preparedBuilds.retrieval.find((item) => item.profileDigest === localPreparation.retrievalProfileDigest);
-  assert.ok(preparedTei);
-  const preparedTeiLock = JSON.parse(await fs.readFile(path.join(preparedTei.path, 'retrieval.lock.json'), 'utf8'));
-  const tei = {
-    evidenceProfileDigest: localPreparation.evidenceProfileDigest,
-    retrievalProfileDigest: localPreparation.retrievalProfileDigest,
-    compatibilityDigest: preparedTeiLock.compatibilityDigest,
-  };
+  await compileComposeProject(packageRoot, { mode: 'package', force: true, target: 'fast', contextRoot: libraryRoot });
+  const teiPreparation = await ensurePackageBuildForTarget(packageRoot, { target: 'tei', contextRoot: libraryRoot });
+  assert.equal(teiPreparation.preparation, 'retrieval_compiled');
+  await applyLibraryLock(libraryRoot, libraryLock(packageId, 1));
+  await Promise.all([
+    writeRuntimeBinding(fastRuntimeRoot, { runtimeId: 'fast-runtime', libraryRoot, target: 'fast' }),
+    writeRuntimeBinding(teiRuntimeRoot, { runtimeId: 'tei-runtime', libraryRoot, target: 'tei' }),
+  ]);
+
+  const fast = await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fastRuntimeRoot, target: 'fast' });
+  const tei = await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: teiRuntimeRoot, target: 'tei' });
+  const fastState = await ensureRuntimeState(fastRuntimeRoot);
+  const teiState = await ensureRuntimeState(teiRuntimeRoot);
+
+  assert.equal(fast.target, 'fast');
+  assert.equal(tei.target, 'tei');
+  assert.equal(fastState.libraryRoot, teiState.libraryRoot);
   assert.equal(fast.evidenceProfileDigest, tei.evidenceProfileDigest);
-  assert.notEqual(fast.retrievalProfileDigest, tei.retrievalProfileDigest);
+  assert.equal(fastState.activation.packages[packageId].evidenceDigest, teiState.activation.packages[packageId].evidenceDigest);
+  assert.notEqual(fast.compatibilityDigest, tei.compatibilityDigest);
+  assert.notEqual(fastState.activation.packages[packageId].retrievalBuildDigest, teiState.activation.packages[packageId].retrievalBuildDigest);
+  assert.equal(JSON.stringify(fastState.activation).includes(libraryRoot), false);
+  await assert.rejects(fs.access(path.join(libraryRoot, ...DKB_RUNTIME_ACTIVATION_PATH.split('/'))));
 
-  await activateStoredPackageBuild({
-    root: packageRoot,
-    target: 'fast',
-    evidenceProfileDigest: fast.evidenceProfileDigest,
-    retrievalProfileDigest: fast.retrievalProfileDigest,
-    compatibilityDigest: fast.compatibilityDigest,
-  });
-  await applyLibraryLock(root, {
-    library: { name: 'Runtime switch proof' },
-    generation: 1,
-    entries: {
-      [packageId]: {
-        identity: packageId,
-        kind: 'dkb',
-        source: 'registry',
-        version: '1.0.0',
-        digest: stableHash({ package: packageId, version: '1.0.0' }),
-        path: 'knowledge',
-        requiredBy: [`root:${packageId}`],
-        installedAt: '2026-08-28T00:00:00.000Z',
-      },
-    },
-    resolvedAt: '2026-08-28T00:00:00.000Z',
-  });
-  await refreshRuntimeCatalogFromInstalledArtifacts(root);
-  await writeRuntimeLock(root, {
-    ...fast,
-    packages: { [packageId]: fast.packages[packageId] },
-  });
-
-  const beforeUnhealthySwitch = await fs.readFile(path.join(root, '.dkb', 'runtime.lock.json'));
-  await assert.rejects(
-    switchRuntimePipelineFromRegistry({
-      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-      stateRoot: root,
-      target: 'unhealthy',
-      registryUrl: 'http://127.0.0.1:1',
-      timeoutMs: 50,
-    }),
-    /required providers are unhealthy.*test-only outage/iu,
-  );
-  assert.deepEqual(await fs.readFile(path.join(root, '.dkb', 'runtime.lock.json')), beforeUnhealthySwitch);
-
-  const switched = await switchRuntimePipelineFromRegistry({
-    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-    stateRoot: root,
-    target: 'tei',
-    registryUrl: 'http://127.0.0.1:1',
-    timeoutMs: 50,
-  });
-  assert.equal(switched.previousTarget, 'fast');
-  assert.equal(switched.target, 'tei');
-  assert.deepEqual(switched.packages.map((item) => item.preparation), ['retained']);
-  assert.equal((await readRuntimeLock(root)).target, 'tei');
-  assert.equal((await readRuntimeLock(packageRoot)).target, 'tei');
-
-  const switchedBack = await switchRuntimePipelineFromRegistry({
-    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-    stateRoot: root,
-    target: 'fast',
-    registryUrl: 'http://127.0.0.1:1',
-    timeoutMs: 50,
-  });
-  assert.deepEqual(switchedBack.packages.map((item) => item.preparation), ['retained']);
-  assert.equal((await readRuntimeLock(root)).target, 'fast');
+  const teiActivationBefore = await activationBytes(teiRuntimeRoot);
+  await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fastRuntimeRoot, target: 'tei' });
+  assert.deepEqual(await activationBytes(teiRuntimeRoot), teiActivationBefore);
+  assert.equal((await runtimeStatus(teiRuntimeRoot)).target, 'tei');
 
   const builds = await listPackageBuilds(packageRoot);
   assert.equal(builds.evidence.length, 1);
   assert.equal(builds.retrieval.length, 2);
-
-  const teiBuild = builds.retrieval.find((item) => item.profileDigest === tei.retrievalProfileDigest);
+  const teiBuild = builds.retrieval.find((item) => item.profileDigest === teiPreparation.retrievalProfileDigest);
   assert.ok(teiBuild);
   await fs.appendFile(path.join(teiBuild.path, 'artifacts', 'test-index.json'), '\ncorrupt\n', 'utf8');
-  const beforeRootLock = await fs.readFile(path.join(root, '.dkb', 'runtime.lock.json'));
-  const beforePackageLock = await fs.readFile(path.join(packageRoot, '.dkb', 'runtime.lock.json'));
-  const beforeConfig = await fs.readFile(path.join(root, '.dkb', 'config.json'));
-
+  await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fastRuntimeRoot, target: 'fast' });
+  const fastActivationBefore = await activationBytes(fastRuntimeRoot);
   await assert.rejects(
-    switchRuntimePipelineFromRegistry({
-      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-      stateRoot: root,
-      target: 'tei',
-      registryUrl: 'http://127.0.0.1:1',
-      timeoutMs: 50,
-    }),
-    /artifact tree is corrupt/i,
+    switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fastRuntimeRoot, target: 'tei' }),
+    /artifact tree mismatch/i,
   );
-  assert.deepEqual(await fs.readFile(path.join(root, '.dkb', 'runtime.lock.json')), beforeRootLock);
-  assert.deepEqual(await fs.readFile(path.join(packageRoot, '.dkb', 'runtime.lock.json')), beforePackageLock);
-  assert.deepEqual(await fs.readFile(path.join(root, '.dkb', 'config.json')), beforeConfig);
-  assert.equal((await readRuntimeLock(root)).target, 'fast');
+  assert.deepEqual(await activationBytes(fastRuntimeRoot), fastActivationBefore);
+
+  await applyLibraryLock(libraryRoot, libraryLock(packageId, 2));
+  assert.equal((await runtimeStatus(fastRuntimeRoot)).stale, true);
+  assert.equal((await runtimeStatus(teiRuntimeRoot)).stale, true);
+  await assert.rejects(
+    getOrOpenRuntimeQueryContext(await ensureRuntimeState(fastRuntimeRoot), 'Shared Runtime Library', DEFAULT_DKB_RUNTIME_CONTEXT),
+    /Runtime fast-runtime is stale/i,
+  );
 });
+
+function libraryLock(packageId, generation) {
+  return {
+    library: { name: 'Shared Runtime Library' }, generation,
+    entries: { [packageId]: {
+      identity: packageId, kind: 'dkb', source: 'local', version: '1.0.0',
+      digest: stableHash({ package: packageId, version: '1.0.0' }), path: 'knowledge',
+      requiredBy: [`root:${packageId}`], installedAt: '2026-08-28T00:00:00.000Z',
+    } },
+    resolvedAt: '2026-08-28T00:00:00.000Z',
+  };
+}
+
+async function activationBytes(runtimeRoot) {
+  return fs.readFile(path.join(runtimeRoot, ...DKB_RUNTIME_ACTIVATION_PATH.split('/')));
+}
 
 async function writePipelinePlugins(root) {
   await writeJson(path.join(root, '.dkb', 'config.json'), {
-    format: 'dkb.config.v2',
-    activeTarget: 'fast',
+    format: 'dkb.config.v2', activeTarget: 'fast',
     targets: {
-      fast: {
-        evidence: '@test/core',
-        embedding: '@test/fast',
-        index: '@test/core',
-        retrieval: '@test/core',
-      },
-      tei: {
-        evidence: '@test/core',
-        embedding: '@test/tei',
-        index: '@test/core',
-        retrieval: '@test/core',
-      },
-      unhealthy: {
-        evidence: '@test/core',
-        embedding: '@test/unhealthy',
-        index: '@test/core',
-        retrieval: '@test/core',
-      },
+      fast: { evidence: '@test/core', embedding: '@test/fast', index: '@test/core', retrieval: '@test/core' },
+      tei: { evidence: '@test/core', embedding: '@test/tei', index: '@test/core', retrieval: '@test/core' },
     },
   });
   await writePlugin(root, '@test', 'core', `
-import fs from 'node:fs/promises';
-import path from 'node:path';
-export const apiVersion = 2;
-export const id = '@test/core';
-export const version = '1.0.0';
+import fs from 'node:fs/promises'; import path from 'node:path';
+export const apiVersion=2; export const id='@test/core'; export const version='1.0.0';
 export function setup(context) {
-  context.registerProvider({
-    kind: 'evidence',
-    async compile({ dkb }) {
-      const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
-      return {
-        records: [{
-          id: 'record-1', chunkId: 'record-1', text,
-          metadata: {
-            assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem',
-            locator: { path: 'knowledge.md', chunk: 0 }, assetLocator: { path: 'knowledge.md' },
-            title: 'knowledge.md', hash: 'sha256:record-1', updatedAt: '2026-08-28T00:00:00.000Z',
-            chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length,
-            sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:source-1' },
-          },
-        }],
-        receipt: { providerId: id, providerVersion: version, build: {} },
-      };
-    },
-  });
-  context.registerProvider({
-    kind: 'index', mode: 'packaged', format: 'test.index.v1',
-    async compilePackage({ artifactsRoot, compiled }) {
-      const target = path.join(artifactsRoot, 'test-index.json');
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, JSON.stringify(compiled.records));
-      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
-    },
-    async validatePackage({ artifactsRoot }) {
-      const records = JSON.parse(await fs.readFile(path.join(artifactsRoot, 'test-index.json'), 'utf8'));
-      return { documentCount: records.length };
-    },
-    async openRuntime() { return null; },
-  });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
-}
-`);
+  context.registerProvider({kind:'evidence',async compile({dkb}){const text=await fs.readFile(path.join(dkb.root,'knowledge.md'),'utf8');return {records:[{id:'record-1',chunkId:'record-1',text,metadata:{assetId:'knowledge.md',storeId:'filesystem',type:'filesystem',locator:{path:'knowledge.md',chunk:0},assetLocator:{path:'knowledge.md'},title:'knowledge.md',hash:'sha256:record-1',updatedAt:'2026-08-28T00:00:00.000Z',chunkOrdinal:0,chunkStart:0,chunkEnd:text.length,sourceMetadata:{dkb_path:'knowledge.md',dkb_source_hash:'sha256:source-1'}}}],receipt:{providerId:id,providerVersion:version,build:{}}};}});
+  context.registerProvider({kind:'index',mode:'packaged',format:'test.index.v1',async compilePackage({artifactsRoot,compiled}){const target=path.join(artifactsRoot,'test-index.json');await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,JSON.stringify(compiled.records));return {providerId:id,providerVersion:version,build:{recordCount:compiled.records.length}};},async validatePackage({artifactsRoot}){const records=JSON.parse(await fs.readFile(path.join(artifactsRoot,'test-index.json'),'utf8'));return {documentCount:records.length};},async openRuntime(){return {providerId:id,async search(){return [];},async close(){}};}});
+  context.registerProvider({kind:'retrieval',protocol:'dkb.evidence.v1',openRuntime(){return {providerId:'@test/retrieval',protocol:'dkb.evidence.v1',async search(){return {hits:[],trace:{}};},async close(){}};}});
+}`);
   await writePlugin(root, '@test', 'fast', embeddingPlugin('@test/fast', 'fast-space', 0.25));
   await writePlugin(root, '@test', 'tei', embeddingPlugin('@test/tei', 'tei-space', 0.75));
-  await writePlugin(root, '@test', 'unhealthy', embeddingPlugin('@test/unhealthy', 'unhealthy-space', 0.5, false));
 }
 
-function embeddingPlugin(id, space, value, healthy = true) {
-  return `
-export const apiVersion = 2;
-export const id = '${id}';
-export const version = '1.0.0';
-export function setup(context) {
-  context.registerProvider({
-    kind: 'embedding',
-    async embedDocuments({ texts }) { return texts.map(() => [${value}]); },
-    async embedQuery() { return [${value}]; },
-    compatibility() { return { embeddingSpace: '${space}', dimensions: 1, metric: 'cosine', normalized: true }; },
-    health() { return { ok: ${healthy}, detail: ${healthy ? "'ready'" : "'test-only outage'"} }; },
-  });
-}
-`;
+function embeddingPlugin(id, space, value) {
+  return `export const apiVersion=2;export const id='${id}';export const version='1.0.0';export function setup(context){context.registerProvider({kind:'embedding',async embedDocuments({texts}){return texts.map(()=>[${value}]);},async embedQuery(){return [${value}];},compatibility(){return {embeddingSpace:'${space}',dimensions:1,metric:'cosine',normalized:true};},health(){return {ok:true};}});}`;
 }
 
 async function writePlugin(root, namespace, name, source) {

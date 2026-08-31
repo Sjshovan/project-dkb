@@ -141,9 +141,16 @@ export function summarizePipelineList(value: unknown): string[] {
       targets: targets.map((value) => {
         const target = value && typeof value === 'object' ? value as Record<string, unknown> : {};
         return {
-          default: target.active ? '*' : '',
+          active: target.active ? '*' : '',
           name: target.name ?? '-',
-          providers: Array.isArray(target.providers) ? target.providers.join(', ') : '-',
+          origin: target.origin ?? '-',
+          dimensions: target.dimensions ?? '-',
+          metric: target.metric ?? '-',
+          coverage: target.coverage && typeof target.coverage === 'object'
+            ? `${String((target.coverage as Record<string, unknown>).ready ?? 0)}/${String((target.coverage as Record<string, unknown>).total ?? 0)}`
+            : '-',
+          status: target.health ?? '-',
+          services: Array.isArray(target.requiredServices) ? target.requiredServices.join(', ') || 'none' : '-',
         };
       }),
     }),

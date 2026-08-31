@@ -1,6 +1,6 @@
 # 0005 - Evidence And Retrieval Build Graph
 
-- **Status:** Build graph retained; active-artifact details superseded by 0006
+- **Status:** Build graph retained; active Runtime ownership superseded by 0008
 - **Date:** 2026-08-27
 - **Scope:** compilation identity, stored build layers, Runtime selection, Registry publication, and Collection portability
 
@@ -24,9 +24,9 @@ PackageVersion must reproduce the same Evidence digest; disagreement is a
 nondeterministic compiler error, not another selectable build.
 
 Collections lock PackageVersions only. `dkb-lock.json` remains logical
-dependency state. `.dkb/runtime.lock.json` records the active target and exact
-Evidence/Retrieval build chain applied in one Library. `.dkb/state.sqlite`
-remains authoritative applied state.
+dependency state and `.dkb/state.sqlite` remains authoritative applied state.
+ADR 0008 moves the exact Evidence/Retrieval activation chain into each
+Runtime's independent state root.
 
 ## Resolution
 
@@ -36,10 +36,10 @@ every active PackageVersion the resolver requires:
 1. an Evidence Build whose Evidence Profile digest exactly matches;
 2. a Retrieval Build whose parent Evidence digest and Retrieval Profile digest
    exactly match; and
-3. one Library-wide compatibility digest.
+3. one Runtime activation compatibility digest.
 
 There is no newest-build, nearest-match, or cross-space fallback. All missing
-layers are staged and verified before the active Runtime snapshot changes.
+layers are staged and verified before that Runtime's snapshot changes.
 
 ## Storage And Distribution
 

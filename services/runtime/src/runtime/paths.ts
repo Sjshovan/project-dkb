@@ -1,22 +1,27 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { DKB_RUNTIME_ACTIVATION_PATH, DKB_RUNTIME_BINDING_PATH } from '@sjshovan/dkb-protocol/paths.js';
 
-export interface DkbRuntimePaths {
+export interface DkbRuntimeStatePaths {
   stateRoot: string;
   stateDir: string;
-  vendorDir: string;
-  packagesDir: string;
+  bindingPath: string;
+  activationPath: string;
+  cacheDir: string;
+  tracesDir: string;
+  auditDir: string;
 }
 
-export function runtimePaths(stateRoot = defaultRuntimeStateRoot()): DkbRuntimePaths {
+export function runtimePaths(stateRoot = defaultRuntimeStateRoot()): DkbRuntimeStatePaths {
   const resolved = path.resolve(stateRoot);
-
   return {
     stateRoot: resolved,
     stateDir: path.join(resolved, '.dkb'),
-    vendorDir: path.join(resolved, 'vendor'),
-    packagesDir: path.join(resolved, 'vendor'),
+    bindingPath: path.join(resolved, ...DKB_RUNTIME_BINDING_PATH.split('/')),
+    activationPath: path.join(resolved, ...DKB_RUNTIME_ACTIVATION_PATH.split('/')),
+    cacheDir: path.join(resolved, '.dkb', 'cache'),
+    tracesDir: path.join(resolved, '.dkb', 'traces'),
+    auditDir: path.join(resolved, '.dkb', 'audit'),
   };
 }
 
@@ -24,17 +29,19 @@ export function defaultRuntimeStateRoot(): string {
   return process.env.DKB_RUNTIME_STATE_ROOT || path.resolve('.dkb/runtime');
 }
 
-export async function ensureRuntimeState(stateRoot?: string): Promise<DkbRuntimePaths> {
+export async function ensureRuntimeStateDirectories(stateRoot?: string): Promise<DkbRuntimeStatePaths> {
   const paths = runtimePaths(stateRoot);
-
-  await fs.mkdir(paths.stateDir, { recursive: true });
-  await fs.mkdir(paths.vendorDir, { recursive: true });
-  await ensureRuntimeProjectManifest(paths.stateRoot);
-
+  await Promise.all([
+    fs.mkdir(paths.stateDir, { recursive: true }),
+    fs.mkdir(paths.cacheDir, { recursive: true }),
+    fs.mkdir(paths.tracesDir, { recursive: true }),
+    fs.mkdir(paths.auditDir, { recursive: true }),
+  ]);
   return paths;
 }
 
 export async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(target), { recursive: true });
   const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
   const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
   const hadTarget = await pathExists(target);
@@ -74,54 +81,11 @@ export async function pathExists(target: string): Promise<boolean> {
 
 export function safeRuntimeId(value: string): string {
   const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-
   return id || 'dkb';
 }
 
 export function isEphemeralDkbStatePath(sourceRoot: string, source: string): boolean {
   const relative = path.relative(sourceRoot, source);
-  const cachePath = path.join('.dkb', 'cache');
-  const locksPath = path.join('.dkb', 'locks');
-  const runsPath = path.join('.dkb', 'runs');
-  const pluginsPath = path.join('.dkb', 'plugins');
-  const configPath = path.join('.dkb', 'config.json');
-
-  return relative === cachePath
-    || relative.startsWith(`${cachePath}${path.sep}`)
-    || relative === locksPath
-    || relative.startsWith(`${locksPath}${path.sep}`)
-    || relative === runsPath
-    || relative.startsWith(`${runsPath}${path.sep}`)
-    || relative === pluginsPath
-    || relative.startsWith(`${pluginsPath}${path.sep}`)
-    || relative === configPath;
-}
-
-async function ensureRuntimeProjectManifest(root: string): Promise<void> {
-  const manifestPath = path.join(root, 'dkb.json');
-
-  if (await pathExists(manifestPath)) {
-    const existing = await maybeReadJsonObject(manifestPath);
-
-    if (existing?.type !== 'library') {
-      throw new DkbError(`Runtime root uses the removed ${String(existing?.type ?? 'legacy')} manifest format. Initialize a new DKB Library.`);
-    }
-    return;
-  }
-
-  await fs.writeFile(manifestPath, `${JSON.stringify({
-    manifestVersion: 1,
-    type: 'library',
-    name: titleFromId(path.basename(root) || 'DKB Library'),
-    description: 'Local DKB Library.',
-    roots: {},
-  }, null, 2)}\n`, 'utf8');
-}
-
-function titleFromId(value: string): string {
-  return value
-    .split(/[-_.]+/g)
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(' ') || value;
+  const ephemeral = ['cache', 'locks', 'runs', 'traces', 'audit'].map((entry) => path.join('.dkb', entry));
+  return ephemeral.some((entry) => relative === entry || relative.startsWith(`${entry}${path.sep}`));
 }

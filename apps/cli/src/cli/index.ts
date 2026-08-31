@@ -123,6 +123,8 @@ const runtime = registerRuntimeCommands(program, {
   presenter,
   printJson,
   currentRuntimeUrl,
+  currentRuntimeAdminClient,
+  currentLibraryRoot,
   parsePositiveInteger,
   parseRuntimeKind,
   defaultDistribution,
@@ -141,7 +143,6 @@ registerKnowledgeCommands(program, runtime, {
   currentLibraryRoot,
   currentRuntimeUrl,
   currentRuntimeAdminClient,
-  defaultRuntimeContext,
   parsePositiveInteger,
   parseLimit,
 });
@@ -150,7 +151,7 @@ registerArtifactCommands(program, {
   presenter,
   printJson,
   currentLibraryRoot,
-  defaultRuntimeContext,
+  currentRuntimeAdminClient,
 });
 
 registerPipelineCommands(program, {

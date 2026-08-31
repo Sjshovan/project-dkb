@@ -2,26 +2,25 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@sjshovan/dkb-library/signing.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
-import { maybeReadRuntimeLock, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
+import { validateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
+import { libraryStateIdentity } from '@sjshovan/dkb-library/state.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import type { DkbRuntimeLock } from '@sjshovan/dkb-protocol/builds.js';
+import type { DkbRuntimeActivation } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import type { DkbRetrievalProfileLock } from '@sjshovan/dkb-protocol/retrievalProfile.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
-import {
-  ensureRuntimeState,
-  maybeReadJsonObject,
-  pathExists,
-  runtimePaths,
-  type DkbRuntimePaths,
-} from './paths.js';
+import { maybeReadJsonObject, pathExists } from './paths.js';
+import { ensureRuntimeState, type DkbRuntimeInstance } from './activation.js';
 
 export interface DkbRuntimeStatus {
   ok: true;
   version: string;
+  runtimeId: string;
   stateRoot: string;
   libraryPath: string;
+  target: string;
+  stale: boolean;
   packageCount: number;
   dkbIds: string[];
   packages: Array<{
@@ -30,8 +29,16 @@ export interface DkbRuntimeStatus {
     packageTreeHash?: string;
   }>;
   retrievalProfile: DkbRetrievalProfileLock | null;
-  runtimeLock: DkbRuntimeLock | null;
+  activation: DkbRuntimeActivation | null;
 }
+
+export type DkbRuntimePublicStatus = Omit<DkbRuntimeStatus, 'stateRoot' | 'libraryPath'> & {
+  library: {
+    id: string;
+    generation: number;
+    stateDigest: string;
+  };
+};
 
 export interface DkbRuntimePackageListing {
   libraryRoot: string;
@@ -49,7 +56,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
   const paths = await ensureRuntimeState(stateRoot);
   const dkbs = await installedDkbs(paths);
   const dkbIds = dkbs.map((dkb) => dkb.manifest.id).sort();
-  const packageTreeHashes = await runtimePackageTreeHashes(paths.stateRoot);
+  const packageTreeHashes = await runtimePackageTreeHashes(paths.libraryRoot);
   const packages = await Promise.all(dkbs.map(async (dkb) => {
     try {
       const receiptPath = path.join(dkb.root, DKB_PACKAGE_RECEIPT_PATH);
@@ -74,48 +81,71 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
       };
     }
   }));
-  const runtimeLock = await maybeReadRuntimeLock(paths.stateRoot);
-  const retrievalProfile = runtimeLock ? await activeRetrievalProfile(dkbs, runtimeLock) : null;
+  const identity = await libraryStateIdentity(paths.libraryRoot);
+  const stale = Boolean(paths.activation && (
+    paths.activation.library.id !== identity.id
+    || paths.activation.library.generation !== identity.generation
+    || paths.activation.library.stateDigest !== identity.stateDigest
+  ));
+  const retrievalProfile = paths.activation
+    ? await activeRetrievalProfile(dkbs, paths.activation).catch(() => null)
+    : null;
 
   return {
     ok: true,
     version: DKB_RUNTIME_VERSION,
+    runtimeId: paths.runtimeId,
     stateRoot: paths.stateRoot,
-    libraryPath: paths.stateRoot,
+    libraryPath: paths.libraryRoot,
+    target: paths.binding.target,
+    stale,
     packageCount: dkbIds.length,
     dkbIds,
     packages,
     retrievalProfile,
-    runtimeLock,
+    activation: paths.activation,
   };
 }
 
-async function activeRetrievalProfile(dkbs: LoadedDkb[], runtime: DkbRuntimeLock): Promise<DkbRetrievalProfileLock> {
-  const dkb = dkbs.find((candidate) => Boolean(runtime.packages[candidate.manifest.id]));
+export async function runtimePublicStatus(stateRoot?: string): Promise<DkbRuntimePublicStatus> {
+  const status = await runtimeStatus(stateRoot);
+  const { stateRoot: _stateRoot, libraryPath: _libraryPath, ...publicStatus } = status;
+  const library = await libraryStateIdentity(status.libraryPath);
+  return { ...publicStatus, library };
+}
+
+async function activeRetrievalProfile(dkbs: LoadedDkb[], activation: DkbRuntimeActivation): Promise<DkbRetrievalProfileLock> {
+  const dkb = dkbs.find((candidate) => Boolean(activation.packages[candidate.manifest.id]));
   if (!dkb) {
-    throw new Error(`Runtime lock ${runtime.retrievalProfileDigest} does not reference an installed DKB`);
+    throw new Error(`Runtime activation ${activation.retrievalProfileDigest} does not reference an installed DKB`);
   }
-  const entry = runtime.packages[dkb.manifest.id]!;
-  const graph = await validatePackageBuildGraph(dkb.root, {
-    ...runtime,
-    packages: { [dkb.manifest.id]: entry },
-  });
+  const entry = activation.packages[dkb.manifest.id]!;
+  const graph = await validateStoredPackageBuild(dkb.root, entry);
   return graph.profile;
 }
 
 export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntimePackageListing> {
-  const paths = runtimePaths(stateRoot);
-  const state = await readLibraryState(paths.stateRoot);
+  const paths = await ensureRuntimeState(stateRoot);
+  return listLibraryPackages(paths.libraryRoot, paths.activation);
+}
+
+export async function listLibraryPackages(
+  libraryRoot: string,
+  activation: DkbRuntimeActivation | null = null,
+): Promise<DkbRuntimePackageListing> {
+  const resolvedLibraryRoot = path.resolve(libraryRoot);
+  const state = await readLibraryState(resolvedLibraryRoot);
   const candidates = new Map<string, string>();
 
   for (const entry of Object.values(state.entries)) {
-    candidates.set(entry.identity, path.resolve(paths.stateRoot, entry.path));
+    candidates.set(entry.identity, path.resolve(resolvedLibraryRoot, entry.path));
   }
 
   try {
-    for (const namespace of await fs.readdir(paths.vendorDir, { withFileTypes: true })) {
+    const vendorDir = path.join(resolvedLibraryRoot, 'vendor');
+    for (const namespace of await fs.readdir(vendorDir, { withFileTypes: true })) {
       if (!namespace.isDirectory() || !namespace.name.startsWith('@') || namespace.name.includes('.replace-')) continue;
-      const namespacePath = path.join(paths.vendorDir, namespace.name);
+      const namespacePath = path.join(vendorDir, namespace.name);
       for (const nested of await fs.readdir(namespacePath, { withFileTypes: true })) {
         if (!nested.isDirectory() || nested.name.includes('.replace-')) continue;
         const nestedPath = path.join(namespacePath, nested.name);
@@ -134,9 +164,11 @@ export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntim
     const stateEntry = state.entries[id];
     const kind = stateEntry?.kind ?? (manifest.type === 'collection' ? 'collection' as const : 'dkb' as const);
     const recordCount = kind === 'dkb'
-      ? await validatePackageBuildGraph(packagePath)
-        .then((graph) => readEvidenceCatalog(graph.evidencePath).records.length)
-        .catch(() => undefined)
+      ? activation?.packages[id]
+        ? await validateStoredPackageBuild(packagePath, activation.packages[id]!)
+          .then((graph) => readEvidenceCatalog(graph.evidencePath).records.length)
+          .catch(() => undefined)
+        : undefined
       : undefined;
 
     return {
@@ -150,17 +182,18 @@ export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntim
   }));
 
   return {
-    libraryRoot: paths.stateRoot,
+    libraryRoot: resolvedLibraryRoot,
     packages: packages.sort((left, right) => left.id.localeCompare(right.id)),
   };
 }
 
 export async function runtimeLibrary(stateRoot?: string) {
   const status = await runtimeStatus(stateRoot);
+  const identity = await libraryStateIdentity(status.libraryPath);
 
   return {
     library: {
-      id: 'default',
+      id: identity.id,
       path: status.libraryPath,
       dkbIds: status.dkbIds,
       packageCount: status.packageCount,
@@ -168,9 +201,9 @@ export async function runtimeLibrary(stateRoot?: string) {
   };
 }
 
-export async function installedDkbs(paths: DkbRuntimePaths): Promise<LoadedDkb[]> {
+export async function installedDkbs(paths: DkbRuntimeInstance): Promise<LoadedDkb[]> {
   try {
-    const library = await loadLibrary(paths.stateRoot);
+    const library = await loadLibrary(paths.libraryRoot);
     return uniqueLoadedDkbs([
       ...library.collections.flatMap((collection) => collection.dkbs),
       ...library.dkbs,
@@ -180,8 +213,8 @@ export async function installedDkbs(paths: DkbRuntimePaths): Promise<LoadedDkb[]
   }
 }
 
-export async function runtimeLibraryId(paths: DkbRuntimePaths): Promise<string> {
-  return (await loadLibrary(paths.stateRoot)).manifest.id;
+export async function runtimeLibraryId(paths: DkbRuntimeInstance): Promise<string> {
+  return (await loadLibrary(paths.libraryRoot)).manifest.id;
 }
 
 async function runtimePackageTreeHashes(root: string): Promise<Map<string, string>> {

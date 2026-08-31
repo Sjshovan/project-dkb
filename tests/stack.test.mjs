@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { backupDkbStack, composeArguments, prepareDkbStack, restoreDkbStack } from '../apps/cli/dist/stack/manager.js';
 import { assertDockerAvailable, localImageMetadataIssue } from '../apps/cli/dist/stack/docker.js';
@@ -27,10 +26,17 @@ test('stack image checks reject stale version and revision labels', () => {
   assert.match(localImageMetadataIssue({}, '0.2.0', 'development'), /version is missing/u);
 });
 
-test('stack Docker preflight fails quickly when the engine is unavailable', { skip: dockerAvailable }, () => {
+test('stack Docker preflight fails quickly when the engine is unavailable', () => {
   const started = Date.now();
-  assert.throws(assertDockerAvailable, /Docker did not respond|Docker engine is not available/iu);
-  assert.ok(Date.now() - started < 10_000, 'Docker preflight exceeded its bounded timeout');
+  const previousPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.throws(assertDockerAvailable, /Docker did not respond|Docker engine is not available/iu);
+    assert.ok(Date.now() - started < 10_000, 'Docker preflight exceeded its bounded timeout');
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
 });
 
 test('stack preparation generates reusable local secrets without returning them', async () => {
@@ -39,9 +45,9 @@ test('stack preparation generates reusable local secrets without returning them'
   process.env.DKB_STACK_STATE_ROOT = root;
 
   try {
-    const first = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'proof-stack', 'default');
+    const first = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'proof-stack', { compilerTarget: 'default', runtimeTarget: 'default' });
     const firstEnvironment = await fs.readFile(first.envFile, 'utf8');
-    const second = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'proof-stack', 'default');
+    const second = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'proof-stack', { compilerTarget: 'default', runtimeTarget: 'default' });
     const secondEnvironment = await fs.readFile(second.envFile, 'utf8');
 
     assert.equal(firstEnvironment, secondEnvironment);
@@ -88,7 +94,7 @@ test('unlocked development stacks refresh local-build images without retaining r
       '',
     ].join('\n'), 'utf8');
 
-    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'image-refresh', 'default');
+    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'image-refresh', { compilerTarget: 'default', runtimeTarget: 'default' });
     const environment = await fs.readFile(stack.envFile, 'utf8');
     assert.match(environment, /^DKB_COMPILER_IMAGE=dkb-compiler:0\.2\.0$/mu);
     assert.match(environment, /^DKB_RUNTIME_IMAGE=dkb-runtime:0\.2\.0$/mu);
@@ -106,7 +112,7 @@ test('Meilisearch stack target selects the distribution recipe for compiler and 
   process.env.DKB_STACK_STATE_ROOT = root;
 
   try {
-    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'meili-proof', 'tei-meilisearch');
+    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'meili-proof', { compilerTarget: 'tei-meilisearch', runtimeTarget: 'tei-meilisearch' });
     const compiler = JSON.parse(await fs.readFile(path.join(stack.root, 'compiler-context', '.dkb', 'config.json'), 'utf8'));
     const runtime = JSON.parse(await fs.readFile(path.join(stack.root, 'runtime', '.dkb', 'config.json'), 'utf8'));
 
@@ -130,7 +136,7 @@ test('TEI stack targets select the pinned shared embedding service for compiler 
   process.env.DKB_STACK_STATE_ROOT = root;
 
   try {
-    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'tei-proof', 'tei-meilisearch');
+    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'tei-proof', { compilerTarget: 'tei-meilisearch', runtimeTarget: 'tei-meilisearch' });
     const environment = await fs.readFile(stack.envFile, 'utf8');
     const compiler = JSON.parse(await fs.readFile(path.join(stack.root, 'compiler-context', '.dkb', 'config.json'), 'utf8'));
     const runtime = JSON.parse(await fs.readFile(path.join(stack.root, 'runtime', '.dkb', 'config.json'), 'utf8'));
@@ -156,29 +162,12 @@ test('changing the compiler target preserves a populated Runtime target until pi
   process.env.DKB_STACK_STATE_ROOT = root;
 
   try {
-    const first = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'target-transaction', 'fastembed-faiss');
-    const evidenceProfileDigest = stableHash({ evidence: 'default' });
-    const retrievalProfileDigest = stableHash({ retrieval: 'fastembed' });
-    await fs.writeFile(path.join(first.root, 'runtime', '.dkb', 'runtime.lock.json'), `${JSON.stringify({
-      format: 'dkb.runtime-lock.v2',
-      target: 'fastembed-faiss',
-      evidenceProfileDigest,
-      retrievalProfileDigest,
-      compatibilityDigest: stableHash({ compatibility: 'fastembed' }),
-      packages: {
-        '@test/installed': {
-          version: '1.0.0',
-          evidenceProfileDigest,
-          evidenceDigest: stableHash({ evidence: 'installed' }),
-          retrievalProfileDigest,
-          retrievalBuildDigest: stableHash({ build: 'fastembed' }),
-        },
-      },
-      generation: 1,
-      generatedAt: '2026-08-28T00:00:00.000Z',
-    }, null, 2)}\n`, 'utf8');
+    const first = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'target-transaction', {
+      compilerTarget: 'fastembed-faiss',
+      runtimeTarget: 'fastembed-faiss',
+    });
 
-    const switchedCompiler = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'target-transaction', 'tei-faiss');
+    const switchedCompiler = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'target-transaction', { compilerTarget: 'tei-faiss' });
     const compiler = JSON.parse(await fs.readFile(path.join(switchedCompiler.root, 'compiler-context', '.dkb', 'config.json'), 'utf8'));
     const runtime = JSON.parse(await fs.readFile(path.join(switchedCompiler.root, 'runtime', '.dkb', 'config.json'), 'utf8'));
     const environment = await fs.readFile(switchedCompiler.envFile, 'utf8');
@@ -247,7 +236,7 @@ test('stack preparation derives unknown target services and options from the inj
     assert.equal(stack.profiles.includes('lab'), true);
     assert.match(environment, /^DKB_LAB_IMAGE=example\.invalid\/lab-daemon:1$/mu);
     await assert.rejects(
-      () => prepareDkbStack(distribution, 'local', 'not-a-target'),
+      () => prepareDkbStack(distribution, 'local', { compilerTarget: 'not-a-target' }),
       /not available.*Available targets: lab-target/u,
     );
   } finally {
@@ -295,7 +284,7 @@ test('stopped stack backup and restore preserve state with a verified sidecar', 
   process.env.DKB_STACK_BACKUP_ROOT = backups;
 
   try {
-    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'backup-proof', 'fastembed-faiss');
+    const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'backup-proof', { compilerTarget: 'fastembed-faiss', runtimeTarget: 'fastembed-faiss' });
     await fs.writeFile(path.join(stack.root, 'runtime', 'proof.txt'), 'preserve me', 'utf8');
     const backup = await backupDkbStack(DEFAULT_DKB_DISTRIBUTION, 'backup-proof');
     assert.equal(backup.containsSecrets, true);

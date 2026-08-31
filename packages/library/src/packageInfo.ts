@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -29,15 +30,15 @@ import {
   DKB_EVIDENCE_BUILD_LOCK,
   DKB_RETRIEVAL_BUILD_LOCK,
   listPackageBuilds,
-  maybeReadRuntimeLock,
   readRetrievalBuildProfile,
-  validatePackageBuildGraph,
+  validateStoredPackageBuild,
+  verifyKnowledgeBuilds,
 } from './builds.js';
 import { readEvidenceCatalog } from './evidenceCatalog.js';
 import {
   DKB_INSTALL_PLAN_RECEIPT_PATH,
   DKB_PACKAGE_RECEIPT_PATH,
-  parsePackageReceipt,
+  parsePersistedPackageReceipt,
   verifyLayerReceipt,
   verifyPackageReceipt,
 } from './signing.js';
@@ -72,13 +73,13 @@ export async function inspectInstalledPackage(
     ...(!manifest ? { recovery: reinstallCommand(root, entry) } : {}),
   }];
   const sourceSummary = await summarizePortablePackageTree(packageRoot).catch(() => ({ files: 0, bytes: 0 }));
-  const runtimeLock = await maybeReadRuntimeLock(root).catch(() => null);
-  const runtimeEntry = runtimeLock?.packages[entry.identity];
   const buildResult = entry.kind === 'dkb'
-    ? await inspectDkbBuilds(packageRoot, runtimeLock?.compatibilityDigest, runtimeEntry, root, entry)
+    ? await inspectDkbBuilds(packageRoot, root, entry)
     : { builds: [] as DkbInstalledBuildSummary[], catalog: null, graph: null, profile: null, check: notApplicableBuildCheck() };
   checks.push(buildResult.check);
-  const receiptResult = await inspectReceipt(root, packageRoot, entry);
+  const receiptResult = entry.kind === 'dkb'
+    ? await inspectReceipt(root, packageRoot, entry)
+    : collectionReceiptStatus();
   checks.push(receiptResult.check, receiptResult.installChainCheck);
   const members = manifest?.type === 'collection'
     ? collectionMembers(manifest, entry.identity, await readLibraryState(root))
@@ -100,24 +101,6 @@ export async function inspectInstalledPackage(
     });
   }
   const recovery = unique(checks.map((check) => check.recovery).filter((value): value is string => Boolean(value)));
-  const active = runtimeLock && runtimeEntry && buildResult.profile
-    ? {
-        target: runtimeLock.target,
-        evidenceProfileDigest: runtimeEntry.evidenceProfileDigest,
-        evidenceDigest: runtimeEntry.evidenceDigest,
-        retrievalProfileDigest: runtimeEntry.retrievalProfileDigest,
-        retrievalBuildDigest: runtimeEntry.retrievalBuildDigest,
-        compatibilityDigest: runtimeLock.compatibilityDigest,
-        embeddingProvider: buildResult.profile.profile.embedding.provider,
-        embeddingSpace: buildResult.profile.profile.embedding.space,
-        dimensions: buildResult.profile.profile.embedding.dimensions,
-        metric: buildResult.profile.profile.embedding.metric,
-        indexProvider: buildResult.profile.profile.index.provider,
-        indexFormat: buildResult.profile.profile.index.format,
-        retrievalProvider: buildResult.profile.profile.retrieval.provider,
-      }
-    : undefined;
-
   return {
     format: DKB_INSTALLED_ENTRY_DETAIL_FORMAT,
     libraryRoot: root,
@@ -138,7 +121,6 @@ export async function inspectInstalledPackage(
       searchableSources: buildResult.catalog?.assets.length ?? 0,
       evidenceRecords: buildResult.catalog?.records.length ?? 0,
     },
-    ...(active ? { activeBuild: active } : {}),
     builds: buildResult.builds,
     provenance: {
       ...(receiptResult.receipt?.payload.packageTreeHash ? { packageTreeHash: receiptResult.receipt.payload.packageTreeHash } : {}),
@@ -212,10 +194,11 @@ export async function verifyInstalledPackage(input: {
 }): Promise<DkbPackageVerification> {
   const { root, entry, packageRoot } = await installedEntryContext(input.libraryRoot, input.identity);
   const checks: DkbInspectionCheck[] = [];
-  let receipt: ReturnType<typeof parsePackageReceipt> | null = null;
+  let receipt: ReturnType<typeof parsePersistedPackageReceipt> | null = null;
 
+  let manifest: DkbSourceManifest | null = null;
   try {
-    const manifest = await loadManifest(packageRoot);
+    manifest = await loadManifest(packageRoot);
     checks.push(check('package.manifest', 'Package manifest', 'passed', `${manifest.name} matches an installed ${manifest.type}.`));
   } catch (error) {
     checks.push(check('package.manifest', 'Package manifest', 'failed', errorMessage(error), reinstallCommand(root, entry)));
@@ -223,19 +206,33 @@ export async function verifyInstalledPackage(input: {
 
   if (entry.kind === 'dkb') {
     try {
-      const graph = await validatePackageBuildGraph(packageRoot);
-      checks.push(check('build.graph', 'Active build graph', 'passed', `${graph.evidence.evidenceDigest} → ${graph.retrieval.retrievalBuildDigest}`));
+      const verification = await verifyKnowledgeBuilds(packageRoot);
+      if (!verification.ok) {
+        throw new DkbError(verification.checks.filter((item) => !item.ok).map((item) => item.detail).join('; '));
+      }
+      checks.push(check(
+        'build.graph',
+        'Stored build graph',
+        'passed',
+        `${verification.checks.length} immutable Retrieval Build${verification.checks.length === 1 ? '' : 's'} verified.`,
+      ));
     } catch (error) {
-      checks.push(check('build.graph', 'Active build graph', 'failed', errorMessage(error), rebuildOrReinstallCommand(root, packageRoot, entry)));
+      checks.push(check('build.graph', 'Stored build graph', 'failed', errorMessage(error), rebuildOrReinstallCommand(root, packageRoot, entry)));
     }
   } else {
-    checks.push(check('build.graph', 'Active build graph', 'not_applicable', 'Collections resolve member DKB builds and do not own retrieval artifacts.'));
+    checks.push(check('build.graph', 'Stored build graph', 'not_applicable', 'Collections resolve member DKB builds and do not own retrieval artifacts.'));
+    checks.push(await verifyCollectionSnapshot(root, entry, manifest));
   }
 
-  if (entry.source === 'registry') {
+  if (entry.kind === 'collection') {
+    checks.push(check(
+      'package.receipt', 'Package receipt', 'not_applicable',
+      'Collections are verified as immutable revision snapshots; signed DKB source/build receipts belong to their member packages.',
+    ));
+  } else if (entry.source === 'registry') {
     try {
       const receiptPath = path.join(packageRoot, DKB_PACKAGE_RECEIPT_PATH);
-      receipt = parsePackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
+      receipt = parsePersistedPackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
       const tree = await hashPortablePackageTree(packageRoot);
       const treeMatches = !receipt.payload.packageTreeHash || receipt.payload.packageTreeHash === tree.hash;
       checks.push(check(
@@ -283,13 +280,15 @@ async function installedEntryContext(libraryRoot: string, identity: string) {
 
 async function inspectDkbBuilds(
   packageRoot: string,
-  compatibilityDigest: string | undefined,
-  runtimeEntry: { evidenceProfileDigest: string; evidenceDigest: string; retrievalProfileDigest: string; retrievalBuildDigest: string } | undefined,
   libraryRoot: string,
   entry: DkbLibraryStateEntry,
 ) {
   try {
-    const [graph, listed] = await Promise.all([validatePackageBuildGraph(packageRoot), listPackageBuilds(packageRoot)]);
+    const [verification, listed] = await Promise.all([verifyKnowledgeBuilds(packageRoot), listPackageBuilds(packageRoot)]);
+    if (!verification.ok) {
+      throw new DkbError(verification.checks.filter((item) => !item.ok).map((item) => item.detail).join('; '));
+    }
+    const graph = await representativeStoredPackageGraph(packageRoot, listed);
     const catalog = readEvidenceCatalog(graph.evidencePath);
     const builds: DkbInstalledBuildSummary[] = [];
     for (const item of listed.evidence) {
@@ -297,7 +296,6 @@ async function inspectDkbBuilds(
       const lock = validateEvidenceBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
       builds.push({
         kind: 'evidence', profileDigest: item.profileDigest, buildDigest: item.evidenceDigest,
-        active: Boolean(runtimeEntry && runtimeEntry.evidenceProfileDigest === item.profileDigest && runtimeEntry.evidenceDigest === item.evidenceDigest),
         bytes: await directoryBytes(item.path), generatedAt: lock.generatedAt, recordCount: lock.recordCount, chunkCount: lock.chunkCount,
       });
     }
@@ -306,19 +304,18 @@ async function inspectDkbBuilds(
       const lock = validateRetrievalBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
       builds.push({
         kind: 'retrieval', profileDigest: item.profileDigest, buildDigest: item.buildDigest,
-        active: Boolean(runtimeEntry && runtimeEntry.retrievalProfileDigest === item.profileDigest && runtimeEntry.retrievalBuildDigest === item.buildDigest),
         bytes: await directoryBytes(item.path), generatedAt: lock.generatedAt, compatibilityDigest: lock.compatibilityDigest,
       });
     }
     const profile = await readRetrievalBuildProfile(graph.retrievalPath);
     return {
       builds, catalog, graph, profile,
-      check: check('build.graph', 'Active build graph', 'passed', `${catalog.assets.length} sources and ${catalog.records.length} Evidence records are active in ${compatibilityDigest ?? graph.retrieval.compatibilityDigest}.`),
+      check: check('build.graph', 'Stored build graph', 'passed', `${catalog.assets.length} sources and ${catalog.records.length} Evidence records are stored in ${graph.retrieval.compatibilityDigest}.`),
     };
   } catch (error) {
     return {
       builds: [] as DkbInstalledBuildSummary[], catalog: null, graph: null, profile: null,
-      check: check('build.graph', 'Active build graph', 'failed', errorMessage(error), rebuildOrReinstallCommand(libraryRoot, packageRoot, entry)),
+      check: check('build.graph', 'Stored build graph', 'failed', errorMessage(error), rebuildOrReinstallCommand(libraryRoot, packageRoot, entry)),
     };
   }
 }
@@ -331,12 +328,12 @@ async function inspectReceipt(libraryRoot: string, packageRoot: string, entry: D
       installChainCheck: check('install.receipts', 'Installed build receipts', 'not_applicable', 'Editable local knowledge uses locally compiled builds.'),
     };
   }
-  let receipt: ReturnType<typeof parsePackageReceipt> | null = null;
+  let receipt: ReturnType<typeof parsePersistedPackageReceipt> | null = null;
   let status: 'present' | 'missing' | 'invalid' = 'missing';
   let receiptMessage = 'The signed package receipt is missing.';
   try {
     const receiptPath = path.join(packageRoot, DKB_PACKAGE_RECEIPT_PATH);
-    receipt = parsePackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
+    receipt = parsePersistedPackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
     status = 'present';
     receiptMessage = `Signed source receipt ${receipt.payloadHash} is present.`;
   } catch (error) {
@@ -361,9 +358,74 @@ async function inspectReceipt(libraryRoot: string, packageRoot: string, entry: D
   };
 }
 
+function collectionReceiptStatus() {
+  return {
+    receipt: null,
+    status: 'not_applicable' as const,
+    installChainStatus: 'not_applicable' as const,
+    check: check(
+      'package.receipt', 'Package receipt', 'not_applicable',
+      'Collections are immutable revision snapshots; their member DKBs own signed source and build receipts.',
+    ),
+    installChainCheck: check(
+      'install.receipts', 'Installed build receipts', 'not_applicable',
+      'Collection members are verified through their own exact install receipt chains.',
+    ),
+  };
+}
+
+async function verifyCollectionSnapshot(
+  libraryRoot: string,
+  entry: DkbLibraryStateEntry,
+  manifest: DkbSourceManifest | null,
+): Promise<DkbInspectionCheck> {
+  const recovery = reinstallCommand(libraryRoot, entry);
+  if (!manifest || manifest.type !== 'collection') {
+    return check('collection.snapshot', 'Collection snapshot', 'failed', 'The installed Collection manifest is missing or invalid.', recovery);
+  }
+  const revision = manifest.meta?.revision;
+  const recordedDigest = manifest.meta?.digest;
+  if (!Number.isInteger(revision) || typeof recordedDigest !== 'string' || !manifest.members) {
+    return check('collection.snapshot', 'Collection snapshot', 'failed', 'The Collection revision, digest, or member snapshot is invalid.', recovery);
+  }
+  const state = await readLibraryState(libraryRoot);
+  const members = [] as Array<{ id: string; version: string; digest: string }>;
+  for (const [identity, selector] of Object.entries(manifest.members)) {
+    const member = state.entries[identity];
+    if (!member || member.kind !== 'dkb' || member.status !== 'installed'
+      || member.version !== selector || typeof member.digest !== 'string') {
+      return check(
+        'collection.snapshot', 'Collection snapshot', 'failed',
+        `${identity}@${String(selector)} does not match an installed member with its immutable release digest.`,
+        recovery,
+      );
+    }
+    members.push({ id: identity, version: member.version, digest: member.digest });
+  }
+  const snapshot = {
+    type: 'collection',
+    id: entry.identity,
+    name: manifest.displayName ?? manifest.name,
+    revision,
+    members,
+  };
+  const computedDigest = `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
+  const valid = computedDigest === recordedDigest
+    && recordedDigest === entry.digest
+    && revision === entry.revision;
+  return check(
+    'collection.snapshot', 'Collection snapshot', valid ? 'passed' : 'failed',
+    valid
+      ? `Revision r${revision} and ${members.length} exact member release${members.length === 1 ? '' : 's'} match ${computedDigest}.`
+      : `Collection snapshot digest mismatch: expected ${String(entry.digest)}, recorded ${recordedDigest}, computed ${computedDigest}.`,
+    valid ? undefined : recovery,
+  );
+}
+
 async function activeEvidenceMap(packageRoot: string): Promise<Map<string, EvidenceFileSummary>> {
   try {
-    const graph = await validatePackageBuildGraph(packageRoot);
+    const listed = await listPackageBuilds(packageRoot);
+    const graph = await representativeStoredPackageGraph(packageRoot, listed);
     const catalog = readEvidenceCatalog(graph.evidencePath);
     const records = new Map<string, number>();
     for (const record of catalog.records) records.set(record.assetId, (records.get(record.assetId) ?? 0) + 1);
@@ -378,7 +440,7 @@ async function activeEvidenceMap(packageRoot: string): Promise<Map<string, Evide
 
 async function verifyStoredInstallChain(
   packageRoot: string,
-  sourceReceipt: ReturnType<typeof parsePackageReceipt>,
+  sourceReceipt: ReturnType<typeof parsePersistedPackageReceipt>,
   resolver: Parameters<typeof verifyPackageReceipt>[1],
   checks: DkbInspectionCheck[],
   entry: DkbLibraryStateEntry,
@@ -393,7 +455,13 @@ async function verifyStoredInstallChain(
     const planResult = await verifyLayerReceipt(plan.receipt, resolver, 'Stored install-plan receipt');
     const planPayload = { ...plan } as Record<string, unknown>;
     delete planPayload.receipt;
-    const graph = await validatePackageBuildGraph(packageRoot);
+    const graph = await validateStoredPackageBuild(packageRoot, {
+      version: plan.package.version,
+      evidenceProfileDigest: plan.evidenceProfileDigest,
+      evidenceDigest: plan.evidenceDigest,
+      retrievalProfileDigest: plan.retrievalProfileDigest,
+      retrievalBuildDigest: plan.retrievalBuildDigest,
+    });
     const identities = [
       stableHash(sourceReceipt) === source.receiptHash,
       evidenceResult.receiptHash === evidence.receiptHash,
@@ -409,12 +477,95 @@ async function verifyStoredInstallChain(
     const ok = identities.every(Boolean) && evidenceResult.ok && retrievalResult.ok && planResult.ok;
     checks.push(check(
       'install.receipt-chain', 'Installed receipt chain', ok ? 'passed' : 'failed',
-      ok ? 'Source, Evidence, Retrieval, and install-plan receipts verify against the active build graph.' : 'The stored install receipt chain does not match the active build graph.',
+      ok ? 'Source, Evidence, Retrieval, and install-plan receipts verify against the exact installed build graph.' : 'The stored install receipt chain does not match the exact installed build graph.',
       ok ? undefined : reinstallCommand(libraryRoot, entry),
     ));
+    await verifyAttachedRetrievalReceipts(packageRoot, plan, resolver, checks, entry, libraryRoot);
   } catch (error) {
     checks.push(check('install.receipt-chain', 'Installed receipt chain', missingFileError(error) ? 'warning' : 'failed', errorMessage(error), reinstallCommand(libraryRoot, entry)));
   }
+}
+
+async function representativeStoredPackageGraph(
+  packageRoot: string,
+  listed: Awaited<ReturnType<typeof listPackageBuilds>>,
+) {
+  const selected = [...listed.retrieval].sort((left, right) =>
+    `${left.profileDigest}/${left.buildDigest}`.localeCompare(`${right.profileDigest}/${right.buildDigest}`))[0];
+  if (!selected) throw new DkbError(`No Retrieval Builds are stored at ${packageRoot}.`);
+  const lockPath = path.join(selected.path, DKB_RETRIEVAL_BUILD_LOCK);
+  const retrieval = validateRetrievalBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
+  return validateStoredPackageBuild(packageRoot, {
+    version: retrieval.package.version,
+    evidenceProfileDigest: retrieval.evidenceProfileDigest,
+    evidenceDigest: retrieval.evidenceDigest,
+    retrievalProfileDigest: retrieval.retrievalProfileDigest,
+    retrievalBuildDigest: retrieval.retrievalBuildDigest,
+  });
+}
+
+async function verifyAttachedRetrievalReceipts(
+  packageRoot: string,
+  plan: ReturnType<typeof validateInstallPlan>,
+  resolver: Parameters<typeof verifyPackageReceipt>[1],
+  checks: DkbInspectionCheck[],
+  entry: DkbLibraryStateEntry,
+  libraryRoot: string,
+): Promise<void> {
+  const receiptRoot = path.join(packageRoot, '.dkb', 'receipts', 'retrieval');
+  const files = await fs.readdir(receiptRoot).catch((error) => {
+    if (missingFileError(error)) return [] as string[];
+    throw error;
+  });
+  for (const file of files.filter((value) => value.endsWith('.json')).sort()) {
+    try {
+      const receiptPath = path.join(receiptRoot, file);
+      const result = await verifyLayerReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), resolver, receiptPath);
+      const payload = result.receipt.payload;
+      const evidenceProfileDigest = receiptField(payload, 'evidenceProfileDigest', receiptPath);
+      const evidenceDigest = receiptField(payload, 'evidenceDigest', receiptPath);
+      const retrievalProfileDigest = receiptField(payload, 'retrievalProfileDigest', receiptPath);
+      const compatibilityDigest = receiptField(payload, 'compatibilityDigest', receiptPath);
+      const retrievalBuildDigest = receiptField(payload, 'retrievalBuildDigest', receiptPath);
+      const graph = await validateStoredPackageBuild(packageRoot, {
+        version: result.receipt.package.version,
+        evidenceProfileDigest,
+        evidenceDigest,
+        retrievalProfileDigest,
+        retrievalBuildDigest,
+      });
+      const expectedFile = `${retrievalBuildDigest.slice('sha256:'.length)}.json`;
+      const ok = result.ok
+        && result.receipt.type === 'dkb.retrieval.receipt'
+        && result.receipt.package.id === entry.identity
+        && result.receipt.package.version === entry.version
+        && result.receipt.parentReceiptHash === plan.artifacts[1]!.receiptHash
+        && receiptField(payload, 'evidenceReceiptHash', receiptPath) === plan.artifacts[1]!.receiptHash
+        && graph.retrieval.compatibilityDigest === compatibilityDigest
+        && file === expectedFile;
+      checks.push(check(
+        `retrieval.receipt.${retrievalBuildDigest.slice(7, 19)}`,
+        'Attached Retrieval receipt',
+        ok ? 'passed' : 'failed',
+        ok ? `${retrievalBuildDigest} verifies against its immutable build.` : `${retrievalBuildDigest} does not match its signed receipt chain.`,
+        ok ? undefined : reinstallCommand(libraryRoot, entry),
+      ));
+    } catch (error) {
+      checks.push(check(
+        `retrieval.receipt.${path.basename(file, '.json').slice(0, 12)}`,
+        'Attached Retrieval receipt',
+        'failed',
+        errorMessage(error),
+        reinstallCommand(libraryRoot, entry),
+      ));
+    }
+  }
+}
+
+function receiptField(payload: Record<string, unknown>, name: string, source: string): string {
+  const value = payload[name];
+  if (typeof value !== 'string' || value.length === 0) throw new DkbError(`Invalid ${source}: ${name} is required.`);
+  return value;
 }
 
 function collectionMembers(
@@ -450,11 +601,11 @@ function manifestSummary(manifest: DkbSourceManifest | null): DkbInstalledEntryD
   };
 }
 
-function publisherSummary(value: ReturnType<typeof parsePackageReceipt>['publisher']): DkbReceiptSignerSummary {
+function publisherSummary(value: ReturnType<typeof parsePersistedPackageReceipt>['publisher']): DkbReceiptSignerSummary {
   return { subjectId: value.accountId, keyId: value.keyId, publicKeyFingerprint: value.publicKeyFingerprint, algorithm: value.algorithm, signedAt: value.signedAt };
 }
 
-function registrySummary(value: ReturnType<typeof parsePackageReceipt>['registry']): DkbReceiptSignerSummary {
+function registrySummary(value: ReturnType<typeof parsePersistedPackageReceipt>['registry']): DkbReceiptSignerSummary {
   return { subjectId: value.registryId, keyId: value.keyId, publicKeyFingerprint: value.publicKeyFingerprint, algorithm: value.algorithm, signedAt: value.signedAt };
 }
 
@@ -466,7 +617,7 @@ function trustedKeyResolver(keys: DkbSigningKeyRecord[]) {
 }
 
 function notApplicableBuildCheck(): DkbInspectionCheck {
-  return check('build.graph', 'Active build graph', 'not_applicable', 'Collections resolve member DKB builds and do not own retrieval artifacts.');
+  return check('build.graph', 'Stored build graph', 'not_applicable', 'Collections resolve member DKB builds and do not own retrieval artifacts.');
 }
 
 function check(id: string, label: string, status: DkbInspectionStatus, message: string, recovery?: string): DkbInspectionCheck {

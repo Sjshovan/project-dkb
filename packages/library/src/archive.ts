@@ -98,8 +98,7 @@ function isExcludedArchivePath(entryPath: string): boolean {
   // prevents tar from visiting any of its descendants.
   if (normalized === '.dkb') return false;
   return normalized !== '.dkb/builds'
-    && !normalized.startsWith('.dkb/builds/')
-    && normalized !== '.dkb/runtime.lock.json';
+    && !normalized.startsWith('.dkb/builds/');
 }
 
 function isSensitiveOrGeneratedPath(value: string): boolean {

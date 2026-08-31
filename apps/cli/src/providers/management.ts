@@ -16,9 +16,6 @@ import {
 } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost, pluginPath, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbPluginModule } from '@sjshovan/dkb-pipeline/types.js';
-import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
 
 export type DkbPluginScope = 'local' | 'global';
 
@@ -30,27 +27,6 @@ export interface DkbPluginListEntry {
   selected: boolean;
   valid: boolean;
   error?: string;
-}
-
-export async function listPipelineTargets(input: { distribution: DkbDistribution; root: string; globalRoot?: string }): Promise<{
-  root: string;
-  activeTarget: string;
-  targets: Array<{ name: string; active: boolean; providers: string[] }>;
-}> {
-  const resolved = await resolveContextConfig(input.root, { defaults: input.distribution.defaults, ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}) });
-  const names = [...new Set([
-    ...Object.keys(input.distribution.defaults.targets ?? {}),
-    ...Object.keys(resolved.global.targets ?? {}),
-    ...Object.keys(resolved.local.targets ?? {}),
-  ])];
-  return {
-    root: resolved.root,
-    activeTarget: resolved.activeTarget,
-    targets: names.map((name) => {
-      const target = resolveContextConfigDocuments(resolved.root, resolved.globalRoot, input.distribution.defaults, resolved.global, resolved.local, name).target;
-      return { name, active: name === resolved.activeTarget, providers: selectedPluginIds(target) };
-    }).sort((left, right) => left.name.localeCompare(right.name)),
-  };
 }
 
 export async function activatePipelineTarget(input: { distribution: DkbDistribution; root: string; name: string; globalRoot?: string }): Promise<ReturnType<DkbProviderHost['describe']>> {
@@ -66,18 +42,6 @@ export async function activatePipelineTarget(input: { distribution: DkbDistribut
   const host = await DkbProviderHost.createFromConfig(resolved, input.distribution);
 
   try {
-    const selected = await resolveProviderRetrievalProfile(host);
-    const runtime = await maybeReadRuntimeLock(root);
-    if (runtime && (
-      runtime.evidenceProfileDigest !== selected.evidenceProfileDigest
-      || runtime.retrievalProfileDigest !== selected.retrievalProfileDigest
-      || runtime.compatibilityDigest !== stableHash(selected.compatibility)
-    )) {
-      throw new DkbError(
-        `Cannot activate pipeline target "${input.name}": the active Runtime Build is ${runtime.retrievalProfileDigest}. `
-        + `Prepare this target first with dkb build ${root} --pipeline ${input.name}.`,
-      );
-    }
     const description = host.describe();
     await writeDkbContextConfig(targetPath, candidate);
     return description;
@@ -224,18 +188,6 @@ export async function setPipelineTarget(input: {
       throw new DkbError(`Pipeline validation failed: ${unhealthy.map((result) => `${result.id}: ${result.detail ?? 'unhealthy'}`).join('; ')}`);
     }
     if (input.activate) {
-      const installedRuntime = await maybeReadRuntimeLock(root);
-
-      if (installedRuntime) {
-        const selectedProfile = await resolveProviderRetrievalProfile(host);
-        const selectedCompatibilityDigest = stableHash(selectedProfile.compatibility);
-
-        if (selectedCompatibilityDigest !== installedRuntime.compatibilityDigest) {
-          throw new DkbError(
-            `Cannot activate pipeline target "${input.name}": installed packages require compatibility ${installedRuntime.compatibilityDigest}, but the target provides ${selectedCompatibilityDigest}. Save it with --no-activate, rebuild or remove incompatible packages, then activate it.`,
-          );
-        }
-      }
     }
     const description = host.describe();
     await writeDkbContextConfig(targetPath, candidate);
@@ -245,13 +197,14 @@ export async function setPipelineTarget(input: {
   }
 }
 
-export async function verifyPipeline(input: { distribution: DkbDistribution; root: string; globalRoot?: string; target?: string }): Promise<{
+export async function verifyPipeline(input: { distribution: DkbDistribution; root: string; libraryRoot?: string; globalRoot?: string; target?: string }): Promise<{
   ok: boolean;
   pipeline: ReturnType<DkbProviderHost['describe']>;
   health: Awaited<ReturnType<DkbProviderHost['health']>>;
 }> {
   const host = await DkbProviderHost.create({
     root: input.root,
+    ...(input.libraryRoot ? { libraryRoot: input.libraryRoot } : {}),
     ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}),
     ...(input.target ? { target: input.target } : {}),
     distribution: input.distribution,

@@ -51,7 +51,10 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     return payload;
   });
 
-  await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+  // Resolve hashed Vite assets from disk at request time. Console builds may be
+  // refreshed while the local server is running, so a startup-time file glob
+  // would leave the new asset names unreachable until the server restarted.
+  await app.register(fastifyStatic, { root: webRoot, wildcard: true });
 
   app.get('/healthz', async () => ({ status: 'ready', service: 'dkb-console', version: '0.1.0' }));
   app.post('/control/bootstrap', async (request) => {
@@ -91,6 +94,31 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
   app.get<{ Params: { name: string } }>('/api/v1/libraries/:name/packages', async (request) => {
     security.session(request);
     return resultOf(await runner.run('library.packages', { library: request.params.name }));
+  });
+  app.get<{ Params: { name: string } }>('/api/v1/libraries/:name/runtimes', async (request) => {
+    security.session(request);
+    const listing = resultOf(await runner.run('runtime.list', {}));
+    const runtimes = records(listing, 'runtimes').filter((runtime) => runtime.library === request.params.name);
+    return {
+      runtimes: await Promise.all(runtimes.map(async (runtime) => {
+        try {
+          return { ...runtime, runtime: resultOf(await runner.run('runtime.show', { runtime: runtime.name })) };
+        } catch (error) {
+          return { ...runtime, status: 'offline', message: errorMessage(error) };
+        }
+      })),
+    };
+  });
+  app.get<{ Params: { name: string } }>('/api/v1/runtimes/:name', async (request) => {
+    security.session(request);
+    const listing = records(resultOf(await runner.run('runtime.list', {})), 'runtimes');
+    const inventory = listing.find((runtime) => runtime.name === request.params.name);
+    if (!inventory) throw new ConsoleInputError(`Unknown host Runtime: ${request.params.name}.`);
+    return { inventory, runtime: resultOf(await runner.run('runtime.show', { runtime: request.params.name })) };
+  });
+  app.get<{ Params: { name: string } }>('/api/v1/runtimes/:name/pipelines', async (request) => {
+    security.session(request);
+    return resultOf(await runner.run('pipeline.list', { runtime: request.params.name }));
   });
   app.get<{ Params: { registry: string } }>('/api/v1/registries/:registry', async (request) => {
     security.session(request);
@@ -181,11 +209,7 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     security.assertMutation(request);
     const body = objectBody(request.body);
     if (typeof body.commandId !== 'string') throw new ConsoleInputError('commandId is required.');
-    let input = parseConsoleCommandInput(consoleCommand(body.commandId), body.input);
-    if (body.commandId === 'package.install') input = { ...input, ...await assertPackageInstallRegistry(runner, input) };
-    if (body.commandId === 'package.uninstall' || body.commandId === 'package.upgrade') {
-      input = { ...input, ...await owningRuntimeContext(runner, input) };
-    }
+    const input = parseConsoleCommandInput(consoleCommand(body.commandId), body.input);
     const operation = runner.start(body.commandId, input);
     return reply.code(202).send({ operationId: operation.id, status: operation.status });
   });
@@ -296,55 +320,10 @@ async function registryContext(runner: ConsoleCommandRunner, name: string): Prom
   return { registry, libraries: libraries.filter((library) => library.registry === name) };
 }
 
-async function assertPackageInstallRegistry(runner: ConsoleCommandRunner, input: Record<string, unknown>): Promise<{ runtimeUrl?: string }> {
-  const [libraryListing, registryListing, runtimeListing] = await Promise.all([
-    runner.run('library.list', {}),
-    runner.run('registry.list', {}),
-    runner.run('runtime.list', {}),
-  ]);
-  const libraries = records(resultOf(libraryListing), 'libraries');
-  const registries = records(resultOf(registryListing), 'registries');
-  const library = libraries.find((item) => item.name === input.library || item.path === input.library);
-  if (!library) throw new ConsoleInputError(`Unknown host Library: ${String(input.library)}.`);
-  const registryName = typeof library.registry === 'string' ? library.registry : undefined;
-  const registry = registryName ? registries.find((item) => item.name === registryName) : undefined;
-  if (!registry || typeof registry.url !== 'string' || normalizedUrl(registry.url) !== normalizedUrl(String(input.registryUrl))) {
-    throw new ConsoleInputError(
-      `Library ${String(library.name)} is not connected to this Registry. Use Connect Library, then retry the installation.`,
-    );
-  }
-  return runtimeForLibrary(records(resultOf(runtimeListing), 'runtimes'), library);
-}
-
-async function owningRuntimeContext(runner: ConsoleCommandRunner, input: Record<string, unknown>): Promise<{ runtimeUrl?: string }> {
-  const [libraryListing, runtimeListing] = await Promise.all([
-    runner.run('library.list', {}),
-    runner.run('runtime.list', {}),
-  ]);
-  const library = records(resultOf(libraryListing), 'libraries')
-    .find((item) => item.name === input.library || item.path === input.library);
-  if (!library) throw new ConsoleInputError(`Unknown host Library: ${String(input.library)}.`);
-  return runtimeForLibrary(records(resultOf(runtimeListing), 'runtimes'), library);
-}
-
-function runtimeForLibrary(runtimes: Record<string, unknown>[], library: Record<string, unknown>): { runtimeUrl?: string } {
-  const matches = runtimes.filter((runtime) => runtime.library === library.name && typeof runtime.url === 'string');
-  if (matches.length === 0) return {};
-  const selected = matches.find((runtime) => runtime.selected === true);
-  if (matches.length > 1 && !selected) {
-    throw new ConsoleInputError(`Library ${String(library.name)} has multiple owning Runtimes. Select one before changing installed knowledge.`);
-  }
-  return { runtimeUrl: String((selected ?? matches[0])!.url) };
-}
-
 function records(value: unknown, key: string): Record<string, unknown>[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
   const list = (value as Record<string, unknown>)[key];
   return Array.isArray(list) ? list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
-}
-
-function normalizedUrl(value: string): string {
-  return new URL(value).toString().replace(/\/$/u, '');
 }
 
 async function availableLoopbackPort(preferred: number): Promise<number> {

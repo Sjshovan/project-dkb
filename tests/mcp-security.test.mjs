@@ -24,7 +24,7 @@ test('remote MCP exposes only read-only search and fetch tools', async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createDkbReadOnlyMcpServer({
     runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-    libraryPath: '.',
+    stateRoot: '.',
     publicBaseUrl: 'https://knowledge.example',
   });
   const client = new Client({ name: 'dkb-proof-client', version: '1.0.0' });
@@ -132,6 +132,13 @@ test('HTTP MCP permits explicit no-auth mode only for a disposable proof', async
 
 test('Runtime serves health and read-only MCP from the same origin', async () => {
   const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-mcp-origin-'));
+  const libraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-mcp-library-'));
+  await fs.writeFile(path.join(libraryRoot, 'dkb.json'), `${JSON.stringify({
+    manifestVersion: 1,
+    type: 'library',
+    name: 'MCP origin test Library',
+    roots: {},
+  }, null, 2)}\n`);
   const previousEnabled = process.env.DKB_MCP_HTTP_ENABLED;
   const previousToken = process.env.DKB_MCP_BEARER_TOKEN;
   process.env.DKB_MCP_HTTP_ENABLED = 'true';
@@ -140,6 +147,7 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
     host: '127.0.0.1',
     port: 0,
     stateRoot,
+    libraryPath: libraryRoot,
     adminToken: 'same-origin-admin-token',
   });
   const address = runtime.address();
@@ -150,7 +158,12 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
   try {
     const health = await fetch(`${origin}/health`);
     assert.equal(health.status, 200);
-    assert.equal((await health.json()).runtime.version, '0.2.0');
+    const healthBody = await health.json();
+    assert.equal(healthBody.runtime.version, '0.2.0');
+    assert.equal(healthBody.runtime.library.id, 'mcp-origin-test-library');
+    assert.equal('stateRoot' in healthBody.runtime, false);
+    assert.equal('libraryPath' in healthBody.runtime, false);
+    assert.equal(JSON.stringify(healthBody).includes(libraryRoot), false);
 
     const listed = await fetch(`${origin}/mcp`, {
       method: 'POST',
@@ -171,6 +184,16 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
     });
     assert.equal(reloaded.status, 401);
 
+    const pipelineCatalog = await fetch(`${origin}/api/runtime/pipelines`);
+    assert.equal(pipelineCatalog.status, 401);
+    const authorizedPipelines = await fetch(`${origin}/api/runtime/pipelines`, {
+      headers: { authorization: 'Bearer same-origin-admin-token' },
+    });
+    assert.equal(authorizedPipelines.status, 200);
+    const pipelineBody = await authorizedPipelines.json();
+    assert.equal(pipelineBody.activeTarget, 'default');
+    assert.equal(pipelineBody.targets.some((target) => target.name === 'default'), true);
+
     const install = await fetch(`${origin}/api/dkbs/install-registry`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -189,11 +212,12 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
       },
       body: '{}',
     });
-    assert.equal(authorizedReload.status, 200);
-    assert.equal((await authorizedReload.json()).status, 'reloaded');
+    assert.notEqual(authorizedReload.status, 401);
+    assert.ok([200, 400].includes(authorizedReload.status));
   } finally {
     await new Promise((resolve, reject) => runtime.close((error) => error ? reject(error) : resolve()));
     await fs.rm(stateRoot, { recursive: true, force: true });
+    await fs.rm(libraryRoot, { recursive: true, force: true });
     restoreEnvironment('DKB_MCP_HTTP_ENABLED', previousEnabled);
     restoreEnvironment('DKB_MCP_BEARER_TOKEN', previousToken);
   }

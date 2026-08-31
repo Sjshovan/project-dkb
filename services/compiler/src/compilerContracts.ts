@@ -23,7 +23,7 @@ export interface CompiledComposeProject {
   recordCount: number;
   evidenceCatalogPath: string;
   retrievalManifestPath: string;
-  runtimeLockPath: string;
+  retrievalBuildPath: string;
   lockPath: string;
   lock: DkbLockManifest;
   cacheHit: boolean;
@@ -75,6 +75,7 @@ export interface CompileRetrievalFromEvidenceOptions {
   distribution: DkbDistribution;
   target: string;
   contextRoot?: string;
+  libraryRoot?: string;
 }
 
 export interface VerifyComposeProjectResult {

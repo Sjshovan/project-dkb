@@ -7,6 +7,7 @@ export * from './paths.js';
 export * from './progress.js';
 export * from './registryCatalog.js';
 export * from './retrievalProfile.js';
+export * from './runtimeActivation.js';
 export * from './space.js';
 export * from './types.js';
 export * from './validation.js';

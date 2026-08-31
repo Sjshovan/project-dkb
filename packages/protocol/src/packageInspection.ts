@@ -1,4 +1,4 @@
-export const DKB_INSTALLED_ENTRY_DETAIL_FORMAT = 'dkb.installed-entry-detail.v1';
+export const DKB_INSTALLED_ENTRY_DETAIL_FORMAT = 'dkb.installed-entry-detail.v2';
 export const DKB_PACKAGE_CONTENTS_FORMAT = 'dkb.package-contents.v1';
 export const DKB_PACKAGE_PREVIEW_FORMAT = 'dkb.package-preview.v1';
 export const DKB_PACKAGE_VERIFICATION_FORMAT = 'dkb.package-verification.v1';
@@ -17,7 +17,6 @@ export interface DkbInstalledBuildSummary {
   kind: 'evidence' | 'retrieval';
   profileDigest: string;
   buildDigest: string;
-  active: boolean;
   bytes: number;
   generatedAt?: string;
   recordCount?: number;
@@ -53,21 +52,6 @@ export interface DkbInstalledEntryDetail {
     bytes: number;
     searchableSources: number;
     evidenceRecords: number;
-  };
-  activeBuild?: {
-    target: string;
-    evidenceProfileDigest: string;
-    evidenceDigest: string;
-    retrievalProfileDigest: string;
-    retrievalBuildDigest: string;
-    compatibilityDigest: string;
-    embeddingProvider?: string;
-    embeddingSpace?: string;
-    dimensions?: number;
-    metric?: string;
-    indexProvider?: string;
-    indexFormat?: string;
-    retrievalProvider?: string;
   };
   builds: DkbInstalledBuildSummary[];
   provenance: {

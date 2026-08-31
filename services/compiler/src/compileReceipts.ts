@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { loadCompose } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_COMPILE_RECEIPT_PATH, DKB_RUNTIME_LOCK_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { DKB_COMPILE_RECEIPT_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { validateDkbLockManifest } from '@sjshovan/dkb-protocol/validation.js';
 import type { DkbLockManifest, LoadedLibrary } from '@sjshovan/dkb-protocol/types.js';
 import {
@@ -95,7 +95,7 @@ export async function cachedCompileResultFor(
     recordCount: lock.compiled?.recordCount ?? Object.values(lock.packages).reduce((total, item) => total + item.recordCount, 0),
     evidenceCatalogPath: path.join(graph.evidencePath, DKB_EVIDENCE_CATALOG_FILENAME),
     retrievalManifestPath: path.join(graph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME),
-    runtimeLockPath: resolveFrom(root, DKB_RUNTIME_LOCK_PATH),
+    retrievalBuildPath: graph.retrievalPath,
     lockPath,
     lock,
     cacheHit: true,
@@ -175,15 +175,10 @@ export async function lockForState(
       },
       retrieval: {
         path: relative(graph?.retrievalPath ?? ''),
+        target: state.resolvedProfile?.target ?? '',
         profileDigest: graph?.retrieval.retrievalProfileDigest ?? null,
         digest: graph?.retrieval.retrievalBuildDigest ?? null,
         compatibilityDigest: graph?.retrieval.compatibilityDigest ?? null,
-        status: graph ? 'built' : 'not_built',
-      },
-      runtime: {
-        path: DKB_RUNTIME_LOCK_PATH,
-        target: graph?.runtime.target ?? '',
-        digest: graph ? stableHash(graph.runtime) : null,
         status: graph ? 'built' : 'not_built',
       },
     },

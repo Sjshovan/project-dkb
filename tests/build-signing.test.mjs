@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { validateInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
+import { validateInstallPlan, validateRetrievalBuildGrant } from '@sjshovan/dkb-protocol/builds.js';
 import {
   createSignedPackageReceipt,
   fingerprintPublicKey,
@@ -103,6 +103,40 @@ test('signed install plans bind the exact source, Evidence, and Retrieval chain'
   const verification = await verifyLayerReceipt(tampered, resolver);
   assert.equal(verification.ok, false);
   assert.ok(verification.checks.some((check) => check.name === 'payload_hash' && !check.ok));
+});
+
+test('Retrieval Build grants contain exactly one signed layer bound to an installed Evidence digest', () => {
+  const evidenceProfileDigest = stableHash({ profile: 'grant-evidence' });
+  const evidenceDigest = stableHash({ evidence: 'grant-evidence' });
+  const retrievalProfileDigest = stableHash({ profile: 'grant-retrieval' });
+  const compatibilityDigest = stableHash({ compatibility: 'grant-retrieval' });
+  const retrievalBuildDigest = stableHash({ build: 'grant-retrieval' });
+  const receipt = layerReceipt('dkb.retrieval.receipt', {
+    target: 'fastembed-faiss',
+    evidenceProfileDigest,
+    evidenceDigest,
+    retrievalProfileDigest,
+    compatibilityDigest,
+    retrievalBuildDigest,
+  }, stableHash({ receipt: 'evidence' }));
+  const grant = validateRetrievalBuildGrant({
+    format: 'dkb.retrieval-build-grant.v1',
+    package: { id: packageIdentity.id, version: packageIdentity.version, sourceDigest: packageIdentity.sourceHash },
+    target: 'fastembed-faiss',
+    evidenceProfileDigest,
+    evidenceDigest,
+    retrievalProfileDigest,
+    compatibilityDigest,
+    retrievalBuildDigest,
+    artifact: layer('retrieval', stableHash(receipt), receipt),
+  });
+
+  assert.equal(grant.artifact.kind, 'retrieval');
+  assert.equal(grant.retrievalBuildDigest, retrievalBuildDigest);
+  assert.throws(
+    () => validateRetrievalBuildGrant({ ...grant, artifact: { ...grant.artifact, kind: 'source' } }),
+    /one Retrieval layer/u,
+  );
 });
 
 test('materialization rejects modified bytes from every signed install layer', async (t) => {
@@ -226,8 +260,7 @@ function minimalLock() {
     packages: {},
     builds: {
       evidence: missing('.dkb/builds/evidence'),
-      retrieval: { ...missing('.dkb/builds/retrieval'), compatibilityDigest: null },
-      runtime: { path: '.dkb/runtime.lock.json', target: '', digest: null, status: 'not_built' },
+      retrieval: { ...missing('.dkb/builds/retrieval'), target: 'tei-faiss', compatibilityDigest: null },
     },
   };
 }

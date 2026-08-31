@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   hostInventoryPath,
   readHostInventory,
+  rebindMigratedStackLibrary,
   registerHostLibrary,
   registerHostRegistry,
   registerHostRuntime,
@@ -22,6 +23,7 @@ import {
 import { inspectHostLibraries } from '../apps/cli/dist/host/inspection.js';
 import { resolveCliLibraryRoot, resolveCliRuntimeUrl } from '../apps/cli/dist/cli/context.js';
 import { configuredRegistry, writeConfiguredRegistryUrl } from '../apps/cli/dist/cli/registryConfig.js';
+import { refreshServingLocalRuntimes } from '../apps/cli/dist/runtime/refresh.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'apps', 'cli', 'dist', 'cli', 'index.js');
@@ -145,6 +147,27 @@ test('host inventory registers named Stacks without storing Stack secrets', asyn
     assert.equal(inventory.defaults.stack, 'local');
     assert.equal(inventory.stacks.local.runtime, 'runtime');
     assert.doesNotMatch(await fs.readFile(inventoryPath, 'utf8'), /token|password|secret/iu);
+  });
+});
+
+test('Stack hard cut rebinds only its own legacy Runtime-hosted Library', async () => {
+  await withInventory(async ({ root }) => {
+    const stackRoot = path.join(root, 'stack');
+    const legacyRoot = await writeLibrary(path.join(stackRoot, 'runtime'), 'Shared Library');
+    await registerHostLibrary(legacyRoot, { name: 'stack-library' });
+    await registerHostStack('stack', stackRoot, { library: 'stack-library' });
+
+    const libraryRoot = path.join(stackRoot, 'library');
+    await fs.rename(legacyRoot, libraryRoot);
+    const rebound = await rebindMigratedStackLibrary('stack', 'stack-library', libraryRoot);
+    const inventory = await readHostInventory();
+
+    assert.equal(rebound.name, 'stack-library');
+    assert.equal(inventory.libraries['stack-library'].path, await fs.realpath(libraryRoot));
+    await assert.rejects(
+      rebindMigratedStackLibrary('stack', 'stack-library', await writeLibrary(path.join(root, 'unrelated'), 'Unrelated')),
+      /does not match its legacy Runtime and Library paths/u,
+    );
   });
 });
 
@@ -305,6 +328,27 @@ test('offline Registry and Runtime checks report status without failing the inve
     assert.match(humanRegistries.stdout, /DEFAULT\s+NAME\s+STATUS\s+USED BY\s+URL/);
     assert.match(humanRuntimes.stdout, /DEFAULT\s+NAME\s+KIND\s+STATUS\s+LIBRARY\s+URL/);
     assert.doesNotMatch(`${humanRegistries.stdout}${humanRuntimes.stdout}`, /SELECTED/);
+  });
+});
+
+test('Library mutations refresh every serving local Runtime and leave offline Runtimes visibly stale', async () => {
+  await withInventory(async ({ root }) => {
+    const libraryRoot = await writeLibrary(path.join(root, 'shared'), 'Shared Library');
+    await registerHostLibrary(libraryRoot, { name: 'shared' });
+    await registerHostRuntime('fast', 'http://127.0.0.1:7331', { kind: 'process', library: 'shared' });
+    await registerHostRuntime('tei', 'http://127.0.0.1:7332', { kind: 'docker', library: 'shared' });
+    await registerHostRuntime('remote', 'https://runtime.example', { kind: 'remote', library: 'shared' });
+    const calls = [];
+    const results = await refreshServingLocalRuntimes(libraryRoot, async (url) => ({
+      async reload() {
+        calls.push(url);
+        if (url.endsWith('7332')) throw new Error('connection refused');
+      },
+    }));
+
+    assert.deepEqual(calls.sort(), ['http://127.0.0.1:7331', 'http://127.0.0.1:7332']);
+    assert.deepEqual(results.map((entry) => [entry.name, entry.status]), [['fast', 'refreshed'], ['tei', 'stale']]);
+    assert.equal(results[1].recovery, 'dkb runtime refresh tei');
   });
 });
 

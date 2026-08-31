@@ -1,32 +1,41 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { mergeStoredPackageBuilds, listPackageBuilds, activateStoredPackageBuild, maybeReadRuntimeLock, readRetrievalBuildProfile, validatePackageBuildGraph, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
-import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
-import { readLibraryState } from '@sjshovan/dkb-library/state.js';
-import { DKB_RUNTIME_LOCK_FORMAT, validateRuntimeLock, type DkbInstallPlan, type DkbRuntimeLock, type DkbRuntimeLockEntry } from '@sjshovan/dkb-protocol/builds.js';
+import { selectStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
+import { libraryStateIdentity, readLibraryState } from '@sjshovan/dkb-library/state.js';
+import type { DkbRetrievalBuildGrant } from '@sjshovan/dkb-protocol/builds.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
 import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
+import {
+  DKB_RUNTIME_BINDING_FORMAT,
+  type DkbRuntimeActivationEntry,
+  type DkbRuntimeLibraryBinding,
+} from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
-import { DKB_CONFIG_FORMAT, DKB_CONFIG_PATH, readDkbContextConfig, writeDkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
-import { materializeDkbInstallPlan } from './registryInstall.js';
-import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
-import { closeRuntimeQuerySnapshot, ensureRuntimeState, invalidateRuntimeQuerySnapshot } from './state.js';
-import { prepareRuntimeIndexPackage, verifyRuntimeIndex, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
+import { attachSignedRetrievalBuild } from './registryInstall.js';
+import { closeRuntimeQuerySnapshot, invalidateRuntimeQuerySnapshot } from './querySnapshot.js';
+import {
+  createRuntimeActivation,
+  ensureRuntimeState,
+  writeRuntimeSelection,
+} from './activation.js';
+import { prepareRuntimeIndexPackage, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
 import type { DkbRuntimeContext } from './context.js';
 
 export interface DkbRuntimePipelineSwitchResult {
   status: 'pipeline_switched';
+  runtimeId: string;
   target: string;
   previousTarget: string | null;
   libraryPath: string;
   evidenceProfileDigest: string;
   retrievalProfileDigest: string;
   compatibilityDigest: string;
+  activationGeneration: number;
   packageCount: number;
   packages: Array<{
     id: string;
@@ -42,83 +51,67 @@ interface PreparedPackage {
   id: string;
   version: string;
   source: 'local' | 'registry';
-  currentRoot: string;
-  stagedRoot: string;
   preparation: 'retained' | 'downloaded';
-  runtimeEntry: DkbRuntimeLockEntry;
-  retrievalRelativePath: string;
+  selection: DkbRuntimeActivationEntry;
   index: PreparedRuntimeIndexPackage;
 }
 
-/**
- * Prepare every package for one exact target before replacing any active
- * package. The caller must serialize Runtime mutations around this operation.
- */
 export async function switchRuntimePipelineFromRegistry(options: {
   runtime: DkbRuntimeContext;
   stateRoot?: string;
+  libraryRoot?: string;
   target: string;
-  registryUrl: string;
-  grants?: Record<string, { plan: DkbInstallPlan; installGrant: string }>;
+  registryUrl?: string;
+  grants?: Record<string, { build: DkbRetrievalBuildGrant; installGrant: string }>;
   timeoutMs?: number;
   progress?: DkbProgressReporter;
+  libraryBinding?: DkbRuntimeLibraryBinding;
 }): Promise<DkbRuntimePipelineSwitchResult> {
-  const runtime = await ensureRuntimeState(options.stateRoot);
+  const instance = await ensureRuntimeState(options.stateRoot);
+  const libraryRoot = path.resolve(options.libraryRoot ?? instance.libraryRoot);
+  await loadLibrary(libraryRoot);
   const target = requiredTarget(options.target);
-  const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: '' });
-  const stageRoot = path.join(runtime.stateDir, `pipeline-stage-${process.pid}-${Date.now().toString(36)}`);
-  const backupRoot = path.join(runtime.stateDir, `pipeline-backup-${process.pid}-${Date.now().toString(36)}`);
-  const configPath = path.join(runtime.stateRoot, ...DKB_CONFIG_PATH.split('/'));
-  let host: DkbProviderHost | null = null;
-  let artifactSnapshot: Awaited<ReturnType<typeof snapshotRuntimeReceipts>> | null = null;
-  let previousRuntime: DkbRuntimeLock | null = null;
-  let previousConfigBytes: Buffer | null = null;
+  const registryUrl = options.registryUrl?.trim();
+  const client = registryUrl ? new DkbRegistryClient({ baseUrl: registryUrl, token: '' }) : null;
+  const stageRoot = path.join(instance.stateDir, `pipeline-stage-${process.pid}-${Date.now().toString(36)}`);
   const prepared: PreparedPackage[] = [];
-  const promoted: Array<{ currentRoot: string; backupRoot: string }> = [];
-  let configWritten = false;
+  let host: DkbProviderHost | null = null;
 
   try {
-    host = await DkbProviderHost.create({ root: runtime.stateRoot, target, distribution: options.runtime.distribution });
-    const unhealthyProviders = (await host.health(['embedding', 'index', 'retrieval']))
-      .filter((provider) => !provider.ok);
-    if (unhealthyProviders.length > 0) {
+    host = await DkbProviderHost.create({
+      root: instance.stateRoot,
+      libraryRoot,
+      target,
+      distribution: options.runtime.distribution,
+    });
+    const unhealthy = (await host.health(['embedding', 'index', 'retrieval'])).filter((provider) => !provider.ok);
+    if (unhealthy.length > 0) {
       throw new DkbError(
-        `Cannot switch the Runtime to ${target}; required providers are unhealthy: `
-        + unhealthyProviders.map((provider) => `${provider.id} (${provider.detail ?? 'health check failed'})`).join('; ')
-        + `. Start or repair the target services, then retry: dkb pipeline use ${target}`,
+        `Cannot activate ${target}; required providers are unhealthy: ${unhealthy.map((provider) => `${provider.id} (${provider.detail ?? 'health check failed'})`).join('; ')}.`,
       );
     }
-    artifactSnapshot = await snapshotRuntimeReceipts(runtime.stateRoot);
-    previousRuntime = await maybeReadRuntimeLock(runtime.stateRoot);
-    previousConfigBytes = await fs.readFile(configPath).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    });
     const profile = await resolveProviderRetrievalProfile(host);
     const compatibilityDigest = stableHash(profile.compatibility);
-    const state = await readLibraryState(runtime.stateRoot);
+    const state = await readLibraryState(libraryRoot);
     const entries = Object.values(state.entries)
       .filter((entry) => entry.kind === 'dkb' && entry.status === 'installed')
       .sort((left, right) => left.identity.localeCompare(right.identity));
-    if (entries.length === 0) {
-      throw new DkbError('The Runtime Library has no installed DKBs to prepare for a pipeline switch.');
-    }
-    await fs.mkdir(stageRoot, { recursive: true });
+    const library = await loadLibrary(libraryRoot);
     let publicKeys: Promise<DkbSigningKeyRecord[]> | null = null;
     const trustedKeys = () => {
+      if (!client) throw new DkbError('A Registry URL is required to download missing builds');
       publicKeys ??= trustedRegistryKeys(client);
       return publicKeys;
     };
-    const library = await loadLibrary(runtime.stateRoot);
+    await fs.mkdir(stageRoot, { recursive: true });
 
     for (const entry of entries) {
-      const currentRoot = path.resolve(runtime.stateRoot, entry.path);
-      const stagedRoot = path.join(stageRoot, safePathSegment(entry.identity));
-      const preparation = await preparePackage({
+      const packageRoot = path.resolve(libraryRoot, entry.path);
+      const preparedBuild = await preparePackageBuild({
         client,
         trustedKeys,
-        currentRoot,
-        stagedRoot,
+        packageRoot,
+        stageRoot: path.join(stageRoot, safePathSegment(entry.identity)),
         id: entry.identity,
         version: requiredVersion(entry.version, entry.identity),
         source: entry.source,
@@ -130,127 +123,124 @@ export async function switchRuntimePipelineFromRegistry(options: {
         progress: options.progress,
         grant: options.grants?.[entry.identity],
       });
-      const dkb = await loadDkbPackage(stagedRoot, entry.identity);
-      const graph = await validatePackageBuildGraph(stagedRoot);
-      const runtimeEntry = graph.runtime.packages[entry.identity];
-      if (!runtimeEntry) throw new DkbError(`Prepared Runtime lock does not contain ${entry.identity}`);
+      const dkb = await loadDkbPackage(packageRoot, entry.identity);
       const index = await prepareRuntimeIndexPackage({
         runtime: options.runtime,
-        libraryRoot: runtime.stateRoot,
+        runtimeStateRoot: instance.stateRoot,
+        libraryRoot,
         libraryId: library.manifest.id,
         dkb,
         target,
+        selection: preparedBuild.selection,
       });
       prepared.push({
         id: entry.identity,
         version: dkb.manifest.version,
         source: entry.source,
-        currentRoot,
-        stagedRoot,
-        preparation,
-        runtimeEntry,
-        retrievalRelativePath: path.relative(stagedRoot, graph.retrievalPath),
+        preparation: preparedBuild.preparation,
+        selection: preparedBuild.selection,
         index,
       });
     }
 
-    await closeRuntimeQuerySnapshot(runtime.stateRoot);
-    await fs.mkdir(backupRoot, { recursive: true });
-    for (const item of prepared) {
-      const backup = path.join(backupRoot, safePathSegment(item.id));
-      await fs.rename(item.currentRoot, backup);
-      try {
-        await fs.rename(item.stagedRoot, item.currentRoot);
-      } catch (error) {
-        await fs.rename(backup, item.currentRoot).catch(() => undefined);
-        throw error;
-      }
-      promoted.push({ currentRoot: item.currentRoot, backupRoot: backup });
-    }
-
-    const packageEntries = Object.fromEntries(prepared.map((item) => [item.id, item.runtimeEntry]));
-    const runtimeLock = validateRuntimeLock({
-      format: DKB_RUNTIME_LOCK_FORMAT,
+    const identity = await libraryStateIdentity(libraryRoot);
+    const activation = createRuntimeActivation({
+      runtimeId: instance.runtimeId,
+      library: identity,
       target,
       evidenceProfileDigest: profile.evidenceProfileDigest,
       retrievalProfileDigest: profile.retrievalProfileDigest,
       compatibilityDigest,
-      packages: packageEntries,
-      generation: (previousRuntime?.generation ?? 0) + 1,
+      packages: Object.fromEntries(prepared.map((item) => [item.id, item.selection])),
+      generation: (instance.activation?.generation ?? 0) + 1,
       generatedAt: new Date().toISOString(),
     });
-    const firstProfile = await readRetrievalBuildProfile(path.join(
-      prepared[0]!.currentRoot,
-      prepared[0]!.retrievalRelativePath,
-    ));
-    if (firstProfile.profileDigest !== profile.retrievalProfileDigest) {
-      throw new DkbError(`Prepared packages do not contain the exact retrieval profile for ${target}`);
-    }
-    await writeRuntimeLock(runtime.stateRoot, runtimeLock);
-    await refreshRuntimeCatalogFromInstalledArtifacts(runtime.stateRoot);
-    for (const item of prepared) {
-      await verifyRuntimeIndex({
-        runtime: options.runtime,
-        libraryRoot: runtime.stateRoot,
-        libraryId: library.manifest.id,
-        packageId: item.id,
-        packageVersion: item.version,
-        target,
-      });
-    }
-
-    const currentConfig = await readDkbContextConfig(configPath);
-    await writeDkbContextConfig(configPath, {
-      ...currentConfig,
-      format: DKB_CONFIG_FORMAT,
-      activeTarget: target,
-    });
-    configWritten = true;
-    invalidateRuntimeQuerySnapshot(runtime.stateRoot);
-    await artifactSnapshot.commit();
-    await fs.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
+    await closeRuntimeQuerySnapshot(instance.stateRoot);
+    await writeRuntimeSelection(instance.stateRoot, {
+      format: DKB_RUNTIME_BINDING_FORMAT,
+      runtimeId: instance.runtimeId,
+      library: options.libraryBinding ?? (
+        path.resolve(instance.libraryRoot) === libraryRoot
+          ? instance.binding.library
+          : { kind: 'local', path: libraryRoot }
+      ),
+      target,
+      updatedAt: new Date().toISOString(),
+    }, activation);
+    invalidateRuntimeQuerySnapshot(instance.stateRoot);
 
     return {
       status: 'pipeline_switched',
+      runtimeId: instance.runtimeId,
       target,
-      previousTarget: previousRuntime?.target ?? null,
-      libraryPath: runtime.stateRoot,
+      previousTarget: instance.activation?.target ?? instance.binding.target ?? null,
+      libraryPath: libraryRoot,
       evidenceProfileDigest: profile.evidenceProfileDigest,
       retrievalProfileDigest: profile.retrievalProfileDigest,
       compatibilityDigest,
+      activationGeneration: activation.generation,
       packageCount: prepared.length,
       packages: prepared.map((item) => ({
         id: item.id,
         version: item.version,
         source: item.source,
         preparation: item.preparation,
-        evidenceDigest: item.runtimeEntry.evidenceDigest,
-        retrievalBuildDigest: item.runtimeEntry.retrievalBuildDigest,
+        evidenceDigest: item.selection.evidenceDigest,
+        retrievalBuildDigest: item.selection.retrievalBuildDigest,
       })),
     };
   } catch (error) {
-    await closeRuntimeQuerySnapshot(runtime.stateRoot).catch(() => undefined);
-    for (const item of [...promoted].reverse()) {
-      await fs.rm(item.currentRoot, { recursive: true, force: true }).catch(() => undefined);
-      await fs.rename(item.backupRoot, item.currentRoot).catch(() => undefined);
-    }
     for (const item of prepared) await item.index.rollback().catch(() => undefined);
-    await artifactSnapshot?.rollback().catch(() => undefined);
-    if (configWritten) await restoreConfig(configPath, previousConfigBytes).catch(() => undefined);
-    invalidateRuntimeQuerySnapshot(runtime.stateRoot);
+    invalidateRuntimeQuerySnapshot(instance.stateRoot);
     throw error;
   } finally {
     await host?.dispose();
     await fs.rm(stageRoot, { recursive: true, force: true }).catch(() => undefined);
-    await fs.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-async function preparePackage(input: {
-  client: DkbRegistryClient;
+export async function refreshRuntimeActivation(options: {
+  runtime: DkbRuntimeContext;
+  stateRoot?: string;
+  progress?: DkbProgressReporter;
+  libraryBinding?: DkbRuntimeLibraryBinding;
+}): Promise<DkbRuntimePipelineSwitchResult> {
+  const instance = await ensureRuntimeState(options.stateRoot);
+  return switchRuntimePipelineFromRegistry({
+    runtime: options.runtime,
+    stateRoot: instance.stateRoot,
+    target: instance.binding.target,
+    ...(options.progress ? { progress: options.progress } : {}),
+    ...(options.libraryBinding ? { libraryBinding: options.libraryBinding } : {}),
+  });
+}
+
+export async function switchRuntimeLibrary(options: {
+  runtime: DkbRuntimeContext;
+  stateRoot?: string;
+  libraryRoot: string;
+  target?: string;
+  registryUrl?: string;
+  grants?: Record<string, { build: DkbRetrievalBuildGrant; installGrant: string }>;
+  progress?: DkbProgressReporter;
+}): Promise<DkbRuntimePipelineSwitchResult> {
+  const instance = await ensureRuntimeState(options.stateRoot);
+  return switchRuntimePipelineFromRegistry({
+    runtime: options.runtime,
+    stateRoot: instance.stateRoot,
+    libraryRoot: options.libraryRoot,
+    target: options.target ?? instance.binding.target,
+    ...(options.registryUrl ? { registryUrl: options.registryUrl } : {}),
+    ...(options.grants ? { grants: options.grants } : {}),
+    ...(options.progress ? { progress: options.progress } : {}),
+  });
+}
+
+async function preparePackageBuild(input: {
+  client: DkbRegistryClient | null;
   trustedKeys: () => Promise<DkbSigningKeyRecord[]>;
-  currentRoot: string;
-  stagedRoot: string;
+  packageRoot: string;
+  stageRoot: string;
   id: string;
   version: string;
   source: 'local' | 'registry';
@@ -260,56 +250,64 @@ async function preparePackage(input: {
   compatibilityDigest: string;
   timeoutMs?: number;
   progress?: DkbProgressReporter;
-  grant?: { plan: DkbInstallPlan; installGrant: string };
-}): Promise<'retained' | 'downloaded'> {
-  await fs.cp(input.currentRoot, input.stagedRoot, { recursive: true, errorOnExist: true, force: false });
-  const builds = await listPackageBuilds(input.stagedRoot);
-  if (builds.retrieval.some((build) => build.profileDigest === input.retrievalProfileDigest)) {
-    await activateStoredPackageBuild({
-      root: input.stagedRoot,
-      target: input.target,
-      evidenceProfileDigest: input.evidenceProfileDigest,
-      retrievalProfileDigest: input.retrievalProfileDigest,
-      compatibilityDigest: input.compatibilityDigest,
-    });
-    return 'retained';
-  }
-  if (input.source !== 'registry') {
-    throw new DkbError(
-      `Editable DKB ${input.id}@${input.version} has no stored build for ${input.target}. `
-      + `Run dkb build ${input.currentRoot} --pipeline ${input.target}, then retry the switch.`,
-    );
-  }
-
-  if (!input.grant) {
-    throw new DkbError(`No exact Runtime install grant was provided for ${input.id}@${input.version}. Re-run the pipeline switch from an authenticated DKB CLI.`);
-  }
-  const plan = input.grant.plan;
-  assertPlanMatchesTarget(planIdentity(plan), input);
-  const downloadClient = new DkbRegistryClient({ baseUrl: input.client.baseUrl, token: '', installGrant: input.grant.installGrant });
-  const layerRoot = `${input.stagedRoot}.layers`;
-  const downloadedRoot = `${input.stagedRoot}.downloaded`;
-  await fs.rm(input.stagedRoot, { recursive: true, force: true });
-  await fs.mkdir(layerRoot, { recursive: true });
+  grant?: { build: DkbRetrievalBuildGrant; installGrant: string };
+}): Promise<{ preparation: 'retained' | 'downloaded'; selection: DkbRuntimeActivationEntry }> {
   try {
-    for (const artifact of plan.artifacts) {
-      const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
-      await downloadClient.writeInstallLayer(artifact, path.join(layerRoot, `${artifact.kind}${extension}`), { progress: input.progress });
+    const graph = await selectStoredPackageBuild({ root: input.packageRoot, ...profileSelection(input) });
+    return { preparation: 'retained', selection: graph.selection };
+  } catch (error) {
+    if (input.source !== 'registry') {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/No stored Retrieval Build exists/u.test(message)) throw error;
+      throw new DkbError(
+        `Editable DKB ${input.id}@${input.version} has no stored build for ${input.target}. `
+        + `Run dkb build ${input.packageRoot} --pipeline ${input.target}, then retry.`,
+      );
     }
-    await materializeDkbInstallPlan({
-      plan,
-      layerRoot,
-      destinationRoot: downloadedRoot,
-      trustedKeys: await input.trustedKeys(),
-      progress: input.progress,
+    if (!input.client || !input.grant) {
+      throw new DkbError(
+        `Registry DKB ${input.id}@${input.version} needs a signed ${input.target} build. `
+        + 'Re-run from an authenticated DKB CLI so it can request an exact download grant.',
+      );
+    }
+    const build = input.grant.build;
+    assertBuildGrantMatchesTarget(build, input);
+    const downloadClient = new DkbRegistryClient({
+      baseUrl: input.client.baseUrl,
+      token: '',
+      installGrant: input.grant.installGrant,
     });
-    await mergeStoredPackageBuilds(input.currentRoot, downloadedRoot);
-    await fs.rename(downloadedRoot, input.stagedRoot);
-  } finally {
-    await fs.rm(layerRoot, { recursive: true, force: true }).catch(() => undefined);
-    await fs.rm(downloadedRoot, { recursive: true, force: true }).catch(() => undefined);
+    const layerRoot = `${input.stageRoot}.layers`;
+    await fs.mkdir(layerRoot, { recursive: true });
+    try {
+      const archivePath = path.join(layerRoot, 'retrieval.dkbbuild');
+      await downloadClient.writeInstallLayer(build.artifact, archivePath, { progress: input.progress });
+      const graph = await attachSignedRetrievalBuild({
+        grant: build,
+        archivePath,
+        packageRoot: input.packageRoot,
+        trustedKeys: await input.trustedKeys(),
+        progress: input.progress,
+      });
+      return { preparation: 'downloaded', selection: graph.selection };
+    } finally {
+      await fs.rm(layerRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
-  return 'downloaded';
+}
+
+function profileSelection(input: {
+  target: string;
+  evidenceProfileDigest: string;
+  retrievalProfileDigest: string;
+  compatibilityDigest: string;
+}) {
+  return {
+    target: input.target,
+    evidenceProfileDigest: input.evidenceProfileDigest,
+    retrievalProfileDigest: input.retrievalProfileDigest,
+    compatibilityDigest: input.compatibilityDigest,
+  };
 }
 
 async function trustedRegistryKeys(client: DkbRegistryClient): Promise<DkbSigningKeyRecord[]> {
@@ -321,34 +319,18 @@ async function trustedRegistryKeys(client: DkbRegistryClient): Promise<DkbSignin
   return keys;
 }
 
-function planIdentity(plan: Awaited<ReturnType<DkbRegistryClient['installPlan']>>) {
-  return {
-    target: plan.target,
-    evidenceProfileDigest: plan.evidenceProfileDigest,
-    retrievalProfileDigest: plan.retrievalProfileDigest,
-    compatibilityDigest: plan.compatibilityDigest,
-  };
-}
-
-function assertPlanMatchesTarget(
-  plan: ReturnType<typeof planIdentity>,
-  target: Pick<Parameters<typeof preparePackage>[0], 'target' | 'evidenceProfileDigest' | 'retrievalProfileDigest' | 'compatibilityDigest'>,
-): void {
-  if (plan.target !== target.target
-    || plan.evidenceProfileDigest !== target.evidenceProfileDigest
-    || plan.retrievalProfileDigest !== target.retrievalProfileDigest
-    || plan.compatibilityDigest !== target.compatibilityDigest) {
+function assertBuildGrantMatchesTarget(build: DkbRetrievalBuildGrant, target: {
+  target: string;
+  evidenceProfileDigest: string;
+  retrievalProfileDigest: string;
+  compatibilityDigest: string;
+}): void {
+  if (build.target !== target.target
+    || build.evidenceProfileDigest !== target.evidenceProfileDigest
+    || build.retrievalProfileDigest !== target.retrievalProfileDigest
+    || build.compatibilityDigest !== target.compatibilityDigest) {
     throw new DkbError(`Registry build for ${target.target} does not match the Runtime's resolved provider identities`);
   }
-}
-
-async function restoreConfig(configPath: string, previous: Buffer | null): Promise<void> {
-  if (!previous) {
-    await fs.rm(configPath, { force: true });
-    return;
-  }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, previous);
 }
 
 function requiredTarget(value: string): string {

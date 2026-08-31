@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
-import { resolveLibraryRuntimeBuilds } from '@sjshovan/dkb-library/builds.js';
+import { resolveLibraryActivationBuilds } from '@sjshovan/dkb-library/builds.js';
+import type { DkbRuntimeActivation } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 
 export interface RuntimeCatalogRefreshResult {
   recordCount: number;
@@ -13,9 +14,10 @@ export interface RuntimeCatalogRefreshResult {
  * same build roots directly.
  */
 export async function refreshRuntimeCatalogFromInstalledArtifacts(
-  stateRoot: string,
+  libraryRoot: string,
+  activation: DkbRuntimeActivation,
 ): Promise<RuntimeCatalogRefreshResult> {
-  const packages = await resolveLibraryRuntimeBuilds(path.resolve(stateRoot));
+  const packages = await resolveLibraryActivationBuilds(path.resolve(libraryRoot), activation);
   const catalogs = packages.map((item) => readEvidenceCatalog(item.evidenceRoot));
 
   return {

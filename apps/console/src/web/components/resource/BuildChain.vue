@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, Box, Database, FileStack } from '@lucide/vue';
+import { FileStack } from '@lucide/vue';
 import type { DkbInstalledEntryDetail } from '@sjshovan/dkb-protocol/packageInspection.js';
 import StatusBadge from '../interface/StatusBadge.vue';
 
@@ -20,31 +20,16 @@ function formatBytes(value: number): string {
 </script>
 
 <template>
-  <div v-if="detail.activeBuild" class="build-chain" aria-label="Active package build chain">
+  <div class="build-chain build-chain--library" aria-label="Library package build storage">
     <article><FileStack :size="20" /><span><small>Package version</small><strong>{{ detail.identity }}@{{ detail.version }}</strong><code>{{ shortDigest(detail.provenance.sourceDigest ?? detail.digest) }}</code></span></article>
-    <ArrowRight class="build-arrow" :size="18" aria-hidden="true" />
-    <article><Database :size="20" /><span><small>Evidence Build</small><strong>{{ detail.sourceSummary.evidenceRecords }} records</strong><code>{{ shortDigest(detail.activeBuild.evidenceDigest) }}</code></span></article>
-    <ArrowRight class="build-arrow" :size="18" aria-hidden="true" />
-    <article><Box :size="20" /><span><small>Retrieval Build</small><strong>{{ detail.activeBuild.embeddingSpace }} · {{ detail.activeBuild.dimensions }}d</strong><code>{{ shortDigest(detail.activeBuild.retrievalBuildDigest) }}</code></span></article>
   </div>
-  <div v-else class="quiet-state">No active build chain is available for this DKB.</div>
-
-  <section v-if="detail.activeBuild" class="build-profile-summary">
-    <dl>
-      <div><dt>Pipeline</dt><dd>{{ detail.activeBuild.target }}</dd></div>
-      <div><dt>Embedding</dt><dd>{{ detail.activeBuild.embeddingProvider }} · {{ detail.activeBuild.metric }}</dd></div>
-      <div><dt>Index</dt><dd>{{ detail.activeBuild.indexProvider }} · {{ detail.activeBuild.indexFormat }}</dd></div>
-      <div><dt>Retrieval</dt><dd>{{ detail.activeBuild.retrievalProvider }}</dd></div>
-      <div><dt>Compatibility</dt><dd><code>{{ detail.activeBuild.compatibilityDigest }}</code></dd></div>
-    </dl>
-  </section>
 
   <section class="stored-builds">
-    <header><div><h2>Stored builds</h2><p>Inactive builds remain reusable until you explicitly prune them.</p></div><span class="count">{{ detail.builds.length }}</span></header>
+    <header><div><h2>Stored builds</h2><p>Immutable Evidence and Retrieval Builds are shared by Runtime activations and remain reusable until explicitly pruned.</p></div><span class="count">{{ detail.builds.length }}</span></header>
     <div v-if="detail.builds.length" class="stored-build-list">
       <article v-for="build in detail.builds" :key="`${build.kind}:${build.buildDigest}`">
         <div><strong>{{ build.kind === 'evidence' ? 'Evidence Build' : 'Retrieval Build' }}</strong><code>{{ shortDigest(build.buildDigest) }}</code></div>
-        <div><span>{{ formatBytes(build.bytes) }}</span><span v-if="build.recordCount !== undefined">{{ build.recordCount }} records</span><StatusBadge :status="build.active ? 'active' : 'inactive'" /></div>
+        <div><span>{{ formatBytes(build.bytes) }}</span><span v-if="build.recordCount !== undefined">{{ build.recordCount }} records</span><StatusBadge status="stored" /></div>
       </article>
     </div>
     <div v-else class="quiet-state">No stored builds were found.</div>

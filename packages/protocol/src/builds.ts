@@ -4,8 +4,8 @@ import type { DkbPublisherReleaseSignature, DkbRegistryReleaseSignature } from '
 
 export const DKB_EVIDENCE_BUILD_LOCK_FORMAT = 'dkb.evidence-build.v1';
 export const DKB_RETRIEVAL_BUILD_LOCK_FORMAT = 'dkb.retrieval-build.v1';
-export const DKB_RUNTIME_LOCK_FORMAT = 'dkb.runtime-lock.v2';
 export const DKB_INSTALL_PLAN_FORMAT = 'dkb.install-plan.v1';
+export const DKB_RETRIEVAL_BUILD_GRANT_FORMAT = 'dkb.retrieval-build-grant.v1';
 
 export interface DkbEvidenceBuildLock {
   format: typeof DKB_EVIDENCE_BUILD_LOCK_FORMAT;
@@ -29,25 +29,6 @@ export interface DkbRetrievalBuildLock {
   generatedAt: string;
 }
 
-export interface DkbRuntimeLockEntry {
-  version: string;
-  evidenceProfileDigest: string;
-  evidenceDigest: string;
-  retrievalProfileDigest: string;
-  retrievalBuildDigest: string;
-}
-
-export interface DkbRuntimeLock {
-  format: typeof DKB_RUNTIME_LOCK_FORMAT;
-  target: string;
-  evidenceProfileDigest: string;
-  retrievalProfileDigest: string;
-  compatibilityDigest: string;
-  packages: Record<string, DkbRuntimeLockEntry>;
-  generation: number;
-  generatedAt: string;
-}
-
 export interface DkbInstallPlanArtifact {
   kind: 'source' | 'evidence' | 'retrieval';
   digest: string;
@@ -55,7 +36,7 @@ export interface DkbInstallPlanArtifact {
   bytes: number;
   url: string;
   receiptHash: string;
-  receipt: Record<string, unknown>;
+  receipt: DkbLayerReceipt;
 }
 
 export type DkbLayerReceiptType = 'dkb.evidence.receipt' | 'dkb.retrieval.receipt' | 'dkb.install-plan.receipt';
@@ -82,6 +63,18 @@ export interface DkbInstallPlan {
   retrievalBuildDigest: string;
   artifacts: [DkbInstallPlanArtifact, DkbInstallPlanArtifact, DkbInstallPlanArtifact];
   receipt: DkbLayerReceipt;
+}
+
+export interface DkbRetrievalBuildGrant {
+  format: typeof DKB_RETRIEVAL_BUILD_GRANT_FORMAT;
+  package: { id: string; version: string; sourceDigest: string };
+  target: string;
+  evidenceProfileDigest: string;
+  evidenceDigest: string;
+  retrievalProfileDigest: string;
+  compatibilityDigest: string;
+  retrievalBuildDigest: string;
+  artifact: Omit<DkbInstallPlanArtifact, 'kind'> & { kind: 'retrieval' };
 }
 
 export function evidenceBuildLock(input: Omit<DkbEvidenceBuildLock, 'format'>): DkbEvidenceBuildLock {
@@ -150,29 +143,6 @@ export function validateRetrievalBuildLock(value: unknown, source = 'Retrieval B
   return candidate;
 }
 
-export function validateRuntimeLock(value: unknown, source = 'Runtime lock'): DkbRuntimeLock {
-  if (!isRecord(value) || value.format !== DKB_RUNTIME_LOCK_FORMAT || !isRecord(value.packages)) {
-    throw new DkbError(`Invalid ${source}: expected ${DKB_RUNTIME_LOCK_FORMAT}`);
-  }
-  const candidate = value as unknown as DkbRuntimeLock;
-  for (const digest of [candidate.evidenceProfileDigest, candidate.retrievalProfileDigest, candidate.compatibilityDigest]) {
-    assertDigest(digest, source);
-  }
-  assertNonNegativeInteger(candidate.generation, `${source} generation`);
-  for (const [id, entry] of Object.entries(candidate.packages)) {
-    if (!isRecord(entry) || typeof entry.version !== 'string' || entry.version.length === 0) {
-      throw new DkbError(`Invalid ${source}: package ${id} is incomplete`);
-    }
-    for (const digest of [entry.evidenceProfileDigest, entry.evidenceDigest, entry.retrievalProfileDigest, entry.retrievalBuildDigest]) {
-      assertDigest(digest, `${source} package ${id}`);
-    }
-    if (entry.evidenceProfileDigest !== candidate.evidenceProfileDigest || entry.retrievalProfileDigest !== candidate.retrievalProfileDigest) {
-      throw new DkbError(`Invalid ${source}: package ${id} does not match the active build profiles`);
-    }
-  }
-  return candidate;
-}
-
 export function validateInstallPlan(value: unknown, source = 'Install plan'): DkbInstallPlan {
   if (!isRecord(value) || value.format !== DKB_INSTALL_PLAN_FORMAT || !isRecord(value.package) || !Array.isArray(value.artifacts)) {
     throw new DkbError(`Invalid ${source}: expected ${DKB_INSTALL_PLAN_FORMAT}`);
@@ -202,6 +172,33 @@ export function validateInstallPlan(value: unknown, source = 'Install plan'): Dk
   }
   candidate.receipt = validateLayerReceipt(candidate.receipt, `${source} receipt`);
   if (candidate.receipt.type !== 'dkb.install-plan.receipt') throw new DkbError(`Invalid ${source}: wrong receipt type`);
+  return candidate;
+}
+
+export function validateRetrievalBuildGrant(value: unknown, source = 'Retrieval Build grant'): DkbRetrievalBuildGrant {
+  if (!isRecord(value) || value.format !== DKB_RETRIEVAL_BUILD_GRANT_FORMAT || !isRecord(value.package) || !isRecord(value.artifact)) {
+    throw new DkbError(`Invalid ${source}: expected ${DKB_RETRIEVAL_BUILD_GRANT_FORMAT}`);
+  }
+  const candidate = value as unknown as DkbRetrievalBuildGrant;
+  assertPackage(candidate.package, source, true);
+  for (const [label, digest] of Object.entries({
+    evidenceProfileDigest: candidate.evidenceProfileDigest,
+    evidenceDigest: candidate.evidenceDigest,
+    retrievalProfileDigest: candidate.retrievalProfileDigest,
+    compatibilityDigest: candidate.compatibilityDigest,
+    retrievalBuildDigest: candidate.retrievalBuildDigest,
+  })) assertDigest(digest, `${source} ${label}`);
+  if (typeof candidate.target !== 'string' || candidate.target.length === 0 || candidate.artifact.kind !== 'retrieval') {
+    throw new DkbError(`Invalid ${source}: target and one Retrieval layer are required`);
+  }
+  assertDigest(candidate.artifact.digest, `${source} retrieval digest`);
+  assertDigest(candidate.artifact.receiptHash, `${source} retrieval receiptHash`);
+  assertNonNegativeInteger(candidate.artifact.bytes, `${source} retrieval bytes`);
+  if (typeof candidate.artifact.mediaType !== 'string' || typeof candidate.artifact.url !== 'string' || !candidate.artifact.url.startsWith('/')) {
+    throw new DkbError(`Invalid ${source}: Retrieval layer URL must be Registry-relative and its media type is required`);
+  }
+  candidate.artifact.receipt = validateLayerReceipt(candidate.artifact.receipt, `${source} receipt`);
+  if (candidate.artifact.receipt.type !== 'dkb.retrieval.receipt') throw new DkbError(`Invalid ${source}: wrong receipt type`);
   return candidate;
 }
 

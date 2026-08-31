@@ -4,28 +4,38 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { type DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
+import {
+  validateRetrievalBuildGrant,
+  type DkbInstallPlan,
+  type DkbRetrievalBuildGrant,
+} from '@sjshovan/dkb-protocol/builds.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
-import { evidenceBuildPath, retrievalBuildPath } from '@sjshovan/dkb-protocol/paths.js';
+import { evidenceBuildPath, retrievalBuildPath, retrievalBuildReceiptPath } from '@sjshovan/dkb-protocol/paths.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { validateCompiledPackage } from '@sjshovan/dkb-library/builds.js';
+import { mergeStoredPackageBuilds, selectStoredPackageBuild, validateCompiledPackage } from '@sjshovan/dkb-library/builds.js';
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
   DKB_INSTALL_PLAN_RECEIPT_PATH,
   DKB_PACKAGE_RECEIPT_PATH,
   packageReceiptPayloadMatchesLock,
   parsePackageReceipt,
+  parsePersistedPackageReceipt,
   verifyLayerReceipt,
   verifyPackageReceipt,
 } from '@sjshovan/dkb-library/signing.js';
-import { activateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
-import { ensureRuntimeState, importCompiledDkbArtifactIntoRuntime } from './state.js';
+import { normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
+import {
+  ensureRuntimeState,
+  importCompiledDkbArtifactIntoLibrary,
+  importCompiledDkbArtifactIntoLibraryWithinMutation,
+  importCompiledDkbArtifactIntoRuntime,
+} from './state.js';
 import type { DkbRuntimeContext } from './context.js';
 
 export interface DkbInstallCandidate {
@@ -39,7 +49,7 @@ export interface DkbAlreadyInstalledResult {
   status: 'already_installed';
   packageId: string;
   version: string;
-  runtimeRoot: string;
+  libraryRoot: string;
   packagePath: string;
 }
 
@@ -54,7 +64,7 @@ export interface DkbRegistryInstallResult {
   status: 'installed';
   packageId: string;
   version: string;
-  runtimeRoot: string;
+  libraryRoot: string;
   packagePath: string;
   verification: DkbPackageVerification;
   catalog: { recordCount: number; packageCount: number };
@@ -62,27 +72,28 @@ export interface DkbRegistryInstallResult {
 }
 
 export async function installDkbFromRegistry(options: {
-  runtime: DkbRuntimeContext;
   registryUrl: string;
   registryToken?: string;
   packageId: string;
   version?: string;
   target?: string;
-  runtimeRoot?: string;
+  libraryRoot: string;
   force?: boolean;
   progress?: DkbProgressReporter;
 }): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
-  const runtime = await ensureRuntimeState(options.runtimeRoot);
+  const libraryRoot = path.resolve(options.libraryRoot);
+  await loadLibrary(libraryRoot);
   const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: options.registryToken });
   const release = await client.packageRelease(options.packageId, options.version);
   const existing = await preflightDkbInstall({
-    runtimeRoot: runtime.stateRoot,
+    libraryRoot,
     candidate: release,
+    registryUrl: client.baseUrl,
     force: options.force,
   });
   if (existing) return existing;
 
-  const downloadRoot = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-registry-download-'));
+  const downloadRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-download-'));
 
   try {
     const plan = await client.installPlan(options.packageId, release.version, options.target);
@@ -91,12 +102,12 @@ export async function installDkbFromRegistry(options: {
       const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
       await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
     }
-    return await installDkbPlanIntoRuntime({
-      runtime: options.runtime,
+    return await installDkbPlanIntoLibrary({
       plan,
       layerRoot: downloadRoot,
       trustedKeys: publicKeys.keys,
-      runtimeRoot: runtime.stateRoot,
+      libraryRoot,
+      registryUrl: client.baseUrl,
       force: options.force,
       progress: options.progress,
     });
@@ -116,7 +127,8 @@ export async function installDkbFromRuntimeGrant(options: {
 }): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
   const runtime = await ensureRuntimeState(options.runtimeRoot);
   const existing = await preflightDkbInstall({
-    runtimeRoot: runtime.stateRoot,
+    libraryRoot: runtime.libraryRoot,
+    registryUrl: options.registryUrl,
     candidate: {
       packageId: options.plan.package.id,
       version: options.plan.package.version,
@@ -138,6 +150,7 @@ export async function installDkbFromRuntimeGrant(options: {
       layerRoot: downloadRoot,
       trustedKeys: publicKeys.keys,
       runtimeRoot: runtime.stateRoot,
+      registryUrl: client.baseUrl,
       force: options.force,
       progress: options.progress,
     });
@@ -152,6 +165,7 @@ export async function installDkbPlanIntoRuntime(options: {
   layerRoot: string;
   runtimeRoot?: string;
   trustedKeys: DkbSigningKeyRecord[];
+  registryUrl: string;
   force?: boolean;
   progress?: DkbProgressReporter;
 }): Promise<DkbRegistryInstallResult> {
@@ -174,6 +188,7 @@ export async function installDkbPlanIntoRuntime(options: {
       force: options.force,
       progress: options.progress,
       registryReceipt: materialized.receipt,
+      registryUrl: options.registryUrl,
       archiveHash: materialized.installDigest,
     }, runtime.stateRoot);
 
@@ -181,11 +196,72 @@ export async function installDkbPlanIntoRuntime(options: {
       status: 'installed',
       packageId: materialized.verification.packageId,
       version: materialized.verification.version,
-      runtimeRoot: imported.libraryPath,
+      libraryRoot: imported.libraryPath,
       packagePath: imported.packagePath,
       verification: materialized.verification,
       catalog: imported.catalog,
       ...(imported.warning ? { warning: imported.warning } : {}),
+    };
+  } finally {
+    await fs.rm(installParent, { recursive: true, force: true });
+  }
+}
+
+export async function installDkbPlanIntoLibrary(options: {
+  plan: DkbInstallPlan;
+  layerRoot: string;
+  libraryRoot: string;
+  trustedKeys: DkbSigningKeyRecord[];
+  registryUrl: string;
+  force?: boolean;
+  progress?: DkbProgressReporter;
+}): Promise<DkbRegistryInstallResult> {
+  return installDkbPlanIntoLibraryInternal(options, false);
+}
+
+/** Install one signed layer chain inside an existing Library mutation transaction. */
+export async function installDkbPlanIntoLibraryWithinMutation(options: Parameters<typeof installDkbPlanIntoLibrary>[0]): Promise<DkbRegistryInstallResult> {
+  return installDkbPlanIntoLibraryInternal(options, true);
+}
+
+async function installDkbPlanIntoLibraryInternal(
+  options: Parameters<typeof installDkbPlanIntoLibrary>[0],
+  mutationLockHeld: boolean,
+): Promise<DkbRegistryInstallResult> {
+  const libraryRoot = path.resolve(options.libraryRoot);
+  await loadLibrary(libraryRoot);
+  const installParent = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-layer-install-'));
+  const extractedRoot = path.join(installParent, 'package');
+
+  try {
+    const materialized = await materializeDkbInstallPlan({
+      plan: options.plan,
+      layerRoot: options.layerRoot,
+      destinationRoot: extractedRoot,
+      trustedKeys: options.trustedKeys,
+      progress: options.progress,
+    });
+    const importPackage = mutationLockHeld
+      ? importCompiledDkbArtifactIntoLibraryWithinMutation
+      : importCompiledDkbArtifactIntoLibrary;
+    const imported = await importPackage({
+      sourcePath: extractedRoot,
+      id: materialized.verification.packageId,
+      force: options.force,
+      progress: options.progress,
+      registryReceipt: materialized.receipt,
+      registryUrl: options.registryUrl,
+      archiveHash: materialized.installDigest,
+    }, libraryRoot);
+    const recordCount = imported.validation.graph?.evidence.recordCount ?? 0;
+    return {
+      status: 'installed',
+      packageId: materialized.verification.packageId,
+      version: materialized.verification.version,
+      libraryRoot,
+      packagePath: imported.packagePath,
+      verification: materialized.verification,
+      catalog: { recordCount, packageCount: 1 },
     };
   } finally {
     await fs.rm(installParent, { recursive: true, force: true });
@@ -213,7 +289,7 @@ export async function materializeDkbInstallPlan(options: {
   const sourcePath = path.join(options.layerRoot, 'source.dkbpkg');
   const evidencePath = path.join(options.layerRoot, 'evidence.dkbevidence');
   const retrievalPath = path.join(options.layerRoot, 'retrieval.dkbbuild');
-  const sourceReceipt = parsePackageReceipt(source.receipt, 'Install plan source receipt');
+  const sourceReceipt = parsePersistedPackageReceipt(source.receipt, 'Install plan source receipt');
   const sourceVerification = await verifyPackageReceipt(sourceReceipt, resolver);
   const evidenceVerification = await verifyLayerReceipt(evidence.receipt, resolver, 'Install plan Evidence receipt');
   const retrievalVerification = await verifyLayerReceipt(retrieval.receipt, resolver, 'Install plan Retrieval receipt');
@@ -279,13 +355,6 @@ export async function materializeDkbInstallPlan(options: {
   const installReceiptPath = path.join(destinationRoot, ...DKB_INSTALL_PLAN_RECEIPT_PATH.split('/'));
   await fs.mkdir(path.dirname(installReceiptPath), { recursive: true });
   await fs.writeFile(installReceiptPath, `${JSON.stringify(options.plan, null, 2)}\n`, 'utf8');
-  await activateStoredPackageBuild({
-    root: destinationRoot,
-    target: options.plan.target,
-    evidenceProfileDigest: options.plan.evidenceProfileDigest,
-    retrievalProfileDigest: options.plan.retrievalProfileDigest,
-    compatibilityDigest: options.plan.compatibilityDigest,
-  });
   const { receipt, verification } = await verifyExtractedPackage(
     destinationRoot,
     options.trustedKeys,
@@ -311,13 +380,90 @@ export async function materializeDkbInstallPlan(options: {
   };
 }
 
+export async function attachSignedRetrievalBuild(options: {
+  grant: DkbRetrievalBuildGrant;
+  archivePath: string;
+  packageRoot: string;
+  trustedKeys: DkbSigningKeyRecord[];
+  progress?: DkbProgressReporter;
+}): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+  const grant = validateRetrievalBuildGrant(options.grant);
+  const packageRoot = path.resolve(options.packageRoot);
+  const resolver = ({ role, signature }: { role: 'publisher' | 'registry'; signature: { keyId: string } }) => {
+    const key = options.trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
+    return key && key.status !== 'revoked' ? key.publicKeyPem : null;
+  };
+  const verification = await verifyLayerReceipt(grant.artifact.receipt, resolver, 'Retrieval Build grant receipt');
+  const receipt = verification.receipt;
+  const receiptChecks = [
+    verification.ok,
+    verification.receiptHash === grant.artifact.receiptHash,
+    receipt.package.id === grant.package.id,
+    receipt.package.version === grant.package.version,
+    receipt.package.sourceHash === grant.package.sourceDigest,
+    receipt.payload.target === grant.target,
+    receipt.payload.evidenceProfileDigest === grant.evidenceProfileDigest,
+    receipt.payload.evidenceDigest === grant.evidenceDigest,
+    receipt.payload.retrievalProfileDigest === grant.retrievalProfileDigest,
+    receipt.payload.compatibilityDigest === grant.compatibilityDigest,
+    receipt.payload.retrievalBuildDigest === grant.retrievalBuildDigest,
+  ];
+  if (receiptChecks.some((check) => !check)) {
+    throw new DkbError('Signed Retrieval Build grant does not match its package, Evidence Build, or Runtime profile.');
+  }
+  const archiveDigest = await hashArchiveFile(options.archivePath, options.progress);
+  if (archiveDigest !== grant.artifact.digest) {
+    throw new DkbError(`Registry retrieval layer hash mismatch: expected ${grant.artifact.digest}, got ${archiveDigest}.`);
+  }
+
+  const candidateRoot = await fs.mkdtemp(path.join(path.dirname(packageRoot), '.dkb-retrieval-candidate-'));
+  const candidateTarget = retrievalBuildPath(candidateRoot, grant.retrievalProfileDigest, grant.retrievalBuildDigest);
+  let copied: string[] = [];
+  try {
+    await extractDkbPackageArchive(options.archivePath, candidateTarget, { progress: options.progress });
+    const promoted = await mergeStoredPackageBuilds(candidateRoot, packageRoot);
+    copied = promoted.copied;
+    const graph = await selectStoredPackageBuild({
+      root: packageRoot,
+      target: grant.target,
+      evidenceProfileDigest: grant.evidenceProfileDigest,
+      retrievalProfileDigest: grant.retrievalProfileDigest,
+      compatibilityDigest: grant.compatibilityDigest,
+    });
+    if (graph.evidence.package.id !== grant.package.id
+      || graph.evidence.package.version !== grant.package.version
+      || graph.evidence.evidenceDigest !== grant.evidenceDigest
+      || graph.retrieval.retrievalBuildDigest !== grant.retrievalBuildDigest) {
+      throw new DkbError('Downloaded Retrieval Build does not attach to the installed source and Evidence Build.');
+    }
+    const receiptPath = retrievalBuildReceiptPath(packageRoot, grant.retrievalBuildDigest);
+    await fs.mkdir(path.dirname(receiptPath), { recursive: true });
+    await fs.writeFile(receiptPath, `${JSON.stringify(grant.artifact.receipt, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+      .catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+        const current = JSON.parse(await fs.readFile(receiptPath, 'utf8')) as unknown;
+        if (stableHash(current) !== stableHash(grant.artifact.receipt)) {
+          throw new DkbError(`Stored Retrieval Build receipt collision at ${receiptPath}`);
+        }
+      });
+    return graph;
+  } catch (error) {
+    await Promise.all(copied.map((target) => fs.rm(target, { recursive: true, force: true })));
+    throw error;
+  } finally {
+    await fs.rm(candidateRoot, { recursive: true, force: true });
+  }
+}
+
 export async function preflightDkbInstall(options: {
-  runtimeRoot?: string;
+  libraryRoot: string;
   candidate: DkbInstallCandidate;
+  registryUrl?: string;
   force?: boolean;
 }): Promise<DkbAlreadyInstalledResult | null> {
-  const runtime = await ensureRuntimeState(options.runtimeRoot);
-  const installedRoots = await installedPackageRoots(runtime.stateRoot, options.candidate.packageId);
+  const libraryRoot = path.resolve(options.libraryRoot);
+  await loadLibrary(libraryRoot);
+  const installedRoots = await installedPackageRoots(libraryRoot, options.candidate.packageId);
   if (installedRoots.length === 0) return null;
 
   const installedRoot = installedRoots[0]!;
@@ -327,19 +473,31 @@ export async function preflightDkbInstall(options: {
   } catch (error) {
     if (options.force) return null;
     throw new DkbError(
-      `Runtime contains an unreadable installation of ${options.candidate.packageId} at ${installedRoot}: `
+      `Library contains an unreadable installation of ${options.candidate.packageId} at ${installedRoot}: `
       + `${error instanceof Error ? error.message : String(error)}. Use --force to repair it.`,
     );
   }
 
   const installedVersion = installedDkb.manifest.version;
-  const lockEntry = (await readLibraryState(runtime.stateRoot)).entries[options.candidate.packageId];
+  const lockEntry = (await readLibraryState(libraryRoot)).entries[options.candidate.packageId];
   if (!lockEntry) {
     if (options.force) return null;
     throw new DkbError(
-      `Runtime contains an incomplete installation of ${options.candidate.packageId}@${installedVersion} at ${installedRoot}. `
+      `Library contains an incomplete installation of ${options.candidate.packageId}@${installedVersion} at ${installedRoot}. `
       + 'Use --force to repair it.',
     );
+  }
+
+  if (options.registryUrl && lockEntry.source === 'registry' && lockEntry.registryUrl
+    && normalizeRegistryUrl(lockEntry.registryUrl) !== normalizeRegistryUrl(options.registryUrl)) {
+    const incomingDigest = options.candidate.packageTreeHash ?? options.candidate.archiveHash;
+    if (!incomingDigest || !lockEntry.digest || incomingDigest !== lockEntry.digest) {
+      throw new DkbError(
+        `Registry origin conflict for ${options.candidate.packageId}: the installed release came from ${lockEntry.registryUrl}, `
+        + `but the requested signed release came from ${normalizeRegistryUrl(options.registryUrl)} with a different digest. `
+        + `Uninstall ${options.candidate.packageId} before changing its Registry origin.`,
+      );
+    }
   }
 
   if (installedVersion === options.candidate.version) {
@@ -365,7 +523,7 @@ export async function preflightDkbInstall(options: {
         status: 'already_installed',
         packageId: options.candidate.packageId,
         version: options.candidate.version,
-        runtimeRoot: runtime.stateRoot,
+        libraryRoot,
         packagePath: installedRoot,
       };
     }
@@ -386,6 +544,7 @@ export async function installDkbArchiveIntoRuntime(options: {
   archivePath: string;
   runtimeRoot?: string;
   trustedKeys: DkbSigningKeyRecord[];
+  registryUrl: string;
   expectedArchiveHash?: string;
   force?: boolean;
   progress?: DkbProgressReporter;
@@ -412,6 +571,7 @@ export async function installDkbArchiveIntoRuntime(options: {
       force: options.force,
       progress: options.progress,
       registryReceipt: receipt,
+      registryUrl: options.registryUrl,
       archiveHash,
     }, runtime.stateRoot);
 
@@ -419,11 +579,59 @@ export async function installDkbArchiveIntoRuntime(options: {
       status: 'installed',
       packageId: verification.packageId,
       version: verification.version,
-      runtimeRoot: imported.libraryPath,
+      libraryRoot: imported.libraryPath,
       packagePath: imported.packagePath,
       verification,
       catalog: imported.catalog,
       ...(imported.warning ? { warning: imported.warning } : {}),
+    };
+  } finally {
+    await fs.rm(installParent, { recursive: true, force: true });
+  }
+}
+
+export async function installDkbArchiveIntoLibrary(options: {
+  archivePath: string;
+  libraryRoot: string;
+  trustedKeys: DkbSigningKeyRecord[];
+  registryUrl: string;
+  expectedArchiveHash?: string;
+  force?: boolean;
+  progress?: DkbProgressReporter;
+}): Promise<DkbRegistryInstallResult> {
+  const libraryRoot = path.resolve(options.libraryRoot);
+  await loadLibrary(libraryRoot);
+  const installParent = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-install-'));
+  const extractedRoot = path.join(installParent, 'package');
+
+  try {
+    const archiveHash = await hashArchiveFile(options.archivePath, options.progress);
+    if (options.expectedArchiveHash && archiveHash !== options.expectedArchiveHash) {
+      throw new DkbError(`Package archive hash mismatch: expected ${options.expectedArchiveHash}, got ${archiveHash}.`);
+    }
+    await extractDkbPackageArchive(options.archivePath, extractedRoot, { progress: options.progress });
+    const { receipt, verification } = await verifyExtractedPackage(extractedRoot, options.trustedKeys, options.progress);
+    if (!verification.ok) throw new DkbError(`Registry package verification failed: ${verification.packageId}@${verification.version}`);
+    const imported = await importCompiledDkbArtifactIntoLibrary({
+      sourcePath: extractedRoot,
+      id: verification.packageId,
+      force: options.force,
+      progress: options.progress,
+      registryReceipt: receipt,
+      registryUrl: options.registryUrl,
+      archiveHash,
+    }, libraryRoot);
+    return {
+      status: 'installed',
+      packageId: verification.packageId,
+      version: verification.version,
+      libraryRoot,
+      packagePath: imported.packagePath,
+      verification,
+      catalog: {
+        recordCount: imported.validation.graph?.evidence.recordCount ?? 0,
+        packageCount: 1,
+      },
     };
   } finally {
     await fs.rm(installParent, { recursive: true, force: true });
@@ -459,13 +667,12 @@ async function verifyExtractedPackage(
 ): Promise<{ receipt: DkbPackageReceipt; verification: DkbPackageVerification }> {
   progress?.(progressStart({ phase: 'verify-package', label: 'Verify package contents and signatures', total: 0, unit: 'steps' }));
   const receiptPath = path.join(root, DKB_PACKAGE_RECEIPT_PATH);
-  const receipt = parsePackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
-  const packageIds = Object.keys(receipt.payload.lock.packages);
-  if (packageIds.length !== 1) {
-    throw new DkbError(`Registry package receipt must contain exactly one DKB package, found ${packageIds.length}.`);
-  }
-  const packageId = packageIds[0]!;
-  const version = receipt.payload.lock.packages[packageId]?.version ?? receipt.package.version;
+  const receiptValue = JSON.parse(await fs.readFile(receiptPath, 'utf8')) as unknown;
+  const receipt = options.verifyReceiptArtifacts === false
+    ? parsePersistedPackageReceipt(receiptValue, receiptPath)
+    : parsePackageReceipt(receiptValue, receiptPath);
+  const packageId = receipt.package.id;
+  const version = receipt.package.version;
   const payloadMatchesLock = packageReceiptPayloadMatchesLock(receipt);
   const sourceTree = receipt.payload.packageTreeHash ? await hashPortablePackageTree(root) : null;
   const packageTreeMatches = !receipt.payload.packageTreeHash || sourceTree?.hash === receipt.payload.packageTreeHash;
@@ -508,7 +715,6 @@ async function verifyLockArtifacts(root: string, lock: DkbLockManifest) {
   const verification = await validateCompiledPackage(root);
   const graph = verification.graph;
   if (!graph) return verification.checks;
-  const runtimeDigest = stableHash(graph.runtime);
   return [
     {
       name: 'build.evidence',
@@ -522,12 +728,6 @@ async function verifyLockArtifacts(root: string, lock: DkbLockManifest) {
         && lock.builds.retrieval.profileDigest === graph.retrieval.retrievalProfileDigest
         && lock.builds.retrieval.compatibilityDigest === graph.retrieval.compatibilityDigest,
       detail: `${graph.retrieval.retrievalProfileDigest}/${graph.retrieval.retrievalBuildDigest}`,
-    },
-    {
-      name: 'build.runtime',
-      ok: lock.builds.runtime.target === graph.runtime.target
-        && lock.builds.runtime.digest === runtimeDigest,
-      detail: `${graph.runtime.target}/${runtimeDigest}`,
     },
   ];
 }

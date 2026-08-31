@@ -63,17 +63,17 @@ the Library lock before downloading the package archive.
   is present.
 - Reuse of a published version with a different digest is rejected as an
   immutable-release violation.
-- A package directory without matching runtime lock metadata is reported as an
-  incomplete installation; `--force` repairs it.
+- A package directory without matching Library applied-state metadata is
+  reported as an incomplete installation; `--force` repairs it.
 - New and forced installs stream the archive directly to disk, verify its
   Registry digest, extract it once, verify package contents and signatures,
-  validate the retrieval index, and atomically activate it. Activation reports
-  its actual subphases (package promotion, catalog refresh, install recording,
-  runtime-readiness verification, and finalization) as indeterminate work; it
+  validate the retrieval build, and atomically install it. Installation reports
+  its actual subphases (package promotion, install recording, serving-Runtime
+  refresh, and finalization) as indeterminate work; it
   never invents a percentage or ETA for those unequal operations.
 
-The runtime performs a second installed-path check immediately before
-activation to cover concurrent installs.
+The Library transaction performs a second installed-path check immediately
+before promotion to cover concurrent installs.
 
 `dkb list --library <path>` shows installed DKBs and Collections in a compact
 table, including compiled record counts for DKBs. `dkb library status` also

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,8 +19,10 @@ import { resolveKnowledgeTarget } from '../apps/cli/dist/knowledge/target.js';
 import { healthReport } from '../apps/cli/dist/lifecycle/health.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime/dist/runtime/catalog.js';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { snapshotRuntimeReceipts } from '@sjshovan/dkb-library/runtimeSnapshot.js';
-import { validatePackageBuildGraph, verifyKnowledgeBuilds, writeRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import { validatePackageBuildGraph, verifyKnowledgeBuilds } from '@sjshovan/dkb-library/builds.js';
+import { libraryStateIdentity } from '@sjshovan/dkb-library/state.js';
+import { createRuntimeActivation } from '../services/runtime/dist/runtime/activation.js';
+import { preflightDkbInstall } from '../services/runtime/dist/runtime/registryInstall.js';
 import {
   inspectInstalledPackage,
   listInstalledPackageContents,
@@ -121,6 +124,64 @@ test('active Collection roots resolve exact member versions without copying DKBs
   await assert.rejects(loadLibrary(root), /Version conflict for @vendor\/reference/);
 });
 
+test('Registry Collection verification checks the immutable revision snapshot instead of a DKB receipt', async (t) => {
+  const root = await tempDirectory(t, 'dkb-collection-verification-');
+  const members = [
+    { id: '@test/core', version: '1.3.0', digest: `sha256:${'a'.repeat(64)}` },
+    { id: '@vendor/reference', version: '2.4.1', digest: `sha256:${'b'.repeat(64)}` },
+  ];
+  const snapshot = { type: 'collection', id: '@test/toolbox', name: 'Toolbox', revision: 1, members };
+  const digest = `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
+  await writeLibrary(root, { '@test/toolbox': { revision: 1 } });
+  await writeJson(path.join(root, 'vendor', '@test', 'toolbox', 'dkb.json'), {
+    manifestVersion: 1,
+    type: 'collection',
+    name: '@test/toolbox',
+    displayName: 'Toolbox',
+    members: Object.fromEntries(members.map((member) => [member.id, member.version])),
+    meta: { revision: 1, digest },
+  });
+  await writeDkb(path.join(root, 'vendor', '@test', 'core'), '@test/core', '1.3.0');
+  await writeDkb(path.join(root, 'vendor', '@vendor', 'reference'), '@vendor/reference', '2.4.1');
+  const entries = {
+    '@test/toolbox': {
+      identity: '@test/toolbox', kind: 'collection', source: 'registry', revision: 1, digest,
+      path: 'vendor/@test/toolbox', registryUrl: 'https://registry.example',
+      requiredBy: ['root:@test/toolbox'], installedAt: '2026-08-31T12:00:00.000Z',
+    },
+    '@test/core': {
+      identity: '@test/core', kind: 'dkb', source: 'registry', version: '1.3.0', digest: members[0].digest,
+      path: 'vendor/@test/core', registryUrl: 'https://registry.example',
+      requiredBy: ['collection:@test/toolbox'], installedAt: '2026-08-31T12:00:00.000Z',
+    },
+    '@vendor/reference': {
+      identity: '@vendor/reference', kind: 'dkb', source: 'registry', version: '2.4.1', digest: members[1].digest,
+      path: 'vendor/@vendor/reference', registryUrl: 'https://registry.example',
+      requiredBy: ['collection:@test/toolbox'], installedAt: '2026-08-31T12:00:00.000Z',
+    },
+  };
+  await applyLibraryLock(root, {
+    library: { name: 'Test Library' }, generation: 1, entries, resolvedAt: '2026-08-31T12:00:00.000Z',
+  });
+
+  const verified = await verifyInstalledPackage({ libraryRoot: root, identity: '@test/toolbox' });
+  assert.equal(verified.status, 'passed');
+  assert.equal(verified.checks.find((item) => item.id === 'collection.snapshot')?.status, 'passed');
+  assert.equal(verified.checks.find((item) => item.id === 'package.receipt')?.status, 'not_applicable');
+
+  await applyLibraryLock(root, {
+    library: { name: 'Test Library' }, generation: 2,
+    entries: {
+      ...entries,
+      '@vendor/reference': { ...entries['@vendor/reference'], digest: `sha256:${'c'.repeat(64)}` },
+    },
+    resolvedAt: '2026-08-31T12:01:00.000Z',
+  });
+  const tampered = await verifyInstalledPackage({ libraryRoot: root, identity: '@test/toolbox' });
+  assert.equal(tampered.status, 'failed');
+  assert.equal(tampered.checks.find((item) => item.id === 'collection.snapshot')?.status, 'failed');
+});
+
 test('the applied-state ledger distinguishes installed entries from broken content', async (t) => {
   const root = await tempDirectory(t, 'dkb-library-ledger-');
   const installedRoot = path.join(root, 'vendor', '@vendor', 'reference');
@@ -152,6 +213,21 @@ test('the applied-state ledger distinguishes installed entries from broken conte
   await fs.rm(path.join(installedRoot, 'dkb.json'));
   const broken = await readLibraryState(root);
   assert.equal(broken.entries['@vendor/reference'].status, 'broken');
+});
+
+test('concurrent Library state readers do not contend on schema or journal writes', async (t) => {
+  const root = await tempDirectory(t, 'dkb-library-concurrent-read-');
+  await writeLibrary(root, {});
+  await applyLibraryLock(root, {
+    library: { name: 'Concurrent Read Library' },
+    generation: 1,
+    entries: {},
+    resolvedAt: '2026-08-31T12:00:00.000Z',
+  });
+
+  const snapshots = await Promise.all(Array.from({ length: 24 }, () => readLibraryState(root)));
+
+  assert.ok(snapshots.every((snapshot) => snapshot.generation === 1));
 });
 
 test('shared Collection members are indexed once and Library-facing commands resolve the hard-cut type', async (t) => {
@@ -209,20 +285,31 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   const packageLockPath = path.join(graph.retrievalPath, 'retrieval.lock.json');
   const packageLock = await fs.readFile(packageLockPath, 'utf8');
 
-  const activated = await refreshRuntimeCatalogFromInstalledArtifacts(root);
+  const identity = await libraryStateIdentity(root);
+  const activation = createRuntimeActivation({
+    runtimeId: 'library-contract-runtime',
+    library: identity,
+    target: graph.profile.profile.target,
+    evidenceProfileDigest: graph.evidence.evidenceProfileDigest,
+    retrievalProfileDigest: graph.retrieval.retrievalProfileDigest,
+    compatibilityDigest: graph.retrieval.compatibilityDigest,
+    packages: { '@test/core': graph.selection },
+    generation: 1,
+    generatedAt: '2026-08-30T12:00:00.000Z',
+  });
+  const activated = await refreshRuntimeCatalogFromInstalledArtifacts(root, activation);
   assert.equal(activated.recordCount, 1);
   assert.equal(activated.packageCount, 1);
   assert.equal(await fs.readFile(packageLockPath, 'utf8'), packageLock);
   await validatePackageBuildGraph(dkbRoot);
-  await writeRuntimeLock(root, graph.runtime);
   const verified = await verifyKnowledgeBuilds(root);
   assert.equal(verified.ok, true, JSON.stringify(verified.checks));
   assert.equal(verified.type, 'library');
-  assert.equal(verified.checks.some((check) => check.name === 'build.@test/core' && check.ok), true);
+  assert.equal(verified.checks.some((check) => check.name.startsWith('build.@test/core.') && check.ok), true);
 
   const detail = await inspectInstalledPackage(root, '@test/core');
-  assert.equal(detail.format, 'dkb.installed-entry-detail.v1');
-  assert.equal(detail.activeBuild.evidenceDigest, graph.evidence.evidenceDigest);
+  assert.equal(detail.format, 'dkb.installed-entry-detail.v2');
+  assert.equal(detail.builds.some((build) => build.kind === 'evidence' && build.buildDigest === graph.evidence.evidenceDigest), true);
   assert.equal(detail.sourceSummary.evidenceRecords, 1);
   assert.equal(detail.provenance.receiptStatus, 'not_applicable');
   assert.equal(detail.integrity.status, 'passed');
@@ -256,27 +343,39 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   assert.equal(packageVerification.status, 'passed');
   assert.equal(packageVerification.checks.find((check) => check.id === 'package.receipt').status, 'not_applicable');
 
-  await writeLibrary(root, {});
-  const removed = await refreshRuntimeCatalogFromInstalledArtifacts(root);
-  assert.equal(removed.recordCount, 0);
-  assert.equal(removed.packageCount, 0);
 });
 
-test('failed Library mutations restore mutable Runtime receipts byte for byte', async (t) => {
-  const root = await tempDirectory(t, 'dkb-runtime-receipt-rollback-');
-  const lockPath = path.join(root, '.dkb', 'runtime.lock.json');
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  await fs.writeFile(lockPath, 'original-lock\n', 'utf8');
+test('Registry origin changes require the same signed release digest', async (t) => {
+  const root = await tempDirectory(t, 'dkb-registry-origin-');
+  const packageRoot = path.join(root, 'vendor', '@proof', 'origin');
+  const originalDigest = `sha256:${'a'.repeat(64)}`;
+  const differentDigest = `sha256:${'b'.repeat(64)}`;
+  await writeLibrary(root, { '@proof/origin': { version: '1.0.0' } });
+  await writeDkb(packageRoot, '@proof/origin', '1.0.0');
+  await applyLibraryLock(root, {
+    library: { name: 'Test Library' },
+    generation: 1,
+    entries: {
+      '@proof/origin': {
+        identity: '@proof/origin', kind: 'dkb', source: 'registry', version: '1.0.0',
+        digest: originalDigest, registryUrl: 'https://registry-a.example', path: 'vendor/@proof/origin',
+        requiredBy: ['root:@proof/origin'], installedAt: '2026-08-31T00:00:00.000Z',
+      },
+    },
+    resolvedAt: '2026-08-31T00:00:00.000Z',
+  });
 
-  const snapshot = await snapshotRuntimeReceipts(root);
-  await fs.writeFile(lockPath, 'mutated-lock\n', 'utf8');
-  const cachePath = path.join(root, '.dkb', 'cache', 'compile-cache.json');
-  await fs.mkdir(path.dirname(cachePath), { recursive: true });
-  await fs.writeFile(cachePath, 'new-cache\n', 'utf8');
-  await snapshot.rollback();
-
-  assert.equal(await fs.readFile(lockPath, 'utf8'), 'original-lock\n');
-  await assert.rejects(fs.access(cachePath));
+  const same = await preflightDkbInstall({
+    libraryRoot: root,
+    registryUrl: 'https://registry-b.example/',
+    candidate: { packageId: '@proof/origin', version: '1.0.0', packageTreeHash: originalDigest },
+  });
+  assert.equal(same.status, 'already_installed');
+  await assert.rejects(preflightDkbInstall({
+    libraryRoot: root,
+    registryUrl: 'https://registry-b.example',
+    candidate: { packageId: '@proof/origin', version: '1.0.0', packageTreeHash: differentDigest },
+  }), /Registry origin conflict.*Uninstall @proof\/origin/u);
 });
 
 async function tempDirectory(t, prefix) {

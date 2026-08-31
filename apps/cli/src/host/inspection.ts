@@ -55,6 +55,11 @@ export interface DkbHostRuntimeListing {
     composeFile?: string;
     status: 'known' | 'online' | 'offline' | 'incompatible';
     packageCount?: number;
+    target?: string;
+    stale?: boolean;
+    libraryId?: string;
+    activationGeneration?: number;
+    compatibilityDigest?: string;
     message?: string;
   }>;
 }
@@ -165,6 +170,15 @@ export async function inspectHostRuntimes(options: { check?: boolean } = {}): Pr
         ...common,
         status: 'online' as const,
         ...(typeof record.packageCount === 'number' ? { packageCount: record.packageCount } : {}),
+        ...(typeof record.target === 'string' ? { target: record.target } : {}),
+        ...(typeof record.stale === 'boolean' ? { stale: record.stale } : {}),
+        ...(isRecord(record.library) && typeof record.library.id === 'string' ? { libraryId: record.library.id } : {}),
+        ...(isRecord(record.activation) && typeof record.activation.generation === 'number'
+          ? { activationGeneration: record.activation.generation }
+          : {}),
+        ...(isRecord(record.activation) && typeof record.activation.compatibilityDigest === 'string'
+          ? { compatibilityDigest: record.activation.compatibilityDigest }
+          : {}),
       };
     } catch (error) {
       return {

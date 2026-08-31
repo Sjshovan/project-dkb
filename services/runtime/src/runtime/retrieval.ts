@@ -5,7 +5,7 @@ import { recordRetrievalTrace, retrievalTraceEnabled } from './trace.js';
 import { enqueueQueryAudit } from './queryAudit.js';
 import { withRuntimeQuery } from './mutation.js';
 import type { DkbRuntimeContext } from './context.js';
-import { ensureRuntimeState } from './paths.js';
+import { ensureRuntimeState } from './activation.js';
 import { getOrOpenRuntimeQueryContext } from './querySnapshot.js';
 
 export async function retrieveFromRuntime(
@@ -15,9 +15,9 @@ export async function retrieveFromRuntime(
 ) {
   const paths = await ensureRuntimeState(stateRoot);
   return withRuntimeQuery(paths.stateRoot, async () => {
-    const library = await loadLibrary(paths.stateRoot);
-    const queryContext = await getOrOpenRuntimeQueryContext(paths.stateRoot, library.manifest.id, runtime);
-    const response = await retrieveKnowledge(paths.stateRoot, request, queryContext, runtime);
+    const library = await loadLibrary(paths.libraryRoot);
+    const queryContext = await getOrOpenRuntimeQueryContext(paths, library.manifest.id, runtime);
+    const response = await retrieveKnowledge(paths.libraryRoot, request, queryContext, runtime);
     const audit = enqueueQueryAudit({
       root: paths.stateRoot,
       channel: 'runtime-http',

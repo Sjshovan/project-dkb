@@ -56,8 +56,9 @@ py -m graphify update apps/cli/src
 - Original source assets are canonical. Embedding-free Evidence Builds are
   portable derived interpretations; vectors, FAISS indexes, and managed-index
   imports are Retrieval Builds tied to an exact Evidence digest.
-- One Runtime serves one Library, and one active Library uses one compatible
-  retrieval space. Reject embedding space, dimensions, metric, normalization,
+- One Runtime serves exactly one Library and selects one compatible Pipeline;
+  any number of Runtimes may serve the same Library through independent
+  activations. Reject embedding space, dimensions, metric, normalization,
   index format, Evidence Profile, or evidence-protocol mismatches before
   activation. Never select builds by name, recency, or partial compatibility.
 - Registry publish compiles from clean source, ignores uploaded generated state
@@ -82,7 +83,8 @@ records the implemented Library and Collection model.
 `docs/decisions/0003-host-inventory-and-context-selection.md` records the
 implemented host-local inventory, selections, and resolution precedence.
 `docs/decisions/0006-final-provider-architecture-and-storage-cutover.md` records
-the active provider and immutable-build hard cut. Verify
+the provider and immutable-build hard cut. ADR 0008 supersedes its
+Library-owned activation assumptions with Runtime-owned bindings and locks. Verify
 actual behavior in source and tests rather than treating these records as
 runtime evidence.
 

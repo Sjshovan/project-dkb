@@ -31,6 +31,7 @@ const ownedDirectoryPatterns = [
   /^dkb-real-corpus-[A-Za-z\d_-]+$/u,
   /^dkb-real-proof-[A-Za-z\d_-]+$/u,
   /^dkb-runtime-add-[A-Za-z\d_-]+$/u,
+  /^dkb-runtime-mcp-(?:library|origin)-[A-Za-z\d_-]+$/u,
   /^dkb-stack-backup-output-[A-Za-z\d_-]+$/u,
   /^dkb-stack-backup-test-[A-Za-z\d_-]+$/u,
   /^dkb-tei-space-(?:library|proof)-[A-Za-z\d_-]+$/u,

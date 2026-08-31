@@ -10,12 +10,14 @@ import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { addPlugin, linkPlugin, listPlugins, removePlugin, setPipelineTarget } from '../apps/cli/dist/providers/management.js';
 import { compileDkbWithProviderHost } from '@sjshovan/dkb-compiler/pipelineRunner.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DKB_RUNTIME_ACTIVATION_PATH } from '@sjshovan/dkb-protocol/paths.js';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
 import { readRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { listPackageBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
+import { runtimePipelineCatalog } from '@sjshovan/dkb-runtime/runtime/pipelineCatalog.js';
 
 const allPlugin = {
   apiVersion: 2,
@@ -72,6 +74,51 @@ test('bundled 384, 768, FastEmbed, and TEI targets share Evidence IR only when i
   assert.equal(resolved[0].retrieval.compatibilityDigest, resolved[3].retrieval.compatibilityDigest);
   assert.notEqual(resolved[1].retrieval.compatibilityDigest, resolved[3].retrieval.compatibilityDigest);
   assert.equal(resolved[4].retrieval.embedding.modelRevision, 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a');
+});
+
+test('Runtime Pipeline catalog shares health probes for identical resolved provider chains', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-pipeline-health-'));
+  const libraryRoot = path.join(root, 'library');
+  const runtimeRoot = path.join(root, 'runtime');
+  const healthCalls = [];
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const plugin = {
+    apiVersion: 2,
+    id: '@test/health',
+    version: '1.0.0',
+    setup(context) {
+      const health = (kind) => async () => {
+        healthCalls.push(kind);
+        return { ok: true, detail: `${kind} ready` };
+      };
+      context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { providerId: '@test/health', providerVersion: '1.0.0', build: {} } }; } });
+      context.registerProvider({
+        kind: 'embedding',
+        async embedDocuments({ texts }) { return texts.map(() => [1]); },
+        async embedQuery() { return [1]; },
+        compatibility() { return { embeddingSpace: 'health-space', dimensions: 1, metric: 'cosine', normalized: true }; },
+        health: health('embedding'),
+      });
+      context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; }, health: health('index') });
+      context.registerProvider({
+        kind: 'retrieval',
+        protocol: 'test.evidence.v1',
+        openRuntime() { return { providerId: '@test/health', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; },
+        health: health('retrieval'),
+      });
+    },
+  };
+  const sharedTarget = { evidence: '@test/health', embedding: '@test/health', index: '@test/health', retrieval: '@test/health' };
+  const distribution = distributionWith([plugin], {
+    format: DKB_CONFIG_FORMAT,
+    activeTarget: 'first',
+    targets: { first: sharedTarget, second: sharedTarget },
+  });
+
+  const catalog = await runtimePipelineCatalog({ distribution, root: runtimeRoot, libraryRoot });
+
+  assert.deepEqual(catalog.targets.map((target) => target.health), ['ready', 'ready']);
+  assert.deepEqual(healthCalls.sort(), ['embedding', 'index', 'retrieval']);
 });
 
 test('Meilisearch managed indexes isolate compatibility spaces for the same package release', () => {
@@ -425,8 +472,15 @@ export function setup(context) {
   assert.equal(profile.compatibility.dimensions, 2);
   assert.equal(await fs.readFile(path.join(root, '.dkb/parse-count.txt'), 'utf8'), '1');
 
-  await compileRetrievalFromEvidence(root, evidence, { target: 'alternate' });
-  const alternateGraph = await validatePackageBuildGraph(root);
+  const alternateResult = await compileRetrievalFromEvidence(root, evidence, { target: 'alternate' });
+  const alternateLock = JSON.parse(await fs.readFile(path.join(alternateResult.retrievalBuildPath, 'retrieval.lock.json'), 'utf8'));
+  const alternateGraph = await validatePackageBuildGraph(root, {
+    version: alternateLock.package.version,
+    evidenceProfileDigest: alternateLock.evidenceProfileDigest,
+    evidenceDigest: alternateLock.evidenceDigest,
+    retrievalProfileDigest: alternateLock.retrievalProfileDigest,
+    retrievalBuildDigest: alternateLock.retrievalBuildDigest,
+  });
   const alternateEvidence = validateEvidenceIr(JSON.parse(await fs.readFile(path.join(alternateGraph.evidencePath, 'evidence.ir.json'), 'utf8')));
   const alternateProfile = await readRetrievalProfileLock(alternateGraph.retrievalPath);
   const alternateIndex = JSON.parse(await fs.readFile(path.join(alternateGraph.retrievalPath, 'artifacts', 'test-index.json'), 'utf8'));
@@ -600,7 +654,7 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   assert.equal(await fs.readFile(configPath, 'utf8'), before);
 });
 
-test('pipeline activation rejects incompatible installed artifacts without changing configuration', async (t) => {
+test('Library Pipeline recipes are suggestions and never act as Runtime activation', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-compatible-promote-'));
   const library = path.join(root, 'library');
   const globalRoot = path.join(root, 'global');
@@ -623,23 +677,7 @@ test('pipeline activation rejects incompatible installed artifacts without chang
     },
   });
   const before = await fs.readFile(configPath, 'utf8');
-  const host = await DkbProviderHost.create({ root: library, globalRoot, distribution });
-  const resolved = await resolveProviderRetrievalProfile(host);
-  await host.dispose();
-  const { evidenceProfileDigest, retrievalProfileDigest } = resolved;
-  const compatibilityDigest = stableHash(resolved.compatibility);
-  await writeJson(path.join(library, '.dkb', 'runtime.lock.json'), {
-    format: 'dkb.runtime-lock.v2',
-    target: 'default',
-    evidenceProfileDigest,
-    retrievalProfileDigest,
-    compatibilityDigest,
-    packages: {},
-    generation: 1,
-    generatedAt: new Date().toISOString(),
-  });
-
-  await assert.rejects(setPipelineTarget({
+  await setPipelineTarget({
     distribution,
     root: library,
     globalRoot,
@@ -653,8 +691,38 @@ test('pipeline activation rejects incompatible installed artifacts without chang
       processors: [],
       options: { '@test/all': { dimensions: 2 } },
     },
-  }), /Cannot activate pipeline target "base".*Save it with --no-activate/);
-  assert.equal(await fs.readFile(configPath, 'utf8'), before);
+  });
+  const after = await fs.readFile(configPath, 'utf8');
+  assert.notEqual(after, before);
+  assert.equal(JSON.parse(after).activeTarget, 'base');
+  await assert.rejects(fs.access(path.join(library, ...DKB_RUNTIME_ACTIVATION_PATH.split('/'))));
+});
+
+test('Runtime Pipeline configuration overrides Library, global, and bundled recipes in order', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-config-precedence-'));
+  const runtime = path.join(root, 'runtime');
+  const library = path.join(root, 'library');
+  const globalRoot = path.join(root, 'global');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const target = (dimensions) => ({
+    format: DKB_CONFIG_FORMAT,
+    activeTarget: 'default',
+    targets: { default: { evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all', options: { '@test/all': { dimensions } } } },
+  });
+  await writeJson(path.join(globalRoot, 'config.json'), target(2));
+  await writeJson(path.join(library, '.dkb/config.json'), target(3));
+  await writeJson(path.join(runtime, '.dkb/config.json'), target(4));
+
+  const resolved = await resolveContextConfig(runtime, {
+    defaults: target(1),
+    globalRoot,
+    libraryRoot: library,
+  });
+  assert.equal(resolved.target.options['@test/all'].dimensions, 4);
+  assert.equal(resolved.global.targets.default.options['@test/all'].dimensions, 2);
+  assert.equal(resolved.library.targets.default.options['@test/all'].dimensions, 3);
+  assert.equal(resolved.local.targets.default.options['@test/all'].dimensions, 4);
 });
 
 function targetConfig(id, processors = []) {

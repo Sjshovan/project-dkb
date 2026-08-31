@@ -8,6 +8,8 @@ export interface DkbStackContext {
   target: DkbStackTarget;
   runtimeTarget: DkbStackTarget;
   root: string;
+  libraryRoot: string;
+  runtimeStateRoot: string;
   composeFile: string;
   envFile: string;
   registryUrl: string;

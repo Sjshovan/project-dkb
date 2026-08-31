@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { RouterLink, RouterView, useRoute } from 'vue-router';
-import { Activity, Boxes, ChevronLeft, ChevronRight, Database, Home, Library, Menu, Moon, Server, Sun } from '@lucide/vue';
+import { Activity, Boxes, ChevronLeft, ChevronRight, Database, GitBranch, Home, Library, Menu, Moon, Server, Sun } from '@lucide/vue';
 import { TooltipContent, TooltipPortal, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui';
 import ContextStrip from './components/resource/ContextStrip.vue';
 
@@ -12,12 +12,16 @@ const navigation = [
   { name: 'Overview', route: '/', icon: Home },
   { name: 'Libraries', route: '/libraries', icon: Library },
   { name: 'Runtimes', route: '/runtimes', icon: Server },
+  { name: 'Pipelines', route: '/pipelines', icon: GitBranch, desktopOnly: true },
   { name: 'Registries', route: '/registries', icon: Database },
   { name: 'Stacks', route: '/stacks', icon: Boxes, desktopOnly: true },
   { name: 'Activity', route: '/activity', icon: Activity, desktopOnly: true },
   { name: 'More', route: '/more', icon: Menu, mobileOnly: true },
 ];
-const current = computed(() => navigation.find((item) => item.route === route.path)?.name ?? 'DKB Console');
+function isNavigationActive(item: { route: string }): boolean {
+  return route.path === item.route || (item.route !== '/' && route.path.startsWith(`${item.route}/`));
+}
+const current = computed(() => navigation.find(isNavigationActive)?.name ?? 'DKB Console');
 function applyTheme(): void {
   document.documentElement.classList.toggle('dark', dark.value);
   localStorage.setItem('dkb-console-theme', dark.value ? 'dark' : 'light');
@@ -38,7 +42,7 @@ onMounted(() => {
       <aside class="desktop-sidebar">
         <div class="sidebar-heading"><RouterLink to="/" class="brand"><span class="brand-mark">D</span><span><b>DKB</b><small>Host Console</small></span></RouterLink><button class="sidebar-collapse" type="button" :aria-label="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'" @click="toggleSidebar"><ChevronRight v-if="sidebarCollapsed" :size="17" /><ChevronLeft v-else :size="17" /></button></div>
         <nav aria-label="Primary navigation">
-          <RouterLink v-for="item in navigation.filter((entry) => !entry.mobileOnly)" :key="item.route" :to="item.route" :title="sidebarCollapsed ? item.name : undefined" :aria-label="sidebarCollapsed ? item.name : undefined" :aria-current="route.path === item.route ? 'page' : undefined">
+          <RouterLink v-for="item in navigation.filter((entry) => !entry.mobileOnly)" :key="item.route" :to="item.route" :title="sidebarCollapsed ? item.name : undefined" :aria-label="sidebarCollapsed ? item.name : undefined" :aria-current="isNavigationActive(item) ? 'page' : undefined">
             <component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.name }}</span>
           </RouterLink>
         </nav>
@@ -52,7 +56,7 @@ onMounted(() => {
       </div>
 
       <nav class="mobile-nav" aria-label="Mobile navigation">
-        <RouterLink v-for="item in navigation.filter((entry) => !entry.desktopOnly)" :key="item.route" :to="item.route" :aria-current="route.path === item.route ? 'page' : undefined"><component :is="item.icon" :size="20" aria-hidden="true" /><span>{{ item.name }}</span></RouterLink>
+        <RouterLink v-for="item in navigation.filter((entry) => !entry.desktopOnly)" :key="item.route" :to="item.route" :aria-current="isNavigationActive(item) ? 'page' : undefined"><component :is="item.icon" :size="20" aria-hidden="true" /><span>{{ item.name }}</span></RouterLink>
       </nav>
       <ConsoleToaster position="top-right" rich-colors close-button />
     </div>

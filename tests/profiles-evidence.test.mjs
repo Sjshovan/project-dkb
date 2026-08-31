@@ -18,9 +18,9 @@ import {
 } from '@sjshovan/dkb-protocol/builds.js';
 import { compileComposeProject, verifyComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import {
-  activateStoredPackageBuild,
   listPackageBuilds,
   mergeStoredPackageBuilds,
+  selectStoredPackageBuild,
   validatePackageBuildGraph,
   writePackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
@@ -202,7 +202,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
   );
   await fs.rm(artifacts, { recursive: true, force: true });
 
-  const activated = await activateStoredPackageBuild({
+  const activated = await selectStoredPackageBuild({
     root,
     target: 'fastembed-small',
     evidenceProfileDigest: small.evidenceProfileDigest,
@@ -210,7 +210,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     compatibilityDigest: smallLock.compatibilityDigest,
   });
   await assert.rejects(fs.access(artifacts), /ENOENT/);
-  assert.equal(activated.runtime.packages[packageIdentity.id].retrievalBuildDigest, smallGraph.retrieval.retrievalBuildDigest);
+  assert.equal(activated.selection.retrievalBuildDigest, smallGraph.retrieval.retrievalBuildDigest);
   assert.deepEqual(
     JSON.parse(await fs.readFile(path.join(smallGraph.evidencePath, 'evidence.ir.json'), 'utf8')),
     evidence,
@@ -218,17 +218,17 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
 
   await fs.appendFile(path.join(baseGraph.retrievalPath, 'artifacts', 'selected.index'), 'tampered\n');
   await assert.rejects(
-    activateStoredPackageBuild({
+    selectStoredPackageBuild({
       root,
       target: 'fastembed-base',
       evidenceProfileDigest: base.evidenceProfileDigest,
       retrievalProfileDigest: baseLock.profileDigest,
       compatibilityDigest: baseLock.compatibilityDigest,
     }),
-    /artifact tree is corrupt/i,
+    /artifact tree mismatch/i,
   );
   await assert.rejects(fs.access(artifacts), /ENOENT/);
-  assert.equal((await validatePackageBuildGraph(root)).runtime.target, 'fastembed-small');
+  assert.equal((await validatePackageBuildGraph(root, smallGraph.selection)).selection.retrievalBuildDigest, smallGraph.retrieval.retrievalBuildDigest);
 });
 
 test('downloaded package layers retain existing compatible builds and reject digest-path collisions', async (t) => {
@@ -312,9 +312,8 @@ test('immutable Retrieval Build profiles are validated and retired root profiles
 
   await compileComposeProject(root, { mode: 'package', force: true });
   const graph = await validatePackageBuildGraph(root);
-  assert.equal(graph.runtime.target, 'default');
-  assert.equal(graph.runtime.packages['@test/profile-hash-proof'].evidenceDigest, graph.evidence.evidenceDigest);
-  assert.equal(graph.runtime.packages['@test/profile-hash-proof'].retrievalBuildDigest, graph.retrieval.retrievalBuildDigest);
+  assert.equal(graph.selection.evidenceDigest, graph.evidence.evidenceDigest);
+  assert.equal(graph.selection.retrievalBuildDigest, graph.retrieval.retrievalBuildDigest);
 
   const copiedManifest = path.join(graph.retrievalPath, 'artifacts', 'test-index.json');
   const originalCopiedManifest = await fs.readFile(copiedManifest);

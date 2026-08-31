@@ -8,7 +8,9 @@ import {
   runtimeLibrary,
   removeDkbFromRuntime,
   reloadRuntimeState,
+  resolveRuntimeLibraryHandle,
   retrieveFromRuntime,
+  runtimePublicStatus,
   runtimeStatus,
 } from './state.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
@@ -19,8 +21,9 @@ import { closeQueryAuditQueue } from './queryAudit.js';
 import { resolveRegistryContext } from '@sjshovan/dkb-registry-client/config.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js';
-import { switchRuntimePipelineFromRegistry } from './pipelineSwitch.js';
+import { refreshRuntimeActivation, switchRuntimeLibrary, switchRuntimePipelineFromRegistry } from './pipelineSwitch.js';
 import { withRuntimeMutation } from './mutation.js';
+import { runtimePipelineCatalog } from './pipelineCatalog.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
 import type { DkbRuntimeContext } from './context.js';
 
@@ -29,6 +32,9 @@ export interface ServeRuntimeOptions {
   host?: string;
   port?: number;
   stateRoot?: string;
+  libraryPath?: string;
+  runtimeId?: string;
+  target?: string;
   adminToken?: string;
 }
 
@@ -45,12 +51,16 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
     );
   }
 
-  await ensureRuntimeState(stateRoot);
+  const instance = await ensureRuntimeState(stateRoot, {
+    ...(options.libraryPath ? { libraryRoot: options.libraryPath } : {}),
+    ...(options.runtimeId ? { runtimeId: options.runtimeId } : {}),
+    ...(options.target ? { target: options.target } : {}),
+  });
   const mcp = process.env.DKB_MCP_HTTP_ENABLED === 'true'
       ? await createDkbMcpHttpHandler({
         runtime,
         host,
-        libraryPath: stateRoot,
+        stateRoot: instance.stateRoot,
       })
     : null;
 
@@ -81,6 +91,9 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
     host,
     port,
     stateRoot,
+    libraryPath: instance.libraryRoot,
+    runtimeId: instance.runtimeId,
+    target: instance.target,
   }));
 
   return server;
@@ -114,7 +127,7 @@ async function routeRequest(
     }
 
     if (request.method === 'GET' && (pathName === '/api/health' || pathName === '/health')) {
-      return sendJson(response, 200, { ok: true, runtime: await runtimeStatus(stateRoot) });
+      return sendJson(response, 200, { ok: true, runtime: await runtimePublicStatus(stateRoot) });
     }
 
     if (request.method === 'GET' && pathName === '/.well-known/dkb.json') {
@@ -122,37 +135,67 @@ async function routeRequest(
     }
 
     if (request.method === 'GET' && pathName === '/api/runtime') {
-      return sendJson(response, 200, await runtimeStatus(stateRoot));
+      return sendJson(response, 200, await runtimePublicStatus(stateRoot));
+    }
+
+    if (request.method === 'GET' && pathName === '/api/runtime/pipelines') {
+      const current = await ensureRuntimeState(stateRoot);
+      return sendJson(response, 200, await runtimePipelineCatalog({
+        distribution: runtime.distribution,
+        root: current.stateRoot,
+        libraryRoot: current.libraryRoot,
+        activeTarget: current.target,
+      }));
     }
 
     if (request.method === 'POST' && pathName === '/api/runtime/reload') {
-      return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => reloadRuntimeState(stateRoot)));
+      return sendJson(response, 200, await withRuntimeMutation(stateRoot, async () => {
+        await refreshRuntimeActivation({ runtime, stateRoot });
+        return reloadRuntimeState(stateRoot);
+      }));
     }
 
     if (request.method === 'POST' && pathName === '/api/runtime/pipeline') {
       const body = await readJsonBody<{
         target: string;
-        registryUrl: string;
-        grants?: Record<string, { plan: unknown; installGrant: string }>;
+        registryUrl?: string;
+        grants?: Record<string, { build: unknown; installGrant: string }>;
       }>(request);
 
-      const { validateInstallPlan } = await import('@sjshovan/dkb-protocol/builds.js');
+      const { validateRetrievalBuildGrant } = await import('@sjshovan/dkb-protocol/builds.js');
       const grants = Object.fromEntries(Object.entries(body.grants ?? {}).map(([identity, grant]) => [identity, {
         installGrant: requiredString(grant.installGrant, `grants.${identity}.installGrant`),
-        plan: validateInstallPlan(grant.plan, `Runtime pipeline grant for ${identity}`),
+        build: validateRetrievalBuildGrant(grant.build, `Runtime pipeline grant for ${identity}`),
       }]));
 
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => switchRuntimePipelineFromRegistry({
         runtime,
         stateRoot,
         target: requiredString(body.target, 'target'),
-        registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
+        ...(process.env.DKB_REGISTRY_URL || body.registryUrl ? { registryUrl: process.env.DKB_REGISTRY_URL ?? body.registryUrl } : {}),
         grants,
       })));
     }
 
     if (request.method === 'GET' && pathName === '/api/library') {
       return sendJson(response, 200, await runtimeLibrary(stateRoot));
+    }
+
+    if (request.method === 'POST' && pathName === '/api/runtime/library') {
+      const body = await readJsonBody<{ libraryPath?: string; libraryHandle?: string; target?: string }>(request);
+      if (Boolean(body.libraryPath) === Boolean(body.libraryHandle)) {
+        throw new DkbError('Choose exactly one Runtime-local libraryPath or libraryHandle.');
+      }
+      const libraryRoot = body.libraryPath
+        ? requiredString(body.libraryPath, 'libraryPath')
+        : await resolveRuntimeLibraryHandle(requiredString(body.libraryHandle, 'libraryHandle'));
+      return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => switchRuntimeLibrary({
+        runtime,
+        stateRoot,
+        libraryRoot,
+        ...(body.libraryHandle ? { libraryBinding: { kind: 'remote' as const, handle: body.libraryHandle } } : {}),
+        ...(body.target ? { target: body.target } : {}),
+      })));
     }
 
     if (request.method === 'POST' && pathName === '/api/dkbs/import-artifact') {
@@ -247,11 +290,11 @@ async function routeRequest(
 
     return sendJson(response, 404, { error: 'not_found', message: `Unknown DKB Runtime route: ${request.method} ${pathName}` });
   } catch (error) {
-    const status = error instanceof DkbError ? 400 : 500;
+    const status = error instanceof DkbError ? (error.code === 'runtime_refresh_required' ? 409 : 400) : 500;
     const message = error instanceof Error ? error.message : String(error);
 
     return sendJson(response, status, {
-      error: status === 400 ? 'bad_request' : 'runtime_error',
+      error: error instanceof DkbError ? error.code : 'runtime_error',
       message,
     });
   }
@@ -267,7 +310,7 @@ function requiredString(value: unknown, label: string): string {
 
 async function runtimeDiscoveryDocument(stateRoot: string, requestHost?: string) {
   const runtime = await runtimeStatus(stateRoot);
-  const registry = await resolveRegistryContext({ root: stateRoot });
+  const registry = await resolveRegistryContext({ root: runtime.libraryPath });
   const registryUrl = registry.source === 'default' ? undefined : registry.url;
   const site = process.env.DKB_PUBLIC_URL
     ?? (requestHost ? 'http://' + requestHost : 'http://127.0.0.1:' + (process.env.DKB_RUNTIME_PORT ?? '7331'));
@@ -348,7 +391,8 @@ function setCommonHeaders(response: ServerResponse): void {
 }
 
 function isManagementRoute(method: string | undefined, pathName: string): boolean {
-  if (pathName === '/api/runtime/reload' || pathName === '/api/runtime/pipeline' || pathName === '/api/dkbs/import-artifact' || pathName === '/api/dkbs/install-registry') return true;
+  if (method === 'GET' && pathName === '/api/runtime/pipelines') return true;
+  if (pathName === '/api/runtime/reload' || pathName === '/api/runtime/pipeline' || pathName === '/api/runtime/library' || pathName === '/api/dkbs/import-artifact' || pathName === '/api/dkbs/install-registry') return true;
   if (method === 'DELETE' && pathName.startsWith('/api/dkbs/')) return true;
   if (pathName.startsWith('/api/traces')) return true;
   if (pathName.startsWith('/api/remote/')) return true;

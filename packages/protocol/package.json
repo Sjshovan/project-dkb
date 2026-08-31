@@ -26,6 +26,7 @@
     "./progress.js": { "types": "./dist/progress.d.ts", "import": "./dist/progress.js" },
     "./registryCatalog.js": { "types": "./dist/registryCatalog.d.ts", "import": "./dist/registryCatalog.js" },
     "./retrievalProfile.js": { "types": "./dist/retrievalProfile.d.ts", "import": "./dist/retrievalProfile.js" },
+    "./runtimeActivation.js": { "types": "./dist/runtimeActivation.d.ts", "import": "./dist/runtimeActivation.js" },
     "./security/sourceContent.js": { "types": "./dist/security/sourceContent.d.ts", "import": "./dist/security/sourceContent.js" },
     "./space.js": { "types": "./dist/space.d.ts", "import": "./dist/space.js" },
     "./types.js": { "types": "./dist/types.d.ts", "import": "./dist/types.js" },

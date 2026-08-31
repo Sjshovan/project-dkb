@@ -11,7 +11,10 @@ PackageVersion -> Evidence Build -> Retrieval Build -> Runtime
 
 - A **DKB** is one namespaced, versioned knowledge package.
 - A **Collection** pins a set of exact DKB releases.
-- A **Library** is one local knowledge environment served by one Runtime.
+- A **Library** owns installed knowledge and immutable builds; any number of
+  Runtimes may serve it.
+- A **Runtime** serves exactly one Library and independently activates one
+  Pipeline.
 - A **Registry** publishes and distributes signed releases and builds.
 - A **pipeline** is a recipe. Evidence and Retrieval Builds are its stored,
   content-addressed results.
@@ -86,8 +89,9 @@ dkb uninstall @my-team/handbook
 
 `install` downloads an already compiled, signed build chain. It does not parse,
 chunk, or embed the package. Installing the same immutable release is a clean
-no-op. Upgrade and uninstall preserve the previous active Runtime snapshot when
-validation or activation fails.
+no-op. Library mutation is authoritative; every online local Runtime serving
+that Library refreshes independently, while an offline or failed Runtime is
+marked stale and cannot serve removed evidence until repaired.
 
 Registry authentication uses scoped, expiring bearer tokens. Run
 `dkb registry login` for browser authorization with PKCE and a loopback
@@ -138,8 +142,9 @@ authenticates the host to a Registry; installs, upgrades, and uninstalls
 knowledge; switches pipelines atomically; and records redacted local activity.
 Registry pages browse DKBs and Collections, exact releases, signed provenance,
 available builds, and a metadata-only source tree without downloading package
-content. Installation offers only Libraries already connected to that Registry;
-changing a Library upstream is an explicit Connect Library operation.
+content. Each installation explicitly selects a Registry and any registered
+Library. Setting a Registry as a Library default is a separate convenience and
+never changes the exact origin retained by an installed release.
 An installed DKB has bounded Contents, Builds, Provenance, and Integrity views;
 a Collection has exact member and provenance views. File previews are inert
 source text and never render package HTML, Markdown, or SVG. Verification is an
@@ -150,13 +155,13 @@ that resource.
 ## Build and pipeline model
 
 ```powershell
-dkb pipeline list
-dkb pipeline show
-dkb pipeline verify
+dkb pipeline list --runtime local
+dkb pipeline show tei-faiss --runtime local
+dkb pipeline verify tei-faiss --runtime local
 dkb build .\handbook
 dkb compile .\handbook # supported compatibility command for the same compiler
 dkb build list .\handbook
-dkb pipeline use fastembed-faiss
+dkb pipeline use fastembed-faiss --runtime local
 dkb build prune .\handbook
 ```
 
@@ -166,7 +171,9 @@ embedding space. Changing an embedder or index reuses compatible Evidence IR;
 changing parsing, chunking, or text-mutating processors creates another
 Evidence Build.
 
-Builds are staged and promoted atomically. Inactive builds remain until an
+Builds are staged and promoted atomically. A Pipeline switch changes only the
+selected Runtime activation; another Runtime may serve the same Library through
+a different Pipeline at the same time. Inactive builds remain until an
 operator prunes them. Human build output reports files, source bytes, records,
 chunks, derived size, expansion ratio, stage timings, and disk preflight—not
 file count as a proxy for corpus size.
@@ -174,7 +181,11 @@ file count as a proxy for corpus size.
 ## Runtime and MCP
 
 ```powershell
-dkb runtime serve --state-root C:\knowledge\personal
+dkb runtime serve --name personal-tei --state-root C:\dkb-runtimes\personal-tei --library C:\knowledge\personal --pipeline tei-faiss
+dkb runtime show personal-tei
+dkb runtime library use personal --runtime personal-tei
+dkb pipeline use fastembed-faiss --runtime personal-tei
+dkb runtime refresh personal-tei
 dkb add C:\knowledge\editable-package
 dkb runtime import C:\knowledge\editable-package
 dkb mcp serve
@@ -183,7 +194,7 @@ dkb mcp serve
 For authenticated Streamable HTTP MCP:
 
 ```powershell
-$env:DKB_LIBRARY_PATH = 'C:\knowledge\personal'
+$env:DKB_RUNTIME_STATE_ROOT = 'C:\dkb-runtimes\personal-tei'
 $env:DKB_MCP_BEARER_TOKEN = '<secret>'
 dkb mcp serve-http --host 127.0.0.1 --port 7332
 ```

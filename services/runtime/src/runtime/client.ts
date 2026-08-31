@@ -1,7 +1,7 @@
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import type { DkbRemoteAttachInput } from '../remote/types.js';
-import type { DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
+import type { DkbInstallPlan, DkbRetrievalBuildGrant } from '@sjshovan/dkb-protocol/builds.js';
 
 export interface DkbRuntimeClientOptions {
   baseUrl?: string;
@@ -25,11 +25,19 @@ export class DkbRuntimeClient {
   }
 
   library() {
-    return this.get('/api/library');
+    return this.get('/api/library', true);
+  }
+
+  pipelines() {
+    return this.get('/api/runtime/pipelines', true);
   }
 
   reload() {
     return this.post('/api/runtime/reload', {}, true);
+  }
+
+  switchLibrary(input: ({ libraryPath: string } | { libraryHandle: string }) & { target?: string }) {
+    return this.post('/api/runtime/library', input, true);
   }
 
   importArtifact(input: { sourcePath: string; id?: string; force?: boolean }) {
@@ -47,8 +55,8 @@ export class DkbRuntimeClient {
 
   switchPipeline(input: {
     target: string;
-    registryUrl: string;
-    grants?: Record<string, { plan: DkbInstallPlan; installGrant: string }>;
+    registryUrl?: string;
+    grants?: Record<string, { build: DkbRetrievalBuildGrant; installGrant: string }>;
   }) {
     return this.post('/api/runtime/pipeline', input, true);
   }

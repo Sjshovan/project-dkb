@@ -4,7 +4,9 @@ export const DKB_STATE_DIR = '.dkb';
 export const DKB_BUILDS_DIR = '.dkb/builds';
 export const DKB_EVIDENCE_BUILDS_DIR = `${DKB_BUILDS_DIR}/evidence`;
 export const DKB_RETRIEVAL_BUILDS_DIR = `${DKB_BUILDS_DIR}/retrieval`;
-export const DKB_RUNTIME_LOCK_PATH = '.dkb/runtime.lock.json';
+export const DKB_RETRIEVAL_RECEIPTS_DIR = '.dkb/receipts/retrieval';
+export const DKB_RUNTIME_BINDING_PATH = '.dkb/runtime-binding.json';
+export const DKB_RUNTIME_ACTIVATION_PATH = '.dkb/runtime-activation.lock.json';
 export const DKB_CACHE_DIR = '.dkb/cache';
 export const DKB_COMPILE_RECEIPT_PATH = `${DKB_CACHE_DIR}/compiler/compile.receipt.json`;
 export const DKB_LOCKS_DIR = '.dkb/locks';
@@ -52,6 +54,13 @@ export function retrievalBuildPath(root: string, retrievalProfileDigest: string,
     DKB_RETRIEVAL_BUILDS_DIR,
     digestPathSegment(retrievalProfileDigest, 'Retrieval Profile digest'),
     digestPathSegment(retrievalBuildDigest, 'Retrieval Build digest'),
+  ));
+}
+
+export function retrievalBuildReceiptPath(root: string, retrievalBuildDigest: string): string {
+  return resolveFrom(root, path.join(
+    DKB_RETRIEVAL_RECEIPTS_DIR,
+    `${digestPathSegment(retrievalBuildDigest, 'Retrieval Build digest')}.json`,
   ));
 }
 

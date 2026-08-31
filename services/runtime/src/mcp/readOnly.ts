@@ -2,15 +2,16 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod/v4';
 import { DKB_PROTOCOL_VERSION } from '@sjshovan/dkb-protocol/version.js';
 import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
-import { getQueryContext } from '../indexes/queryContext.js';
 import { readDkb } from '../read/runtime.js';
 import { semanticSearch } from '../read/navigation.js';
 import { withRuntimeQuery } from '../runtime/mutation.js';
 import type { DkbRuntimeContext } from '../runtime/context.js';
+import { ensureRuntimeState, type DkbRuntimeInstance } from '../runtime/activation.js';
+import { getOrOpenRuntimeQueryContext } from '../runtime/querySnapshot.js';
 
 export function createDkbReadOnlyMcpServer(options: {
   runtime: DkbRuntimeContext;
-  libraryPath: string;
+  stateRoot: string;
   publicBaseUrl?: string;
 }): McpServer {
   const server = new McpServer(
@@ -31,10 +32,10 @@ export function createDkbReadOnlyMcpServer(options: {
       outputSchema: z.object({}).loose(),
       annotations: readOnlyAnnotations,
     },
-    async ({ query, limit, dkbId }) => withRuntimeQuery(options.libraryPath, async () => {
-      const context = await queryContext(options.libraryPath, options.runtime);
+    async ({ query, limit, dkbId }) => withRuntimeQuery(options.stateRoot, async () => {
+      const { instance, library, context } = await queryContext(options.stateRoot, options.runtime);
       const result = await semanticSearch(
-        options.libraryPath,
+        instance.libraryRoot,
         query,
         limit,
         dkbId ? { dkbId } : undefined,
@@ -50,6 +51,7 @@ export function createDkbReadOnlyMcpServer(options: {
 
       return toolResult({
         ...result,
+        runtime: runtimeIdentity(instance, library.manifest.id),
         status: results.length > 0 ? 'ready' : 'empty',
         results,
         sufficiency: {
@@ -71,23 +73,24 @@ export function createDkbReadOnlyMcpServer(options: {
       annotations: readOnlyAnnotations,
     },
     async ({ id }) => withRuntimeQuery(
-      options.libraryPath,
-      async () => toolResult(await fetchRemoteEvidence(options.libraryPath, id, options.publicBaseUrl, options.runtime)),
+      options.stateRoot,
+      async () => toolResult(await fetchRemoteEvidence(options.stateRoot, id, options.publicBaseUrl, options.runtime)),
     ),
   );
 
   return server;
 }
 
-export async function fetchRemoteEvidence(libraryPath: string, id: string, publicBaseUrl: string | undefined, runtime: DkbRuntimeContext) {
-  const context = await queryContext(libraryPath, runtime);
-  const result = await readDkb(libraryPath, {
+export async function fetchRemoteEvidence(stateRoot: string, id: string, publicBaseUrl: string | undefined, runtime: DkbRuntimeContext) {
+  const { instance, library, context } = await queryContext(stateRoot, runtime);
+  const result = await readDkb(instance.libraryRoot, {
     queries: [{ id: 'fetch', target: id, operation: 'fetch' }],
   }, context);
   const evidence = result.queries[0]?.evidence[0];
 
   return {
     ...result,
+    runtime: runtimeIdentity(instance, library.manifest.id),
     citation: evidence ? {
       id: evidence.source.evidenceId ?? evidence.source.chunkId ?? id,
       url: citationUrl(publicBaseUrl, id),
@@ -100,9 +103,20 @@ export async function fetchRemoteEvidence(libraryPath: string, id: string, publi
   };
 }
 
-async function queryContext(libraryPath: string, runtime: DkbRuntimeContext) {
-  const library = await loadLibrary(libraryPath);
-  return getQueryContext(libraryPath, library.manifest.id, runtime);
+async function queryContext(stateRoot: string, runtime: DkbRuntimeContext) {
+  const instance = await ensureRuntimeState(stateRoot);
+  const library = await loadLibrary(instance.libraryRoot);
+  const context = await getOrOpenRuntimeQueryContext(instance, library.manifest.id, runtime);
+  return { instance, library, context };
+}
+
+function runtimeIdentity(instance: DkbRuntimeInstance, libraryId: string) {
+  return {
+    name: instance.runtimeId,
+    libraryId,
+    pipeline: instance.target,
+    compatibilityDigest: instance.activation?.compatibilityDigest ?? null,
+  };
 }
 
 const readOnlyAnnotations = {

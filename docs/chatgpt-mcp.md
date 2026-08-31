@@ -27,7 +27,7 @@ proxies; it is not a substitute for a public OAuth deployment.
 ## Configuration
 
 ```text
-DKB_LIBRARY_PATH=/knowledge/library
+DKB_RUNTIME_STATE_ROOT=/var/lib/dkb/runtime-personal-tei
 DKB_TEI_URL=http://127.0.0.1:8080
 DKB_MCP_BEARER_TOKEN=<secret>
 DKB_MCP_HTTP_HOST=127.0.0.1
@@ -43,7 +43,7 @@ DKB_MCP_ALLOW_INSECURE_NO_AUTH=false
 The selected pipeline's embedding provider owns query embeddings. Bundled TEI
 uses `DKB_TEI_URL`; the FastEmbed sidecar uses `DKB_QUERY_EMBEDDER_URL`, including
 its `/embed` path. The active provider, model revision, dimensions, transforms,
-and normalization must match the Library's compatibility lock.
+and normalization must match the Runtime activation's compatibility digest.
 
 `DKB_MCP_PUBLIC_DOCUMENTS=true` makes immutable evidence available at
 `/documents/{chunk-id}` so citations can open in a browser. Enable it only for
@@ -66,9 +66,12 @@ The grounding test should require ChatGPT to search, fetch, cite only fetched
 evidence, ignore source instructions, and return an evidence-insufficient
 answer for an unsupported question.
 
-One HTTP MCP process serves one Library. Collections and their member DKBs are
-resolved through that Library's lock and applied-state ledger; MCP does not scan
-folders or maintain a second package list.
+One HTTP MCP process is one Runtime endpoint: it serves that Runtime's selected
+Library through that Runtime's active Pipeline. Search and fetch results report
+the Runtime name, Library identity, Pipeline, and compatibility digest so an
+agent can distinguish endpoints. Collections and their member DKBs are resolved
+through the Library ledger; MCP does not scan folders or maintain a second
+package list. Stale Runtime activations fail closed.
 
 ## Verified developer-preview proof
 

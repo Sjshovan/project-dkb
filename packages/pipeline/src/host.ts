@@ -68,6 +68,7 @@ export interface DkbDistribution {
 
 export interface DkbProviderHostOptions {
   root: string;
+  libraryRoot?: string;
   distribution: DkbDistribution;
   globalRoot?: string;
   target?: string;
@@ -75,6 +76,7 @@ export interface DkbProviderHostOptions {
 
 export interface DkbProviderHostDescription {
   root: string;
+  libraryRoot?: string;
   globalRoot: string;
   target: string;
   configDigest: string;
@@ -99,6 +101,7 @@ export interface DkbProviderHostDescription {
 
 export class DkbProviderHost {
   readonly root: string;
+  readonly libraryRoot?: string;
   readonly globalRoot: string;
   readonly config: DkbResolvedContextConfig;
   private readonly providers = new Map<DkbProviderKind, DkbProviderRegistration>();
@@ -107,6 +110,7 @@ export class DkbProviderHost {
 
   private constructor(config: DkbResolvedContextConfig) {
     this.root = config.root;
+    this.libraryRoot = config.libraryRoot;
     this.globalRoot = config.globalRoot;
     this.config = config;
   }
@@ -114,6 +118,7 @@ export class DkbProviderHost {
   static async create(options: DkbProviderHostOptions): Promise<DkbProviderHost> {
     const config = await resolveContextConfig(options.root, {
       defaults: options.distribution.defaults,
+      ...(options.libraryRoot ? { libraryRoot: options.libraryRoot } : {}),
       ...(options.globalRoot ? { globalRoot: options.globalRoot } : {}),
       ...(options.target ? { target: options.target } : {}),
     });
@@ -204,6 +209,7 @@ export class DkbProviderHost {
 
     return {
       root: this.root,
+      ...(this.libraryRoot ? { libraryRoot: this.libraryRoot } : {}),
       globalRoot: this.globalRoot,
       target: this.config.activeTarget,
       configDigest: this.config.target.configDigest,
@@ -254,8 +260,12 @@ export class DkbProviderHost {
       throw new DkbError(`Invalid selected plugin id: ${id}`);
     }
     const localPath = pluginPath(path.join(this.root, '.dkb/plugins'), id);
+    const libraryPath = this.libraryRoot && this.libraryRoot !== this.root
+      ? pluginPath(path.join(this.libraryRoot, '.dkb/plugins'), id)
+      : null;
     const globalPath = pluginPath(path.join(this.globalRoot, 'plugins'), id);
     const localExists = await fileExists(localPath);
+    const libraryExists = libraryPath ? await fileExists(libraryPath) : false;
     const globalExists = await fileExists(globalPath);
     let plugin: DkbPluginModule;
     let source: DkbProviderRegistration['source'];
@@ -267,6 +277,11 @@ export class DkbProviderHost {
       source = 'local';
       sourcePath = localPath;
       sourceDigest = await hashPluginDirectory(path.dirname(localPath));
+    } else if (libraryExists && libraryPath) {
+      plugin = await importPlugin(libraryPath, this.root);
+      source = 'local';
+      sourcePath = libraryPath;
+      sourceDigest = await hashPluginDirectory(path.dirname(libraryPath));
     } else if (globalExists) {
       plugin = await importPlugin(globalPath, this.root);
       source = 'global';
@@ -276,7 +291,7 @@ export class DkbProviderHost {
       const selected = bundled.get(id);
 
       if (!selected) {
-        throw new DkbError(`Selected plugin ${id} was not found locally at ${localPath}, globally at ${globalPath}, or in DKB's bundled providers`);
+        throw new DkbError(`Selected plugin ${id} was not found at Runtime ${localPath}, Library ${libraryPath ?? '(not configured)'}, global ${globalPath}, or in DKB's bundled providers`);
       }
       plugin = selected;
       source = 'bundled';

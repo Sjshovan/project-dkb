@@ -17,11 +17,15 @@ A plugin is a directory containing `plugin.mjs` at:
 
 The module exports `id`, `version`, and `setup(context)`. It needs no plugin
 manifest and is not downloaded from a plugin registry. DKB resolves each
-selected plugin independently in this order:
+selected Runtime plugin independently in this order:
 
-1. the current Library, Runtime, or Registry compiler context;
-2. current-user global storage;
-3. bundled providers.
+1. the Runtime-local context;
+2. the bound Library context;
+3. current-user global storage;
+4. bundled providers.
+
+Compiler and Registry compiler contexts use their own trusted context root,
+then current-user global storage, then bundled providers.
 
 Only selected plugins are loaded. A present but broken local override is an
 error; DKB never silently falls back to a global or bundled implementation.
@@ -31,7 +35,7 @@ Runtimes in one process may select different overrides without sharing state.
 Plugin code and operator configuration are never package content. Archive,
 artifact, and local compiled-install filters exclude `.dkb/plugins/` and
 `.dkb/config.json`. A DKB uploaded as knowledge cannot execute code or change a
-Library's pipeline.
+Runtime's active Pipeline.
 
 ## Profiles, targets, and stored builds
 
@@ -66,12 +70,12 @@ followed by embedding, index, and retrieval:
 Profiles are recipes. Evidence and Retrieval Builds are stored results. DKB
 never chooses a build by recency or target name alone.
 
-`dkb pipeline set` validates the full candidate before atomically writing the
-configuration. `dkb pipeline use` prepares an exact build chain for every
-installed package, then asks the Runtime to switch the complete Library
-snapshot. Registry packages download signed missing layers; editable local
+`dkb pipeline set` validates a target recipe before atomically writing trusted
+configuration. `dkb pipeline use <pipeline> --runtime <runtime>` prepares an
+exact build chain for every installed package, then switches only that
+Runtime's activation. Registry packages download signed missing layers; editable local
 packages reuse matching Evidence IR when possible and compile through the same
-shared runner. Failure leaves the previous target active.
+shared runner. Failure leaves that Runtime's previous activation intact.
 
 ## Contracts
 
@@ -147,8 +151,9 @@ dkb plugin link ./my-provider --root ./Library
 dkb plugin list ./Library
 dkb plugin remove @team/provider --root ./Library
 
-dkb pipeline show ./Library
-dkb pipeline verify ./Library
+dkb pipeline list --runtime local
+dkb pipeline show meili --runtime local
+dkb pipeline verify meili --runtime local
 dkb pipeline set meili --root ./Library \
   --evidence @dkb/evidence-docling-llamaindex \
   --embedding @dkb/embedding-fastembed \
@@ -169,7 +174,7 @@ dkb build inspect <digest> ./my-dkb
 dkb build prune ./my-dkb
 ```
 
-Inactive Retrieval Builds remain available until pruning, so a Library can
+Inactive Retrieval Builds remain available until pruning, so any Runtime can
 switch back without parsing, chunking, or embedding again.
 
 ## Registry compiler

@@ -12,7 +12,7 @@ export interface ServeDkbMcpHttpOptions {
   host?: string;
   port?: number;
   path?: string;
-  libraryPath?: string;
+  stateRoot?: string;
   bearerToken?: string;
   allowedHosts?: string[];
   allowedOrigins?: string[];
@@ -30,7 +30,7 @@ export interface DkbMcpHttpHandler {
 export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = {}): Promise<DkbMcpHttpHandler> {
   const host = options.host ?? process.env.DKB_MCP_HTTP_HOST ?? process.env.DKB_RUNTIME_HOST ?? '127.0.0.1';
   const endpointPath = normalizePath(options.path ?? process.env.DKB_MCP_HTTP_PATH ?? '/mcp');
-  const libraryPath = options.libraryPath ?? process.env.DKB_LIBRARY_PATH ?? defaultRuntimeStateRoot();
+  const stateRoot = options.stateRoot ?? process.env.DKB_RUNTIME_STATE_ROOT ?? defaultRuntimeStateRoot();
   const bearerToken = options.bearerToken ?? process.env.DKB_MCP_BEARER_TOKEN;
   const publicBaseUrl = options.publicBaseUrl ?? process.env.DKB_MCP_PUBLIC_BASE_URL;
   const publicDocuments = options.publicDocuments ?? process.env.DKB_MCP_PUBLIC_DOCUMENTS === 'true';
@@ -49,7 +49,7 @@ export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = 
     ...(options.allowedOrigins ?? csv(process.env.DKB_MCP_ALLOWED_ORIGINS)),
     'localhost', '127.0.0.1', '[::1]',
   ]));
-  const mcp = createDkbReadOnlyMcpServer({ runtime, libraryPath, publicBaseUrl });
+  const mcp = createDkbReadOnlyMcpServer({ runtime, stateRoot, publicBaseUrl });
   const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -64,7 +64,7 @@ export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = 
       const documentId = requestUrl.pathname.match(/^\/documents\/([^/]+)$/)?.[1];
 
       if (documentId && request.method === 'GET' && publicDocuments) {
-        sendJson(response, 200, await fetchRemoteEvidence(libraryPath, decodeURIComponent(documentId), publicBaseUrl, runtime));
+        sendJson(response, 200, await fetchRemoteEvidence(stateRoot, decodeURIComponent(documentId), publicBaseUrl, runtime));
         return true;
       }
       if (requestUrl.pathname !== endpointPath) return false;

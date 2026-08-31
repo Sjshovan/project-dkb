@@ -155,12 +155,13 @@ services:
     image: ${DKB_FAISS_IMAGE:-dkb-index-faiss:0.1.0}
     profiles: ["faiss"]
     environment:
-      DKB_FAISS_ALLOWED_ROOTS: /context,/jobs,/state
+      DKB_FAISS_ALLOWED_ROOTS: /context,/jobs,/state,/library
       DKB_FAISS_MAX_SESSIONS: "64"
     volumes:
       - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-context:/context
       - dkb-compiler-jobs:/jobs
       - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
+      - ${DKB_LIBRARY_HOST_PATH:?Run dkb stack up to select a Library}:/library
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,json; assert json.load(urllib.request.urlopen('http://127.0.0.1:8092/health'))['ok']"]
       interval: 5s
@@ -197,6 +198,9 @@ services:
       DKB_RUNTIME_HOST: 0.0.0.0
       DKB_RUNTIME_PORT: 7331
       DKB_RUNTIME_STATE_ROOT: /state
+      DKB_LIBRARY_PATH: /library
+      DKB_PIPELINE_TARGET: ${DKB_RUNTIME_PIPELINE_TARGET:-default}
+      DKB_RUNTIME_ID: ${DKB_STACK_NAME:-local}-runtime
       DKB_PUBLIC_URL: ${DKB_PUBLIC_URL:-http://127.0.0.1:7331}
       DKB_MCP_PUBLIC_BASE_URL: ${DKB_MCP_PUBLIC_BASE_URL:-http://127.0.0.1:7331}
       DKB_MCP_PUBLIC_DOCUMENTS: "true"
@@ -214,6 +218,7 @@ services:
       MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
     volumes:
       - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
+      - ${DKB_LIBRARY_HOST_PATH:?Run dkb stack up to select a Library}:/library
     ports:
       - "${DKB_RUNTIME_PORT:-7331}:7331"
     depends_on:

@@ -210,13 +210,8 @@ export interface DkbLockManifest {
   builds: {
     evidence: DkbLockBuildReference;
     retrieval: DkbLockBuildReference & {
-      compatibilityDigest: string | null;
-    };
-    runtime: {
-      path: string;
       target: string;
-      digest: string | null;
-      status: DkbLockBuildStatus;
+      compatibilityDigest: string | null;
     };
   };
   compiled?: {

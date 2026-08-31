@@ -14,7 +14,7 @@ knowledge:
   digests, build compatibility, and index integrity before promotion.
 
 Uploaded or installed knowledge cannot select providers, supply executable
-plugins, mutate other packages, or change a Library's active pipeline.
+plugins, mutate other packages, or change a Runtime's active Pipeline.
 
 ## MCP boundary
 

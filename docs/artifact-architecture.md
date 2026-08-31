@@ -186,8 +186,9 @@ The content-addressed build graph is the only compiled package representation:
   Evidence catalog, and the Evidence lock.
 - `.dkb/builds/retrieval/<profile>/<digest>` stores the generic artifact
   manifest, provider-native artifacts, and the Retrieval/profile locks.
-- `.dkb/runtime.lock.json` points at one exact build chain per installed
-  package. It does not copy active artifacts.
+- Each Runtime's separate `.dkb/runtime-activation.lock.json` points at one exact
+  build chain per installed package. It contains digests rather than machine
+  paths and does not copy active artifacts into the Library.
 - `dkb artifact inspect <path>` and `dkb artifact validate <path>` inspect and
   verify the generic build graph.
 - `dkb artifact pack <path> --out <file>` creates a deterministic `.dkbpkg`
@@ -202,13 +203,13 @@ layers. OCI transport remains available for a composed package artifact, while
 the Laravel Registry distributes the layers through a signed install plan.
 
 Compiled package install is not a source import. After receipt, manifest, and
-hash verification, the Runtime stages the source, Evidence, and Retrieval
-layers, promotes them through a temporary install directory, writes an atomic
-Runtime lock, and opens the immutable build paths directly. It never recompiles
-raw source during install.
+hash verification, DKB stages the source, Evidence, and Retrieval layers and
+promotes them through a temporary Library transaction. Online local Runtimes
+then refresh their independent activation locks and open the immutable build
+paths directly. Install never recompiles raw source.
 
-Uninstall removes the promoted package and refreshes the active aggregate
-catalog. Reinstalling the same verified `.dkbpkg` restores its compiled
+Uninstall removes the promoted package and invalidates every Runtime activation
+serving that Library. Reinstalling the same verified `.dkbpkg` restores its compiled
 artifacts without parsing, chunking, or embedding its source again.
 
 ORAS and Cosign remain adapters against the package and build receipts. They do not

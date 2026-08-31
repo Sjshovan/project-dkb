@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { maybeReadRuntimeLock } from '@sjshovan/dkb-library/builds.js';
+import { maybeReadRuntimeActivation } from '@sjshovan/dkb-runtime/runtime/activation.js';
+import { DKB_RUNTIME_ACTIVATION_PATH, DKB_RUNTIME_BINDING_PATH, resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
+import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import type { DkbDistribution, DkbDistributionService } from '@sjshovan/dkb-pipeline/host.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbStackContext, DkbStackTarget } from './types.js';
@@ -12,17 +14,29 @@ import type { DkbStackContext, DkbStackTarget } from './types.js';
 export async function prepareDkbStack(
   distribution: DkbDistribution,
   name = 'local',
-  requestedTarget?: DkbStackTarget,
+  options: {
+    compilerTarget?: DkbStackTarget;
+    runtimeTarget?: DkbStackTarget;
+    libraryRoot?: string;
+  } = {},
 ): Promise<DkbStackContext> {
   const normalizedName = stackName(name);
   const root = path.join(stackStateRoot(), normalizedName);
-  const target = requestedTarget ?? distributionDefaultTarget(distribution);
+  await migrateLegacyStackLibrary(root);
+  const target = options.compilerTarget ?? distributionDefaultTarget(distribution);
   const recipe = targetRecipe(distribution, target);
   const composeFile = await resolveComposeFile();
   const envFile = path.join(root, 'stack.env');
   const runtimeRoot = path.join(root, 'runtime');
-  const activeRuntimeBuild = await maybeReadRuntimeLock(runtimeRoot);
-  const runtimeTarget = parseStoredTarget(distribution, activeRuntimeBuild?.target ?? target);
+  const libraryRoot = path.resolve(options.libraryRoot ?? path.join(root, 'library'));
+  await ensureStackLibrary(libraryRoot, `${normalizedName} Library`);
+  await removeLegacyPackageRuntimeLocks(libraryRoot);
+  const activeRuntimeBuild = await maybeReadStackRuntimeActivation(runtimeRoot);
+  const existing = await readEnvironmentFile(envFile);
+  const runtimeTarget = parseStoredTarget(
+    distribution,
+    options.runtimeTarget ?? activeRuntimeBuild?.target ?? existing.DKB_RUNTIME_PIPELINE_TARGET ?? target,
+  );
   const requiredServices = requiredStackServices(distribution, [target, runtimeTarget]);
 
   await Promise.all([
@@ -36,12 +50,13 @@ export async function prepareDkbStack(
       : []),
   ]);
 
-  const existing = await readEnvironmentFile(envFile);
   const values: Record<string, string> = {
     ...existing,
     DKB_STACK_NAME: normalizedName,
     DKB_STACK_STATE: root.replace(/\\/gu, '/'),
     DKB_PIPELINE_TARGET: target,
+    DKB_RUNTIME_PIPELINE_TARGET: runtimeTarget,
+    DKB_LIBRARY_HOST_PATH: libraryRoot.replace(/\\/gu, '/'),
     DKB_BUILD_COMMIT: existing.DKB_BUILD_COMMIT ?? process.env.DKB_BUILD_COMMIT ?? 'development',
     DKB_REGISTRY_APP_KEY: existing.DKB_REGISTRY_APP_KEY ?? `base64:${randomBytes(32).toString('base64')}`,
     DKB_REGISTRY_BOOTSTRAP_NAMESPACE: existing.DKB_REGISTRY_BOOTSTRAP_NAMESPACE ?? namespaceForStack(normalizedName),
@@ -94,10 +109,17 @@ export async function prepareDkbStack(
   await writePipelineConfig(path.join(root, 'compiler-context', '.dkb', 'config.json'), target);
   await writePipelineConfig(
     path.join(runtimeRoot, '.dkb', 'config.json'),
-    parseStoredTarget(distribution, activeRuntimeBuild?.target ?? target),
+    runtimeTarget,
   );
+  await writeAtomic(path.join(runtimeRoot, ...DKB_RUNTIME_BINDING_PATH.split('/')), `${JSON.stringify({
+    format: 'dkb.runtime-binding.v1',
+    runtimeId: `${normalizedName}-runtime`,
+    library: { kind: 'local', path: '/library', name: path.basename(libraryRoot) },
+    target: runtimeTarget,
+    updatedAt: new Date().toISOString(),
+  }, null, 2)}\n`);
 
-  return contextFrom(distribution, root, composeFile, envFile, values, runtimeTarget);
+  return contextFrom(distribution, root, libraryRoot, runtimeRoot, composeFile, envFile, values, runtimeTarget);
 }
 
 export async function readDkbStack(distribution: DkbDistribution, name: string): Promise<DkbStackContext> {
@@ -109,9 +131,10 @@ export async function readDkbStack(distribution: DkbDistribution, name: string):
   }
   const runtimeTarget = parseStoredTarget(
     distribution,
-    (await maybeReadRuntimeLock(path.join(root, 'runtime')))?.target ?? values.DKB_PIPELINE_TARGET,
+    (await maybeReadStackRuntimeActivation(path.join(root, 'runtime')))?.target ?? values.DKB_PIPELINE_TARGET,
   );
-  return contextFrom(distribution, root, await resolveComposeFile(), envFile, values, runtimeTarget);
+  const libraryRoot = path.resolve(values.DKB_LIBRARY_HOST_PATH ?? path.join(root, 'library'));
+  return contextFrom(distribution, root, libraryRoot, path.join(root, 'runtime'), await resolveComposeFile(), envFile, values, runtimeTarget);
 }
 
 export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<string | undefined> {
@@ -196,9 +219,15 @@ export async function pathExists(target: string): Promise<boolean> {
   }
 }
 
+async function maybeReadStackRuntimeActivation(runtimeRoot: string) {
+  return maybeReadRuntimeActivation(path.join(runtimeRoot, ...DKB_RUNTIME_ACTIVATION_PATH.split('/')));
+}
+
 function contextFrom(
   distribution: DkbDistribution,
   root: string,
+  libraryRoot: string,
+  runtimeStateRoot: string,
   composeFile: string,
   envFile: string,
   values: Record<string, string>,
@@ -220,6 +249,8 @@ function contextFrom(
     target,
     runtimeTarget,
     root,
+    libraryRoot,
+    runtimeStateRoot,
     composeFile,
     envFile,
     registryUrl: `http://127.0.0.1:${registryPort}`,
@@ -237,6 +268,53 @@ function contextFrom(
     servicePorts,
     ...(values.DKB_STACK_VERSION ? { version: values.DKB_STACK_VERSION } : {}),
   };
+}
+
+async function ensureStackLibrary(libraryRoot: string, name: string): Promise<void> {
+  const manifestPath = path.join(libraryRoot, 'dkb.json');
+  if (await pathExists(manifestPath)) return;
+  await fs.mkdir(libraryRoot, { recursive: true });
+  await writeAtomic(manifestPath, `${JSON.stringify({
+    manifestVersion: 1,
+    type: 'library',
+    name,
+    description: 'Local DKB Library.',
+    roots: {},
+  }, null, 2)}\n`);
+}
+
+async function migrateLegacyStackLibrary(root: string): Promise<void> {
+  const legacyRoot = path.join(root, 'runtime');
+  const libraryRoot = path.join(root, 'library');
+  if (!await pathExists(path.join(legacyRoot, 'dkb.json')) || await pathExists(path.join(libraryRoot, 'dkb.json'))) return;
+  const staged = path.join(root, `runtime-library-split-${process.pid}-${Date.now().toString(36)}`);
+  await fs.rename(legacyRoot, staged);
+  try {
+    await fs.rename(staged, libraryRoot);
+    await Promise.all([
+      fs.rm(path.join(libraryRoot, '.dkb', 'runtime.lock.json'), { force: true }),
+      fs.rm(path.join(libraryRoot, '.dkb', 'runtime.json'), { force: true }),
+      fs.rm(path.join(libraryRoot, '.dkb', 'activation.lock.json'), { force: true }),
+      fs.rm(path.join(libraryRoot, '.dkb', 'cache', 'runtime'), { recursive: true, force: true }),
+      fs.rm(path.join(libraryRoot, '.dkb', 'traces'), { recursive: true, force: true }),
+      fs.rm(path.join(libraryRoot, '.dkb', 'audit'), { recursive: true, force: true }),
+    ]);
+    await fs.mkdir(path.join(legacyRoot, '.dkb'), { recursive: true });
+  } catch (error) {
+    if (!await pathExists(legacyRoot) && await pathExists(libraryRoot)) await fs.rename(libraryRoot, legacyRoot).catch(() => undefined);
+    if (!await pathExists(legacyRoot) && await pathExists(staged)) await fs.rename(staged, legacyRoot).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function removeLegacyPackageRuntimeLocks(libraryRoot: string): Promise<void> {
+  const state = await readLibraryState(libraryRoot);
+  await Promise.all(Object.values(state.entries)
+    .filter((entry) => entry.kind === 'dkb' && entry.status === 'installed')
+    .map(async (entry) => {
+      const packageRoot = resolveContainedPath(libraryRoot, entry.path, `Installed DKB ${entry.identity}`);
+      await fs.rm(path.join(packageRoot, '.dkb', 'runtime.lock.json'), { force: true });
+    }));
 }
 
 async function writePipelineConfig(targetPath: string, target: DkbStackTarget): Promise<void> {

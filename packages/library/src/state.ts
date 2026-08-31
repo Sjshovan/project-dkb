@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
 import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
 import { validateDkbLibraryLockManifest } from '@sjshovan/dkb-protocol/validation.js';
 import type { DkbEntryStatus, DkbLibraryLockEntry, DkbLibraryLockManifest } from '@sjshovan/dkb-protocol/types.js';
@@ -17,6 +19,12 @@ export interface DkbLibraryStateEntry extends DkbLibraryLockEntry {
 export interface DkbLibraryStateSnapshot {
   generation: number;
   entries: Record<string, DkbLibraryStateEntry>;
+}
+
+export interface DkbLibraryStateIdentity {
+  id: string;
+  generation: number;
+  stateDigest: string;
 }
 
 interface StateRow {
@@ -68,7 +76,7 @@ export async function readLibraryState(libraryRoot: string): Promise<DkbLibraryS
     return { generation: 0, entries: {} };
   }
 
-  const database = openLibraryState(databasePath);
+  const database = openLibraryStateReadOnly(databasePath);
   try {
     const generation = Number((database.prepare("SELECT value FROM metadata WHERE key = 'generation'").get() as { value?: string } | undefined)?.value ?? 0);
     const rows = database.prepare('SELECT * FROM entries ORDER BY identity').all() as unknown as StateRow[];
@@ -97,6 +105,36 @@ export async function readLibraryState(libraryRoot: string): Promise<DkbLibraryS
   } finally {
     database.close();
   }
+}
+
+export async function libraryStateIdentity(libraryRoot: string): Promise<DkbLibraryStateIdentity> {
+  const root = path.resolve(libraryRoot);
+  const [library, state] = await Promise.all([loadLibrary(root), readLibraryState(root)]);
+  const entries = Object.fromEntries(Object.entries(state.entries)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([identity, entry]) => [identity, {
+      identity: entry.identity,
+      kind: entry.kind,
+      source: entry.source,
+      version: entry.version ?? null,
+      revision: entry.revision ?? null,
+      digest: entry.digest ?? null,
+      path: entry.path.replace(/\\/gu, '/'),
+      registryUrl: entry.registryUrl ?? null,
+      requiredBy: [...entry.requiredBy].sort(),
+      status: entry.status,
+      generation: entry.generation,
+    }]));
+
+  return {
+    id: library.manifest.id,
+    generation: state.generation,
+    stateDigest: stableHash({
+      libraryId: library.manifest.id,
+      generation: state.generation,
+      entries,
+    }),
+  };
 }
 
 export async function applyLibraryLock(libraryRoot: string, input: DkbLibraryLockManifest): Promise<DkbLibraryStateSnapshot> {
@@ -208,6 +246,10 @@ function openLibraryState(databasePath: string): DatabaseSync {
     );
   `);
   return database;
+}
+
+function openLibraryStateReadOnly(databasePath: string): DatabaseSync {
+  return new DatabaseSync(path.toNamespacedPath(databasePath), { readOnly: true });
 }
 
 async function assertLockPaths(root: string, lock: DkbLibraryLockManifest): Promise<void> {

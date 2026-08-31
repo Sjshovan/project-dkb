@@ -1,7 +1,15 @@
 import path from 'node:path';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime, registerHostStack } from '../host/inventory.js';
+import { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
+import {
+  readHostInventory,
+  rebindMigratedStackLibrary,
+  registerHostLibrary,
+  registerHostRegistry,
+  registerHostRuntime,
+  registerHostStack,
+} from '../host/inventory.js';
 import { writeConfiguredRegistryUrl } from '../cli/registryConfig.js';
 import { backupDkbStack, restoreDkbStack } from './backups.js';
 import {
@@ -90,7 +98,11 @@ export async function listDkbStacks(distribution: DkbDistribution, check = false
 export async function upDkbStack(
   distribution: DkbDistribution,
   name = 'local',
-  target?: DkbStackTarget,
+  options: {
+    compilerTarget?: DkbStackTarget;
+    runtimeTarget?: DkbStackTarget;
+    libraryRoot?: string;
+  } = {},
 ): Promise<DkbStackStatus & {
   status: 'ready';
   registryName: string;
@@ -98,7 +110,7 @@ export async function upDkbStack(
   libraryName: string;
   legacyRegistryVolume?: { status: 'copied'; volume: string; preserved: true };
 }> {
-  const context = await prepareDkbStack(distribution, name, target);
+  const context = await prepareDkbStack(distribution, name, options);
   assertDockerAvailable();
   assertRequiredImages(context);
   const legacyRegistryVolume = await migrateLegacyRegistryVolume(context);
@@ -133,15 +145,29 @@ export async function upDkbStack(
     );
   }
 
+  const runtimeAdminToken = await runtimeAdminTokenForUrl(context.runtimeUrl);
+  if (!runtimeAdminToken) {
+    throw new DkbError(`DKB stack ${context.name} started without a readable Runtime admin credential. Run: dkb stack doctor ${context.name}`);
+  }
+  await new DkbRuntimeClient({ baseUrl: context.runtimeUrl, adminToken: runtimeAdminToken, timeoutMs: 5 * 60_000 }).switchPipeline({
+    target: context.runtimeTarget,
+  });
+
   const inventory = await readHostInventory();
-  const runtimeStateRoot = path.resolve(context.root, 'runtime');
-  const existingLibrary = Object.entries(inventory.libraries).find(([, item]) => samePath(item.path, runtimeStateRoot));
+  const runtimeStateRoot = context.runtimeStateRoot;
+  const existingLibrary = Object.entries(inventory.libraries).find(([, item]) => samePath(item.path, context.libraryRoot));
   const existingRegistry = Object.entries(inventory.registries).find(([, item]) => item.url === context.registryUrl);
   const existingRuntime = Object.entries(inventory.runtimes).find(([, item]) => item.url === context.runtimeUrl);
-  await writeConfiguredRegistryUrl(context.registryUrl, { root: runtimeStateRoot });
+  await writeConfiguredRegistryUrl(context.registryUrl, { root: context.libraryRoot });
   const registry = await registerHostRegistry(existingRegistry?.[0] ?? `${context.name}-registry`, context.registryUrl, { select: 'if-empty' });
-  const library = await registerHostLibrary(runtimeStateRoot, {
-    name: existingLibrary?.[0] ?? `${context.name}-library`,
+  const stackLibraryName = inventory.stacks[context.name]?.library;
+  if (!existingLibrary && stackLibraryName && inventory.libraries[stackLibraryName]
+    && samePath(inventory.libraries[stackLibraryName].path, path.join(context.root, 'runtime'))
+    && samePath(context.libraryRoot, path.join(context.root, 'library'))) {
+    await rebindMigratedStackLibrary(context.name, stackLibraryName, context.libraryRoot);
+  }
+  const library = await registerHostLibrary(context.libraryRoot, {
+    name: existingLibrary?.[0] ?? stackLibraryName ?? `${context.name}-library`,
     registryName: registry.name,
     registryUrl: context.registryUrl,
     select: 'if-empty',
@@ -260,7 +286,7 @@ export async function upgradeDkbStack(
     distribution,
     name,
     lockPath,
-    async (stackName, target) => upDkbStack(distribution, stackName, target),
+    async (stackName, target) => upDkbStack(distribution, stackName, { compilerTarget: target }),
   );
 }
 

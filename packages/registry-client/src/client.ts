@@ -8,7 +8,13 @@ import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { validateInstallPlan, type DkbInstallPlan, type DkbInstallPlanArtifact } from '@sjshovan/dkb-protocol/builds.js';
+import {
+  validateInstallPlan,
+  validateRetrievalBuildGrant,
+  type DkbInstallPlan,
+  type DkbInstallPlanArtifact,
+  type DkbRetrievalBuildGrant,
+} from '@sjshovan/dkb-protocol/builds.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
@@ -60,6 +66,12 @@ export interface DkbRegistryTokenExchange {
 
 export interface DkbRegistryInstallGrant {
   plan: DkbInstallPlan;
+  installGrant: string;
+  expiresAt: string;
+}
+
+export interface DkbRegistryRetrievalBuildGrant {
+  build: DkbRetrievalBuildGrant;
   installGrant: string;
   expiresAt: string;
 }
@@ -458,10 +470,38 @@ export class DkbRegistryClient {
     };
   }
 
-  async requestBuild(packageId: string, version: string, target: string): Promise<DkbRegistryBuildRequest> {
+  async createRetrievalBuildGrant(input: {
+    packageId: string;
+    version: string;
+    target: string;
+    sourceDigest: string;
+    evidenceDigest: string;
+  }): Promise<DkbRegistryRetrievalBuildGrant> {
+    const value = await this.post(
+      `/api/registry/packages/${identityRoute(input.packageId)}/versions/${encodeURIComponent(input.version)}/retrieval-build-grant`,
+      {
+        target: input.target,
+        sourceDigest: input.sourceDigest,
+        evidenceDigest: input.evidenceDigest,
+      },
+    );
+    if (!isRecord(value) || typeof value.installGrant !== 'string' || typeof value.expiresAt !== 'string') {
+      throw new DkbError(`Registry returned an invalid Retrieval Build grant for ${input.packageId}@${input.version}.`);
+    }
+    return {
+      build: validateRetrievalBuildGrant(value.build, `Registry Retrieval Build grant for ${input.packageId}@${input.version}`),
+      installGrant: value.installGrant,
+      expiresAt: value.expiresAt,
+    };
+  }
+
+  async requestBuild(packageId: string, version: string, target: string, expected?: {
+    retrievalProfileDigest: string;
+    compatibilityDigest: string;
+  }): Promise<DkbRegistryBuildRequest> {
     const value = await this.post(
       `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/builds`,
-      { target },
+      { target, ...expected },
     );
     if (!isRecord(value) || (value.status !== 'queued' && value.status !== 'ready')) {
       throw new DkbError(`Registry returned an invalid build request for ${packageId}@${version} (${target})`);

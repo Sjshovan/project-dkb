@@ -23,7 +23,9 @@ are authoritative.
 - Filesystem presence alone never activates knowledge.
 - Resolve every package path inside its Library root and preserve provenance identity.
 - Collection membership resolves exact versions through the Library lock.
-- Build directories are immutable and content-addressed. Runtime locks are generated receipts; `.dkb/state.sqlite` remains authoritative applied state.
+- Build directories are immutable and content-addressed. Runtime activation
+  state never lives in a Library; `.dkb/state.sqlite` remains authoritative
+  applied state for installed knowledge.
 
 ## Prohibited coupling
 

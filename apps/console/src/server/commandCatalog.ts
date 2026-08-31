@@ -8,6 +8,10 @@ export type ConsoleCommandId =
   | 'library.use'
   | 'library.registry.use'
   | 'runtime.list'
+  | 'runtime.show'
+  | 'runtime.library.show'
+  | 'runtime.library.use'
+  | 'runtime.refresh'
   | 'runtime.register'
   | 'runtime.unregister'
   | 'runtime.use'
@@ -31,6 +35,9 @@ export type ConsoleCommandId =
   | 'package.verify'
   | 'package.uninstall'
   | 'package.upgrade'
+  | 'pipeline.list'
+  | 'pipeline.show'
+  | 'pipeline.verify'
   | 'pipeline.use';
 
 export interface ConsoleCommandDefinition {
@@ -50,6 +57,11 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   'library.list': read('library.list', ['library', 'list'], checkInput, () => []),
   'library.packages': read('library.packages', ['list'], libraryInput, (input) => ['--library', text(input.library)]),
   'runtime.list': read('runtime.list', ['runtime', 'list'], checkInput),
+  'runtime.show': read('runtime.show', ['runtime', 'show'], runtimeNameInput, (input) => [text(input.runtime)]),
+  'runtime.library.show': read('runtime.library.show', ['runtime', 'library', 'show'], runtimeNameInput, (input) => [text(input.runtime)]),
+  'pipeline.list': read('pipeline.list', ['pipeline', 'list'], runtimeNameInput, (input) => ['--runtime', text(input.runtime)], verificationTimeout),
+  'pipeline.show': read('pipeline.show', ['pipeline', 'show'], pipelineReadInput, (input) => [text(input.target), '--runtime', text(input.runtime)]),
+  'pipeline.verify': read('pipeline.verify', ['pipeline', 'verify'], pipelineReadInput, (input) => [text(input.target), '--runtime', text(input.runtime)], verificationTimeout),
   'registry.list': read('registry.list', ['registry', 'list'], checkInput),
   'registry.catalog': read('registry.catalog', ['search'], registryCatalogInput, (input) => [
     ...(input.query ? [text(input.query)] : []), '--url', text(input.url), '--type', text(input.type),
@@ -103,7 +115,16 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
     '--url', text(input.url), ...(input.revoke ? ['--revoke'] : []),
   ], (input) => `host:registry-auth:${text(input.url)}`),
   'registry.use': mutation('registry.use', ['registry', 'use'], namedInput('registry'), (input) => [text(input.name), '--global'], (input) => `host:registry:${text(input.name)}`),
-  'stack.up': mutation('stack.up', ['stack', 'up'], stackInput, (input) => [text(input.name), ...(input.target ? ['--target', text(input.target)] : [])], (input) => `stack:${text(input.name)}`),
+  'runtime.library.use': mutation('runtime.library.use', ['runtime', 'library', 'use'], runtimeLibraryInput, (input) => [
+    text(input.library), '--runtime', text(input.runtime), ...(input.handle ? ['--handle', text(input.handle)] : []),
+  ], (input) => `runtime:${text(input.runtime)}`),
+  'runtime.refresh': mutation('runtime.refresh', ['runtime', 'refresh'], runtimeNameInput, (input) => [text(input.runtime)], (input) => `runtime:${text(input.runtime)}`),
+  'stack.up': mutation('stack.up', ['stack', 'up'], stackInput, (input) => [
+    text(input.name),
+    ...(input.compilerTarget ? ['--compiler-target', text(input.compilerTarget)] : []),
+    ...(input.pipeline ? ['--pipeline', text(input.pipeline)] : []),
+    ...(input.library ? ['--library', text(input.library)] : []),
+  ], (input) => `stack:${text(input.name)}`),
   'stack.down': mutation('stack.down', ['stack', 'down'], namedInput('stack'), (input) => [text(input.name)], (input) => `stack:${text(input.name)}`),
   'package.install': mutation('package.install', ['install'], packageInstallInput, (input) => [
     text(input.identity), '--library', text(input.library),
@@ -122,7 +143,11 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
     text(input.identity), '--library', text(input.library),
     ...(input.runtimeUrl ? ['--runtime-url', text(input.runtimeUrl)] : []),
   ], (input) => `library:${text(input.library)}`),
-  'pipeline.use': mutation('pipeline.use', ['pipeline', 'use'], pipelineInput, (input) => [text(input.target), text(input.library)], (input) => `library:${text(input.library)}`),
+  'pipeline.use': mutation('pipeline.use', ['pipeline', 'use'], pipelineUseInput, (input) => [
+    text(input.target), '--runtime', text(input.runtime),
+    ...(input.runtimeUrl ? ['--runtime-url', text(input.runtimeUrl)] : []),
+    ...(input.registryUrl ? ['--registry-url', text(input.registryUrl)] : []),
+  ], (input) => `runtime:${text(input.runtime)}`),
 };
 
 export function consoleCommand(id: string): ConsoleCommandDefinition {
@@ -225,10 +250,12 @@ function registryLogoutInput(value: unknown): Record<string, unknown> {
 
 function stackInput(value: unknown): Record<string, unknown> {
   const input = record(value);
-  exactKeys(input, ['name', 'target']);
+  exactKeys(input, ['name', 'compilerTarget', 'pipeline', 'library']);
   return {
     name: hostName(input.name ?? 'local', 'Stack'),
-    ...(input.target === undefined || input.target === '' ? {} : { target: hostName(input.target, 'Pipeline target') }),
+    ...(input.compilerTarget === undefined || input.compilerTarget === '' ? {} : { compilerTarget: hostName(input.compilerTarget, 'Compiler target') }),
+    ...(input.pipeline === undefined || input.pipeline === '' ? {} : { pipeline: hostName(input.pipeline, 'Runtime Pipeline') }),
+    ...(input.library === undefined || input.library === '' ? {} : { library: hostNameOrAbsolutePath(input.library, 'Library') }),
   };
 }
 
@@ -343,10 +370,37 @@ function packagePreviewInput(value: unknown): Record<string, unknown> {
   };
 }
 
-function pipelineInput(value: unknown): Record<string, unknown> {
+function runtimeNameInput(value: unknown): Record<string, unknown> {
   const input = record(value);
-  exactKeys(input, ['library', 'target']);
-  return { library: hostNameOrAbsolutePath(input.library, 'Library'), target: hostName(input.target, 'Pipeline target') };
+  exactKeys(input, ['runtime']);
+  return { runtime: hostName(input.runtime, 'Runtime') };
+}
+
+function runtimeLibraryInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['runtime', 'library', 'handle']);
+  return {
+    runtime: hostName(input.runtime, 'Runtime'),
+    library: hostNameOrAbsolutePath(input.library, 'Library'),
+    ...(input.handle === undefined || input.handle === '' ? {} : { handle: safeValue(input.handle, 'Runtime Library handle') }),
+  };
+}
+
+function pipelineReadInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['runtime', 'target']);
+  return { runtime: hostName(input.runtime, 'Runtime'), target: hostName(input.target, 'Pipeline target') };
+}
+
+function pipelineUseInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['runtime', 'target', 'runtimeUrl', 'registryUrl']);
+  return {
+    runtime: hostName(input.runtime, 'Runtime'),
+    target: hostName(input.target, 'Pipeline target'),
+    ...(input.runtimeUrl === undefined || input.runtimeUrl === '' ? {} : { runtimeUrl: endpointUrl(input.runtimeUrl, 'Runtime URL') }),
+    ...(input.registryUrl === undefined || input.registryUrl === '' ? {} : { registryUrl: endpointUrl(input.registryUrl, 'Registry URL') }),
+  };
 }
 
 function record(value: unknown): Record<string, unknown> {

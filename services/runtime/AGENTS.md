@@ -3,16 +3,19 @@
 This directory owns installed-state activation, retrieval, evidence resolution,
 tracing, Runtime HTTP, and MCP. The canonical
 [provider architecture](../../docs/architecture/final-provider-architecture.md)
-and [ADR 0006](../../docs/decisions/0006-final-provider-architecture-and-storage-cutover.md)
+and [ADR 0008](../../docs/decisions/0008-runtime-bound-pipelines-and-shared-libraries.md)
 are authoritative.
 
 - Depend only on protocol, Library, pipeline contracts, Registry client, and
   provider implementations supplied at the composition boundary.
-- One Runtime serves one Library. It must not keep a second package selection.
+- One Runtime serves one Library and owns one independent Pipeline activation.
+  Multiple Runtimes may share the same Library and immutable build bytes.
+- Keep binding, activation, caches, traces, audit data, and credentials under
+  the Runtime state root. Never write active Pipeline state into the Library.
 - Accept only verified compiled artifacts. Never parse, chunk, embed, or import
   compiler internals here.
-- Promote packages and retrieval snapshots atomically. Queries see either the
-  previous ready state or the next complete state.
+- Promote Runtime activations atomically. Library mutation is authoritative;
+  stale Runtimes fail closed until refreshed and cannot serve removed evidence.
 - Resolve exact signed Evidence/Retrieval chains. Never choose a newest or
   partial match, and never mix compatibility spaces in one snapshot.
 - Preserve stable evidence identities, bounded untrusted-source output,

@@ -6,7 +6,6 @@ import {
   DKB_CACHE_DIR,
   DKB_EVIDENCE_BUILDS_DIR,
   DKB_RETRIEVAL_BUILDS_DIR,
-  DKB_RUNTIME_LOCK_PATH,
   resolveFrom,
 } from '@sjshovan/dkb-protocol/paths.js';
 import type { DkbStore, LoadedDkb, LoadedLibrary } from '@sjshovan/dkb-protocol/types.js';
@@ -21,7 +20,6 @@ export const COMPILE_CACHE_PATH = `${DKB_CACHE_DIR}/compile-cache.json`;
 export const COMPILE_CACHE_VERSION = 1;
 
 const QUICK_ARTIFACT_PATHS = [
-  DKB_RUNTIME_LOCK_PATH,
   DKB_EVIDENCE_BUILDS_DIR,
   DKB_RETRIEVAL_BUILDS_DIR,
 ];
