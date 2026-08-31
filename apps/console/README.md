@@ -16,6 +16,17 @@ false`, then streams the `dkb.command-event.v1` result to the browser. Browser
 code never receives Registry or Runtime credentials and cannot submit raw
 commands or argv.
 
+Registry detail pages use the same typed CLI boundary to search DKBs and
+Collections, inspect exact releases, view signed source metadata, builds, and
+provenance, and install into an explicitly selected matching Library. A Library
+with another upstream must go through the separate Connect Library operation;
+the Console never changes it implicitly.
+
+When an installed package or Collection changes in a Library associated with a
+running Runtime, the Console resolves that Runtime from host inventory and asks
+the CLI to reload it after the transactional Library operation. The browser
+cannot supply an arbitrary Runtime endpoint.
+
 The server binds to `127.0.0.1`, requires a one-time bootstrap into an HttpOnly
 session, validates Host and Origin, and requires CSRF on mutations. It stores
 only redacted activity metadata in its local SQLite database. Authoritative

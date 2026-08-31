@@ -116,6 +116,7 @@ registerLibraryCommands(program, {
   presenter,
   currentLibraryRoot,
   defaultRuntimeContext,
+  currentRuntimeAdminClient,
   parsePositiveInteger,
 });
 const runtime = registerRuntimeCommands(program, {

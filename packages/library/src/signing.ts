@@ -27,6 +27,7 @@ import type {
   DkbReleaseSignature,
   DkbReleaseSigningContent,
 } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbSourceInventoryBinding } from '@sjshovan/dkb-protocol/registryCatalog.js';
 
 export const DKB_RELEASE_PATH = 'dkb-release.json';
 export const DKB_PACKAGE_RECEIPT_PATH = '.dkb-package.json';
@@ -110,11 +111,24 @@ export function releasePayloadForLock(lock: DkbLockManifest): DkbReleasePayload 
   return { lock };
 }
 
-export function packageReceiptPayloadForLock(lock: DkbLockManifest, packageTreeHash?: string): DkbPackageReceiptPayload {
+export function packageReceiptPayloadForLock(
+  lock: DkbLockManifest,
+  packageTreeHash?: string,
+  sourceInventory?: DkbSourceInventoryBinding,
+): DkbPackageReceiptPayload {
   return {
     lock,
     ...(packageTreeHash ? { packageTreeHash } : {}),
+    ...(sourceInventory ? { sourceInventory } : {}),
   };
+}
+
+export function packageReceiptPayloadMatchesLock(receipt: DkbPackageReceipt): boolean {
+  return stableHash(packageReceiptPayloadForLock(
+    receipt.payload.lock,
+    receipt.payload.packageTreeHash,
+    receipt.payload.sourceInventory,
+  )) === receipt.payloadHash;
 }
 
 export function releasePackageForLock(lock: DkbLockManifest): DkbReleasePackage {
@@ -156,8 +170,9 @@ export function packageReceiptSigningContent(input: {
 export function createSignedPackageReceipt(lock: DkbLockManifest, options: CreateSignedReleaseOptions & {
   package: DkbPackageReceiptPackage;
   packageTreeHash?: string;
+  sourceInventory?: DkbSourceInventoryBinding;
 }): DkbPackageReceipt {
-  const payload = packageReceiptPayloadForLock(lock, options.packageTreeHash);
+  const payload = packageReceiptPayloadForLock(lock, options.packageTreeHash, options.sourceInventory);
   const payloadHash = stableHash(payload);
   const content = packageReceiptSigningContent({
     package: options.package,
@@ -483,6 +498,7 @@ export function parsePackageReceipt(value: unknown, source: string): DkbPackageR
   const payload = {
     lock: validateDkbLockManifest(value.payload.lock, `${source}#payload.lock`),
     ...(typeof value.payload.packageTreeHash === 'string' ? { packageTreeHash: value.payload.packageTreeHash } : {}),
+    ...(isSourceInventoryBinding(value.payload.sourceInventory) ? { sourceInventory: value.payload.sourceInventory } : {}),
   };
 
   return {
@@ -494,6 +510,18 @@ export function parsePackageReceipt(value: unknown, source: string): DkbPackageR
     publisher: parsePublisherSignature(value.publisher, `${source}#publisher`),
     registry: parseRegistrySignature(value.registry, `${source}#registry`),
   };
+}
+
+function isSourceInventoryBinding(value: unknown): value is DkbSourceInventoryBinding {
+  return isRecord(value)
+    && value.format === 'dkb.source-inventory.v1'
+    && value.mediaType === 'application/vnd.dkb.source-inventory+json'
+    && typeof value.hash === 'string'
+    && /^sha256:[a-f0-9]{64}$/u.test(value.hash)
+    && Number.isSafeInteger(value.count)
+    && (value.count as number) >= 0
+    && Number.isSafeInteger(value.bytes)
+    && (value.bytes as number) >= 0;
 }
 
 function signCanonical(value: unknown, privateKeyPem: string): string {

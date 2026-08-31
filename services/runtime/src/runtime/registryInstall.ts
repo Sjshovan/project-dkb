@@ -16,7 +16,7 @@ import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
   DKB_INSTALL_PLAN_RECEIPT_PATH,
   DKB_PACKAGE_RECEIPT_PATH,
-  packageReceiptPayloadForLock,
+  packageReceiptPayloadMatchesLock,
   parsePackageReceipt,
   verifyLayerReceipt,
   verifyPackageReceipt,
@@ -466,7 +466,7 @@ async function verifyExtractedPackage(
   }
   const packageId = packageIds[0]!;
   const version = receipt.payload.lock.packages[packageId]?.version ?? receipt.package.version;
-  const payloadMatchesLock = stableHash(packageReceiptPayloadForLock(receipt.payload.lock, receipt.payload.packageTreeHash)) === receipt.payloadHash;
+  const payloadMatchesLock = packageReceiptPayloadMatchesLock(receipt);
   const sourceTree = receipt.payload.packageTreeHash ? await hashPortablePackageTree(root) : null;
   const packageTreeMatches = !receipt.payload.packageTreeHash || sourceTree?.hash === receipt.payload.packageTreeHash;
   const artifact = await validateCompiledPackage(root);

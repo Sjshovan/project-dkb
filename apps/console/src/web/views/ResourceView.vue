@@ -5,6 +5,7 @@ import type { CellContext } from '@tanstack/vue-table';
 import type { DkbCommandEvent } from '@sjshovan/dkb-protocol/command-events.js';
 import { ChevronRight, LogIn, LogOut, Plus, RefreshCw, Square } from '@lucide/vue';
 import { toast } from 'vue-sonner';
+import { RouterLink } from 'vue-router';
 import { cancelOperation, followOperation, getJson, startOperation } from '../api.js';
 import AppButton from '../components/interface/AppButton.vue';
 import ConfirmDialog from '../components/interface/ConfirmDialog.vue';
@@ -65,6 +66,10 @@ const confirmation = computed(() => {
 function actionNodes(row: ResourceRow) {
   return [
     ...(isDefault(row) ? [h('span', { class: 'default-label' }, 'Default')] : []),
+    ...((props.kind === 'libraries' || props.kind === 'registries') ? [h(RouterLink, {
+      class: 'table-inspect-link',
+      to: props.kind === 'libraries' ? `/libraries/${encodeURIComponent(row.name)}` : `/registries/${encodeURIComponent(row.name)}`,
+    }, () => 'Inspect')] : []),
     h(ResourceActionsMenu, {
       kind: props.kind, name: row.name, isDefault: isDefault(row), authenticated: row.authenticated,
       onDefault: () => void setDefault(row),
@@ -191,7 +196,7 @@ function associationLabel(kind: ResourceKind): string { return kind === 'librari
     <template v-else>
       <ResourceTable :rows="rows" :columns="columns" />
       <div class="mobile-resource-list">
-        <article v-for="row in rows" :key="row.name"><header><div><strong>{{ row.displayName ?? row.name }}</strong><small v-if="row.displayName">{{ row.name }}</small></div><button v-if="hasHealthDetails(row)" class="status-detail-trigger" type="button" :aria-label="`View status details for ${row.name}`" @click="details = row"><StatusBadge :status="row.status" /><ChevronRight :size="14" aria-hidden="true" /></button><StatusBadge v-else :status="row.status" /></header><dl><div><dt>{{ associationLabel(props.kind) }}</dt><dd>{{ association(row) }}</dd></div><div><dt>Location</dt><dd>{{ resourceLocation(row) }}</dd></div></dl><footer><span v-if="isDefault(row)" class="default-label">Default</span><AppButton v-else size="sm" variant="quiet" @click="setDefault(row)">Set default</AppButton><AppButton v-if="kind === 'registries'" size="sm" variant="quiet" @click="row.authenticated ? ask(row, 'logout') : authenticate(row)"><component :is="row.authenticated ? LogOut : LogIn" :size="15" />{{ row.authenticated ? 'Sign out' : 'Sign in' }}</AppButton><AppButton v-if="kind === 'stacks'" size="sm" variant="quiet" @click="ask(row, 'stop')"><Square :size="14" />Stop</AppButton><AppButton v-else size="sm" variant="quiet" @click="ask(row, 'forget')">Forget</AppButton><RouterLink v-if="props.kind === 'libraries'" :to="`/libraries/${row.name}`">Inspect</RouterLink></footer></article>
+        <article v-for="row in rows" :key="row.name"><header><div><strong>{{ row.displayName ?? row.name }}</strong><small v-if="row.displayName">{{ row.name }}</small></div><button v-if="hasHealthDetails(row)" class="status-detail-trigger" type="button" :aria-label="`View status details for ${row.name}`" @click="details = row"><StatusBadge :status="row.status" /><ChevronRight :size="14" aria-hidden="true" /></button><StatusBadge v-else :status="row.status" /></header><dl><div><dt>{{ associationLabel(props.kind) }}</dt><dd>{{ association(row) }}</dd></div><div><dt>Location</dt><dd>{{ resourceLocation(row) }}</dd></div></dl><footer><span v-if="isDefault(row)" class="default-label">Default</span><AppButton v-else size="sm" variant="quiet" @click="setDefault(row)">Set default</AppButton><AppButton v-if="kind === 'registries'" size="sm" variant="quiet" @click="row.authenticated ? ask(row, 'logout') : authenticate(row)"><component :is="row.authenticated ? LogOut : LogIn" :size="15" />{{ row.authenticated ? 'Sign out' : 'Sign in' }}</AppButton><AppButton v-if="kind === 'stacks'" size="sm" variant="quiet" @click="ask(row, 'stop')"><Square :size="14" />Stop</AppButton><AppButton v-else size="sm" variant="quiet" @click="ask(row, 'forget')">Forget</AppButton><RouterLink v-if="props.kind === 'libraries' || props.kind === 'registries'" :to="props.kind === 'libraries' ? `/libraries/${encodeURIComponent(row.name)}` : `/registries/${encodeURIComponent(row.name)}`">Inspect</RouterLink></footer></article>
       </div>
     </template>
     <ResourceCreateDrawer :open="createOpen" :kind="kind" :libraries="libraries" :busy="busy" @update:open="createOpen = $event" @submit="register" />

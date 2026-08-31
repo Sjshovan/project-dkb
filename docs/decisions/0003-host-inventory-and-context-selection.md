@@ -5,8 +5,8 @@ Status: implemented
 ## Decision
 
 DKB keeps a disposable, machine-local catalog at `~/.dkb/host.json`. The
-versioned `dkb.host.v1` document remembers known Libraries, Registry endpoints,
-Runtime endpoints, and one selected item of each kind. `DKB_HOST_INVENTORY`
+versioned `dkb.host.v2` document remembers known Libraries, Registry endpoints,
+Runtime endpoints, Stacks, and one default item of each kind. `DKB_HOST_INVENTORY`
 overrides the file location for tests and automation.
 
 This catalog is convenience state, not a control plane. A Library's manifest,
@@ -52,8 +52,11 @@ Runtime clients resolve:
 4. `http://127.0.0.1:7331`.
 
 Registry selection remains Library-specific. An explicit URL and environment
-override win first, followed by the target Library configuration, selected host
-Registry, user fallback, and localhost default.
+override win first, followed by the target Library configuration, its registered
+host association, the default host Registry, user fallback, and localhost
+default. Reads never rewrite any of those sources. `dkb stack up` writes the
+Stack Registry into both the generated Library configuration and its host
+association after the Stack has passed health checks.
 
 ## Reliability And Safety
 

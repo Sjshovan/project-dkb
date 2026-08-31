@@ -12,6 +12,17 @@ import { validateInstallPlan, type DkbInstallPlan, type DkbInstallPlanArtifact }
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
+import {
+  DKB_SOURCE_INVENTORY_FORMAT,
+  DKB_SOURCE_INVENTORY_MEDIA_TYPE,
+  type DkbRegistryCatalogEntry,
+  type DkbRegistryCatalogPage,
+  type DkbRegistryCollectionDetail,
+  type DkbRegistryPackageDetail,
+  type DkbRegistryPackageVersionDetail,
+  type DkbRegistryPageMeta,
+  type DkbRegistrySourceInventoryPage,
+} from '@sjshovan/dkb-protocol/registryCatalog.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, DKB_PACKAGE_MEDIA_TYPE, DKB_SOURCE_ARCHIVE_MEDIA_TYPE } from '@sjshovan/dkb-library/archive.js';
 import { DEFAULT_REGISTRY_URL, normalizeRegistryUrl } from './config.js';
 import { loadRegistryCredentialSync } from './credentials.js';
@@ -173,6 +184,117 @@ export class DkbRegistryClient {
     const suffix = query ? `?q=${encodeURIComponent(query)}` : '';
 
     return this.get(`/api/registry/packages${suffix}`);
+  }
+
+  async catalog(options: {
+    query?: string;
+    type?: 'all' | 'dkb' | 'collection';
+    page?: number;
+    perPage?: number;
+  } = {}): Promise<DkbRegistryCatalogPage> {
+    const type = options.type ?? 'all';
+    const query = registryQuery({ q: options.query, page: options.page, perPage: options.perPage });
+    const [packages, collections] = await Promise.all([
+      type === 'collection' ? null : this.get(`/api/registry/packages${query}`),
+      type === 'dkb' ? null : this.get(`/api/registry/collections${query}`),
+    ]);
+    const packagePage = packages === null ? null : parseCatalogPage(packages, 'dkb');
+    const collectionPage = collections === null ? null : parseCatalogPage(collections, 'collection');
+
+    return {
+      entries: [...(packagePage?.entries ?? []), ...(collectionPage?.entries ?? [])]
+        .sort((left, right) => String(right.publishedAt ?? '').localeCompare(String(left.publishedAt ?? ''))
+          || left.id.localeCompare(right.id)),
+      pages: {
+        ...(packagePage ? { dkbs: packagePage.meta } : {}),
+        ...(collectionPage ? { collections: collectionPage.meta } : {}),
+      },
+    };
+  }
+
+  async packageDetails(packageId: string, version?: string): Promise<DkbRegistryPackageDetail> {
+    const entry = resourceData(await this.download(packageId));
+    if (!entry || entry.id !== packageId || typeof entry.latestVersion !== 'string') {
+      throw new DkbError(`Registry returned invalid DKB details for ${packageId}.`);
+    }
+    const selectedVersion = version ?? entry.latestVersion;
+    const release = resourceData(await this.download(packageId, selectedVersion));
+    if (!release || release.packageId !== packageId || release.version !== selectedVersion || typeof release.status !== 'string') {
+      throw new DkbError(`Registry returned invalid DKB release details for ${packageId}@${selectedVersion}.`);
+    }
+
+    return {
+      type: 'dkb',
+      entry: catalogEntry(entry, 'dkb'),
+      versions: Array.isArray(entry.versions)
+        ? entry.versions.filter(isRecord).map((item) => ({
+            version: String(item.version ?? ''),
+            status: String(item.status ?? ''),
+            ...(typeof item.packageTreeHash === 'string' ? { packageTreeHash: item.packageTreeHash } : {}),
+          })).filter((item) => item.version !== '' && item.status !== '')
+        : [],
+      selectedVersion: release as unknown as DkbRegistryPackageVersionDetail,
+    };
+  }
+
+  async collectionDetails(collectionId: string, revision?: number): Promise<DkbRegistryCollectionDetail> {
+    const entry = resourceData(await this.collection(collectionId));
+    if (!entry || entry.id !== collectionId || typeof entry.latestRevision !== 'number') {
+      throw new DkbError(`Registry returned invalid Collection details for ${collectionId}.`);
+    }
+    const revisions = Array.isArray(entry.revisions)
+      ? entry.revisions.filter(isRecord).map((item) => ({
+          revision: Number(item.revision),
+          digest: String(item.digest ?? ''),
+          ...(typeof item.publishedAt === 'string' ? { publishedAt: item.publishedAt } : {}),
+        })).filter((item) => Number.isSafeInteger(item.revision) && item.revision > 0 && /^sha256:[a-f0-9]{64}$/u.test(item.digest))
+      : [];
+    if (!revisions.some((item) => item.revision === entry.latestRevision)) {
+      throw new DkbError(`Registry returned incomplete Collection revision details for ${collectionId}.`);
+    }
+    const selectedRevision = await this.collectionRevision(collectionId, revision);
+    return {
+      type: 'collection',
+      entry: { ...catalogEntry(entry, 'collection'), revisions },
+      selectedRevision: selectedRevision as unknown as DkbRegistryCollectionDetail['selectedRevision'],
+    };
+  }
+
+  async sourceContents(packageId: string, version: string, options: {
+    cursor?: string;
+    path?: string;
+    perPage?: number;
+  } = {}): Promise<DkbRegistrySourceInventoryPage> {
+    const query = registryQuery({ cursor: options.cursor, path: options.path, perPage: options.perPage });
+    const value = await this.get(
+      `/api/registry/packages/${identityRoute(packageId)}/versions/${encodeURIComponent(version)}/contents${query}`,
+    );
+    if (!isRecord(value) || !Array.isArray(value.data) || !isRecord(value.meta)
+      || value.meta.packageId !== packageId || value.meta.version !== version
+      || !isRecord(value.meta.sourceInventory)) {
+      throw new DkbError(`Registry returned invalid source inventory metadata for ${packageId}@${version}.`);
+    }
+    const binding = value.meta.sourceInventory;
+    if (binding.format !== DKB_SOURCE_INVENTORY_FORMAT
+      || binding.mediaType !== DKB_SOURCE_INVENTORY_MEDIA_TYPE
+      || typeof binding.hash !== 'string'
+      || typeof binding.count !== 'number'
+      || typeof binding.bytes !== 'number') {
+      throw new DkbError(`Registry returned an invalid signed source inventory binding for ${packageId}@${version}.`);
+    }
+    const entries = value.data.map((item, index) => {
+      if (!isRecord(item) || typeof item.path !== 'string' || typeof item.bytes !== 'number' || typeof item.hash !== 'string') {
+        throw new DkbError(`Registry returned invalid source inventory entry ${index} for ${packageId}@${version}.`);
+      }
+      return { path: item.path, bytes: item.bytes, hash: item.hash };
+    });
+    return {
+      packageId,
+      version,
+      sourceInventory: binding as unknown as DkbRegistrySourceInventoryPage['sourceInventory'],
+      entries,
+      nextCursor: typeof value.meta.nextCursor === 'string' ? value.meta.nextCursor : null,
+    };
   }
 
   async packageSummary(packageId: string): Promise<DkbRegistryPackageSummary> {
@@ -1003,6 +1125,66 @@ function resourceData(value: unknown): Record<string, unknown> | null {
   const data = (value as { data?: unknown }).data;
 
   return data && typeof data === 'object' && !Array.isArray(data) ? data as Record<string, unknown> : null;
+}
+
+function registryQuery(values: Record<string, string | number | undefined>): string {
+  const parameters = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined && value !== '') parameters.set(key, String(value));
+  }
+  const query = parameters.toString();
+  return query ? `?${query}` : '';
+}
+
+function parseCatalogPage(value: unknown, type: 'dkb' | 'collection'): {
+  entries: DkbRegistryCatalogEntry[];
+  meta: DkbRegistryPageMeta;
+} {
+  if (!isRecord(value) || !Array.isArray(value.data) || !isRecord(value.meta)) {
+    throw new DkbError(`Registry returned an invalid ${type} catalog page.`);
+  }
+  return {
+    entries: value.data.map((item) => catalogEntry(item, type)),
+    meta: {
+      currentPage: numberField(value.meta, 'current_page', `${type} catalog pagination`),
+      perPage: numberField(value.meta, 'per_page', `${type} catalog pagination`),
+      lastPage: numberField(value.meta, 'last_page', `${type} catalog pagination`),
+      total: numberField(value.meta, 'total', `${type} catalog pagination`),
+    },
+  };
+}
+
+function catalogEntry(value: unknown, type: 'dkb' | 'collection'): DkbRegistryCatalogEntry {
+  if (!isRecord(value)
+      || typeof value.id !== 'string'
+      || typeof value.namespace !== 'string'
+      || typeof value.name !== 'string'
+      || typeof value.slug !== 'string'
+      || (value.visibility !== 'public' && value.visibility !== 'private' && value.visibility !== 'unlisted')) {
+    throw new DkbError(`Registry returned invalid ${type} catalog metadata.`);
+  }
+  return {
+    type,
+      id: value.id,
+      namespace: value.namespace,
+      name: value.name,
+      slug: value.slug,
+    ...(typeof value.description === 'string' || value.description === null ? { description: value.description } : {}),
+    visibility: value.visibility,
+    ...(type === 'dkb' && (typeof value.latestVersion === 'string' || value.latestVersion === null)
+      ? { latestVersion: value.latestVersion } : {}),
+    ...(type === 'collection' && (typeof value.latestRevision === 'number' || value.latestRevision === null)
+      ? { latestRevision: value.latestRevision } : {}),
+    ...(typeof value.publishedAt === 'string' || value.publishedAt === null ? { publishedAt: value.publishedAt } : {}),
+  };
+}
+
+function numberField(record: Record<string, unknown>, key: string, source: string): number {
+  const value = record[key];
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new DkbError(`Registry returned invalid ${source}.`);
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

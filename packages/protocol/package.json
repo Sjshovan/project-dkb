@@ -24,6 +24,7 @@
     "./packageInspection.js": { "types": "./dist/packageInspection.d.ts", "import": "./dist/packageInspection.js" },
     "./paths.js": { "types": "./dist/paths.d.ts", "import": "./dist/paths.js" },
     "./progress.js": { "types": "./dist/progress.d.ts", "import": "./dist/progress.js" },
+    "./registryCatalog.js": { "types": "./dist/registryCatalog.d.ts", "import": "./dist/registryCatalog.js" },
     "./retrievalProfile.js": { "types": "./dist/retrievalProfile.d.ts", "import": "./dist/retrievalProfile.js" },
     "./security/sourceContent.js": { "types": "./dist/security/sourceContent.d.ts", "import": "./dist/security/sourceContent.js" },
     "./space.js": { "types": "./dist/space.d.ts", "import": "./dist/space.js" },

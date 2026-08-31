@@ -113,14 +113,18 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
         if (options.target) throw new DkbError('--target applies to DKBs. Install the Collection, then run dkb pipeline use <target>.');
         const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
-        await presenter().run('Installing Collection', async (progress) => installRegistryCollection({
-          runtime: await defaultRuntimeContext(),
-          client,
-          collectionId: packageId,
-          revision: options.revision,
-          libraryRoot,
-          progress,
-        }), summarizeCollectionInstall);
+        await presenter().run('Installing Collection', async (progress) => {
+          const result = await installRegistryCollection({
+            runtime: await defaultRuntimeContext(),
+            client,
+            collectionId: packageId,
+            revision: options.revision,
+            libraryRoot,
+            progress,
+          });
+          if (options.runtimeUrl) await (await currentRuntimeAdminClient(options.runtimeUrl)).reload();
+          return result;
+        }, summarizeCollectionInstall);
         return;
       }
       if (options.revision) throw new DkbError('--revision applies to Collections; use --version for a DKB.');
@@ -296,10 +300,11 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
       if (entry?.kind === 'collection' && entry.source === 'registry') {
         const { uninstallRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
 
-        await presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
-          libraryRoot,
-          collectionId: identity,
-        }), summarizeCollectionUninstall);
+        await presenter().run(`Uninstalling Collection ${identity}`, async () => {
+          const result = await uninstallRegistryCollection({ libraryRoot, collectionId: identity });
+          if (options.url) await (await currentRuntimeAdminClient(options.url)).reload();
+          return result;
+        }, summarizeCollectionUninstall);
         return;
       }
 

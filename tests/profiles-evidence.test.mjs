@@ -10,6 +10,7 @@ import {
 } from '@sjshovan/dkb-pipeline/profile.js';
 import { buildEvidenceIr, validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { validateSourceInventory } from '@sjshovan/dkb-protocol/registryCatalog.js';
 import {
   evidenceBuildLock,
   retrievalBuildLock,
@@ -25,6 +26,21 @@ import {
 } from '@sjshovan/dkb-library/builds.js';
 
 const image = 'dkb-evidence-docling-llamaindex:0.1.0';
+
+test('source inventory accepts only sorted portable metadata', () => {
+  const inventory = {
+    format: 'dkb.source-inventory.v1',
+    package: { id: '@proof/safe', version: '1.0.0' },
+    entries: [
+      { path: 'README.md', bytes: 12, hash: `sha256:${'a'.repeat(64)}` },
+      { path: 'docs/guide.md', bytes: 34, hash: `sha256:${'b'.repeat(64)}` },
+    ],
+  };
+  assert.deepEqual(validateSourceInventory(inventory, 'proof'), inventory);
+  assert.throws(() => validateSourceInventory({ ...inventory, entries: [...inventory.entries].reverse() }, 'proof'), /strictly sorted/u);
+  assert.throws(() => validateSourceInventory({ ...inventory, entries: [{ ...inventory.entries[0], path: '../secret' }] }, 'proof'), /Invalid source inventory entry/u);
+  assert.throws(() => validateSourceInventory({ ...inventory, entries: [{ ...inventory.entries[0], path: '.dkb/config.json' }] }, 'proof'), /Invalid source inventory entry/u);
+});
 
 function compilerResult(model, dimensions) {
   return {

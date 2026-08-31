@@ -15,6 +15,7 @@ import {
   registeredHostLibrary,
   selectHostLibrary,
   selectHostRuntime,
+  selectHostStack,
   unregisterHostLibrary,
   unregisterHostRegistry,
 } from '../apps/cli/dist/host/inventory.js';
@@ -147,6 +148,27 @@ test('host inventory registers named Stacks without storing Stack secrets', asyn
   });
 });
 
+test('selecting a Stack atomically selects every associated host resource', async () => {
+  await withInventory(async ({ root }) => {
+    const libraryRoot = await writeLibrary(path.join(root, 'library'), 'Library');
+    const stackRoot = path.join(root, 'stack');
+    await fs.mkdir(stackRoot, { recursive: true });
+    await registerHostRegistry('registry', 'http://127.0.0.1:8018');
+    await registerHostLibrary(libraryRoot, { name: 'library' });
+    await registerHostRuntime('runtime', 'http://127.0.0.1:7331', { library: 'library' });
+    await registerHostStack('golden', stackRoot, { library: 'library', registry: 'registry', runtime: 'runtime' });
+
+    await selectHostStack('golden');
+    const inventory = await readHostInventory();
+    assert.deepEqual(inventory.defaults, {
+      library: 'library',
+      registry: 'registry',
+      runtime: 'runtime',
+      stack: 'golden',
+    });
+  });
+});
+
 test('Library listing preserves missing entries and unregister never deletes source', async () => {
   await withInventory(async ({ root }) => {
     const libraryRoot = await writeLibrary(path.join(root, 'movable'), 'Movable');
@@ -194,16 +216,24 @@ test('selected Runtime is used only after explicit and environment URLs', async 
   });
 });
 
-test('selected Registry is used after project and environment configuration but before user fallback', async () => {
+test('Registry resolution honors Library association before the selected host Registry', async () => {
   await withInventory(async ({ root }) => {
     const userConfig = path.join(root, 'user-config.json');
     const projectRoot = await writeLibrary(path.join(root, 'project'), 'Project', 'https://project.example');
+    const associatedRoot = await writeLibrary(path.join(root, 'associated'), 'Associated');
     process.env.DKB_CLI_CONFIG = userConfig;
     await writeConfiguredRegistryUrl('https://user.example', { global: true });
     await registerHostRegistry('selected', 'https://selected.example', { select: true });
+    await registerHostLibrary(associatedRoot, {
+      name: 'associated',
+      registryName: 'associated-registry',
+      registryUrl: 'https://associated.example',
+    });
 
     assert.equal((await configuredRegistry({ root: path.join(root, 'unconfigured') })).source, 'host');
     assert.equal((await configuredRegistry({ root: path.join(root, 'unconfigured') })).url, 'https://selected.example');
+    assert.equal((await configuredRegistry({ root: associatedRoot })).source, 'host-library');
+    assert.equal((await configuredRegistry({ root: associatedRoot })).url, 'https://associated.example');
     assert.equal((await configuredRegistry({ root: projectRoot })).source, 'project');
     process.env.DKB_REGISTRY_URL = 'https://environment.example';
     assert.equal((await configuredRegistry({ root: projectRoot })).source, 'environment');

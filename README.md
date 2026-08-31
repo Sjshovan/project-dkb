@@ -68,6 +68,9 @@ For a first non-sensitive proof, compile and query the
 
 ```powershell
 dkb search handbook
+dkb search handbook --type all --page 1 --per-page 20
+dkb registry show @my-team/handbook --version 1.0.0
+dkb registry show @my-team/handbook --version 1.0.0 --contents .
 dkb install @my-team/handbook --version 1.0.0
 dkb list
 dkb show @my-team/handbook
@@ -133,6 +136,10 @@ dkb console stop
 The Console registers and selects Libraries, Runtimes, Registries, and Stacks;
 authenticates the host to a Registry; installs, upgrades, and uninstalls
 knowledge; switches pipelines atomically; and records redacted local activity.
+Registry pages browse DKBs and Collections, exact releases, signed provenance,
+available builds, and a metadata-only source tree without downloading package
+content. Installation offers only Libraries already connected to that Registry;
+changing a Library upstream is an explicit Connect Library operation.
 An installed DKB has bounded Contents, Builds, Provenance, and Integrity views;
 a Collection has exact member and provenance views. File previews are inert
 source text and never render package HTML, Markdown, or SVG. Verification is an

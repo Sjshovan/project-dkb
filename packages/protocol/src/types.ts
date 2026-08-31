@@ -313,6 +313,7 @@ export interface DkbPackageReceiptPackage extends DkbReleasePackage {
 export interface DkbPackageReceiptPayload {
   lock: DkbLockManifest;
   packageTreeHash?: string;
+  sourceInventory?: import('./registryCatalog.js').DkbSourceInventoryBinding;
 }
 
 export interface DkbPackageReceiptSigningContent {

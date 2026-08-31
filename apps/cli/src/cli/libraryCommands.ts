@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { Command } from 'commander';
 import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
+import type { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import type { CliPresenter } from './presentation.js';
 import {
   summarizeCollectionInstall,
@@ -19,6 +20,7 @@ export interface LibraryCommandContext {
   presenter(): CliPresenter;
   currentLibraryRoot(explicit?: string, cwd?: string): Promise<string>;
   defaultRuntimeContext(): Promise<DkbRuntimeContext>;
+  currentRuntimeAdminClient(explicit?: string): Promise<DkbRuntimeClient>;
   parsePositiveInteger(value: string): number;
 }
 
@@ -222,20 +224,25 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
     .option('--revision <revision>', 'Immutable Collection revision', context.parsePositiveInteger)
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--url <url>', 'Registry API URL')
-    .action(async (identity: string, options: { revision?: number; library?: string; url?: string }) => {
+    .option('--runtime-url <url>', 'Owning Runtime URL; reloads its snapshot after installation')
+    .action(async (identity: string, options: { revision?: number; library?: string; url?: string; runtimeUrl?: string }) => {
       const { configuredRegistry } = await import('./registryConfig.js');
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
       const root = await context.currentLibraryRoot(options.library);
       const registryConfig = await configuredRegistry({ url: options.url, root });
-      await context.presenter().run(`Installing Collection ${identity}`, async (progress) => installRegistryCollection({
-        runtime: await context.defaultRuntimeContext(),
-        client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
-        collectionId: identity,
-        revision: options.revision,
-        libraryRoot: root,
-        progress,
-      }), summarizeCollectionInstall);
+      await context.presenter().run(`Installing Collection ${identity}`, async (progress) => {
+        const result = await installRegistryCollection({
+          runtime: await context.defaultRuntimeContext(),
+          client: new DkbRegistryClient({ baseUrl: registryConfig.url }),
+          collectionId: identity,
+          revision: options.revision,
+          libraryRoot: root,
+          progress,
+        });
+        if (options.runtimeUrl) await (await context.currentRuntimeAdminClient(options.runtimeUrl)).reload();
+        return result;
+      }, summarizeCollectionInstall);
     });
 
   collection
@@ -267,12 +274,14 @@ export function registerLibraryCommands(program: Command, context: LibraryComman
     .description('Uninstall a Registry Collection and prune only its unused vendor DKBs')
     .argument('<identity>', 'Scoped Collection identity')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
-    .action(async (identity: string, options: { library?: string }) => {
+    .option('--runtime-url <url>', 'Owning Runtime URL; reloads its snapshot after uninstallation')
+    .action(async (identity: string, options: { library?: string; runtimeUrl?: string }) => {
       const { uninstallRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
       const root = await context.currentLibraryRoot(options.library);
-      await context.presenter().run(`Uninstalling Collection ${identity}`, async () => uninstallRegistryCollection({
-        collectionId: identity,
-        libraryRoot: root,
-      }), summarizeCollectionUninstall);
+      await context.presenter().run(`Uninstalling Collection ${identity}`, async () => {
+        const result = await uninstallRegistryCollection({ collectionId: identity, libraryRoot: root });
+        if (options.runtimeUrl) await (await context.currentRuntimeAdminClient(options.runtimeUrl)).reload();
+        return result;
+      }, summarizeCollectionUninstall);
     });
 }

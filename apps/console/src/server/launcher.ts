@@ -45,6 +45,7 @@ export async function consoleStatus(): Promise<ConsoleStatus> {
   if (!state) return { status: 'stopped' };
   try {
     const response = await fetch(`${state.url}/healthz`, { signal: AbortSignal.timeout(2_000) });
+    await response.arrayBuffer();
     if (response.ok) return { status: 'running', url: state.url, pid: state.pid, startedAt: state.startedAt };
   } catch {}
   return { status: 'stale', url: state.url, pid: state.pid, startedAt: state.startedAt };
@@ -54,7 +55,8 @@ export async function stopDkbConsole(): Promise<ConsoleStatus> {
   const state = await readConsoleProcessState();
   if (!state) return { status: 'stopped' };
   try {
-    await fetch(`${state.url}/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${state.controlToken}` }, signal: AbortSignal.timeout(3_000) });
+    const response = await fetch(`${state.url}/shutdown`, { method: 'POST', headers: { authorization: `Bearer ${state.controlToken}` }, signal: AbortSignal.timeout(3_000) });
+    await response.arrayBuffer();
   } catch {}
   for (let attempt = 0; attempt < 30; attempt += 1) {
     if ((await consoleStatus()).status !== 'running') {

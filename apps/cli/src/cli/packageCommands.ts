@@ -3,7 +3,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import type { CliPresenter } from './presentation.js';
 import { formatBytes, humanSummary } from './presentation.js';
-import { summarizePackageListing } from './packagePresentation.js';
+import { summarizeRegistryCatalog } from './packagePresentation.js';
 import { configuredRegistry } from './registryConfig.js';
 import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
 
@@ -33,13 +33,22 @@ export function registerPackageLifecycleCommands(
     .argument('[query]', 'Package name, namespace, or description')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--url <url>', 'Registry API URL')
-    .action(async (query: string | undefined, options: RegistryOptions) => {
-      const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
-      const registry = await configuredRegistry({ url: options.url, root: libraryRoot });
+    .option('--type <type>', 'Entry type: all, dkb, or collection', parseCatalogType, 'all')
+    .option('--page <number>', 'Catalog page', parseCatalogPage, 1)
+    .option('--per-page <number>', 'Entries per type, from 1 to 50', parseCatalogPageSize, 20)
+    .action(async (query: string | undefined, options: RegistryOptions & { type: 'all' | 'dkb' | 'collection'; page: number; perPage: number }) => {
+      const registry = options.url
+        ? await configuredRegistry({ url: options.url })
+        : await configuredRegistry({ root: await dependencies.resolveLibraryRoot(options.library) });
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
-      const result = await new DkbRegistryClient({ baseUrl: registry.url }).searchPackages(query);
+      const result = await new DkbRegistryClient({ baseUrl: registry.url }).catalog({
+        query,
+        type: options.type,
+        page: options.page,
+        perPage: options.perPage,
+      });
 
-      dependencies.presenter().print({ registryUrl: registry.url, ...asRecord(result) }, summarizePackageListing);
+      dependencies.presenter().print({ registryUrl: registry.url, ...result }, summarizeRegistryCatalog);
     });
 
   program
@@ -359,6 +368,23 @@ function shortDigest(value: unknown): string {
 function parseContentsLimit(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) throw new DkbError('Package contents limit must be between 1 and 100.');
+  return parsed;
+}
+
+function parseCatalogType(value: string): 'all' | 'dkb' | 'collection' {
+  if (value === 'all' || value === 'dkb' || value === 'collection') return value;
+  throw new DkbError('Registry search type must be all, dkb, or collection.');
+}
+
+function parseCatalogPage(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) throw new DkbError('Registry search page must be a positive integer.');
+  return parsed;
+}
+
+function parseCatalogPageSize(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) throw new DkbError('Registry search per-page must be between 1 and 50.');
   return parsed;
 }
 

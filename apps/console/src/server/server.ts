@@ -7,7 +7,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ConsoleActivityStore } from './activity.js';
 import { ConsoleCommandRunner, type ConsoleOperation } from './commandRunner.js';
-import { ConsoleInputError } from './commandCatalog.js';
+import { ConsoleInputError, consoleCommand, parseConsoleCommandInput } from './commandCatalog.js';
 import { consoleStateRoot, removeConsoleProcessState, writeConsoleProcessState } from './processState.js';
 import { ConsoleSecurity, ConsoleSecurityError } from './security.js';
 
@@ -24,7 +24,7 @@ export interface DkbConsoleServerOptions {
 export async function startDkbConsoleServer(options: DkbConsoleServerOptions): Promise<{ app: FastifyInstance; url: string; close(): Promise<void> }> {
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? await availableLoopbackPort(7338);
-  const app = Fastify({ logger: false, bodyLimit: 64 * 1024, requestTimeout: 30_000 });
+  const app = Fastify({ logger: false, bodyLimit: 64 * 1024, requestTimeout: 30_000, forceCloseConnections: true });
   await app.register(cookie);
   const webRoot = options.webRoot ?? fileURLToPath(new URL('../web', import.meta.url));
   const url = `http://${host}:${port}`;
@@ -92,6 +92,55 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     security.session(request);
     return resultOf(await runner.run('library.packages', { library: request.params.name }));
   });
+  app.get<{ Params: { registry: string } }>('/api/v1/registries/:registry', async (request) => {
+    security.session(request);
+    const context = await registryContext(runner, request.params.registry);
+    return context;
+  });
+  app.get<{
+    Params: { registry: string };
+    Querystring: { q?: string; type?: string; page?: string; perPage?: string };
+  }>('/api/v1/registries/:registry/catalog', async (request) => {
+    security.session(request);
+    const context = await registryContext(runner, request.params.registry);
+    return resultOf(await runner.run('registry.catalog', {
+      url: context.registry.url,
+      ...(request.query.q ? { query: request.query.q } : {}),
+      type: request.query.type ?? 'all',
+      page: request.query.page ? Number(request.query.page) : 1,
+      perPage: request.query.perPage ? Number(request.query.perPage) : 20,
+    }));
+  });
+  app.get<{
+    Params: { registry: string; kind: string; namespace: string; name: string };
+    Querystring: { version?: string; revision?: string };
+  }>('/api/v1/registries/:registry/:kind/:namespace/:name', async (request) => {
+    security.session(request);
+    assertRegistryEntryKind(request.params.kind);
+    const context = await registryContext(runner, request.params.registry);
+    return resultOf(await runner.run('registry.entry', {
+      url: context.registry.url,
+      identity: installedEntryIdentity(request.params.namespace, request.params.name),
+      ...(request.query.version ? { version: request.query.version } : {}),
+      ...(request.query.revision ? { revision: Number(request.query.revision) } : {}),
+    }));
+  });
+  app.get<{
+    Params: { registry: string; namespace: string; name: string };
+    Querystring: { version?: string; path?: string; cursor?: string; limit?: string };
+  }>('/api/v1/registries/:registry/dkbs/:namespace/:name/contents', async (request) => {
+    security.session(request);
+    if (!request.query.version) throw new ConsoleInputError('An exact DKB version is required for remote Contents.');
+    const context = await registryContext(runner, request.params.registry);
+    return resultOf(await runner.run('registry.contents', {
+      url: context.registry.url,
+      identity: installedEntryIdentity(request.params.namespace, request.params.name),
+      version: request.query.version,
+      path: request.query.path ?? '.',
+      ...(request.query.cursor ? { cursor: request.query.cursor } : {}),
+      ...(request.query.limit ? { limit: Number(request.query.limit) } : {}),
+    }));
+  });
   app.get<{
     Params: { library: string; namespace: string; name: string };
     Querystring: { path?: string; cursor?: string; limit?: string };
@@ -132,7 +181,12 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     security.assertMutation(request);
     const body = objectBody(request.body);
     if (typeof body.commandId !== 'string') throw new ConsoleInputError('commandId is required.');
-    const operation = runner.start(body.commandId, body.input);
+    let input = parseConsoleCommandInput(consoleCommand(body.commandId), body.input);
+    if (body.commandId === 'package.install') input = { ...input, ...await assertPackageInstallRegistry(runner, input) };
+    if (body.commandId === 'package.uninstall' || body.commandId === 'package.upgrade') {
+      input = { ...input, ...await owningRuntimeContext(runner, input) };
+    }
+    const operation = runner.start(body.commandId, input);
     return reply.code(202).send({ operationId: operation.id, status: operation.status });
   });
   app.get<{ Params: { id: string } }>('/api/v1/operations/:id', async (request, reply) => {
@@ -221,6 +275,76 @@ function installedEntryIdentity(namespace: string, name: string): string {
     throw new ConsoleInputError('Installed entry identity is invalid.');
   }
   return `@${normalizedNamespace}/${normalizedName}`;
+}
+
+function assertRegistryEntryKind(value: string): void {
+  if (value !== 'dkbs' && value !== 'collections') throw new ConsoleInputError('Registry entry kind must be dkbs or collections.');
+}
+
+async function registryContext(runner: ConsoleCommandRunner, name: string): Promise<{
+  registry: Record<string, unknown>;
+  libraries: Record<string, unknown>[];
+}> {
+  const [registryListing, libraryListing] = await Promise.all([
+    runner.run('registry.list', {}),
+    runner.run('library.list', {}),
+  ]);
+  const registries = records(resultOf(registryListing), 'registries');
+  const libraries = records(resultOf(libraryListing), 'libraries');
+  const registry = registries.find((item) => item.name === name);
+  if (!registry || typeof registry.url !== 'string') throw new ConsoleInputError(`Unknown host Registry: ${name}.`);
+  return { registry, libraries: libraries.filter((library) => library.registry === name) };
+}
+
+async function assertPackageInstallRegistry(runner: ConsoleCommandRunner, input: Record<string, unknown>): Promise<{ runtimeUrl?: string }> {
+  const [libraryListing, registryListing, runtimeListing] = await Promise.all([
+    runner.run('library.list', {}),
+    runner.run('registry.list', {}),
+    runner.run('runtime.list', {}),
+  ]);
+  const libraries = records(resultOf(libraryListing), 'libraries');
+  const registries = records(resultOf(registryListing), 'registries');
+  const library = libraries.find((item) => item.name === input.library || item.path === input.library);
+  if (!library) throw new ConsoleInputError(`Unknown host Library: ${String(input.library)}.`);
+  const registryName = typeof library.registry === 'string' ? library.registry : undefined;
+  const registry = registryName ? registries.find((item) => item.name === registryName) : undefined;
+  if (!registry || typeof registry.url !== 'string' || normalizedUrl(registry.url) !== normalizedUrl(String(input.registryUrl))) {
+    throw new ConsoleInputError(
+      `Library ${String(library.name)} is not connected to this Registry. Use Connect Library, then retry the installation.`,
+    );
+  }
+  return runtimeForLibrary(records(resultOf(runtimeListing), 'runtimes'), library);
+}
+
+async function owningRuntimeContext(runner: ConsoleCommandRunner, input: Record<string, unknown>): Promise<{ runtimeUrl?: string }> {
+  const [libraryListing, runtimeListing] = await Promise.all([
+    runner.run('library.list', {}),
+    runner.run('runtime.list', {}),
+  ]);
+  const library = records(resultOf(libraryListing), 'libraries')
+    .find((item) => item.name === input.library || item.path === input.library);
+  if (!library) throw new ConsoleInputError(`Unknown host Library: ${String(input.library)}.`);
+  return runtimeForLibrary(records(resultOf(runtimeListing), 'runtimes'), library);
+}
+
+function runtimeForLibrary(runtimes: Record<string, unknown>[], library: Record<string, unknown>): { runtimeUrl?: string } {
+  const matches = runtimes.filter((runtime) => runtime.library === library.name && typeof runtime.url === 'string');
+  if (matches.length === 0) return {};
+  const selected = matches.find((runtime) => runtime.selected === true);
+  if (matches.length > 1 && !selected) {
+    throw new ConsoleInputError(`Library ${String(library.name)} has multiple owning Runtimes. Select one before changing installed knowledge.`);
+  }
+  return { runtimeUrl: String((selected ?? matches[0])!.url) };
+}
+
+function records(value: unknown, key: string): Record<string, unknown>[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const list = (value as Record<string, unknown>)[key];
+  return Array.isArray(list) ? list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+}
+
+function normalizedUrl(value: string): string {
+  return new URL(value).toString().replace(/\/$/u, '');
 }
 
 async function availableLoopbackPort(preferred: number): Promise<number> {

@@ -3,8 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Command } from 'commander';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import type { CliPresenter } from './presentation.js';
-import { summarizePackageListing } from './packagePresentation.js';
+import {
+  summarizePackageListing,
+  summarizeRegistryContents,
+  summarizeRegistryEntry,
+} from './packagePresentation.js';
 import {
   summarizeArtifactTransport,
   summarizeHostMutation,
@@ -289,6 +294,58 @@ export function registerRegistryCommands(program: Command, context: RegistryComm
     });
 
   registry
+    .command('show')
+    .description('Inspect a remote DKB or Collection without installing it')
+    .argument('<identity>', 'Scoped @namespace/name identity')
+    .option('--version <version>', 'Exact DKB version')
+    .option('--revision <number>', 'Exact Collection revision', parsePositiveInteger)
+    .option('--url <url>', 'Registry API URL')
+    .option('--contents [path]', 'List signed source metadata for a DKB version')
+    .option('--cursor <cursor>', 'Continue a source inventory page')
+    .option('--limit <number>', 'Maximum source entries, from 1 to 200', parseRegistryContentsLimit, 100)
+    .action(async (identity: string, options: {
+      version?: string;
+      revision?: number;
+      url?: string;
+      contents?: string | boolean;
+      cursor?: string;
+      limit: number;
+    }) => {
+      if (options.version && options.revision !== undefined) throw new DkbError('--version and --revision cannot be combined.');
+      if ((options.cursor || options.limit !== 100) && options.contents === undefined) {
+        throw new DkbError('--cursor and --limit require --contents.');
+      }
+      const normalizedIdentity = parseDkbIdentity(identity, 'Registry entry identity').identity;
+      const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+      const { configuredRegistry } = await import('./registryConfig.js');
+      const registryConfig = await configuredRegistry({ url: options.url });
+      const client = new DkbRegistryClient({ baseUrl: registryConfig.url });
+      const kind = options.revision !== undefined
+        ? 'collection'
+        : options.version || options.contents !== undefined
+          ? 'dkb'
+          : await client.entryKind(normalizedIdentity);
+
+      if (kind === 'collection') {
+        if (options.version) throw new DkbError('--version applies only to DKB entries; use --revision for a Collection.');
+        if (options.contents !== undefined) throw new DkbError('Remote Contents are available for DKB versions; Collection details expose exact members.');
+        presenter().print(await client.collectionDetails(normalizedIdentity, options.revision), summarizeRegistryEntry);
+        return;
+      }
+      if (options.revision !== undefined) throw new DkbError('--revision applies only to Collections; use --version for a DKB.');
+      const detail = await client.packageDetails(normalizedIdentity, options.version);
+      if (options.contents !== undefined) {
+        presenter().print(await client.sourceContents(normalizedIdentity, detail.selectedVersion.version, {
+          path: typeof options.contents === 'string' ? options.contents : '.',
+          cursor: options.cursor,
+          perPage: options.limit,
+        }), summarizeRegistryContents);
+        return;
+      }
+      presenter().print(detail, summarizeRegistryEntry);
+    });
+
+  registry
     .command('keys')
     .description('List registry public signing keys')
     .option('--url <url>', 'Registry API URL')
@@ -436,6 +493,14 @@ function defaultPackageArchiveName(packageId: string, version?: string): string 
 function safeCliId(value: string): string {
   const id = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return id || 'dkb';
+}
+
+function parseRegistryContentsLimit(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+    throw new DkbError('Registry contents limit must be between 1 and 200.');
+  }
+  return parsed;
 }
 
 async function exists(target: string): Promise<boolean> {

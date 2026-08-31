@@ -6,6 +6,7 @@ export type ConsoleCommandId =
   | 'library.register'
   | 'library.unregister'
   | 'library.use'
+  | 'library.registry.use'
   | 'runtime.list'
   | 'runtime.register'
   | 'runtime.unregister'
@@ -16,7 +17,11 @@ export type ConsoleCommandId =
   | 'registry.login'
   | 'registry.logout'
   | 'registry.use'
+  | 'registry.catalog'
+  | 'registry.entry'
+  | 'registry.contents'
   | 'stack.list'
+  | 'stack.use'
   | 'stack.up'
   | 'stack.down'
   | 'package.install'
@@ -37,7 +42,7 @@ export interface ConsoleCommandDefinition {
   resourceKey(input: Record<string, unknown>): string;
 }
 
-const readTimeout = 30_000;
+const readTimeout = 90_000;
 const verificationTimeout = 5 * 60_000;
 const mutationTimeout = 30 * 60_000;
 
@@ -46,7 +51,21 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   'library.packages': read('library.packages', ['list'], libraryInput, (input) => ['--library', text(input.library)]),
   'runtime.list': read('runtime.list', ['runtime', 'list'], checkInput),
   'registry.list': read('registry.list', ['registry', 'list'], checkInput),
+  'registry.catalog': read('registry.catalog', ['search'], registryCatalogInput, (input) => [
+    ...(input.query ? [text(input.query)] : []), '--url', text(input.url), '--type', text(input.type),
+    '--page', text(input.page), '--per-page', text(input.perPage),
+  ]),
+  'registry.entry': read('registry.entry', ['registry', 'show'], registryEntryInput, (input) => [
+    text(input.identity), '--url', text(input.url),
+    ...(input.version ? ['--version', text(input.version)] : []),
+    ...(input.revision ? ['--revision', text(input.revision)] : []),
+  ]),
+  'registry.contents': read('registry.contents', ['registry', 'show'], registryContentsInput, (input) => [
+    text(input.identity), '--url', text(input.url), '--version', text(input.version), '--contents', text(input.path),
+    '--limit', text(input.limit), ...(input.cursor ? ['--cursor', text(input.cursor)] : []),
+  ]),
   'stack.list': read('stack.list', ['stack', 'list'], checkInput),
+  'stack.use': mutation('stack.use', ['stack', 'use'], namedInput('stack'), (input) => [text(input.name)], (input) => `host:stack:${text(input.name)}`),
   'package.show': read('package.show', ['show'], packageMutationInput, (input) => [text(input.identity), '--library', text(input.library)]),
   'package.contents': read('package.contents', ['show'], packageContentsInput, (input) => [
     text(input.identity), '--library', text(input.library), '--contents', text(input.directory), '--limit', text(input.limit),
@@ -63,6 +82,9 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   ], (input) => `host:library:${text(input.name ?? input.path)}`),
   'library.unregister': mutation('library.unregister', ['library', 'unregister'], namedInput('library'), (input) => [text(input.name)], (input) => `host:library:${text(input.name)}`),
   'library.use': mutation('library.use', ['library', 'use'], namedInput('library'), (input) => [text(input.name)], (input) => `host:library:${text(input.name)}`),
+  'library.registry.use': mutation('library.registry.use', ['registry', 'use'], libraryRegistryInput, (input) => [
+    text(input.registry), '--root', text(input.library),
+  ], (input) => `host:library:${text(input.library)}`),
   'runtime.register': mutation('runtime.register', ['runtime', 'register'], runtimeRegistrationInput, (input) => [
     text(input.name), text(input.url), '--kind', text(input.kind),
     ...(input.library ? ['--library', text(input.library)] : []),
@@ -86,13 +108,19 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   'package.install': mutation('package.install', ['install'], packageInstallInput, (input) => [
     text(input.identity), '--library', text(input.library),
     ...(input.version ? ['--version', text(input.version)] : []),
+    ...(input.revision ? ['--revision', text(input.revision)] : []),
+    ...(input.target ? ['--target', text(input.target)] : []),
+    '--url', text(input.registryUrl),
+    ...(input.runtimeUrl ? ['--runtime-url', text(input.runtimeUrl)] : []),
     ...(input.force ? ['--force'] : []),
   ], (input) => `library:${text(input.library)}`),
   'package.uninstall': mutation('package.uninstall', ['uninstall'], packageMutationInput, (input) => [
     text(input.identity), '--library', text(input.library),
+    ...(input.runtimeUrl ? ['--url', text(input.runtimeUrl)] : []),
   ], (input) => `library:${text(input.library)}`),
   'package.upgrade': mutation('package.upgrade', ['upgrade'], packageMutationInput, (input) => [
     text(input.identity), '--library', text(input.library),
+    ...(input.runtimeUrl ? ['--runtime-url', text(input.runtimeUrl)] : []),
   ], (input) => `library:${text(input.library)}`),
   'pipeline.use': mutation('pipeline.use', ['pipeline', 'use'], pipelineInput, (input) => [text(input.target), text(input.library)], (input) => `library:${text(input.library)}`),
 };
@@ -206,19 +234,89 @@ function stackInput(value: unknown): Record<string, unknown> {
 
 function packageMutationInput(value: unknown): Record<string, unknown> {
   const input = record(value);
-  exactKeys(input, ['library', 'identity']);
-  return { library: hostNameOrAbsolutePath(input.library, 'Library'), identity: packageIdentity(input.identity) };
+  exactKeys(input, ['library', 'identity', 'runtimeUrl']);
+  return {
+    library: hostNameOrAbsolutePath(input.library, 'Library'),
+    identity: packageIdentity(input.identity),
+    ...(input.runtimeUrl === undefined ? {} : { runtimeUrl: endpointUrl(input.runtimeUrl, 'Runtime URL') }),
+  };
 }
 
 function packageInstallInput(value: unknown): Record<string, unknown> {
   const input = record(value);
-  exactKeys(input, ['library', 'identity', 'version', 'force']);
+  exactKeys(input, ['library', 'identity', 'version', 'revision', 'target', 'registryUrl', 'runtimeUrl', 'force']);
+  if (input.version && input.revision) throw new ConsoleInputError('Version and revision cannot be combined.');
+  const revision = input.revision === undefined ? undefined : Number(input.revision);
+  if (revision !== undefined && (!Number.isInteger(revision) || revision < 1)) {
+    throw new ConsoleInputError('Collection revision must be a positive integer.');
+  }
   return {
     library: hostNameOrAbsolutePath(input.library, 'Library'),
     identity: packageIdentity(input.identity),
     ...(input.version === undefined || input.version === '' ? {} : { version: safeValue(input.version, 'Version') }),
+    ...(revision === undefined ? {} : { revision }),
+    ...(input.target === undefined || input.target === '' ? {} : { target: hostName(input.target, 'Pipeline target') }),
+    registryUrl: endpointUrl(input.registryUrl, 'Registry URL'),
+    ...(input.runtimeUrl === undefined ? {} : { runtimeUrl: endpointUrl(input.runtimeUrl, 'Runtime URL') }),
     force: input.force === true,
   };
+}
+
+function libraryRegistryInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['library', 'registry']);
+  return {
+    library: hostNameOrAbsolutePath(input.library, 'Library'),
+    registry: hostName(input.registry, 'Registry'),
+  };
+}
+
+function registryCatalogInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['url', 'query', 'type', 'page', 'perPage']);
+  const type = input.type ?? 'all';
+  if (type !== 'all' && type !== 'dkb' && type !== 'collection') throw new ConsoleInputError('Registry catalog type is invalid.');
+  const page = boundedInteger(input.page ?? 1, 1, Number.MAX_SAFE_INTEGER, 'Registry catalog page');
+  const perPage = boundedInteger(input.perPage ?? 20, 1, 50, 'Registry catalog page size');
+  return {
+    url: endpointUrl(input.url, 'Registry URL'),
+    ...(input.query === undefined || input.query === '' ? {} : { query: safeValue(input.query, 'Registry search query') }),
+    type,
+    page,
+    perPage,
+  };
+}
+
+function registryEntryInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['url', 'identity', 'version', 'revision']);
+  if (input.version && input.revision) throw new ConsoleInputError('Version and revision cannot be combined.');
+  const revision = input.revision === undefined ? undefined : boundedInteger(input.revision, 1, Number.MAX_SAFE_INTEGER, 'Collection revision');
+  return {
+    url: endpointUrl(input.url, 'Registry URL'),
+    identity: packageIdentity(input.identity),
+    ...(input.version === undefined || input.version === '' ? {} : { version: safeValue(input.version, 'Version') }),
+    ...(revision === undefined ? {} : { revision }),
+  };
+}
+
+function registryContentsInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['url', 'identity', 'version', 'path', 'cursor', 'limit']);
+  return {
+    url: endpointUrl(input.url, 'Registry URL'),
+    identity: packageIdentity(input.identity),
+    version: safeValue(input.version, 'Version'),
+    path: portablePackagePath(input.path ?? '.', true),
+    ...(input.cursor === undefined || input.cursor === '' ? {} : { cursor: safeValue(input.cursor, 'Source inventory cursor') }),
+    limit: boundedInteger(input.limit ?? 100, 1, 200, 'Source inventory page size'),
+  };
+}
+
+function boundedInteger(value: unknown, minimum: number, maximum: number, label: string): number {
+  const result = Number(value);
+  if (!Number.isInteger(result) || result < minimum || result > maximum) throw new ConsoleInputError(`${label} is invalid.`);
+  return result;
 }
 
 function packageContentsInput(value: unknown): Record<string, unknown> {

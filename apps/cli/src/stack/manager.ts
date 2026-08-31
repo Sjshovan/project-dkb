@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { readHostInventory, registerHostLibrary, registerHostRegistry, registerHostRuntime, registerHostStack } from '../host/inventory.js';
+import { writeConfiguredRegistryUrl } from '../cli/registryConfig.js';
 import { backupDkbStack, restoreDkbStack } from './backups.js';
 import {
   pathExists,
@@ -137,6 +138,7 @@ export async function upDkbStack(
   const existingLibrary = Object.entries(inventory.libraries).find(([, item]) => samePath(item.path, runtimeStateRoot));
   const existingRegistry = Object.entries(inventory.registries).find(([, item]) => item.url === context.registryUrl);
   const existingRuntime = Object.entries(inventory.runtimes).find(([, item]) => item.url === context.runtimeUrl);
+  await writeConfiguredRegistryUrl(context.registryUrl, { root: runtimeStateRoot });
   const registry = await registerHostRegistry(existingRegistry?.[0] ?? `${context.name}-registry`, context.registryUrl, { select: 'if-empty' });
   const library = await registerHostLibrary(runtimeStateRoot, {
     name: existingLibrary?.[0] ?? `${context.name}-library`,

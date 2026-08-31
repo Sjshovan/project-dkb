@@ -4,6 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { compileComposeProject, compileRetrievalFromEvidence } from './compilerCore.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import {
+  DKB_SOURCE_INVENTORY_FORMAT,
+  DKB_SOURCE_INVENTORY_MEDIA_TYPE,
+  type DkbSourceInventory,
+} from '@sjshovan/dkb-protocol/registryCatalog.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
@@ -95,7 +100,14 @@ export async function compileRegistryPackage(
     const publisherId = input.request.package?.publisherId ?? parseDkbIdentity(dkb.manifest.id).namespace;
 
     assertRegistryPackageManifest(dkb, packageId, version, publisherId);
-    const sourceTreeHash = await hashPackageTree(buildRoot);
+    const sourceTree = await inspectPackageTree(buildRoot);
+    const sourceTreeHash = sourceTree.hash;
+    const sourceInventory: DkbSourceInventory = {
+      format: DKB_SOURCE_INVENTORY_FORMAT,
+      package: { id: packageId, version },
+      entries: sourceTree.entries,
+    };
+    const sourceInventoryContents = Buffer.from(`${JSON.stringify(sourceInventory, null, 2)}\n`, 'utf8');
     const stage = input.request.stage ?? 'pipeline';
     const compiled = stage === 'retrieval'
       ? await compileRetrievalStage(
@@ -117,7 +129,7 @@ export async function compileRegistryPackage(
         });
     const graph = await validatePackageBuildGraph(buildRoot);
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
-    const packageTreeHash = await hashPackageTree(buildRoot);
+    const packageTreeHash = (await inspectPackageTree(buildRoot)).hash;
     await createDkbPackageArchive(buildRoot, archivePath);
 
     const artifactManifestPath = path.join(graph.retrievalPath, DKB_ARTIFACT_MANIFEST_FILENAME);
@@ -136,6 +148,15 @@ export async function compileRegistryPackage(
       },
       lock: compiled.lock,
       sourceTreeHash,
+      sourceInventory: {
+        fileName: 'source.inventory.v1.json',
+        format: DKB_SOURCE_INVENTORY_FORMAT,
+        mediaType: DKB_SOURCE_INVENTORY_MEDIA_TYPE,
+        hash: `sha256:${createHash('sha256').update(sourceInventoryContents).digest('hex')}`,
+        count: sourceInventory.entries.length,
+        bytes: sourceInventoryContents.byteLength,
+        contents: sourceInventoryContents.toString('base64'),
+      },
       packageTreeHash,
       archive: {
         fileName: archiveFileName,
@@ -232,7 +253,8 @@ async function copyDkbSourceOnly(sourceRoot: string, targetRoot: string): Promis
   if (!stat.isDirectory()) throw new DkbError(`Registry compile source must be a DKB directory: ${sourceRoot}`);
   await fs.cp(sourceRoot, targetRoot, {
     recursive: true,
-    filter: (candidate) => !isDkbSystemArtifactPath(sourceRoot, candidate),
+    filter: (candidate) => !isDkbSystemArtifactPath(sourceRoot, candidate)
+      && !isSensitiveSourceInventoryPath(path.relative(sourceRoot, candidate).replace(/\\/g, '/')),
   });
 }
 
@@ -252,26 +274,56 @@ function assertRegistryPackageManifest(
   }
 }
 
-async function hashPackageTree(root: string): Promise<string> {
+async function inspectPackageTree(root: string): Promise<{
+  hash: string;
+  entries: Array<{ path: string; bytes: number; hash: string }>;
+}> {
   const files = (await listFiles(root, root))
     .map((file) => path.relative(root, file).replace(/\\/g, '/'))
-    .sort((left, right) => left.localeCompare(right));
-  const entries = await Promise.all(files.map(async (relative) => ({
-    path: relative,
-    hash: `sha256:${createHash('sha256').update(await fs.readFile(path.join(root, relative))).digest('hex')}`,
-  })));
-  return stableHash(entries);
+    .sort(comparePortablePaths);
+  const allEntries = await Promise.all(files.map(async (relative) => {
+    const contents = await fs.readFile(path.join(root, relative));
+    return {
+      path: relative,
+      bytes: contents.byteLength,
+      hash: `sha256:${createHash('sha256').update(contents).digest('hex')}`,
+    };
+  }));
+  return {
+    hash: stableHash(allEntries.map(({ path: entryPath, hash }) => ({ path: entryPath, hash }))),
+    entries: allEntries.filter((entry) => !isSensitiveSourceInventoryPath(entry.path)),
+  };
 }
 
 async function listFiles(root: string, sourceRoot?: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   const nested = await Promise.all(entries.map(async (entry) => {
     const target = path.join(root, entry.name);
-    if (sourceRoot && isDkbSystemArtifactPath(sourceRoot, target)) return [];
+    if (sourceRoot && (isDkbSystemArtifactPath(sourceRoot, target)
+      || isSensitiveSourceInventoryPath(path.relative(sourceRoot, target).replace(/\\/g, '/')))) return [];
     if (entry.isDirectory()) return listFiles(target, sourceRoot);
     return entry.isFile() ? [target] : [];
   }));
-  return nested.flat().sort((left, right) => left.localeCompare(right));
+  return nested.flat().sort(comparePortablePaths);
+}
+
+function comparePortablePaths(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left.replace(/\\/g, '/'), 'utf8'), Buffer.from(right.replace(/\\/g, '/'), 'utf8'));
+}
+
+function isSensitiveSourceInventoryPath(relative: string): boolean {
+  const parts = relative.split('/').filter(Boolean);
+  if (parts.some((part) => ['.git', '.hg', '.svn', '.idea', '.vscode', 'node_modules', 'vendor', 'dist', 'coverage', '__pycache__', '.pytest_cache'].includes(part))) {
+    return true;
+  }
+  const name = (parts.at(-1) ?? '').toLowerCase();
+  return name === '.env'
+    || name.startsWith('.env.')
+    || name === '.npmrc'
+    || name === '.pypirc'
+    || name === 'credentials.json'
+    || name === 'secrets.json'
+    || /\.(?:key|pem|p12|pfx)$/u.test(name);
 }
 
 function packageArchiveFileName(packageId: string, version: string): string {

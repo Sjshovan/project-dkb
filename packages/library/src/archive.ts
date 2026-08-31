@@ -35,7 +35,7 @@ export async function createDkbPackageArchive(sourceRoot: string, archivePath: s
     gzip: true,
     portable: true,
     noMtime: true,
-    filter: (entryPath) => !isOperatorControlledPath(entryPath),
+    filter: (entryPath) => !isExcludedArchivePath(entryPath),
   }, ['.']);
 }
 
@@ -89,8 +89,9 @@ export async function extractDkbPackageArchive(
   options.progress?.(progressFinish({ phase: 'extract', label: 'Extract package', total: extracted, unit: 'files' }));
 }
 
-function isOperatorControlledPath(entryPath: string): boolean {
+function isExcludedArchivePath(entryPath: string): boolean {
   const normalized = entryPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  if (isSensitiveOrGeneratedPath(normalized)) return true;
   if (normalized !== '.dkb' && !normalized.startsWith('.dkb/')) return false;
   // Keep the container directory traversable so tar can reach the two
   // allowlisted immutable build paths below. Filtering the directory itself
@@ -99,6 +100,21 @@ function isOperatorControlledPath(entryPath: string): boolean {
   return normalized !== '.dkb/builds'
     && !normalized.startsWith('.dkb/builds/')
     && normalized !== '.dkb/runtime.lock.json';
+}
+
+function isSensitiveOrGeneratedPath(value: string): boolean {
+  const parts = value.split('/').filter(Boolean);
+  if (parts.some((part) => ['.git', '.hg', '.svn', '.idea', '.vscode', 'node_modules', 'vendor', 'dist', 'coverage', '__pycache__', '.pytest_cache'].includes(part))) {
+    return true;
+  }
+  const name = (parts.at(-1) ?? '').toLowerCase();
+  return name === '.env'
+    || name.startsWith('.env.')
+    || name === '.npmrc'
+    || name === '.pypirc'
+    || name === 'credentials.json'
+    || name === 'secrets.json'
+    || /\.(?:key|pem|p12|pfx)$/u.test(name);
 }
 
 function isSafeTarEntry(entryPath: string, entry: unknown): boolean {

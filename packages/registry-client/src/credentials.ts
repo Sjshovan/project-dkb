@@ -150,7 +150,7 @@ async function acquireLock(target: string): Promise<() => Promise<void>> {
 }
 
 function validateToken(token: string): void {
-  if (!/^dkb_[A-Za-z0-9]{32,}$/u.test(token)) {
+  if (!/^dkb_[A-Za-z0-9_-]{32,}$/u.test(token)) {
     throw new DkbError('Registry token is invalid. Expected a token beginning with dkb_.');
   }
 }

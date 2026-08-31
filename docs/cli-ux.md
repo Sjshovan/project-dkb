@@ -91,7 +91,7 @@ root or Collection owner.
 The top-level lifecycle is intentionally small and consistent:
 
 ```text
-dkb search [query]
+dkb search [query] [--url <url>] [--type all|dkb|collection] [--page <n>] [--per-page <n>]
 dkb install <identity>
 dkb list
 dkb show <identity>
@@ -101,7 +101,9 @@ dkb upgrade <identity> [--dry-run]
 dkb uninstall <identity>
 ```
 
-`search` queries the configured Registry. `show` reports bounded operational
+`search` queries both DKBs and Collections in the configured Registry. With an
+explicit `--url`, it works outside a Library. Results are case-insensitive,
+paginated, and ordered by the latest published release. `show` reports bounded operational
 metadata for an installed entry, including receipt state and the active
 Evidence/Retrieval Build when present. Its explicit inspection modes are:
 
@@ -110,6 +112,17 @@ dkb show <identity> --contents <directory> [--cursor <path>] [--limit <n>]
 dkb show <identity> --preview <file>
 dkb show <identity> --verify
 ```
+
+Remote inspection remains under the Registry command group so it cannot be
+confused with installed state:
+
+```text
+dkb registry show <identity> [--version <version> | --revision <revision>] [--url <url>]
+dkb registry show <dkb> --version <version> --contents [path] [--cursor <cursor>] [--limit <n>]
+```
+
+Remote Contents expose signed path, size, and hash metadata only. File bodies
+are available after installation through `dkb show --preview`.
 
 Contents are restricted to the portable package tree; `.dkb`, receipts,
 configuration, traversal, and symlink escapes are excluded. Preview reads at

@@ -10,6 +10,7 @@ import {
   createSignedPackageReceipt,
   fingerprintPublicKey,
   generateSigningKeyPair,
+  packageReceiptPayloadMatchesLock,
   verifyLayerReceipt,
 } from '@sjshovan/dkb-library/signing.js';
 import { materializeDkbInstallPlan } from '@sjshovan/dkb-runtime/runtime/registryInstall.js';
@@ -21,6 +22,39 @@ const packageIdentity = {
   version: '1.0.0',
   sourceHash: stableHash({ source: 'signed-builds' }),
 };
+
+test('package receipt lock verification includes the signed source inventory binding', () => {
+  const sourceInventory = {
+    format: 'dkb.source-inventory.v1',
+    mediaType: 'application/vnd.dkb.source-inventory+json',
+    hash: `sha256:${'a'.repeat(64)}`,
+    count: 2,
+    bytes: 128,
+  };
+  const receipt = createSignedPackageReceipt(minimalLock(), {
+    package: {
+      id: packageIdentity.id,
+      name: packageIdentity.id,
+      version: packageIdentity.version,
+      publisherId: '@test',
+      registryId: 'test-registry',
+    },
+    packageTreeHash: `sha256:${'b'.repeat(64)}`,
+    sourceInventory,
+    publisher: { accountId: '@test', keyId: 'publisher-key', privateKeyPem: publisher.privateKeyPem },
+    registry: { registryId: 'test-registry', keyId: 'registry-key', privateKeyPem: registry.privateKeyPem },
+    signedAt: '2026-08-27T00:00:00.000Z',
+  });
+
+  assert.equal(packageReceiptPayloadMatchesLock(receipt), true);
+  assert.equal(packageReceiptPayloadMatchesLock({
+    ...receipt,
+    payload: {
+      ...receipt.payload,
+      sourceInventory: { ...sourceInventory, count: sourceInventory.count + 1 },
+    },
+  }), false);
+});
 
 test('signed install plans bind the exact source, Evidence, and Retrieval chain', async () => {
   const sourceReceiptHash = stableHash({ receipt: 'source' });

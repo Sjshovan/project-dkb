@@ -20,3 +20,4 @@ Statuses:
 - [0005 - Evidence and Retrieval Build graph](0005-evidence-and-retrieval-build-graph.md) — Build graph retained; active-artifact details superseded by 0006.
 - [0006 - Final provider architecture and storage cutover](0006-final-provider-architecture-and-storage-cutover.md) — Implemented.
 - [0007 - Host Console, CLI control, and authentication](0007-host-console-cli-control-and-authentication.md) — Implemented for the developer preview.
+- [0008 - Registry catalog and signed source inventory](0008-registry-catalog-and-signed-source-inventory.md) — Implemented for the developer preview.

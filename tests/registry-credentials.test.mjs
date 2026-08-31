@@ -17,7 +17,7 @@ test('Registry credentials are URL-scoped, atomic, and removable', async () => {
   process.env.DKB_REGISTRY_CREDENTIALS = target;
 
   try {
-    const token = `dkb_${'a'.repeat(64)}`;
+    const token = `dkb_${'_a-b'.repeat(16)}`;
     await saveRegistryCredential('https://registry.example.test/', {
       token,
       savedAt: '2026-08-28T12:00:00.000Z',

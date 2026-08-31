@@ -227,6 +227,24 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     });
 
   stack
+    .command('use')
+    .description('Select a Stack and its associated Library, Registry, and Runtime as host defaults')
+    .argument('<name>', 'Registered Stack name')
+    .action(async (name: string) => {
+      const { selectHostStack } = await import('../host/inventory.js');
+      const result = await selectHostStack(name);
+      context.presenter().print(result, (value) => {
+        const selected = value as typeof result;
+        return [
+          `Default Stack: ${selected.name}`,
+          ...(selected.stack.library ? [`Default Library: ${selected.stack.library}`] : []),
+          ...(selected.stack.registry ? [`Default Registry: ${selected.stack.registry}`] : []),
+          ...(selected.stack.runtime ? [`Default Runtime: ${selected.stack.runtime}`] : []),
+        ];
+      });
+    });
+
+  stack
     .command('down')
     .description('Stop a named stack while preserving its state')
     .argument('[name]', 'Stack name', 'local')

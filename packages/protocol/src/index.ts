@@ -5,6 +5,7 @@ export * from './manifest.js';
 export * from './packageInspection.js';
 export * from './paths.js';
 export * from './progress.js';
+export * from './registryCatalog.js';
 export * from './retrievalProfile.js';
 export * from './space.js';
 export * from './types.js';

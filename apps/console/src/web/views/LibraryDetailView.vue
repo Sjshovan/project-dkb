@@ -20,7 +20,12 @@ const props = defineProps<{ name: string }>();
 const queryClient = useQueryClient();
 const query = useQuery({ queryKey: ['library-packages', props.name], queryFn: () => getJson<{ packages?: Array<Record<string, unknown>> }>(`/api/v1/libraries/${encodeURIComponent(props.name)}/packages`) });
 const libraries = useQuery({ queryKey: ['resources', 'libraries', false], queryFn: () => getJson<ResourceListing>('/api/v1/resources/libraries') });
+const registries = useQuery({ queryKey: ['resources', 'registries', false], queryFn: () => getJson<ResourceListing>('/api/v1/resources/registries') });
 const root = computed(() => libraries.data.value?.libraries?.find((library) => library.name === props.name)?.path ?? props.name);
+const registryUrl = computed(() => {
+  const registryName = libraries.data.value?.libraries?.find((library) => library.name === props.name)?.registry;
+  return registries.data.value?.registries?.find((registry) => registry.name === registryName)?.url;
+});
 const drawer = ref<'install' | 'pipeline'>();
 const pendingPackage = ref<string>();
 const pendingUpgrade = ref<string>();
@@ -57,7 +62,10 @@ async function cancelCurrent(): Promise<void> {
 }
 
 function openInstall(): void { Object.assign(install, { identity: '', version: '', force: false }); drawer.value = 'install'; }
-function submitInstall(): void { void run('package.install', { library: props.name, ...install }, `${install.identity} installed.`, () => { drawer.value = undefined; }); }
+function submitInstall(): void {
+  if (!registryUrl.value) { toast.error('This Library is not connected to a registered Registry. Connect it from a Registry entry first.'); return; }
+  void run('package.install', { library: props.name, ...install, registryUrl: registryUrl.value }, `${install.identity} installed.`, () => { drawer.value = undefined; });
+}
 function submitPipeline(): void { void run('pipeline.use', { library: root.value, target: pipeline.target }, `${pipeline.target} is active for ${props.name}.`, () => { drawer.value = undefined; }); }
 function uninstall(): void {
   if (!pendingPackage.value) return;
@@ -91,6 +99,7 @@ function packageRoute(item: Record<string, unknown>): string | undefined {
     <ActionDrawer :open="drawer === 'install'" title="Install knowledge" description="Download an exact signed package build from this Library’s Registry and activate it atomically." submit-label="Install" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
       <FormField label="Package" hint="Use the namespaced Registry identity." required><input v-model="install.identity" autocomplete="off" placeholder="@namespace/package" required /></FormField>
       <FormField label="Version" hint="Leave empty to install the Registry default version."><input v-model="install.version" autocomplete="off" placeholder="1.0.0" /></FormField>
+      <p v-if="registryUrl" class="form-notice">Registry: {{ registryUrl }}</p><p v-else class="form-notice">No Registry is connected. Browse Registries and use Connect Library before installing.</p>
       <label class="checkbox-field"><input v-model="install.force" type="checkbox" /><span><b>Repair or replace existing install</b><small>Use only when reinstalling or recovering an incomplete package.</small></span></label>
     </ActionDrawer>
     <ActionDrawer :open="drawer === 'pipeline'" title="Change retrieval pipeline" description="Prepare every required Evidence and Retrieval Build, verify the graph, then switch the Runtime atomically." submit-label="Prepare and switch" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitPipeline">

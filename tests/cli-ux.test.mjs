@@ -534,6 +534,7 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-package-lifecycle-'));
   const packageRoot = path.join(tempRoot, 'vendor', '@acct-test', 'knowledge');
   const requests = [];
+  let unrelated;
   let upgradeRequest;
   const server = http.createServer(async (request, response) => {
     requests.push(request.url);
@@ -561,14 +562,25 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
       return;
     }
 
-    if (request.url === '/api/registry/packages?q=knowledge') {
+    if (request.url === '/api/registry/packages?q=knowledge&page=1&perPage=20') {
       response.end(JSON.stringify({
         data: [{
           id: '@acct-test/knowledge',
+          namespace: 'acct-test',
           name: 'Knowledge',
+          slug: 'knowledge',
           latestVersion: '1.1.0',
           visibility: 'private',
         }],
+        meta: { current_page: 1, per_page: 20, last_page: 1, total: 1 },
+      }));
+      return;
+    }
+
+    if (request.url === '/api/registry/collections?q=knowledge&page=1&perPage=20') {
+      response.end(JSON.stringify({
+        data: [{ id: '@acct-test/knowledge-bundle', namespace: 'acct-test', name: 'Knowledge bundle', slug: 'knowledge-bundle', latestRevision: 2, visibility: 'private' }],
+        meta: { current_page: 1, per_page: 20, last_page: 1, total: 1 },
       }));
       return;
     }
@@ -577,11 +589,37 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
       response.end(JSON.stringify({
         data: {
           id: '@acct-test/knowledge',
+          namespace: 'acct-test',
           name: 'Knowledge',
+          slug: 'knowledge',
           latestVersion: '1.1.0',
           visibility: 'private',
+          versions: [{ version: '1.1.0', status: 'published', packageTreeHash: `sha256:${'d'.repeat(64)}` }],
         },
       }));
+      return;
+    }
+
+    if (request.url === '/api/registry/packages/acct-test/knowledge/versions/1.1.0') {
+      response.end(JSON.stringify({ data: { packageId: '@acct-test/knowledge', version: '1.1.0', status: 'published', builds: [], sourceReceipt: { sourceInventory: { hash: `sha256:${'e'.repeat(64)}` } } } }));
+      return;
+    }
+
+    if (request.url === '/api/registry/packages/acct-test/knowledge/versions/1.1.0/contents?path=.&perPage=10') {
+      response.end(JSON.stringify({
+        data: [{ path: 'README.md', bytes: 42, hash: `sha256:${'f'.repeat(64)}` }],
+        meta: { packageId: '@acct-test/knowledge', version: '1.1.0', sourceInventory: { format: 'dkb.source-inventory.v1', mediaType: 'application/vnd.dkb.source-inventory+json', hash: `sha256:${'e'.repeat(64)}`, count: 1, bytes: 222 }, nextCursor: null },
+      }));
+      return;
+    }
+
+    if (request.url === '/api/registry/collections/acct-test/knowledge-bundle') {
+      response.end(JSON.stringify({ data: { id: '@acct-test/knowledge-bundle', namespace: 'acct-test', name: 'Knowledge bundle', slug: 'knowledge-bundle', latestRevision: 2, visibility: 'private', revisions: [{ revision: 2, digest: `sha256:${'a'.repeat(64)}` }] } }));
+      return;
+    }
+
+    if (request.url === '/api/registry/collections/acct-test/knowledge-bundle/revisions/2') {
+      response.end(JSON.stringify({ data: { collectionId: '@acct-test/knowledge-bundle', revision: 2, digest: `sha256:${'a'.repeat(64)}`, manifest: { type: 'collection', id: '@acct-test/knowledge-bundle', name: 'Knowledge bundle', revision: 2, digest: `sha256:${'a'.repeat(64)}`, members: [{ id: '@acct-test/knowledge', version: '1.1.0', digest: `sha256:${'d'.repeat(64)}` }] } } }));
       return;
     }
 
@@ -624,9 +662,21 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     await fs.mkdir(path.dirname(libraryRegistryConfigPath(tempRoot)), { recursive: true });
     await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ format: 'dkb.config.v2', registry: { url: registryUrl } }, null, 2)}\n`);
 
-    const search = await runCli(['--json', 'search', 'knowledge', '--library', tempRoot], { DKB_REGISTRY_URL: '' });
+    unrelated = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-registry-browse-'));
+    const search = await runCli(['--json', 'search', 'knowledge', '--url', registryUrl, '--type', 'all', '--page', '1', '--per-page', '20'], { DKB_REGISTRY_URL: '' }, unrelated);
     assert.equal(search.code, 0, search.stderr);
-    assert.equal(JSON.parse(search.stdout).data[0].id, '@acct-test/knowledge');
+    assert.deepEqual(JSON.parse(search.stdout).entries.map((entry) => entry.type), ['dkb', 'collection']);
+    const remoteDkb = await runCli(['--json', 'registry', 'show', '@acct-test/knowledge', '--version', '1.1.0', '--url', registryUrl], {}, unrelated);
+    assert.equal(remoteDkb.code, 0, remoteDkb.stderr);
+    assert.equal(JSON.parse(remoteDkb.stdout).selectedVersion.version, '1.1.0');
+    const remoteCollection = await runCli(['--json', 'registry', 'show', '@acct-test/knowledge-bundle', '--revision', '2', '--url', registryUrl], {}, unrelated);
+    assert.equal(remoteCollection.code, 0, remoteCollection.stderr);
+    assert.equal(JSON.parse(remoteCollection.stdout).selectedRevision.revision, 2);
+    const remoteContents = await runCli(['--json', 'registry', 'show', '@acct-test/knowledge', '--version', '1.1.0', '--url', registryUrl, '--contents', '.', '--limit', '10'], {}, unrelated);
+    assert.equal(remoteContents.code, 0, remoteContents.stderr);
+    assert.equal(JSON.parse(remoteContents.stdout).entries[0].path, 'README.md');
+    await fs.rm(unrelated, { recursive: true, force: true });
+    unrelated = undefined;
 
     const shown = await runCli(['--json', 'show', '@acct-test/knowledge', '--library', tempRoot]);
     assert.equal(shown.code, 0, shown.stderr);
@@ -695,16 +745,14 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
       plan: fakeInstallPlan('@acct-test/knowledge', '1.1.0'),
       force: true,
     });
-    assert.deepEqual(requests, [
-      '/api/registry/packages?q=knowledge',
-      '/api/registry/packages/acct-test/knowledge',
-      '/api/registry/packages/acct-test/knowledge',
-      '/api/registry/packages/acct-test/knowledge',
-      '/api/registry/packages/acct-test/knowledge/versions/1.1.0/install-grant',
-      '/api/dkbs/install-registry',
-    ]);
+    assert.ok(requests.includes('/api/registry/packages?q=knowledge&page=1&perPage=20'));
+    assert.ok(requests.includes('/api/registry/collections?q=knowledge&page=1&perPage=20'));
+    assert.ok(requests.includes('/api/registry/packages/acct-test/knowledge/versions/1.1.0/contents?path=.&perPage=10'));
+    assert.ok(requests.includes('/api/registry/packages/acct-test/knowledge/versions/1.1.0/install-grant'));
+    assert.ok(requests.includes('/api/dkbs/install-registry'));
   } finally {
     await close(server);
+    if (unrelated) await fs.rm(unrelated, { recursive: true, force: true });
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
@@ -786,6 +834,10 @@ test('package archives retain immutable builds while excluding operator-controll
     await fs.writeFile(path.join(sourceRoot, '.dkb/artifacts/evidence.json'), '{"portable":true}\n');
     await fs.writeFile(path.join(sourceRoot, '.dkb/builds/evidence/profile/digest/evidence.ir.json'), '{"portable":true}\n');
     await fs.writeFile(path.join(sourceRoot, '.dkb/runtime.lock.json'), '{"format":"dkb.runtime.lock.v2"}\n');
+    await fs.writeFile(path.join(sourceRoot, '.env'), 'SECRET=must-not-ship\n');
+    await fs.writeFile(path.join(sourceRoot, 'private.pem'), 'must-not-ship\n');
+    await fs.mkdir(path.join(sourceRoot, 'node_modules', 'unsafe'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, 'node_modules', 'unsafe', 'index.js'), 'must-not-ship\n');
     await fs.writeFile(path.join(sourceRoot, 'dkb.json'), '{"type":"dkb"}\n');
     await createDkbPackageArchive(sourceRoot, archivePath);
     await extractDkbPackageArchive(archivePath, outputRoot);
@@ -793,6 +845,9 @@ test('package archives retain immutable builds while excluding operator-controll
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/config.json')), (error) => error?.code === 'ENOENT');
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/plugins/@host/provider/plugin.mjs')), (error) => error?.code === 'ENOENT');
     await assert.rejects(fs.access(path.join(outputRoot, '.dkb/artifacts/evidence.json')), (error) => error?.code === 'ENOENT');
+    await assert.rejects(fs.access(path.join(outputRoot, '.env')), (error) => error?.code === 'ENOENT');
+    await assert.rejects(fs.access(path.join(outputRoot, 'private.pem')), (error) => error?.code === 'ENOENT');
+    await assert.rejects(fs.access(path.join(outputRoot, 'node_modules/unsafe/index.js')), (error) => error?.code === 'ENOENT');
     assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/builds/evidence/profile/digest/evidence.ir.json'), 'utf8'), '{"portable":true}\n');
     assert.equal(await fs.readFile(path.join(outputRoot, '.dkb/runtime.lock.json'), 'utf8'), '{"format":"dkb.runtime.lock.v2"}\n');
   } finally {

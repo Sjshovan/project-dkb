@@ -441,6 +441,9 @@ export async function selectHostStack(name: string): Promise<{ name: string; sta
     const stack = inventory.stacks[normalizedName];
     if (!stack) throw new DkbError(`Unknown host Stack: ${name}. Run: dkb stack list`);
     inventory.defaults.stack = normalizedName;
+    if (stack.library) inventory.defaults.library = stack.library;
+    if (stack.registry) inventory.defaults.registry = stack.registry;
+    if (stack.runtime) inventory.defaults.runtime = stack.runtime;
     return { value: { name: normalizedName, stack }, inventory };
   });
 }
