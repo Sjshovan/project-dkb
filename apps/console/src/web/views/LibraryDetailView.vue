@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import type { DkbCommandEvent } from '@sjshovan/dkb-protocol/command-events.js';
+import type { DkbRegistryCatalogEntry } from '@sjshovan/dkb-protocol/registryCatalog.js';
 import { ArrowLeft, PackageOpen, Plus, RefreshCw, Server } from '@lucide/vue';
 import { RouterLink } from 'vue-router';
 import { toast } from 'vue-sonner';
@@ -14,6 +15,7 @@ import FormField from '../components/interface/FormField.vue';
 import PageHeader from '../components/interface/PageHeader.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
+import RegistryPackagePicker from '../components/resource/RegistryPackagePicker.vue';
 import type { ResourceListing, ResourceRow, RuntimeStatus } from '../types.js';
 
 const props = defineProps<{ name: string }>();
@@ -36,7 +38,8 @@ const pendingUpgrade = ref<string>();
 const busy = ref(false);
 const events = ref<DkbCommandEvent[]>([]);
 const operationId = ref<string>();
-const install = reactive({ identity: '', version: '', registry: '', force: false });
+const selectedInstallEntry = ref<DkbRegistryCatalogEntry>();
+const install = reactive({ identity: '', version: '', revision: undefined as number | undefined, registry: '', force: false });
 
 async function run(commandId: string, input: Record<string, unknown>, success: string, after?: () => void): Promise<void> {
   busy.value = true;
@@ -64,11 +67,24 @@ async function cancelCurrent(): Promise<void> {
   try { await cancelOperation(operationId.value); } catch (error) { toast.error(error instanceof Error ? error.message : String(error)); }
 }
 
-function openInstall(): void { Object.assign(install, { identity: '', version: '', registry: defaultRegistry.value?.name ?? registries.data.value?.registries?.[0]?.name ?? '', force: false }); drawer.value = 'install'; }
+function openInstall(): void { Object.assign(install, { identity: '', version: '', revision: undefined, registry: defaultRegistry.value?.name ?? registries.data.value?.registries?.[0]?.name ?? '', force: false }); selectedInstallEntry.value = undefined; drawer.value = 'install'; }
+function resetInstallPackage(): void { Object.assign(install, { identity: '', version: '', revision: undefined }); selectedInstallEntry.value = undefined; }
+function selectInstallPackage(entry: DkbRegistryCatalogEntry | undefined): void {
+  selectedInstallEntry.value = entry;
+  install.version = entry?.type === 'dkb' ? entry.latestVersion ?? '' : '';
+  install.revision = entry?.type === 'collection' ? entry.latestRevision ?? undefined : undefined;
+}
 function submitInstall(): void {
   const registry = registries.data.value?.registries?.find((item) => item.name === install.registry);
   if (!registry?.url) { toast.error('Choose a registered Registry for this install.'); return; }
-  void run('package.install', { library: props.name, identity: install.identity, version: install.version, force: install.force, registryUrl: registry.url }, `${install.identity} installed.`, () => { drawer.value = undefined; });
+  if (!selectedInstallEntry.value || selectedInstallEntry.value.id !== install.identity) { toast.error('Choose knowledge from the Registry catalog before installing.'); return; }
+  void run('package.install', {
+    library: props.name,
+    identity: install.identity,
+    ...(selectedInstallEntry.value.type === 'dkb' ? { version: install.version } : { revision: install.revision }),
+    force: install.force,
+    registryUrl: registry.url,
+  }, `${install.identity} installed.`, () => { drawer.value = undefined; });
 }
 function uninstall(): void {
   if (!pendingPackage.value) return;
@@ -106,10 +122,11 @@ function packageRoute(item: Record<string, unknown>): string | undefined {
       <div v-else class="serving-runtime-list"><RouterLink v-for="runtime in servingRuntimes.data.value?.runtimes" :key="runtime.name" :to="`/runtimes/${encodeURIComponent(runtime.name)}`"><Server :size="18" /><span><strong>{{ runtime.name }}</strong><small>{{ runtime.runtime?.target ?? runtime.target ?? 'Pipeline unavailable' }}</small></span><StatusBadge :status="runtime.runtime?.stale ? 'stale' : runtime.runtime ? 'ready' : runtime.status ?? 'known'" /></RouterLink></div>
     </section>
 
-    <ActionDrawer :open="drawer === 'install'" title="Install knowledge" description="Choose a Registry for this exact install. The package retains its signed Registry origin independently of this Library’s default." submit-label="Install" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
-      <FormField label="Registry" hint="The Library default is only a convenience; any registered Registry may be selected." required><select v-model="install.registry" required><option v-for="registry in registries.data.value?.registries" :key="registry.name" :value="registry.name">{{ registry.name }}{{ registry.name === defaultRegistry?.name ? ' · default' : '' }}</option></select></FormField>
-      <FormField label="Package" hint="Use the namespaced Registry identity." required><input v-model="install.identity" autocomplete="off" placeholder="@namespace/package" required /></FormField>
-      <FormField label="Version" hint="Leave empty to install the Registry default version."><input v-model="install.version" autocomplete="off" placeholder="1.0.0" /></FormField>
+    <ActionDrawer :open="drawer === 'install'" title="Install knowledge" description="Choose a Registry, find available knowledge, and confirm the exact release. The signed Registry origin is retained with the install." submit-label="Install selected knowledge" :submit-disabled="!selectedInstallEntry || !install.identity || (selectedInstallEntry.type === 'dkb' ? !install.version : !install.revision)" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
+      <FormField label="Registry" hint="The Library default is only a convenience; any registered Registry may be selected." required><select v-model="install.registry" required @change="resetInstallPackage"><option v-for="registry in registries.data.value?.registries" :key="registry.name" :value="registry.name">{{ registry.name }}{{ registry.name === defaultRegistry?.name ? ' · default' : '' }}</option></select></FormField>
+      <div class="form-field"><label for="registry-package-filter">Knowledge <b aria-hidden="true">*</b></label><RegistryPackagePicker v-model="install.identity" :registry="install.registry" input-id="registry-package-filter" @select="selectInstallPackage" /><small>Type to filter available DKBs and Collections, then choose one from the catalog.</small></div>
+      <FormField v-if="selectedInstallEntry?.type === 'dkb'" label="Version" hint="The latest published version is selected automatically; enter another exact version if needed." required><input v-model="install.version" autocomplete="off" placeholder="1.0.0" required /></FormField>
+      <FormField v-else-if="selectedInstallEntry?.type === 'collection'" label="Revision" hint="The latest immutable Collection revision is selected automatically." required><input v-model.number="install.revision" type="number" min="1" step="1" required /></FormField>
       <p class="form-notice">Changing the install source does not change this Library's default Registry.</p>
       <label class="checkbox-field"><input v-model="install.force" type="checkbox" /><span><b>Repair or replace existing install</b><small>Use only when reinstalling or recovering an incomplete package.</small></span></label>
     </ActionDrawer>
