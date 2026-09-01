@@ -526,6 +526,7 @@ main { min-width: 0; padding-bottom: 84px; }
 .registry-package-empty, .registry-package-error { padding: 1rem; color: var(--muted); font-size: .82rem; text-align: center; }
 .registry-package-error { display: grid; justify-items: start; gap: .3rem; color: var(--foreground); text-align: left; }
 .registry-package-error p { color: var(--muted); overflow-wrap: anywhere; }
+.registry-package-error small { color: var(--muted); }
 .registry-package-error button { min-height: 36px; margin-top: .25rem; border: 0; background: transparent; color: var(--primary); font-weight: 680; }
 .registry-package-loading { display: grid; gap: .45rem; padding: .6rem; }
 .registry-package-loading span { height: 58px; border-radius: 8px; background: var(--subtle); }

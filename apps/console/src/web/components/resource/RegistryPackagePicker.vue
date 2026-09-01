@@ -121,9 +121,10 @@ function formatDate(value?: string | null): string {
 
       <ComboboxPortal>
         <ComboboxContent class="registry-package-options" position="popper" align="start" :side-offset="6" :collision-padding="12">
-          <header><strong>Available knowledge</strong><span v-if="!catalog.isPending.value">{{ resultCount }} {{ resultCount === 1 ? 'match' : 'matches' }}</span></header>
-          <div v-if="catalog.isPending.value" class="registry-package-loading" aria-live="polite"><span v-for="item in 4" :key="item" /></div>
-          <div v-else-if="catalog.isError.value" class="registry-package-error" role="alert"><strong>Catalog unavailable</strong><p>{{ catalog.error.value?.message }}</p><button type="button" @click="catalog.refetch()">Retry catalog</button></div>
+          <header><strong>Available knowledge</strong><span v-if="!catalog.isPending.value && !catalog.isError.value">{{ resultCount }} {{ resultCount === 1 ? 'match' : 'matches' }}</span></header>
+          <div v-if="!props.registry" class="registry-package-empty">Choose a Registry to browse its knowledge.</div>
+          <div v-else-if="catalog.isPending.value" class="registry-package-loading" aria-live="polite"><span v-for="item in 4" :key="item" /></div>
+          <div v-else-if="catalog.isError.value" class="registry-package-error" role="alert"><strong>{{ props.registry }} is unavailable</strong><p>{{ catalog.error.value?.message }}</p><small>Bring this Registry online or choose another Registry above, then retry.</small><button type="button" @click="catalog.refetch()">Retry catalog</button></div>
           <ComboboxViewport v-else class="registry-package-viewport">
             <ComboboxEmpty class="registry-package-empty">{{ filter ? `No Registry knowledge matches “${filter}”.` : 'This Registry has no published knowledge.' }}</ComboboxEmpty>
             <ComboboxItem

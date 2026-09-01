@@ -20,6 +20,12 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     import fs from 'node:fs';
     const args = process.argv.slice(2);
     fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + '\\n');
+    const base = { format: 'dkb.command-event.v1', timestamp: new Date().toISOString() };
+    if (args.includes('http://127.0.0.1:8999')) {
+      console.log(JSON.stringify({ ...base, sequence: 0, event: 'failure', error: { code: 'DKB_ERROR', message: 'Unable to reach registry http://127.0.0.1:8999: connection refused' } }));
+      console.log(JSON.stringify({ ...base, sequence: 1, event: 'completion', status: 'failed' }));
+      process.exit(1);
+    }
     const result = args.includes('runtime') && args.includes('show')
       ? { format: 'dkb.runtime-status.v1', runtimeId: args.at(-1), library: { kind: 'local', id: 'personal', name: 'Personal', path: 'C:/knowledge' }, target: 'default', activationGeneration: 3, stale: false, packageCoverage: { ready: 2, total: 2 }, compatibilityDigest: 'sha256:' + 'c'.repeat(64) }
       : args.includes('pipeline') && args.includes('list')
@@ -47,7 +53,6 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
       : process.argv.includes('runtime') && process.argv.includes('list')
         ? { selected: 'proof-runtime', runtimes: [{ name: 'proof-runtime', selected: true, status: 'online', url: 'http://127.0.0.1:7331', library: 'personal' }] }
       : { status: 'selected' };
-    const base = { format: 'dkb.command-event.v1', timestamp: new Date().toISOString() };
     console.log(JSON.stringify({ ...base, sequence: 0, event: 'start', label: 'Reading DKB state' }));
     console.log(JSON.stringify({ ...base, sequence: 1, event: 'result', value: result }));
     console.log(JSON.stringify({ ...base, sequence: 2, event: 'completion', status: 'succeeded' }));
@@ -126,6 +131,9 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     const registryCatalog = await fetch(`${server.url}/api/v1/registries/proof-registry/catalog?q=proof&type=all&page=1&perPage=20`, { headers: { cookie } });
     assert.equal(registryCatalog.status, 200);
     assert.equal((await registryCatalog.json()).entries.length, 2);
+    const unavailableRegistry = await fetch(`${server.url}/api/v1/registries/other-registry/catalog?type=all&page=1&perPage=20`, { headers: { cookie } });
+    assert.equal(unavailableRegistry.status, 422);
+    assert.deepEqual(await unavailableRegistry.json(), { error: 'Unable to reach registry http://127.0.0.1:8999: connection refused' });
     const registryDkb = await fetch(`${server.url}/api/v1/registries/proof-registry/dkbs/proof/alpha?version=1.0.0`, { headers: { cookie } });
     assert.equal(registryDkb.status, 200);
     assert.equal((await registryDkb.json()).selectedVersion.version, '1.0.0');

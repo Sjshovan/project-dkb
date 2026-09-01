@@ -253,7 +253,13 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     return reply.code(404).send({ error: 'Not found.' });
   });
   app.setErrorHandler(async (error, _request, reply) => {
-    const statusCode = error instanceof ConsoleSecurityError ? error.statusCode : error instanceof ConsoleInputError ? 400 : 500;
+    const statusCode = error instanceof ConsoleSecurityError
+      ? error.statusCode
+      : error instanceof ConsoleInputError
+        ? 400
+        : error instanceof ConsoleCommandError
+          ? 422
+          : 500;
     return reply.code(statusCode).send({ error: statusCode === 500 ? 'Console operation failed.' : errorMessage(error) });
   });
 
@@ -295,8 +301,10 @@ function resourceCommand(kind: string): 'library.list' | 'runtime.list' | 'regis
 function resultOf(operation: ConsoleOperation): unknown {
   if (operation.status === 'succeeded') return operation.result;
   const failure = [...operation.events].reverse().find((event) => event.event === 'failure');
-  throw new Error(failure && 'error' in failure ? String((failure.error as { message?: unknown }).message ?? 'CLI command failed.') : 'CLI command failed.');
+  throw new ConsoleCommandError(failure && 'error' in failure ? String((failure.error as { message?: unknown }).message ?? 'CLI command failed.') : 'CLI command failed.');
 }
+
+class ConsoleCommandError extends Error {}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
