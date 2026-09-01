@@ -68,6 +68,16 @@ export async function stopDkbConsole(): Promise<ConsoleStatus> {
   return { status: 'stale', url: state.url, pid: state.pid, startedAt: state.startedAt };
 }
 
+export async function waitForDkbConsole(timeoutMilliseconds = 10_000): Promise<ConsoleStatus> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMilliseconds) {
+    const status = await consoleStatus();
+    if (status.status === 'running') return status;
+    await delay(100);
+  }
+  throw new Error('DKB Console did not become ready. Run: dkb console status');
+}
+
 async function waitForConsole(): Promise<ConsoleProcessState> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const state = await readConsoleProcessState();

@@ -133,9 +133,18 @@ CLI events, and keeps Registry and Runtime credentials server-side.
 
 ```powershell
 dkb console
+dkb console enable
+dkb console restart
+dkb console disable
 dkb console status
 dkb console stop
 ```
+
+`dkb console enable` registers a least-privilege, per-user background service
+and starts it immediately. On Windows it also installs a **DKB Console** Start
+Menu shortcut, so a fresh secure browser session can be opened without a
+terminal. Linux uses a systemd user unit and macOS uses a LaunchAgent. Disable
+removes login startup without changing any managed DKB resource.
 
 The Console registers and selects Libraries, Runtimes, Registries, and Stacks;
 authenticates the host to a Registry; installs, upgrades, and uninstalls

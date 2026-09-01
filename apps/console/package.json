@@ -12,6 +12,10 @@
     "./launcher.js": {
       "types": "./dist/server/launcher.d.ts",
       "import": "./dist/server/launcher.js"
+    },
+    "./autostart.js": {
+      "types": "./dist/server/autostart.d.ts",
+      "import": "./dist/server/autostart.js"
     }
   },
   "bin": {

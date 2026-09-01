@@ -21,6 +21,14 @@ The Console follows [the product brief](../../PRODUCT.md), [design system](../..
 and [surface brief](../design/console-surface.md). It is a mobile-complete
 operations interface, not a Registry showcase or a second Registry admin.
 
+The installed Console may run as an optional per-user login service. Windows
+uses a least-privilege scheduled task, Linux uses a systemd user unit, and macOS
+uses a LaunchAgent. The service runs the Console foreground entrypoint so the
+operating system can supervise failure and restart it. It never runs as a
+system account. The CLI remains the trusted lifecycle controller and session
+issuer; an operating-system application launcher invokes that controller
+without exposing its control credential to browser code.
+
 Registry authentication belongs to the host. Browser login uses authorization
 code plus PKCE and a loopback callback; device authorization supports headless
 hosts. Local Fortify, passkeys, and two-factor authentication remain the default.

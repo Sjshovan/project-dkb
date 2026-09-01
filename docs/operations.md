@@ -141,8 +141,17 @@ delete stack data implicitly.
 
 `dkb console` starts a loopback-only operator interface. It invokes the exact
 bundled CLI with typed inputs and `shell: false`; it is not a remote shell or a
-second lifecycle implementation. Use `dkb console status` to inspect the
-process and `dkb console stop` to stop only the interface. Console activity is
+second lifecycle implementation. `dkb console enable` installs the operating
+system's user-scoped login service and starts it immediately. Windows uses a
+least-privilege Task Scheduler entry and Start Menu launcher, Linux uses a
+systemd user unit, and macOS uses a LaunchAgent. No administrator or system
+account is required.
+
+Use `dkb console restart` to restart the supervised process and issue a fresh
+browser session, `dkb console disable` to remove login startup without stopping
+the current Console, and `dkb console status` to inspect both process and
+registration state. `dkb console stop` stops only the current interface; an
+enabled login service returns at the next user login. Console activity is
 redacted and stored locally; authoritative state remains in the Library,
 Runtime, Registry, and host inventory.
 

@@ -1,6 +1,17 @@
 import type { DkbCommandEvent } from '@sjshovan/dkb-protocol/command-events.js';
 
+export const CONSOLE_SESSION_EXPIRED_EVENT = 'dkb:console-session-expired';
+
 let csrfToken = '';
+let sessionIssue: string | undefined;
+
+export class ConsoleSessionExpiredError extends Error {
+  readonly code = 'console_session_expired';
+}
+
+export function consoleSessionIssue(): string | undefined {
+  return sessionIssue;
+}
 
 export async function establishConsoleSession(): Promise<void> {
   const url = new URL(window.location.href);
@@ -12,11 +23,13 @@ export async function establishConsoleSession(): Promise<void> {
       body: JSON.stringify({ secret: bootstrap }),
     }, false);
     csrfToken = session.csrf;
+    sessionIssue = undefined;
     url.searchParams.delete('bootstrap');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
     return;
   }
   csrfToken = (await request<{ csrf: string }>('/api/session', {}, false)).csrf;
+  sessionIssue = undefined;
 }
 
 export async function getJson<T>(path: string): Promise<T> {
@@ -51,11 +64,29 @@ export function followOperation(id: string, listener: (event: DkbCommandEvent) =
 
 async function request<T>(path: string, init: RequestInit = {}, retrySession = true): Promise<T> {
   const response = await fetch(path, { ...init, credentials: 'same-origin', headers: { accept: 'application/json', ...init.headers } });
-  if (response.status === 401 && retrySession && path !== '/api/session') {
-    await establishConsoleSession();
-    return request<T>(path, init, false);
+  if (response.status === 401 && retrySession && path !== '/api/session' && path !== '/api/session/bootstrap') {
+    try {
+      await establishConsoleSession();
+      return request<T>(path, init, false);
+    } catch (error) {
+      if (error instanceof ConsoleSessionExpiredError) markSessionExpired(error.message);
+      throw error;
+    }
   }
   const body = await response.json().catch(() => ({})) as { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `Console request failed (${response.status}).`);
+  if (!response.ok) {
+    const message = body.error ?? `Console request failed (${response.status}).`;
+    if (response.status === 401) {
+      markSessionExpired(message);
+      throw new ConsoleSessionExpiredError(message);
+    }
+    throw new Error(message);
+  }
   return body as T;
+}
+
+function markSessionExpired(message: string): void {
+  csrfToken = '';
+  sessionIssue = message;
+  window.dispatchEvent(new CustomEvent(CONSOLE_SESSION_EXPIRED_EVENT, { detail: { message } }));
 }

@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink, RouterView, useRoute } from 'vue-router';
 import { Activity, Boxes, ChevronLeft, ChevronRight, Database, GitBranch, Home, Library, Menu, Moon, Server, Sun } from '@lucide/vue';
 import { TooltipContent, TooltipPortal, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui';
 import ContextStrip from './components/resource/ContextStrip.vue';
+import SessionExpiredView from './components/interface/SessionExpiredView.vue';
+import { CONSOLE_SESSION_EXPIRED_EVENT, consoleSessionIssue, establishConsoleSession } from './api.js';
 
 const route = useRoute();
 const dark = ref(false);
 const sidebarCollapsed = ref(false);
+const expiredSession = ref<string | undefined>(consoleSessionIssue());
+const reconnecting = ref(false);
+const reconnectError = ref<string>();
 const navigation = [
   { name: 'Overview', route: '/', icon: Home },
   { name: 'Libraries', route: '/libraries', icon: Library },
@@ -28,15 +33,33 @@ function applyTheme(): void {
 }
 function toggleTheme(): void { dark.value = !dark.value; applyTheme(); }
 function toggleSidebar(): void { sidebarCollapsed.value = !sidebarCollapsed.value; localStorage.setItem('dkb-console-sidebar', sidebarCollapsed.value ? 'collapsed' : 'expanded'); }
+function handleSessionExpired(event: Event): void {
+  expiredSession.value = (event as CustomEvent<{ message?: string }>).detail?.message ?? 'Console session expired.';
+}
+async function reconnect(): Promise<void> {
+  reconnecting.value = true;
+  reconnectError.value = undefined;
+  try {
+    await establishConsoleSession();
+    window.location.reload();
+  } catch {
+    reconnectError.value = 'A fresh session is not available yet. Run dkb console, open the link it provides, then retry.';
+  } finally {
+    reconnecting.value = false;
+  }
+}
 onMounted(() => {
   dark.value = localStorage.getItem('dkb-console-theme') === 'dark' || (!localStorage.getItem('dkb-console-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
   sidebarCollapsed.value = localStorage.getItem('dkb-console-sidebar') === 'collapsed';
   applyTheme();
+  window.addEventListener(CONSOLE_SESSION_EXPIRED_EVENT, handleSessionExpired);
 });
+onBeforeUnmount(() => window.removeEventListener(CONSOLE_SESSION_EXPIRED_EVENT, handleSessionExpired));
 </script>
 
 <template>
-  <TooltipProvider :delay-duration="350">
+  <SessionExpiredView v-if="expiredSession" :detail="expiredSession" :reconnecting="reconnecting" :reconnect-error="reconnectError" @reconnect="reconnect" />
+  <TooltipProvider v-else :delay-duration="350">
     <a class="skip-link" href="#main-content">Skip to content</a>
     <div class="app-shell" :class="{ 'app-shell--collapsed': sidebarCollapsed }">
       <aside class="desktop-sidebar">
