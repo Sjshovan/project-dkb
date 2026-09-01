@@ -8,7 +8,7 @@ const emit = defineEmits<{ default: []; authenticate: []; stop: []; forget: [] }
 </script>
 
 <template>
-  <DropdownMenuRoot>
+  <DropdownMenuRoot :modal="false">
     <DropdownMenuTrigger class="icon-button resource-menu-trigger" :aria-label="`Actions for ${name}`"><MoreHorizontal :size="19" /></DropdownMenuTrigger>
     <DropdownMenuPortal><DropdownMenuContent class="resource-menu" :side-offset="6" align="end">
       <DropdownMenuItem v-if="!isDefault" class="resource-menu-item" @select="emit('default')">Set as default</DropdownMenuItem>
