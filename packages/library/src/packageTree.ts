@@ -29,7 +29,7 @@ export async function hashPortablePackageTree(root: string): Promise<{ hash: str
   const resolvedRoot = path.resolve(root);
   const files = (await sourceFiles(resolvedRoot))
     .map((file) => path.relative(resolvedRoot, file).replace(/\\/gu, '/'))
-    .sort((left, right) => left.localeCompare(right));
+    .sort(comparePortablePaths);
   const entries: Array<{ path: string; hash: string }> = [];
 
   for (const relative of files) {
@@ -40,6 +40,10 @@ export async function hashPortablePackageTree(root: string): Promise<{ hash: str
   }
 
   return { hash: stableHash(entries), files };
+}
+
+function comparePortablePaths(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
 }
 
 export async function summarizePortablePackageTree(root: string): Promise<{ files: number; bytes: number }> {

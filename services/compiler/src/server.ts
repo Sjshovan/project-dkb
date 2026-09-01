@@ -13,9 +13,10 @@ import {
   type CompiledRegistryPackageDelivery,
   type RegistryCompileRequest,
 } from './registryCompilation.js';
-
-const DKB_COMPILER_RESULT_MEDIA_TYPE = 'application/vnd.dkb.compiler-result+gzip';
-const DKB_COMPILER_RESULT_HEADER = 'x-dkb-compiler-result';
+import {
+  compilerResultEnvelopePrefix,
+  DKB_COMPILER_RESULT_MEDIA_TYPE,
+} from './compilerResultEnvelope.js';
 
 export interface ServeDkbRegistryCompilerOptions {
   host?: string;
@@ -130,15 +131,12 @@ function registryCompilerContextRoot(): string {
 }
 
 async function sendCompiledArchive(response: ServerResponse, compiled: CompiledRegistryPackageDelivery): Promise<void> {
-  const metadata = Buffer.from(JSON.stringify(compiled.payload), 'utf8').toString('base64');
-  if (Buffer.byteLength(metadata, 'ascii') > 12 * 1024) {
-    throw new DkbError('Compiler result metadata is too large for the streamed response header');
-  }
+  const prefix = compilerResultEnvelopePrefix(compiled.payload);
   response.writeHead(200, {
     'content-type': DKB_COMPILER_RESULT_MEDIA_TYPE,
-    'content-length': compiled.archiveSize,
-    [DKB_COMPILER_RESULT_HEADER]: metadata,
+    'content-length': prefix.byteLength + compiled.archiveSize,
   });
+  response.write(prefix);
   await pipeline(createReadStream(compiled.archivePath), response);
 }
 
