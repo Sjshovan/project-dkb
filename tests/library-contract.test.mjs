@@ -309,7 +309,19 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
 
   const detail = await inspectInstalledPackage(root, '@test/core');
   assert.equal(detail.format, 'dkb.installed-entry-detail.v2');
-  assert.equal(detail.builds.some((build) => build.kind === 'evidence' && build.buildDigest === graph.evidence.evidenceDigest), true);
+  const evidenceBuild = detail.builds.find((build) => build.kind === 'evidence' && build.buildDigest === graph.evidence.evidenceDigest);
+  const retrievalBuild = detail.builds.find((build) => build.kind === 'retrieval' && build.buildDigest === graph.retrieval.retrievalBuildDigest);
+  assert.ok(evidenceBuild);
+  assert.ok(retrievalBuild);
+  assert.deepEqual(evidenceBuild.files.map((file) => file.path), ['evidence.ir.json', 'evidence.catalog.sqlite', 'evidence.lock.json']);
+  assert.deepEqual(evidenceBuild.providers.map((provider) => provider.kind), ['evidence']);
+  assert.equal(retrievalBuild.target, 'default');
+  assert.equal(retrievalBuild.evidenceDigest, graph.evidence.evidenceDigest);
+  assert.equal(retrievalBuild.embedding.provider, '@test/pipeline');
+  assert.equal(retrievalBuild.embedding.dimensions, 1);
+  assert.equal(retrievalBuild.index.format, 'test.index.v1');
+  assert.equal(retrievalBuild.retrieval.protocol, 'dkb.evidence.v1');
+  assert.equal(retrievalBuild.files.some((file) => file.path === 'artifacts/test-index.json' && file.role === 'retrieval_artifact'), true);
   assert.equal(detail.sourceSummary.evidenceRecords, 1);
   assert.equal(detail.provenance.receiptStatus, 'not_applicable');
   assert.equal(detail.integrity.status, 'passed');

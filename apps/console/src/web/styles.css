@@ -329,12 +329,55 @@ main { min-width: 0; padding-bottom: 84px; }
 .stored-builds > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: .65rem; }
 .stored-builds > header p { margin-top: .2rem; color: var(--muted); font-size: .82rem; }
 .stored-build-list { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
-.stored-build-list article { display: flex; flex-direction: column; gap: .65rem; padding: .75rem .85rem; border-bottom: 1px solid var(--border); }
+.stored-build-list article { border-bottom: 1px solid var(--border); }
 .stored-build-list article:last-child { border-bottom: 0; }
-.stored-build-list article > div { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: .5rem; }
-.stored-build-list article > div:first-child { justify-content: space-between; }
+.stored-build-list article > button { display: grid; width: 100%; min-height: 44px; gap: .5rem; padding: .8rem .85rem; border: 0; background: transparent; color: inherit; text-align: left; }
+.stored-build-list article > button:hover { background: var(--subtle); }
+.stored-build-list article > button:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--primary); outline-offset: -2px; }
+.stored-build-main, .stored-build-identity, .stored-build-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.stored-build-main { justify-content: space-between; }
+.stored-build-main > span:first-child { display: grid; min-width: 0; }
+.stored-build-main small { margin-top: .05rem; color: var(--muted); font-size: .72rem; font-weight: 650; }
+.stored-build-purpose { color: var(--foreground); font-size: .82rem; }
+.stored-build-meta span { color: var(--muted); font-size: .76rem; }
+.stored-build-meta span:not(:last-child)::after { margin-left: .5rem; color: var(--border-strong); content: '·'; }
+.stored-build-identity { justify-content: space-between; color: var(--muted); }
 .stored-build-list code { overflow: hidden; color: var(--muted); font-size: .73rem; text-overflow: ellipsis; white-space: nowrap; }
-.stored-build-list span { color: var(--muted); font-size: .78rem; }
+
+.build-details-drawer .drawer-body { grid-auto-rows: max-content; }
+.build-drawer-summary { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+.build-drawer-summary > div:first-child { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .65rem; padding: .85rem; background: var(--subtle); border-bottom: 1px solid var(--border); }
+.build-drawer-summary > div:first-child > span:nth-child(2) { display: grid; min-width: 0; }
+.build-drawer-summary small { color: var(--muted); }
+.build-type-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 9px; background: var(--primary-soft); color: var(--primary); }
+.build-drawer-summary dl, .build-recipe dl, .build-identities dl { margin: 0; }
+.build-drawer-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: .35rem .85rem; }
+.build-drawer-summary dl > div { padding: .55rem 0; }
+.build-drawer-summary dt, .build-recipe dt, .build-identities dt { color: var(--muted); font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.build-drawer-summary dd, .build-recipe dd, .build-identities dd { min-width: 0; margin: .15rem 0 0; overflow-wrap: anywhere; }
+.build-file-inventory, .build-recipe, .build-identities { display: grid; gap: .65rem; }
+.build-drawer-heading { display: flex; align-items: flex-start; gap: .55rem; }
+.build-drawer-heading > svg { flex: 0 0 auto; margin-top: .08rem; color: var(--primary); }
+.build-drawer-heading h2 { font-size: .9rem; }
+.build-drawer-heading p { margin-top: .1rem; color: var(--muted); font-size: .78rem; }
+.build-file-inventory ul, .build-provider-list, .build-recipe dl, .build-identities dl { overflow: hidden; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; list-style: none; }
+.build-file-inventory li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: .8rem; padding: .8rem .85rem; border-bottom: 1px solid var(--border); }
+.build-file-inventory li:last-child, .build-provider-list li:last-child, .build-recipe dl > div:last-child, .build-identities dl > div:last-child { border-bottom: 0; }
+.build-file-inventory li > div { display: grid; min-width: 0; gap: .16rem; }
+.build-file-inventory li > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.build-file-inventory code { width: fit-content; max-width: 100%; color: var(--foreground); font-size: .72rem; overflow-wrap: anywhere; }
+.build-file-inventory small { color: var(--muted); overflow-wrap: anywhere; }
+.build-file-inventory .build-file-hash { color: var(--muted); }
+.build-recipe dl > div, .build-identities dl > div { display: grid; gap: .2rem; padding: .7rem .85rem; border-bottom: 1px solid var(--border); }
+.build-recipe dd { display: grid; gap: .08rem; }
+.build-recipe dd small { color: var(--muted); }
+.build-identities code { font-size: .72rem; overflow-wrap: anywhere; }
+.build-provider-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; padding: .7rem .85rem; border-bottom: 1px solid var(--border); }
+.build-provider-list li > span { display: grid; min-width: 0; gap: .12rem; }
+.build-provider-list code { color: var(--foreground); font-size: .72rem; overflow-wrap: anywhere; }
+.build-provider-list li > small { color: var(--muted); white-space: nowrap; }
+.build-processors { display: grid; gap: .35rem; padding: .75rem .85rem; background: var(--subtle); border-radius: 10px; }
+.build-processors span { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
 
 .contents-browser { display: grid; min-height: 34rem; }
 .contents-tree { min-width: 0; background: var(--surface); }
@@ -626,6 +669,7 @@ main { min-width: 0; padding-bottom: 84px; }
   .resource-table-wrap { display: block; }
   .mobile-resource-list { display: none; }
   .action-drawer { top: 0; right: 0; bottom: 0; left: auto; width: min(32rem, 46vw); border-left: 1px solid var(--border); }
+  .action-drawer.build-details-drawer { width: min(40rem, 52vw); }
 }
 
 @media (min-width: 1180px) {

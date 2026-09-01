@@ -21,8 +21,11 @@ shown beside a list when space permits and as a dedicated page when it does not.
   has Overview, Contents, Builds, Provenance, and Integrity sections. A
   Collection uses Overview, Members, Provenance, and Integrity. Contents use a
   bounded directory browser and escaped, inert preview; active content is never
-  rendered. Integrity is refreshed only when the user runs Verify and exposes
-  check-level recovery context.
+  rendered. Build inspection explains the portable Evidence layer and the
+  Runtime-specific Retrieval layer, including their exact stored files,
+  provider recipe, parent identity, compatibility, and content digests.
+  Integrity is refreshed only when the user runs Verify and exposes check-level
+  recovery context.
 - **Runtimes:** endpoints, Library association, version, health, and available
   local controls.
 - **Registries:** endpoints, authentication state, health, Library usage, and

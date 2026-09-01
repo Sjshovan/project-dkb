@@ -13,6 +13,21 @@ export interface DkbInspectionCheck {
   recovery?: string;
 }
 
+export type DkbInstalledBuildFileRole =
+  | 'evidence_ir'
+  | 'evidence_catalog'
+  | 'build_lock'
+  | 'profile_lock'
+  | 'artifact_manifest'
+  | 'retrieval_artifact';
+
+export interface DkbInstalledBuildFile {
+  path: string;
+  bytes: number;
+  role: DkbInstalledBuildFileRole;
+  hash?: string;
+}
+
 export interface DkbInstalledBuildSummary {
   kind: 'evidence' | 'retrieval';
   profileDigest: string;
@@ -22,6 +37,38 @@ export interface DkbInstalledBuildSummary {
   recordCount?: number;
   chunkCount?: number;
   compatibilityDigest?: string;
+  evidenceDigest?: string;
+  target?: string;
+  providers: Array<{
+    id: string;
+    version: string;
+    kind: 'evidence' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
+  }>;
+  processors: Array<{
+    id: string;
+    version: string;
+    stage: 'document' | 'chunk' | 'record';
+  }>;
+  embedding?: {
+    provider: string;
+    space: string;
+    modelRevision?: string;
+    dimensions: number;
+    metric: string;
+    normalized: boolean;
+    queryMode: string;
+    documentMode: string;
+  };
+  index?: {
+    provider: string;
+    mode: 'packaged' | 'managed';
+    format: string;
+  };
+  retrieval?: {
+    provider: string;
+    protocol: string;
+  };
+  files: DkbInstalledBuildFile[];
 }
 
 export interface DkbInstalledEntryDetail {

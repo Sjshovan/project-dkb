@@ -6,7 +6,12 @@ import {
   validateInstallPlan,
   validateRetrievalBuildLock,
 } from '@sjshovan/dkb-protocol/builds.js';
+import {
+  DKB_ARTIFACT_MANIFEST_FILENAME,
+  validateArtifactManifest,
+} from '@sjshovan/dkb-protocol/artifacts.js';
 import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { DKB_EVIDENCE_CATALOG_FILENAME } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
@@ -28,7 +33,10 @@ import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
 import type { DkbSigningKeyRecord, DkbSourceManifest } from '@sjshovan/dkb-protocol/types.js';
 import {
   DKB_EVIDENCE_BUILD_LOCK,
+  DKB_EVIDENCE_BUILD_IR,
+  DKB_RETRIEVAL_BUILD_ARTIFACTS,
   DKB_RETRIEVAL_BUILD_LOCK,
+  DKB_RETRIEVAL_BUILD_PROFILE_LOCK,
   listPackageBuilds,
   readRetrievalBuildProfile,
   validateStoredPackageBuild,
@@ -291,20 +299,68 @@ async function inspectDkbBuilds(
     const graph = await representativeStoredPackageGraph(packageRoot, listed);
     const catalog = readEvidenceCatalog(graph.evidencePath);
     const builds: DkbInstalledBuildSummary[] = [];
+    const retrievalDetails = await Promise.all(listed.retrieval.map(async (item) => {
+      const lockPath = path.join(item.path, DKB_RETRIEVAL_BUILD_LOCK);
+      const manifestPath = path.join(item.path, DKB_ARTIFACT_MANIFEST_FILENAME);
+      const [lock, profile, manifest, bytes] = await Promise.all([
+        fs.readFile(lockPath, 'utf8').then((value) => validateRetrievalBuildLock(JSON.parse(value), lockPath)),
+        readRetrievalBuildProfile(item.path),
+        fs.readFile(manifestPath, 'utf8').then((value) => validateArtifactManifest(JSON.parse(value), manifestPath)),
+        directoryBytes(item.path),
+      ]);
+      return { item, lock, profile, manifest, bytes };
+    }));
+    const evidenceProfiles = new Map(retrievalDetails.map(({ profile }) => [profile.profile.evidence.profileDigest, profile.profile.evidence]));
     for (const item of listed.evidence) {
       const lockPath = path.join(item.path, DKB_EVIDENCE_BUILD_LOCK);
       const lock = validateEvidenceBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
+      const evidenceProfile = evidenceProfiles.get(item.profileDigest);
       builds.push({
         kind: 'evidence', profileDigest: item.profileDigest, buildDigest: item.evidenceDigest,
         bytes: await directoryBytes(item.path), generatedAt: lock.generatedAt, recordCount: lock.recordCount, chunkCount: lock.chunkCount,
+        providers: evidenceProfile?.providers.map(({ id, version, kind }) => ({ id, version, kind })) ?? [],
+        processors: evidenceProfile?.processors.map(({ id, version, stage }) => ({ id, version, stage })) ?? [],
+        files: await Promise.all([
+          installedBuildFile(item.path, DKB_EVIDENCE_BUILD_IR, 'evidence_ir'),
+          installedBuildFile(item.path, DKB_EVIDENCE_CATALOG_FILENAME, 'evidence_catalog'),
+          installedBuildFile(item.path, DKB_EVIDENCE_BUILD_LOCK, 'build_lock'),
+        ]),
       });
     }
-    for (const item of listed.retrieval) {
-      const lockPath = path.join(item.path, DKB_RETRIEVAL_BUILD_LOCK);
-      const lock = validateRetrievalBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
+    for (const { item, lock, profile, manifest, bytes } of retrievalDetails) {
       builds.push({
         kind: 'retrieval', profileDigest: item.profileDigest, buildDigest: item.buildDigest,
-        bytes: await directoryBytes(item.path), generatedAt: lock.generatedAt, compatibilityDigest: lock.compatibilityDigest,
+        bytes, generatedAt: lock.generatedAt, compatibilityDigest: lock.compatibilityDigest,
+        evidenceDigest: lock.evidenceDigest,
+        target: profile.profile.target,
+        providers: profile.profile.retrieval.providers.map(({ id, version, kind }) => ({ id, version, kind })),
+        processors: [],
+        embedding: {
+          provider: profile.profile.embedding.provider,
+          space: profile.profile.embedding.space,
+          ...(profile.profile.embedding.modelRevision ? { modelRevision: profile.profile.embedding.modelRevision } : {}),
+          dimensions: profile.profile.embedding.dimensions,
+          metric: profile.profile.embedding.metric,
+          normalized: profile.profile.embedding.normalized,
+          queryMode: profile.profile.embedding.queryMode,
+          documentMode: profile.profile.embedding.documentMode,
+        },
+        index: { ...profile.profile.index },
+        retrieval: {
+          provider: profile.profile.retrieval.provider,
+          protocol: profile.profile.retrieval.protocol,
+        },
+        files: [
+          await installedBuildFile(item.path, DKB_RETRIEVAL_BUILD_LOCK, 'build_lock'),
+          await installedBuildFile(item.path, DKB_RETRIEVAL_BUILD_PROFILE_LOCK, 'profile_lock'),
+          await installedBuildFile(item.path, DKB_ARTIFACT_MANIFEST_FILENAME, 'artifact_manifest'),
+          ...manifest.files.map((file) => ({
+            path: path.posix.join(DKB_RETRIEVAL_BUILD_ARTIFACTS, file.path),
+            bytes: file.size,
+            role: 'retrieval_artifact' as const,
+            hash: file.hash,
+          })),
+        ],
       });
     }
     const profile = await readRetrievalBuildProfile(graph.retrievalPath);
@@ -318,6 +374,18 @@ async function inspectDkbBuilds(
       check: check('build.graph', 'Stored build graph', 'failed', errorMessage(error), rebuildOrReinstallCommand(libraryRoot, packageRoot, entry)),
     };
   }
+}
+
+async function installedBuildFile(
+  buildRoot: string,
+  relativePath: string,
+  role: DkbInstalledBuildSummary['files'][number]['role'],
+): Promise<DkbInstalledBuildSummary['files'][number]> {
+  const normalizedPath = relativePath.replaceAll('\\', '/');
+  const target = resolveContainedPath(buildRoot, normalizedPath, 'Stored build file');
+  const stat = await fs.stat(target);
+  if (!stat.isFile()) throw new DkbError(`Stored build file is not a regular file: ${normalizedPath}`);
+  return { path: normalizedPath, bytes: stat.size, role };
 }
 
 async function inspectReceipt(libraryRoot: string, packageRoot: string, entry: DkbLibraryStateEntry) {
