@@ -20,4 +20,3 @@ async function stop(): Promise<void> {
 
 process.once('SIGINT', () => void stop());
 process.once('SIGTERM', () => void stop());
-
