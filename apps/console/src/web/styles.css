@@ -183,10 +183,13 @@ main { min-width: 0; padding-bottom: 84px; }
 .recovery-panel > svg { color: var(--negative); }
 .recovery-panel button { margin-top: .7rem; border: 0; background: transparent; color: var(--primary); font-weight: 650; }
 
-.operation-panel { margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.operation-panel { overflow: hidden; margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .operation-panel > header { display: flex; align-items: center; justify-content: space-between; padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
 .operation-actions { display: flex; align-items: center; gap: .4rem; }
-.operation-panel ol { display: grid; gap: .55rem; margin: 0; padding: .8rem 1rem 1rem; list-style: none; }
+.operation-event-log { display: grid; max-block-size: min(20rem, 40vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-color: color-mix(in srgb, var(--muted) 48%, transparent) transparent; scrollbar-gutter: stable; gap: .55rem; margin: 0; padding: .8rem 1rem 1rem; list-style: none; }
+.operation-event-log:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.operation-event-log::-webkit-scrollbar { width: 10px; }
+.operation-event-log::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 48%, transparent); background-clip: padding-box; border: 3px solid transparent; border-radius: 999px; }
 .operation-panel li { display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: .55rem; }
 .operation-panel li > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 999px; background: var(--neutral-bg); color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
 .operation-progress { display: grid; min-width: 0; gap: .35rem; }
