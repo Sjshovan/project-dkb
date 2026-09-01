@@ -37,7 +37,7 @@ function shortDigest(value?: string): string {
 function fileLabel(file: DkbInstalledBuildFile): string {
   if (file.role === 'evidence_ir') return 'Evidence IR';
   if (file.role === 'evidence_catalog') return 'Evidence catalog';
-  if (file.role === 'build_lock') return 'Build receipt';
+  if (file.role === 'build_lock') return 'Build lock';
   if (file.role === 'profile_lock') return 'Resolved Pipeline recipe';
   if (file.role === 'artifact_manifest') return 'Artifact manifest';
   if (file.path.endsWith('.faiss')) return 'Vector index';
