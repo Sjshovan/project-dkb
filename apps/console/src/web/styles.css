@@ -209,6 +209,7 @@ main { min-width: 0; padding-bottom: 84px; }
 .package-detail-link strong { color: var(--foreground); }
 .package-detail-link:hover strong { color: var(--primary); }
 .activity-list p { margin-top: .25rem; color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
+.activity-pagination > span { min-width: 0; text-align: center; }
 
 .registry-context-card { margin-bottom: 1rem; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .registry-context-card dl { display: grid; margin: 0; padding: .4rem 1rem; }
@@ -593,6 +594,8 @@ main { min-width: 0; padding-bottom: 84px; }
 @keyframes drawer-in { from { transform: translateX(4%); opacity: .7; } }
 
 @media (max-width: 767px) {
+  .activity-pagination { display: grid; grid-template-columns: 1fr 1fr; }
+  .activity-pagination > span { grid-column: 1 / -1; grid-row: 1; }
   .app-button--sm, .resource-menu-trigger, .resource-menu-item, .mobile-resource-list footer a, .segment-control button, .contents-toolbar nav button { min-height: 44px; }
   .registry-package-option { grid-template-columns: 22px minmax(0, 1fr) 18px; align-items: start; gap: .45rem .55rem; }
   .registry-package-option > svg:first-child { grid-column: 1; grid-row: 1; margin-top: .15rem; }

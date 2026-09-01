@@ -148,6 +148,19 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     const operation = await waitForOperation(server.url, cookie, operationId);
     assert.equal(operation.status, 'succeeded');
 
+    const activityResponse = await fetch(`${server.url}/api/v1/activity?page=1&perPage=1`, { headers: { cookie } });
+    assert.equal(activityResponse.status, 200);
+    const activity = await activityResponse.json();
+    assert.equal(activity.activities.length, 1);
+    assert.equal(activity.pagination.page, 1);
+    assert.equal(activity.pagination.perPage, 1);
+    assert.equal(activity.pagination.retainedLimit, 500);
+    assert.ok(activity.pagination.total >= 1);
+    const invalidActivityPage = await fetch(`${server.url}/api/v1/activity?page=0`, { headers: { cookie } });
+    assert.equal(invalidActivityPage.status, 400);
+    const oversizedActivityPage = await fetch(`${server.url}/api/v1/activity?perPage=51`, { headers: { cookie } });
+    assert.equal(oversizedActivityPage.status, 400);
+
     const verification = await fetch(`${server.url}/api/v1/operations`, {
       method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({ commandId: 'package.verify', input: { library: 'personal', identity: '@proof/alpha' } }),
     });

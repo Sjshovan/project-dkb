@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { ConsoleActivityStore } from './activity.js';
+import { CONSOLE_ACTIVITY_DEFAULT_PAGE_SIZE, CONSOLE_ACTIVITY_MAX_PAGE_SIZE, ConsoleActivityStore } from './activity.js';
 import { ConsoleCommandRunner, type ConsoleOperation } from './commandRunner.js';
 import { ConsoleInputError, consoleCommand, parseConsoleCommandInput } from './commandCatalog.js';
 import { consoleStateRoot, removeConsoleProcessState, writeConsoleProcessState } from './processState.js';
@@ -201,9 +201,11 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
       identity: installedEntryIdentity(request.params.namespace, request.params.name),
     }));
   });
-  app.get('/api/v1/activity', async (request) => {
+  app.get<{ Querystring: { page?: string; perPage?: string } }>('/api/v1/activity', async (request) => {
     security.session(request);
-    return { activities: activity.list() };
+    const page = queryInteger(request.query.page, 1, Number.MAX_SAFE_INTEGER, 'Activity page');
+    const perPage = queryInteger(request.query.perPage, CONSOLE_ACTIVITY_DEFAULT_PAGE_SIZE, CONSOLE_ACTIVITY_MAX_PAGE_SIZE, 'Activity page size');
+    return activity.list(page, perPage);
   });
   app.post('/api/v1/operations', async (request, reply) => {
     security.assertMutation(request);
@@ -272,6 +274,14 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
 function objectBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConsoleInputError('Request body must be a JSON object.');
   return value as Record<string, unknown>;
+}
+
+function queryInteger(value: string | undefined, fallback: number, maximum: number, label: string): number {
+  if (value === undefined) return fallback;
+  if (!/^[1-9]\d*$/u.test(value)) throw new ConsoleInputError(`${label} must be a positive integer.`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > maximum) throw new ConsoleInputError(`${label} must be between 1 and ${maximum}.`);
+  return parsed;
 }
 
 function resourceCommand(kind: string): 'library.list' | 'runtime.list' | 'registry.list' | 'stack.list' {

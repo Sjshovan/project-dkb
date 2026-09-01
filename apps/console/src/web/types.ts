@@ -103,3 +103,14 @@ export interface ActivityRecord {
   completedAt?: string;
   summary?: string;
 }
+
+export interface ActivityPage {
+  activities: ActivityRecord[];
+  pagination: {
+    page: number;
+    perPage: number;
+    total: number;
+    totalPages: number;
+    retainedLimit: number;
+  };
+}
