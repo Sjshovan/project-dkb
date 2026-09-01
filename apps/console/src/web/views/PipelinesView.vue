@@ -13,6 +13,7 @@ import PageHeader from '../components/interface/PageHeader.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
 import PipelineDetailsDrawer from '../components/resource/PipelineDetailsDrawer.vue';
+import { isHostDefault, selectOptionLabel } from '../selectOptions.js';
 import type { PipelineListing, PipelineTarget, ResourceListing } from '../types.js';
 
 const route = useRoute();
@@ -75,7 +76,7 @@ function unavailableSummary(target: PipelineTarget): string {
       <template #actions><AppButton :loading="pipelines.isFetching.value" :disabled="!selectedRuntime || pipelines.isFetching.value" @click="pipelines.refetch()"><RefreshCw v-if="!pipelines.isFetching.value" :size="16" />Refresh</AppButton></template>
     </PageHeader>
     <div class="pipeline-toolbar">
-      <FormField label="Runtime" hint="Pipeline availability is resolved in the selected Runtime’s own context."><select v-model="selectedRuntime"><option v-for="runtime in runtimes.data.value?.runtimes" :key="runtime.name" :value="runtime.name">{{ runtime.name }} · {{ runtime.library ?? 'No Library association' }}</option></select></FormField>
+      <FormField label="Runtime" hint="Pipeline availability is resolved in the selected Runtime’s own context."><select v-model="selectedRuntime"><option v-for="runtime in runtimes.data.value?.runtimes" :key="runtime.name" :value="runtime.name">{{ selectOptionLabel(runtime.name, [isHostDefault(runtime) ? 'Default' : undefined, runtime.library ?? 'No Library association']) }}</option></select></FormField>
       <FormField label="Filter Pipelines" hint="Filter the resolved list by Pipeline name or provider."><div class="pipeline-filter-control"><Search :size="17" aria-hidden="true" /><input v-model="filter" type="search" aria-label="Filter Pipelines" placeholder="Name or provider" /></div></FormField>
     </div>
     <OperationTimeline :events="events" :operation-id="operationId" @cancel="cancelCurrent" />

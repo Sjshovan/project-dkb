@@ -16,6 +16,7 @@ import PageHeader from '../components/interface/PageHeader.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
 import RegistryPackagePicker from '../components/resource/RegistryPackagePicker.vue';
+import { defaultOptionLabel } from '../selectOptions.js';
 import type { ResourceListing, ResourceRow, RuntimeStatus } from '../types.js';
 
 const props = defineProps<{ name: string }>();
@@ -123,7 +124,7 @@ function packageRoute(item: Record<string, unknown>): string | undefined {
     </section>
 
     <ActionDrawer :open="drawer === 'install'" title="Install knowledge" description="Choose a Registry, find available knowledge, and confirm the exact release. The signed Registry origin is retained with the install." submit-label="Install selected knowledge" :submit-disabled="!selectedInstallEntry || !install.identity || (selectedInstallEntry.type === 'dkb' ? !install.version : !install.revision)" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
-      <FormField label="Registry" hint="The Library default is only a convenience; any registered Registry may be selected." required><select v-model="install.registry" required @change="resetInstallPackage"><option v-for="registry in registries.data.value?.registries" :key="registry.name" :value="registry.name">{{ registry.name }}{{ registry.name === defaultRegistry?.name ? ' · default' : '' }}</option></select></FormField>
+      <FormField label="Registry" hint="The Library default is only a convenience; any registered Registry may be selected." required><select v-model="install.registry" required @change="resetInstallPackage"><option v-for="registry in registries.data.value?.registries" :key="registry.name" :value="registry.name">{{ defaultOptionLabel(registry.name, registry.name === defaultRegistry?.name) }}</option></select></FormField>
       <div class="form-field"><label for="registry-package-filter">Knowledge <b aria-hidden="true">*</b></label><RegistryPackagePicker v-model="install.identity" :registry="install.registry" input-id="registry-package-filter" @select="selectInstallPackage" /><small>Type to filter available DKBs and Collections, then choose one from the catalog.</small></div>
       <FormField v-if="selectedInstallEntry?.type === 'dkb'" label="Version" hint="The latest published version is selected automatically; enter another exact version if needed." required><input v-model="install.version" autocomplete="off" placeholder="1.0.0" required /></FormField>
       <FormField v-else-if="selectedInstallEntry?.type === 'collection'" label="Revision" hint="The latest immutable Collection revision is selected automatically." required><input v-model.number="install.revision" type="number" min="1" step="1" required /></FormField>

@@ -15,6 +15,7 @@ import PageHeader from '../components/interface/PageHeader.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
 import RemoteSourceInventory from '../components/resource/RemoteSourceInventory.vue';
+import { defaultOptionLabel, isHostDefault, selectOptionLabel } from '../selectOptions.js';
 import type { ResourceListing, ResourceRow } from '../types.js';
 
 const props = defineProps<{ registry: string; kind: 'dkb' | 'collection'; namespace: string; name: string }>();
@@ -197,14 +198,14 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
     </template>
 
     <ActionDrawer :open="drawer === 'install'" :title="`Install ${identity}`" description="Choose an exact release, compatible build target, and any registered destination Library." submit-label="Install signed release" :submit-disabled="props.kind === 'dkb' && (!selectedVersion || !selectedTarget)" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitInstall">
-      <FormField label="Library" hint="This install records the current Registry as package origin without changing the Library default." required><select v-model="installLibrary" required><option v-for="library in installLibraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}{{ matchingLibraries.some((matched) => matched.name === library.name) ? ' · default Registry' : '' }}</option></select></FormField>
+      <FormField label="Library" hint="This install records the current Registry as package origin without changing the Library default." required><select v-model="installLibrary" required><option v-for="library in installLibraries" :key="library.name" :value="library.name">{{ selectOptionLabel(library.displayName ?? library.name, [isHostDefault(library) ? 'Default Library' : undefined, matchingLibraries.some((matched) => matched.name === library.name) ? 'Registry default' : undefined]) }}</option></select></FormField>
       <FormField v-if="props.kind === 'dkb'" label="Version" hint="The exact immutable source release." required><select v-model="selectedVersion" required><option v-for="item in packageDetail?.versions" :key="item.version" :value="item.version">{{ item.version }} · {{ item.status }}</option></select></FormField>
-      <FormField v-if="props.kind === 'dkb'" label="Retrieval target" hint="Only published signed builds are installable." required><select v-model="selectedTarget" required><option v-for="target in targets" :key="target" :value="target">{{ target }}</option></select></FormField>
+      <FormField v-if="props.kind === 'dkb'" label="Retrieval target" hint="Only published signed builds are installable." required><select v-model="selectedTarget" required><option v-for="target in targets" :key="target" :value="target">{{ defaultOptionLabel(target, target === release?.defaultTarget) }}</option></select></FormField>
       <FormField v-else label="Revision" hint="Collection revisions are immutable." required><select v-model.number="selectedRevision" required><option v-for="item in collectionDetail?.entry.revisions" :key="item.revision" :value="item.revision">Revision {{ item.revision }} · {{ formatDate(item.publishedAt) }}</option></select></FormField>
       <p class="form-notice">The Registry credential stays on this host. The browser never receives it.</p>
     </ActionDrawer>
     <ActionDrawer :open="drawer === 'connect'" :title="`Set ${props.registry} as Library default`" description="This changes only the selected Library’s default package source. Existing packages keep their exact Registry origins." submit-label="Set as default" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitConnect">
-      <FormField label="Library" hint="Choose a host Library that is not currently connected to this Registry." required><select v-model="connectLibrary" required><option v-for="library in disconnectedLibraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}</option></select></FormField>
+      <FormField label="Library" hint="Choose a host Library that is not currently connected to this Registry." required><select v-model="connectLibrary" required><option v-for="library in disconnectedLibraries" :key="library.name" :value="library.name">{{ defaultOptionLabel(library.displayName ?? library.name, isHostDefault(library)) }}</option></select></FormField>
       <p class="form-notice"><Link2 :size="16" /> Future Registry browsing and installs for this Library will use {{ props.registry }}. This is an explicit configuration change.</p>
       <EmptyState v-if="!disconnectedLibraries.length" title="No Library is available to connect" message="Register a Library first, then return to this Registry entry." />
     </ActionDrawer>

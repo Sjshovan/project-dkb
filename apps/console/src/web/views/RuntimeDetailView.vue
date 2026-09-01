@@ -13,6 +13,7 @@ import FormField from '../components/interface/FormField.vue';
 import PageHeader from '../components/interface/PageHeader.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
+import { defaultOptionLabel, isHostDefault, selectOptionLabel } from '../selectOptions.js';
 import type { PipelineListing, ResourceListing, ResourceRow, RuntimeDetail } from '../types.js';
 
 const props = defineProps<{ name: string }>();
@@ -140,12 +141,12 @@ function libraryLabel(library: ResourceRow): string {
     </template>
 
     <ActionDrawer :open="drawer === 'library'" title="Change Serving Library" description="DKB prepares the complete destination build graph, then changes only this Runtime’s binding." submit-label="Prepare and switch" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="changeLibrary">
-      <FormField v-if="!isRemote" label="Library" hint="Any registered local Library can be served by multiple Runtimes." required><select v-model="selectedLibrary" required><option v-for="library in libraries.data.value?.libraries" :key="library.name" :value="library.name">{{ libraryLabel(library) }}</option></select></FormField>
+      <FormField v-if="!isRemote" label="Library" hint="Any registered local Library can be served by multiple Runtimes." required><select v-model="selectedLibrary" required><option v-for="library in libraries.data.value?.libraries" :key="library.name" :value="library.name">{{ defaultOptionLabel(libraryLabel(library), isHostDefault(library)) }}</option></select></FormField>
       <FormField v-else label="Runtime Library handle" hint="Remote Runtimes resolve operator-defined handles locally; this Console never sends host filesystem paths." required><input v-model="remoteHandle" autocomplete="off" placeholder="shared-knowledge" required /></FormField>
       <p class="form-notice">The current Library and Pipeline remain active if preparation or validation fails.</p>
     </ActionDrawer>
     <ActionDrawer :open="drawer === 'pipeline'" title="Change Active Pipeline" description="Select one resolved Pipeline available to this Runtime. Existing immutable builds are reused." submit-label="Prepare and switch" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="changePipeline">
-      <FormField label="Pipeline" hint="Origin, provider health, and package coverage are shown on the Pipelines page." required><select v-model="selectedPipeline" required><option v-for="target in pipelines.data.value?.targets" :key="target.name" :value="target.name">{{ target.name }} · {{ target.coverage.ready }}/{{ target.coverage.total }} ready · {{ target.health }}</option></select></FormField>
+      <FormField label="Pipeline" hint="Origin, provider health, and package coverage are shown on the Pipelines page." required><select v-model="selectedPipeline" required><option v-for="target in pipelines.data.value?.targets" :key="target.name" :value="target.name">{{ selectOptionLabel(target.name, [target.active ? 'Active' : undefined, `${target.coverage.ready}/${target.coverage.total} ready`, target.health]) }}</option></select></FormField>
       <RouterLink class="form-link" :to="`/pipelines?runtime=${encodeURIComponent(props.name)}`">Compare Pipeline details</RouterLink>
     </ActionDrawer>
   </div>

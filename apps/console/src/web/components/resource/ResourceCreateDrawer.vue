@@ -2,6 +2,7 @@
 import { computed, reactive, watch } from 'vue';
 import ActionDrawer from '../interface/ActionDrawer.vue';
 import FormField from '../interface/FormField.vue';
+import { defaultOptionLabel, isHostDefault } from '../../selectOptions.js';
 import type { PipelineTarget, ResourceKind, ResourceRow } from '../../types.js';
 
 const props = defineProps<{ open: boolean; kind: ResourceKind; libraries: ResourceRow[]; pipelines?: PipelineTarget[]; busy?: boolean }>();
@@ -36,8 +37,8 @@ function submit(): void {
     <FormField v-if="kind === 'libraries'" label="Host name" hint="Optional short name used only on this machine."><input v-model="form.name" autocomplete="off" /></FormField>
     <FormField v-if="kind === 'runtimes' || kind === 'registries'" label="URL" required><input v-model="form.url" type="url" inputmode="url" placeholder="http://127.0.0.1:7331" required /></FormField>
     <FormField v-if="kind === 'runtimes'" label="Runtime kind"><select v-model="form.kind"><option value="remote">Remote</option><option value="docker">Docker</option><option value="process">Process</option></select></FormField>
-    <FormField v-if="kind === 'runtimes'" label="Library" hint="Optional host Library association."><select v-model="form.library"><option value="">No association</option><option v-for="library in libraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}</option></select></FormField>
-    <FormField v-if="kind === 'stacks'" label="Library" hint="The Stack Runtime serves this Library without copying its knowledge." required><select v-model="form.library" required><option v-for="library in libraries" :key="library.name" :value="library.name">{{ library.displayName ?? library.name }}</option></select></FormField>
+    <FormField v-if="kind === 'runtimes'" label="Library" hint="Optional host Library association."><select v-model="form.library"><option value="">No association</option><option v-for="library in libraries" :key="library.name" :value="library.name">{{ defaultOptionLabel(library.displayName ?? library.name, isHostDefault(library)) }}</option></select></FormField>
+    <FormField v-if="kind === 'stacks'" label="Library" hint="The Stack Runtime serves this Library without copying its knowledge." required><select v-model="form.library" required><option v-for="library in libraries" :key="library.name" :value="library.name">{{ defaultOptionLabel(library.displayName ?? library.name, isHostDefault(library)) }}</option></select></FormField>
     <FormField v-if="kind === 'stacks'" label="Runtime Pipeline" hint="Select a resolved target already known to this host, or use the bundled distribution default."><select v-model="form.pipeline"><option value="">Distribution default</option><option v-for="pipeline in pipelines" :key="pipeline.name" :value="pipeline.name">{{ pipeline.name }} · {{ pipeline.providers.join(' → ') }}</option></select></FormField>
     <FormField v-if="kind === 'stacks'" label="Registry compiler target" hint="Independent from the Runtime Pipeline. Leave empty to use the Registry default."><select v-model="form.compilerTarget"><option value="">Registry default</option><option v-for="pipeline in pipelines" :key="pipeline.name" :value="pipeline.name">{{ pipeline.name }}</option></select></FormField>
     <label v-if="kind === 'runtimes' || kind === 'registries'" class="checkbox-field"><input v-model="form.verify" type="checkbox" /><span><b>Verify before saving</b><small>The resource is still registered with a recovery warning if it is offline.</small></span></label>
