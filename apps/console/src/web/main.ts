@@ -1,4 +1,7 @@
 import '@fontsource-variable/instrument-sans';
+import 'datatables.net-dt/css/dataTables.dataTables.css';
+import 'datatables.net-columncontrol-dt/css/columnControl.dataTables.css';
+import 'datatables.net-responsive-dt/css/responsive.dataTables.css';
 import 'vue-sonner/style.css';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { createApp } from 'vue';

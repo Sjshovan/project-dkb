@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const CONSOLE_ACTIVITY_RETENTION_LIMIT = 500;
 export const CONSOLE_ACTIVITY_DEFAULT_PAGE_SIZE = 25;
-export const CONSOLE_ACTIVITY_MAX_PAGE_SIZE = 50;
+export const CONSOLE_ACTIVITY_MAX_PAGE_SIZE = CONSOLE_ACTIVITY_RETENTION_LIMIT;
 
 export interface ConsoleActivity {
   id: string;

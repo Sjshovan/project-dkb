@@ -224,18 +224,16 @@ main { min-width: 0; padding-bottom: 84px; }
 .operation-progress progress::-webkit-progress-value { background: var(--primary); }
 
 .back-link { display: inline-flex; min-height: 44px; align-items: center; gap: .4rem; margin-bottom: .75rem; color: var(--primary); font-weight: 650; }
-.package-list, .activity-list { overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
-.package-list article, .activity-list article { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: .7rem; padding: .85rem 1rem; border-bottom: 1px solid var(--border); }
-.package-list article:last-child, .activity-list article:last-child { border-bottom: 0; }
-.package-list article > svg, .activity-list article > svg { margin-top: .1rem; color: var(--primary); }
-.package-list article > div, .activity-list article > div { display: flex; min-width: 0; flex-direction: column; }
+.package-list { overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.package-list article { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: .7rem; padding: .85rem 1rem; border-bottom: 1px solid var(--border); }
+.package-list article:last-child { border-bottom: 0; }
+.package-list article > svg { margin-top: .1rem; color: var(--primary); }
+.package-list article > div { display: flex; min-width: 0; flex-direction: column; }
 .package-list article .package-actions { flex-direction: row; flex-wrap: wrap; }
 .package-detail-link { display: flex; min-width: 0; flex-direction: column; border-radius: 4px; }
 .package-detail-link strong { color: var(--foreground); }
 .package-detail-link:hover strong { color: var(--primary); }
-.activity-list p { margin-top: .25rem; color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
 .console-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; padding: .7rem .8rem; background: color-mix(in srgb, var(--subtle) 38%, var(--surface)); }
-.console-pagination--top { border-bottom: 1px solid var(--border); }
 .console-pagination--bottom { border-top: 1px solid var(--border); }
 .console-pagination__summary { min-width: 0; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
 .console-pagination__controls { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; }
@@ -245,6 +243,58 @@ main { min-width: 0; padding-bottom: 84px; }
 .console-pagination__button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .console-pagination__button:disabled { opacity: .35; cursor: not-allowed; }
 .console-pagination__ellipsis { display: grid; width: 24px; height: 36px; place-items: center; color: var(--muted); }
+
+.activity-table-shell { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.activity-table-shell .dt-container { color: var(--foreground); font-family: inherit; }
+.activity-table-shell .dt-layout-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .75rem 1rem; margin: 0; padding: .75rem 1rem; }
+.activity-table-shell .dt-layout-row:first-child { border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--subtle) 45%, var(--surface)); }
+.activity-table-shell .dt-layout-row:last-child { border-top: 1px solid var(--border); background: color-mix(in srgb, var(--subtle) 32%, var(--surface)); }
+.activity-table-shell .dt-layout-row.dt-layout-table { padding: 0; border: 0; background: transparent; }
+.activity-table-shell .dt-layout-cell { min-width: 0; }
+.activity-table-shell .dt-length,
+.activity-table-shell .dt-search { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .8rem; font-weight: 650; }
+.activity-table-shell .dt-input { min-height: 40px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--background); color: var(--foreground); }
+.activity-table-shell .dt-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 24%, transparent); outline-offset: 0; }
+.activity-table-shell .dt-length select.dt-input { min-width: 4.5rem; padding: .45rem 1.8rem .45rem .65rem; }
+.activity-table-shell .dt-search input.dt-input { width: min(19rem, 42vw); padding: .5rem .7rem; }
+.activity-table-shell .dt-scroll { min-width: 0; }
+.activity-table-shell .dt-scroll-body { scrollbar-color: color-mix(in srgb, var(--muted) 48%, transparent) transparent; scrollbar-gutter: stable; }
+.activity-table-shell table.dataTable { width: 100% !important; margin: 0 !important; border-collapse: collapse; color: var(--foreground); }
+.activity-table-shell table.dataTable > thead > tr > th { padding: .7rem .8rem; border-bottom: 1px solid var(--border); background: var(--subtle); color: var(--muted); font-size: .72rem; font-weight: 720; text-align: left; text-transform: uppercase; letter-spacing: .05em; }
+.activity-table-shell table.dataTable > thead > tr > th.dt-ordering-asc,
+.activity-table-shell table.dataTable > thead > tr > th.dt-ordering-desc { color: var(--foreground); }
+.activity-table-shell table.dataTable > tbody > tr { background: transparent; }
+.activity-table-shell table.dataTable > tbody > tr:hover { background: color-mix(in srgb, var(--subtle) 58%, transparent); }
+.activity-table-shell table.dataTable > tbody > tr > td { padding: .7rem .8rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.activity-table-shell table.dataTable > tbody > tr:last-child > td { border-bottom: 0; }
+.activity-table-shell table.dataTable td:nth-child(1),
+.activity-table-shell table.dataTable td:nth-child(2) { font-weight: 650; }
+.activity-table-shell table.dataTable td:nth-child(3) { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-table-shell table.dataTable td:nth-child(5) { max-width: 34rem; overflow-wrap: anywhere; color: var(--muted); font-size: .84rem; }
+.activity-table-shell .dt-column-header { gap: .35rem; }
+.activity-table-shell .dtcc { margin-left: auto; }
+.activity-table-shell .dtcc-button,
+.activity-table-shell .dtcc > button { border-radius: 7px; color: var(--muted); }
+.activity-table-shell .dtcc-button:hover,
+.activity-table-shell .dtcc > button:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
+.activity-table-shell .dt-info { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.activity-table-shell .dt-paging { display: flex; align-items: center; justify-content: flex-end; gap: .2rem; }
+.activity-table-shell .dt-paging .dt-paging-button { display: inline-grid; min-width: 36px; min-height: 36px; margin: 0; padding: .45rem .65rem !important; place-items: center; border: 1px solid transparent !important; border-radius: 8px; background: transparent !important; color: var(--muted) !important; font-weight: 700; font-variant-numeric: tabular-nums; box-shadow: none !important; }
+.activity-table-shell .dt-paging .dt-paging-button:hover:not(.disabled):not(.current) { border-color: var(--border) !important; background: var(--surface) !important; color: var(--foreground) !important; }
+.activity-table-shell .dt-paging .dt-paging-button.current { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)) !important; background: var(--primary) !important; color: var(--primary-ink) !important; }
+.activity-table-shell .dt-paging .dt-paging-button.disabled { color: var(--muted) !important; opacity: .35; }
+.activity-table-shell .dt-paging .dt-paging-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dtcc-dropdown { z-index: 90; min-width: 15rem; padding: .45rem; border: 1px solid var(--border) !important; border-radius: 10px; background: var(--surface) !important; color: var(--foreground); box-shadow: 0 16px 42px rgba(8, 8, 13, .22); }
+.dtcc-dropdown input,
+.dtcc-dropdown select { min-height: 40px; border-color: var(--border-strong) !important; border-radius: 8px; background: var(--background) !important; color: var(--foreground) !important; }
+.dtcc-dropdown .dtcc-list-title,
+.dtcc-dropdown .dtcc-search-title { color: var(--muted); font-size: .72rem; font-weight: 720; text-transform: uppercase; letter-spacing: .05em; }
+.dtcc-dropdown .dtcc-button { min-height: 40px; border-radius: 8px; color: var(--foreground); }
+.dtcc-dropdown .dtcc-button:hover { background: var(--subtle); color: var(--primary); }
+.dtcc-dropdown .dtcc-list-selectAll,
+.dtcc-dropdown .dtcc-list-selectNone { color: var(--primary); }
+.activity-table-shell table.dataTable > tbody > tr.child ul.dtr-details { width: 100%; }
+.activity-table-shell table.dataTable > tbody > tr.child span.dtr-title { color: var(--muted); font-size: .72rem; font-weight: 720; text-transform: uppercase; letter-spacing: .04em; }
 
 .registry-context-card { margin-bottom: 1rem; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .registry-context-card dl { display: grid; margin: 0; padding: .4rem 1rem; }
@@ -628,6 +678,23 @@ main { min-width: 0; padding-bottom: 84px; }
 @keyframes drawer-in { from { transform: translateX(4%); opacity: .7; } }
 
 @media (max-width: 767px) {
+  .activity-table-shell .dt-layout-row { flex-direction: column; align-items: stretch; padding: .75rem; }
+  .activity-table-shell .dt-layout-cell,
+  .activity-table-shell .dt-length,
+  .activity-table-shell .dt-search { width: 100%; }
+  .activity-table-shell .dt-length,
+  .activity-table-shell .dt-search { justify-content: space-between; }
+  .activity-table-shell .dt-search input.dt-input { width: min(100%, 22rem); min-height: 44px; }
+  .activity-table-shell .dt-length select.dt-input { min-height: 44px; }
+  .activity-table-shell .dt-scroll-body { max-height: max(10rem, calc(100dvh - 40rem)) !important; }
+  .activity-table-shell .dt-layout-row:last-child { align-items: center; }
+  .activity-table-shell .dt-info { text-align: center; }
+  .activity-table-shell .dt-paging { width: 100%; justify-content: center; gap: .1rem; }
+  .activity-table-shell .dt-paging .dt-paging-button { min-width: 40px; min-height: 44px; padding-inline: .45rem !important; }
+  .activity-table-shell .dt-paging .first,
+  .activity-table-shell .dt-paging .previous,
+  .activity-table-shell .dt-paging .next,
+  .activity-table-shell .dt-paging .last { min-width: 36px; padding-inline: .25rem !important; }
   .console-pagination { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: .7rem; }
   .console-pagination__summary { text-align: center; }
   .console-pagination__controls { width: 100%; justify-content: center; }

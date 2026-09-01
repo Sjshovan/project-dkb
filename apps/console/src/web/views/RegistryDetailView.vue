@@ -70,7 +70,6 @@ watch(lastPage, (value) => {
         <section v-else-if="catalog.isError.value" class="recovery-panel"><div><h2>Catalog unavailable</h2><p>{{ catalog.error.value?.message }}</p><AppButton @click="catalog.refetch()">Retry</AppButton></div></section>
         <EmptyState v-else-if="entries.length === 0" title="No matching Registry entries" message="Try a broader search or choose another catalog type." />
         <template v-else>
-          <ConsolePagination v-if="lastPage > 1" :page="page" :total-pages="lastPage" :summary="paginationSummary" pagination-label="Registry catalog pagination" placement="top" :disabled="catalog.isFetching.value" @update:page="page = $event" />
           <div class="catalog-grid">
             <RouterLink v-for="entry in entries" :key="`${entry.type}:${entry.id}`" class="catalog-entry" :to="entryRoute(entry)">
               <component :is="entry.type === 'dkb' ? PackageOpen : UsersRound" :size="20" />

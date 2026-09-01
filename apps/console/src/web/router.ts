@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import ActivityView from './views/ActivityView.vue';
 import InstalledEntryDetailView from './views/InstalledEntryDetailView.vue';
 import LibraryDetailView from './views/LibraryDetailView.vue';
 import MoreView from './views/MoreView.vue';
@@ -25,7 +24,7 @@ export const router = createRouter({
     { path: '/registries/:registry/dkbs/:namespace/:name', name: 'registry-dkb', component: RegistryEntryDetailView, props: (route) => ({ ...route.params, kind: 'dkb' }) },
     { path: '/registries/:registry/collections/:namespace/:name', name: 'registry-collection', component: RegistryEntryDetailView, props: (route) => ({ ...route.params, kind: 'collection' }) },
     { path: '/stacks', name: 'stacks', component: ResourceView, props: { kind: 'stacks' } },
-    { path: '/activity', name: 'activity', component: ActivityView },
+    { path: '/activity', name: 'activity', component: () => import('./views/ActivityView.vue') },
     { path: '/more', name: 'more', component: MoreView },
   ],
 });

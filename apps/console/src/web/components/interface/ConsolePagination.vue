@@ -16,9 +16,8 @@ const props = withDefaults(defineProps<{
   totalPages: number;
   summary: string;
   paginationLabel: string;
-  placement?: 'top' | 'bottom';
   disabled?: boolean;
-}>(), { placement: 'bottom', disabled: false });
+}>(), { disabled: false });
 
 const emit = defineEmits<{ 'update:page': [page: number] }>();
 
@@ -33,10 +32,11 @@ function selectPage(page: number): void {
     :page="props.page"
     :total="Math.max(1, props.totalPages)"
     :items-per-page="1"
-    :sibling-count="1"
+    :sibling-count="0"
+    show-edges
     :disabled="props.disabled"
     :aria-label="props.paginationLabel"
-    :class="['console-pagination', `console-pagination--${props.placement}`]"
+    class="console-pagination console-pagination--bottom"
     @update:page="selectPage"
   >
     <p class="console-pagination__summary" aria-live="polite">{{ props.summary }}</p>

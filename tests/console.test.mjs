@@ -164,9 +164,14 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.equal(activity.pagination.perPage, 1);
     assert.equal(activity.pagination.retainedLimit, 500);
     assert.ok(activity.pagination.total >= 1);
+    const retainedActivityResponse = await fetch(`${server.url}/api/v1/activity?page=1&perPage=500`, { headers: { cookie } });
+    assert.equal(retainedActivityResponse.status, 200);
+    const retainedActivity = await retainedActivityResponse.json();
+    assert.equal(retainedActivity.pagination.perPage, 500);
+    assert.ok(retainedActivity.activities.length <= 500);
     const invalidActivityPage = await fetch(`${server.url}/api/v1/activity?page=0`, { headers: { cookie } });
     assert.equal(invalidActivityPage.status, 400);
-    const oversizedActivityPage = await fetch(`${server.url}/api/v1/activity?perPage=51`, { headers: { cookie } });
+    const oversizedActivityPage = await fetch(`${server.url}/api/v1/activity?perPage=501`, { headers: { cookie } });
     assert.equal(oversizedActivityPage.status, 400);
 
     const verification = await fetch(`${server.url}/api/v1/operations`, {
