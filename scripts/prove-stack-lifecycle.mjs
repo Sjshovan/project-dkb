@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
+import { proofStackLibraryRoot } from './lib/disposable-stack.mjs';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
+import { proveSignedMultispace } from './lib/multispace-lifecycle.mjs';
+import { requiredProofServices, provisionMultispaceServices } from './lib/multispace-fixture.mjs';
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,7 +20,7 @@ const stackRoot = path.join(stackStateRoot, stackName);
 const stackEnvironment = parseEnvironment(await fs.readFile(path.join(stackRoot, 'stack.env'), 'utf8'));
 const registryUrl = `http://127.0.0.1:${stackEnvironment.DKB_REGISTRY_PORT}`;
 const runtimeUrl = `http://127.0.0.1:${stackEnvironment.DKB_RUNTIME_PORT}`;
-const libraryRoot = path.join(stackRoot, 'runtime');
+const libraryRoot = proofStackLibraryRoot(stackRoot, stackEnvironment);
 const namespace = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_NAMESPACE, 'Registry bootstrap namespace');
 const registryToken = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_TOKEN, 'Registry bootstrap token');
 const mcpToken = required(stackEnvironment.DKB_MCP_BEARER_TOKEN, 'MCP bearer token');
@@ -26,8 +28,9 @@ const runtimeAdminToken = required(stackEnvironment.DKB_RUNTIME_ADMIN_TOKEN, 'Ru
 const proofVersion = process.env.DKB_PROOF_VERSION ?? `0.0.${Math.floor(Date.now() / 1000)}`;
 const updateVersion = nextPatch(proofVersion, 1);
 const retryVersion = nextPatch(proofVersion, 2);
-const initialTarget = required(stackEnvironment.DKB_PIPELINE_TARGET, 'Stack pipeline target');
+const initialTarget = required(stackEnvironment.DKB_RUNTIME_PIPELINE_TARGET, 'Stack Runtime pipeline target');
 const alternateTarget = process.env.DKB_PROOF_ALTERNATE_TARGET?.trim() || null;
+const changedTarget = process.env.DKB_PROOF_CHANGED_TARGET?.trim() || null;
 const marineId = `@${namespace}/marine-proof`;
 const systemsId = `@${namespace}/systems-proof`;
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-lifecycle-'));
@@ -39,11 +42,17 @@ let currentStep = 'startup';
 try {
   step(`verify ${initialTarget} runs only its required provider services`);
   await assertStackProviderServices([initialTarget]);
+  if (alternateTarget) {
+    step('explicitly provision and attest only the additional proof recipe services');
+    await provisionMultispaceServices({ stackName, targets: [initialTarget, alternateTarget, changedTarget] });
+    await assertStackProviderServices([initialTarget, alternateTarget]);
+  }
 
   step('write synthetic corpus');
   await writeDkb(marineRoot, marineId, proofVersion, {
     'whale-behavior.md': '# Whale Behavior Notes\n\nMarker fact WHALE-BUBBLE-73: humpback whales use coordinated bubble-net feeding to concentrate prey before surfacing through the bubble column.\n',
     'reef-signals.md': '# Reef Signals\n\nMarker fact REEF-CODE-44: parrotfish grazing can support reef health by reducing algal overgrowth on coral surfaces.\n',
+    'feeding-table.html': '<!doctype html><html><head><title>Whale feeding observations</title></head><body><h1>Feeding records</h1><table><caption>Verified feeding signals</caption><thead><tr><th>Species</th><th>Technique</th><th>Signal</th></tr></thead><tbody><tr><td>Humpback whale</td><td>Coordinated bubble-net feeding</td><td>TABLE-DENSE-46</td></tr><tr><td>Blue whale</td><td>Lunge feeding on krill</td><td>OPEN-OCEAN-12</td></tr></tbody></table></body></html>\n',
   });
   await writeDkb(systemsRoot, systemsId, proofVersion, {
     'runtime-design.md': '# Runtime Design Notes\n\nMarker fact RUNTIME-MOUNT-28: every comparative MCP server mounts the same read-only corpus at `/corpus` so benchmark inputs remain identical.\n\nRelease marker SYSTEMS-V1-17 identifies the initial systems package.\n',
@@ -51,9 +60,11 @@ try {
   });
 
   step(`publish ${marineId}@${proofVersion}`);
+  const publicationCatalog = await client.pipelines();
+  assert.equal(publicationCatalog.default, initialTarget);
   await runCli(['publish', marineRoot, '--url', registryUrl]);
-  step(`publish ${systemsId}@${proofVersion}`);
-  await runCli(['publish', systemsRoot, '--url', registryUrl]);
+  step(`publish ${systemsId}@${proofVersion} with an explicit advertised Pipeline`);
+  await runCli(['publish', systemsRoot, '--url', registryUrl, '--pipeline', initialTarget]);
   const systemsReleaseBefore = await client.packageRelease(systemsId, proofVersion);
 
   step('install both signed releases');
@@ -121,63 +132,14 @@ try {
 
   let multiSpace = null;
   if (alternateTarget) {
-    step(`start ${alternateTarget} compiler services without changing the active Runtime`);
-    await runCli(['stack', 'up', stackName, '--target', alternateTarget]);
-    assert.equal((await runtimeStatus()).runtimeLock?.target, initialTarget);
-    await assertStackProviderServices([initialTarget, alternateTarget]);
-    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
-
-    step(`switch the complete Runtime atomically to ${alternateTarget}`);
-    const switched = await runCli([
-      'pipeline', 'use', alternateTarget, libraryRoot,
-      '--runtime-url', runtimeUrl,
-      '--registry-url', registryUrl,
-    ]);
-    assert.equal(switched.target, alternateTarget);
-    assert.equal(switched.packageCount, 2);
-    assert.ok(switched.packages.every((item) => item.preparation === 'downloaded' || item.preparation === 'retained'));
-    step(`retire provider services no longer required by ${alternateTarget}`);
-    await runCli(['stack', 'up', stackName, '--target', alternateTarget]);
-    await assertStackProviderServices([alternateTarget]);
-    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
-    await assertRuntimeMarker('RUNTIME-MOUNT-28', true);
-    const alternateSafe = await assertRuntimeMarker('SAFE-SOURCE-91', true);
-    assert.doesNotMatch(JSON.stringify(alternateSafe), /PWNED/u);
+    multiSpace = await proveSignedMultispace({
+      client, runCli, step, stackName, stackRoot, libraryRoot, runtimeUrl, registryUrl, registryToken,
+      initialTarget, alternateTarget, changedTarget, repositoryRoot,
+      secondaryUrl: process.env.DKB_PROOF_RUNTIME_B_URL,
+      packages: [{ id: marineId, version: proofVersion }, { id: systemsId, version: updateVersion }],
+      assertStackProviderServices, assertRuntimeMarker, runtimeRetrieve,
+    });
     assert.equal((await runtimeRetrieve('What is the launch code for the moon base?')).sufficiency?.matchedNeed, false);
-
-    const marineBuilds = await runCli(['build', 'list', registryPackagePath(libraryRoot, marineId)]);
-    const systemsBuilds = await runCli(['build', 'list', registryPackagePath(libraryRoot, systemsId)]);
-    for (const builds of [marineBuilds, systemsBuilds]) {
-      assert.equal(builds.evidence.length, 1, 'targets sharing ingestion must reuse one Evidence Build');
-      assert.ok(builds.retrieval.length >= 2, 'alternate target did not retain both Retrieval Builds');
-    }
-
-    step(`start ${initialTarget} services before switching back from ${alternateTarget}`);
-    await runCli(['stack', 'up', stackName, '--target', initialTarget]);
-    assert.equal((await runtimeStatus()).runtimeLock?.target, alternateTarget);
-    await assertStackProviderServices([alternateTarget, initialTarget]);
-    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
-
-    step(`switch back to retained ${initialTarget} builds without Registry compilation`);
-    const switchedBack = await runCli([
-      'pipeline', 'use', initialTarget, libraryRoot,
-      '--runtime-url', runtimeUrl,
-      '--registry-url', registryUrl,
-    ]);
-    assert.equal(switchedBack.target, initialTarget);
-    assert.ok(switchedBack.packages.every((item) => item.preparation === 'retained'));
-    step(`retire provider services no longer required by ${initialTarget}`);
-    await runCli(['stack', 'up', stackName, '--target', initialTarget]);
-    await assertStackProviderServices([initialTarget]);
-    await assertRuntimeMarker('WHALE-BUBBLE-73', true);
-    await assertRuntimeMarker('SYSTEMS-UPDATE-62', true);
-    assert.equal((await runtimeStatus()).runtimeLock?.target, initialTarget);
-    multiSpace = {
-      alternateTarget,
-      evidenceBuildsPerPackage: 1,
-      retrievalBuildsPerPackage: 2,
-      switchBackPreparation: 'retained',
-    };
   }
 
   let failureRollback = 'covered by atomic Runtime tests';
@@ -228,7 +190,7 @@ try {
       alternateTarget
       && alternateTarget !== initialTarget
       && usesMeilisearch(alternateTarget),
-    );
+    ) + Number(Boolean(changedTarget && alternateTarget && usesMeilisearch(alternateTarget)));
     await assertMeilisearchIndexCount(retainedMarineMeilisearchSpaces + 1);
     failureRollback = true;
     retryAfterFailure = true;
@@ -317,10 +279,8 @@ async function assertStackProviderServices(targets) {
   const status = await runCli(['stack', 'status', stackName]);
   const profiled = DEFAULT_DKB_DISTRIBUTION.services.filter((service) => service.stack?.composeProfile);
   const known = new Set(profiled.map((service) => service.stack.composeService ?? service.id));
-  const expected = profiled
-    .filter((service) => targets.some((target) => service.requiredBy.includes(target)))
-    .map((service) => service.stack.composeService ?? service.id)
-    .sort();
+  const config = JSON.parse(await fs.readFile(path.join(stackRoot, 'compiler-context/.dkb/config.json'), 'utf8'));
+  const expected = requiredProofServices(targets, config.targets ?? {});
   const running = status.services
     .filter((service) => known.has(service.name) && service.status === 'running')
     .map((service) => service.name)
@@ -334,7 +294,7 @@ async function setMeilisearchRunning(running) {
     '--env-file',
     path.join(stackRoot, 'stack.env'),
     '--file',
-    path.join(repositoryRoot, 'deploy', 'compose.yaml'),
+    process.env.DKB_STACK_COMPOSE_FILE ?? path.join(repositoryRoot, 'deploy', 'compose.yaml'),
     '--profile',
     'meilisearch',
     running ? 'up' : 'stop',

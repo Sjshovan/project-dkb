@@ -10,7 +10,8 @@
     "./faissStore.js": { "types": "./dist/faissStore.d.ts", "import": "./dist/faissStore.js" }
   },
   "files": ["dist/", "!dist/.tsbuildinfo", "python/faiss/faiss_helper.py", "python/service.py", "python/requirements.txt", "python/Dockerfile"],
-  "scripts": { "build": "tsc -b", "check": "tsc -b --pretty false" },
+  "scripts": { "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs .", "check": "tsc -b --pretty false", "prepack": "node ../../scripts/generate-provider-integrity.mjs --verify --quiet ." },
+  "bundleDependencies": ["@sjshovan/dkb-pipeline", "@sjshovan/dkb-protocol"],
   "dependencies": {
     "@sjshovan/dkb-pipeline": "0.2.0",
     "@sjshovan/dkb-protocol": "2.0.0"

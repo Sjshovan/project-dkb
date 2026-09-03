@@ -73,9 +73,18 @@ agent can distinguish endpoints. Collections and their member DKBs are resolved
 through the Library ledger; MCP does not scan folders or maintain a second
 package list. Stale Runtime activations fail closed.
 
+Search relevance belongs to the selected retrieval provider. MCP does not require
+optional keyword diagnostics or apply a second ranking/filtering policy to its
+validated results. The bundled hybrid provider rejects weak meaningful-token
+coverage before results reach any transport; a lexical or other custom provider
+may use a different relevance method. `sufficiency.matchedNeed` reports whether
+the provider returned usable hits, while `confidence` is `null` because arbitrary
+provider scores are not calibrated answer probabilities. Agents must still
+fetch and assess the actual evidence before answering.
+
 ## Verified developer-preview proof
 
-The complete synthetic proof passed on 2026-08-30 through a disposable HTTPS
+The historical synthetic proof passed on 2026-08-30 through a disposable HTTPS
 tunnel and private ChatGPT development app:
 
 - ChatGPT discovered exactly `search` and `fetch`.
@@ -96,3 +105,8 @@ request returned it successfully; permanent browser validation should use a
 stable HTTPS origin rather than an ngrok proof URL. Follow the
 [official ChatGPT connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt)
 for future proofs and deployments.
+
+That run predates the current API-v3 hardening. The current real lexical proof
+checks equivalent CLI/HTTP/MCP Evidence identities, audit build chains,
+authentication, and unrelated-query insufficiency locally. A fresh ChatGPT
+proof against the final service images is still required.

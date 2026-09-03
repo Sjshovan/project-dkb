@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish packages and create a private-repository draft release
+        description: Publish verified candidates (blocked while required packages are private) and create a draft release
         required: true
         default: false
         type: boolean
@@ -48,15 +48,18 @@ jobs:
       - run: npm run package:check
       - run: npm run temp:audit
 
-      - name: Pack CLI release
-        run: |
-          mkdir -p release
-          npm pack --workspace @sjshovan/dkb-cli --pack-destination release
+      - name: Pack the complete verified distribution once
+        run: node scripts/package-distribution.mjs --output release
+
+      - name: Verify exact archives and dependency completeness
+        run: node scripts/release-package-candidates.mjs --directory release
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dkb-cli-private-candidate
-          path: release/*.tgz
+          name: dkb-distribution-private-candidate
+          path: |
+            release/*.tgz
+            release/candidates.json
           if-no-files-found: error
 
       - name: Publish private GitHub Packages
@@ -69,16 +72,16 @@ jobs:
             echo "Pending Changesets remain. Run npm run version:packages, review, commit, and rerun." >&2
             exit 1
           }
-          npx changeset publish
+          node scripts/release-package-candidates.mjs --directory release --publish
 
       - name: Create private-repository draft release
         if: ${{ inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="$(node -p "require('./apps/cli/package.json').version")"
+          version="$(node -p "require('./release/candidates.json').packages.find(p => p.name === '@sjshovan/dkb-cli').version")"
           tag="dkb-cli-v${version}"
-          gh release create "$tag" release/*.tgz \
+          gh release create "$tag" release/*.tgz release/candidates.json \
             --draft \
             --prerelease \
             --target "$GITHUB_SHA" \

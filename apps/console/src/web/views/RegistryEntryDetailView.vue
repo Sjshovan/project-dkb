@@ -12,11 +12,15 @@ import AppButton from '../components/interface/AppButton.vue';
 import EmptyState from '../components/interface/EmptyState.vue';
 import FormField from '../components/interface/FormField.vue';
 import PageHeader from '../components/interface/PageHeader.vue';
+import ResourceLink from '../components/interface/ResourceLink.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
+import CollectionMemberDataTable from '../components/resource/CollectionMemberDataTable.vue';
+import RegistryBuildDataTable from '../components/resource/RegistryBuildDataTable.vue';
+import RegistryVersionDataTable from '../components/resource/RegistryVersionDataTable.vue';
 import RemoteSourceInventory from '../components/resource/RemoteSourceInventory.vue';
 import { defaultOptionLabel, isHostDefault, selectOptionLabel } from '../selectOptions.js';
-import type { ResourceListing, ResourceRow } from '../types.js';
+import type { RegistryPipelineCatalog, ResourceListing, ResourceRow } from '../types.js';
 
 const props = defineProps<{ registry: string; kind: 'dkb' | 'collection'; namespace: string; name: string }>();
 const router = useRouter();
@@ -26,7 +30,7 @@ const selectedVersion = ref('');
 const selectedRevision = ref<number>();
 const selectedTarget = ref('');
 const section = ref('overview');
-const drawer = ref<'install' | 'connect'>();
+const drawer = ref<'install' | 'connect' | 'build'>();
 const busy = ref(false);
 const events = ref<DkbCommandEvent[]>([]);
 const operationId = ref<string>();
@@ -37,6 +41,12 @@ const context = useQuery({
   queryFn: () => getJson<{ registry: ResourceRow; libraries: ResourceRow[] }>(`/api/v1/registries/${encodeURIComponent(props.registry)}`),
 });
 const allLibraries = useQuery({ queryKey: ['resources', 'libraries', false], queryFn: () => getJson<ResourceListing>('/api/v1/resources/libraries') });
+const registryPipelines = useQuery({
+  queryKey: computed(() => ['registry-pipelines', props.registry]),
+  queryFn: () => getJson<RegistryPipelineCatalog>(`/api/v1/registries/${encodeURIComponent(props.registry)}/pipelines`),
+  retry: false,
+});
+const selectedBuildPipeline = ref('');
 const detailUrl = computed(() => {
   const query = props.kind === 'dkb' && selectedVersion.value ? `?version=${encodeURIComponent(selectedVersion.value)}`
     : props.kind === 'collection' && selectedRevision.value ? `?revision=${selectedRevision.value}` : '';
@@ -56,6 +66,25 @@ const installLibraries = computed(() => allLibraries.data.value?.libraries ?? []
 const disconnectedLibraries = computed(() => (allLibraries.data.value?.libraries ?? []).filter((library) => !matchingLibraries.value.some((matched) => matched.name === library.name)));
 const builds = computed(() => release.value?.builds ?? []);
 const targets = computed(() => [...new Set(builds.value.filter(isInstallableBuild).map((build) => build.target))]);
+const buildPipelines = computed(() => registryPipelines.data.value?.pipelines.filter((pipeline) => pipeline.available) ?? []);
+const requestedPipeline = computed(() => buildPipelines.value.find((pipeline) => pipeline.name === selectedBuildPipeline.value));
+const buildImpact = computed(() => {
+  const pipeline = requestedPipeline.value;
+  if (!pipeline) return { status: 'Choose a Pipeline', detail: 'Select one trusted recipe advertised by this Registry.' };
+  if (builds.value.some((build) => build.retrievalProfileDigest === pipeline.retrievalProfileDigest && build.compatibilityDigest === pipeline.compatibilityDigest)) {
+    return { status: 'Already available', detail: 'This exact signed Retrieval Build is already attached to the release.' };
+  }
+  if (builds.value.some((build) => build.evidenceProfileDigest === pipeline.evidenceProfileDigest)) {
+    return { status: 'Evidence reused', detail: 'The Registry will reuse the existing Evidence Build and compile only the missing Retrieval Build.' };
+  }
+  return { status: 'New Evidence required', detail: 'This recipe changes source interpretation, so the Registry will compile a sibling Evidence Build and its Retrieval Build.' };
+});
+const canRequestBuild = computed(() => !busy.value && Boolean(context.data.value?.registry.url)
+  && !context.isFetching.value && !context.isError.value
+  && Boolean(selectedVersion.value && release.value?.version === selectedVersion.value)
+  && !query.isFetching.value && !query.isError.value
+  && !registryPipelines.isFetching.value && !registryPipelines.isError.value
+  && Boolean(requestedPipeline.value) && buildImpact.value.status !== 'Already available');
 const members = computed(() => {
   const manifest = revision.value?.manifest;
   return isRecord(manifest) && Array.isArray(manifest.members) ? manifest.members.filter(isRecord) : [];
@@ -77,13 +106,14 @@ watch(() => query.data.value, (value) => {
 }, { immediate: true });
 watch(installLibraries, (value) => { if (!installLibrary.value && value[0]) installLibrary.value = value[0].name; }, { immediate: true });
 watch(disconnectedLibraries, (value) => { if (!connectLibrary.value && value[0]) connectLibrary.value = value[0].name; }, { immediate: true });
+watch(buildPipelines, (value) => { if (!selectedBuildPipeline.value && value[0]) selectedBuildPipeline.value = value.find((pipeline) => pipeline.default)?.name ?? value[0].name; }, { immediate: true });
 
 function openInstall(): void {
   installLibrary.value = matchingLibraries.value[0]?.name ?? installLibraries.value[0]?.name ?? '';
   drawer.value = 'install';
 }
 
-async function run(commandId: 'package.install' | 'library.registry.use', input: Record<string, unknown>): Promise<void> {
+async function run(commandId: 'package.install' | 'library.registry.use' | 'registry.build', input: Record<string, unknown>): Promise<void> {
   busy.value = true;
   events.value = [];
   try {
@@ -98,6 +128,12 @@ async function run(commandId: 'package.install' | 'library.registry.use', input:
         toast.success(`${String(input.library)} connected to ${props.registry}.`);
         drawer.value = undefined;
         void Promise.all([context.refetch(), queryClient.invalidateQueries({ queryKey: ['resources'] })]);
+        return;
+      }
+      if (commandId === 'registry.build') {
+        toast.success(`${String(input.pipeline)} build requested for ${identity.value}@${selectedVersion.value}.`);
+        drawer.value = undefined;
+        void Promise.all([query.refetch(), queryClient.invalidateQueries({ queryKey: ['registry-catalog', props.registry] }), queryClient.invalidateQueries({ queryKey: ['activity'] })]);
         return;
       }
       toast.success(`${identity.value} installed.`);
@@ -132,17 +168,16 @@ function submitInstall(): void {
   });
 }
 function submitConnect(): void { if (connectLibrary.value) void run('library.registry.use', { library: connectLibrary.value, registry: props.registry }); }
+function submitBuild(): void {
+  const registryUrl = context.data.value?.registry.url;
+  if (!canRequestBuild.value || !registryUrl) return;
+  void run('registry.build', { url: registryUrl, identity: identity.value, version: selectedVersion.value, pipeline: selectedBuildPipeline.value });
+}
 async function cancelCurrent(): Promise<void> { if (operationId.value) await cancelOperation(operationId.value); }
 function selectVersion(value: string): void { selectedVersion.value = value; selectedTarget.value = ''; }
 function isInstallableBuild(build: DkbRegistryBuildSummary): boolean { return build.status === 'published' || build.status === 'ready'; }
 function shortDigest(value?: string | null): string { return value ? value.length > 32 ? `${value.slice(0, 29)}…` : value : 'Unavailable'; }
-function formatBytes(value?: number): string { if (value === undefined) return 'Unavailable'; return value < 1048576 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1048576).toFixed(1)} MiB`; }
-function formatBuildBytes(build: DkbRegistryBuildSummary): string {
-  if (build.evidenceSize === undefined && build.retrievalSize === undefined) return 'Unavailable';
-  return formatBytes((build.evidenceSize ?? 0) + (build.retrievalSize ?? 0));
-}
 function formatDate(value?: string | null): string { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Unavailable'; }
-function providerIds(value: unknown[]): string { const ids = value.map((item) => isRecord(item) ? String(item.id ?? item.providerId ?? '') : '').filter(Boolean); return ids.length ? ids.join(' → ') : 'Not reported'; }
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 </script>
 
@@ -168,27 +203,27 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
           <article><Boxes :size="20" /><span><small>Install options</small><strong>{{ installLibraries.length }}</strong><em>registered {{ installLibraries.length === 1 ? 'Library' : 'Libraries' }}</em></span></article>
         </div>
         <div class="overview-grid">
-          <article class="detail-card"><header><FileStack :size="19" /><div><h2>Release identity</h2><p>The immutable source release selected for inspection.</p></div></header><dl class="detail-list"><div><dt>Identity</dt><dd><code>{{ detail.entry.id }}</code></dd></div><div><dt>{{ props.kind === 'dkb' ? 'Version' : 'Revision' }}</dt><dd>{{ props.kind === 'dkb' ? selectedVersion : selectedRevision }}</dd></div><div><dt>Published</dt><dd>{{ props.kind === 'dkb' ? formatDate(release?.publishedAt) : formatDate(revision?.publishedAt) }}</dd></div><div><dt>Registry</dt><dd>{{ props.registry }}</dd></div></dl></article>
+          <article class="detail-card"><header><FileStack :size="19" /><div><h2>Release identity</h2><p>The immutable source release selected for inspection.</p></div></header><dl class="detail-list"><div><dt>Identity</dt><dd><code>{{ detail.entry.id }}</code></dd></div><div><dt>{{ props.kind === 'dkb' ? 'Version' : 'Revision' }}</dt><dd>{{ props.kind === 'dkb' ? selectedVersion : selectedRevision }}</dd></div><div><dt>Published</dt><dd>{{ props.kind === 'dkb' ? formatDate(release?.publishedAt) : formatDate(revision?.publishedAt) }}</dd></div><div><dt>Registry</dt><dd><ResourceLink kind="registry" :name="props.registry" /></dd></div></dl></article>
           <article class="detail-card"><header><ShieldCheck :size="19" /><div><h2>Trust summary</h2><p>Digests carried by this signed Registry release.</p></div></header><dl class="detail-list"><template v-if="release"><div><dt>Receipt</dt><dd><code>{{ shortDigest(release.receiptHash) }}</code></dd></div><div><dt>Payload</dt><dd><code>{{ shortDigest(release.payloadHash) }}</code></dd></div><div><dt>Source tree</dt><dd><code>{{ shortDigest(release.packageTreeHash) }}</code></dd></div></template><template v-else><div><dt>Revision digest</dt><dd><code>{{ shortDigest(revision?.digest) }}</code></dd></div></template></dl></article>
         </div>
       </section>
 
       <section v-else-if="section === 'versions' && packageDetail" class="detail-section">
         <header class="section-heading"><div><h2>Published versions</h2><p>Select an exact immutable release to inspect and install.</p></div><span class="count">{{ packageDetail.versions.length }}</span></header>
-        <ul class="release-list"><li v-for="item in packageDetail.versions" :key="item.version" :class="{ 'release-list--selected': item.version === selectedVersion }"><button type="button" @click="selectVersion(item.version)"><span><strong>{{ item.version }}</strong><small><code>{{ shortDigest(item.packageTreeHash) }}</code></small></span><StatusBadge :status="item.status" /></button></li></ul>
+        <RegistryVersionDataTable :rows="packageDetail.versions" :selected="selectedVersion" @select="selectVersion" />
       </section>
 
       <section v-else-if="section === 'contents' && props.kind === 'dkb' && selectedVersion" class="detail-section detail-section--flush"><RemoteSourceInventory :registry="props.registry" :namespace="props.namespace" :name="props.name" :version="selectedVersion" /></section>
 
       <section v-else-if="section === 'builds' && props.kind === 'dkb'" class="detail-section">
-        <header class="section-heading"><div><h2>Available retrieval builds</h2><p>Signed, runtime-ready builds derived from the selected Evidence Build.</p></div><span class="count">{{ builds.length }}</span></header>
+        <header class="section-heading"><div><h2>Available retrieval builds</h2><p>Signed, runtime-ready builds grouped by their exact parent Evidence identity.</p></div><div class="section-heading-actions"><span class="count">{{ builds.length }}</span><AppButton size="sm" :disabled="registryPipelines.isError.value || !buildPipelines.length" @click="drawer = 'build'">Request build</AppButton></div></header>
         <EmptyState v-if="!builds.length" title="No available builds" message="This release cannot be installed until a trusted pipeline target finishes compiling." />
-        <div v-else class="registry-build-list"><article v-for="build in builds" :key="build.retrievalBuildDigest"><header><div><strong>{{ build.target }}</strong><small>{{ providerIds(build.evidenceProviders) }} · {{ providerIds(build.retrievalProviders) }}</small></div><StatusBadge :status="build.status" /></header><dl><div><dt>Evidence</dt><dd><code>{{ shortDigest(build.evidenceDigest) }}</code></dd></div><div><dt>Retrieval</dt><dd><code>{{ shortDigest(build.retrievalBuildDigest) }}</code></dd></div><div><dt>Compatibility</dt><dd><code>{{ shortDigest(build.compatibilityDigest) }}</code></dd></div><div><dt>Stored size</dt><dd>{{ formatBuildBytes(build) }}</dd></div><div><dt>Built</dt><dd>{{ formatDate(build.retrievalBuiltAt) }}</dd></div></dl></article></div>
+        <RegistryBuildDataTable v-else :rows="builds" />
       </section>
 
       <section v-else-if="section === 'members' && props.kind === 'collection'" class="detail-section">
         <header class="section-heading"><div><h2>Collection members</h2><p>Exact package versions and release digests pinned by revision {{ selectedRevision }}.</p></div><span class="count">{{ members.length }}</span></header>
-        <ul class="member-list"><li v-for="member in members" :key="String(member.id)"><PackageOpen :size="18" /><span><strong>{{ member.id }}</strong><small>Version {{ member.version }}</small></span><code>{{ shortDigest(String(member.digest ?? '')) }}</code></li></ul>
+        <CollectionMemberDataTable :rows="members" :registry="props.registry" />
       </section>
 
       <section v-else-if="section === 'provenance'" class="detail-section provenance-layout">
@@ -208,6 +243,15 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
       <FormField label="Library" hint="Choose a host Library that is not currently connected to this Registry." required><select v-model="connectLibrary" required><option v-for="library in disconnectedLibraries" :key="library.name" :value="library.name">{{ defaultOptionLabel(library.displayName ?? library.name, isHostDefault(library)) }}</option></select></FormField>
       <p class="form-notice"><Link2 :size="16" /> Future Registry browsing and installs for this Library will use {{ props.registry }}. This is an explicit configuration change.</p>
       <EmptyState v-if="!disconnectedLibraries.length" title="No Library is available to connect" message="Register a Library first, then return to this Registry entry." />
+    </ActionDrawer>
+    <ActionDrawer :open="drawer === 'build'" :title="`Request another build for ${identity}`" description="Compile this immutable source release through one trusted Registry recipe. Existing published builds remain unchanged." submit-label="Request signed build" :submit-disabled="!canRequestBuild" :busy="busy" @update:open="!$event && (drawer = undefined)" @submit="submitBuild">
+      <FormField label="Registry Pipeline" hint="Only healthy recipes advertised by this Registry are available." required><select v-model="selectedBuildPipeline" :disabled="busy || registryPipelines.isFetching.value" required><option v-for="pipeline in buildPipelines" :key="pipeline.name" :value="pipeline.name">{{ selectOptionLabel(pipeline.name, [pipeline.default ? 'Default' : undefined, pipeline.providers.map((provider) => provider.id).join(' → ')]) }}</option></select></FormField>
+      <section v-if="registryPipelines.isError.value" class="recovery-panel" role="alert"><div><p>{{ registryPipelines.error.value?.message }}</p><AppButton :disabled="busy" @click="registryPipelines.refetch()">Retry Pipeline catalog</AppButton></div></section>
+      <p v-else-if="registryPipelines.isFetching.value || query.isFetching.value || context.isFetching.value" class="quiet-state" role="status">Checking the current release and Pipeline availability…</p>
+      <p v-else-if="selectedBuildPipeline && !requestedPipeline" class="form-notice">The selected Pipeline is no longer available. Choose a healthy recipe before requesting a build.</p>
+      <section class="form-impact-panel"><strong>{{ buildImpact.status }}</strong><p>{{ buildImpact.detail }}</p></section>
+      <dl v-if="requestedPipeline" class="drawer-compact-ledger"><div><dt>Evidence Profile</dt><dd><code>{{ shortDigest(requestedPipeline.evidenceProfileDigest) }}</code></dd></div><div><dt>Retrieval Profile</dt><dd><code>{{ shortDigest(requestedPipeline.retrievalProfileDigest) }}</code></dd></div><div><dt>Compatibility</dt><dd><code>{{ shortDigest(requestedPipeline.compatibilityDigest) }}</code></dd></div></dl>
+      <p class="form-notice">This operation requires a Registry credential with <code>registry:build</code>. Local builds are never uploaded into an existing Registry release.</p>
     </ActionDrawer>
   </div>
 </template>

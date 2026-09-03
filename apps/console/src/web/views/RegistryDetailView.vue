@@ -1,51 +1,47 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
-import type { DkbRegistryCatalogEntry, DkbRegistryCatalogPage } from '@sjshovan/dkb-protocol/registryCatalog.js';
-import { ArrowLeft, ChevronRight, PackageOpen, Search, UsersRound } from '@lucide/vue';
+import type { DkbRegistryCatalogPage } from '@sjshovan/dkb-protocol/registryCatalog.js';
+import { ArrowLeft } from '@lucide/vue';
 import { RouterLink } from 'vue-router';
 import { getJson } from '../api.js';
 import AppButton from '../components/interface/AppButton.vue';
-import ConsolePagination from '../components/interface/ConsolePagination.vue';
 import EmptyState from '../components/interface/EmptyState.vue';
 import PageHeader from '../components/interface/PageHeader.vue';
+import ResourceLink from '../components/interface/ResourceLink.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
-import type { ResourceRow } from '../types.js';
+import RegistryCatalogDataTable from '../components/resource/RegistryCatalogDataTable.vue';
+import RegistryPipelineDataTable from '../components/resource/RegistryPipelineDataTable.vue';
+import RegistryPipelineDetailsDrawer from '../components/resource/RegistryPipelineDetailsDrawer.vue';
+import type { RegistryPipeline, RegistryPipelineCatalog, ResourceRow } from '../types.js';
 
 const props = defineProps<{ registry: string }>();
-const queryText = ref('');
-const appliedQuery = ref('');
-const type = ref<'all' | 'dkb' | 'collection'>('all');
-const page = ref(1);
 const context = useQuery({
   queryKey: computed(() => ['registry-context', props.registry]),
   queryFn: () => getJson<{ registry: ResourceRow; libraries: ResourceRow[] }>(`/api/v1/registries/${encodeURIComponent(props.registry)}`),
 });
 const catalog = useQuery({
-  queryKey: computed(() => ['registry-catalog', props.registry, appliedQuery.value, type.value, page.value]),
-  queryFn: () => getJson<DkbRegistryCatalogPage>(`/api/v1/registries/${encodeURIComponent(props.registry)}/catalog?${new URLSearchParams({
-    ...(appliedQuery.value ? { q: appliedQuery.value } : {}), type: type.value, page: String(page.value), perPage: '20',
-  })}`),
-  placeholderData: (previous) => previous,
+  queryKey: computed(() => ['registry-catalog', props.registry]),
+  queryFn: loadCatalog,
 });
+const pipelines = useQuery({
+  queryKey: computed(() => ['registry-pipelines', props.registry]),
+  queryFn: () => getJson<RegistryPipelineCatalog>(`/api/v1/registries/${encodeURIComponent(props.registry)}/pipelines`),
+  retry: false,
+});
+const selectedPipeline = ref<RegistryPipeline>();
 const registry = computed(() => context.data.value?.registry);
 const libraries = computed(() => context.data.value?.libraries ?? []);
 const entries = computed(() => catalog.data.value?.entries ?? []);
-const lastPage = computed(() => Math.max(catalog.data.value?.pages.dkbs?.lastPage ?? 1, catalog.data.value?.pages.collections?.lastPage ?? 1));
-const catalogTotal = computed(() => Object.values(catalog.data.value?.pages ?? {}).reduce((total, value) => total + value.total, 0));
-const paginationSummary = computed(() => `Page ${page.value} of ${lastPage.value} · ${catalogTotal.value} matching ${catalogTotal.value === 1 ? 'entry' : 'entries'}`);
-
-function applySearch(): void { appliedQuery.value = queryText.value.trim(); page.value = 1; }
-function selectType(value: 'all' | 'dkb' | 'collection'): void { type.value = value; page.value = 1; }
-function entryRoute(entry: DkbRegistryCatalogEntry): string {
-  return `/registries/${encodeURIComponent(props.registry)}/${entry.type === 'dkb' ? 'dkbs' : 'collections'}/${encodeURIComponent(entry.namespace)}/${encodeURIComponent(entry.slug)}`;
+async function loadCatalog(): Promise<DkbRegistryCatalogPage> {
+  const endpoint = `/api/v1/registries/${encodeURIComponent(props.registry)}/catalog`;
+  const first = await getJson<DkbRegistryCatalogPage>(`${endpoint}?type=all&page=1&perPage=100`);
+  const lastPage = Math.max(first.pages.dkbs?.lastPage ?? 1, first.pages.collections?.lastPage ?? 1);
+  if (lastPage === 1) return first;
+  const pages = await Promise.all(Array.from({ length: lastPage - 1 }, (_, index) => getJson<DkbRegistryCatalogPage>(`${endpoint}?type=all&page=${index + 2}&perPage=100`)));
+  const entries = [...first.entries, ...pages.flatMap((page) => page.entries)];
+  return { ...first, entries: [...new Map(entries.map((entry) => [`${entry.type}:${entry.id}`, entry])).values()] };
 }
-function releaseLabel(entry: DkbRegistryCatalogEntry): string { return entry.type === 'dkb' ? entry.latestVersion ?? 'No release' : entry.latestRevision ? `Revision ${entry.latestRevision}` : 'No revision'; }
-function formatDate(value?: string | null): string { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value)) : 'Not published'; }
-
-watch(lastPage, (value) => {
-  if (page.value > value) page.value = value;
-});
 </script>
 
 <template>
@@ -58,28 +54,23 @@ watch(lastPage, (value) => {
         <template #actions><StatusBadge :status="registry.status" /><StatusBadge :status="registry.authenticated ? 'authenticated' : 'anonymous'" /></template>
       </PageHeader>
       <section class="registry-context-card">
-        <dl><div><dt>Endpoint</dt><dd><code>{{ registry.url }}</code></dd></div><div><dt>Access</dt><dd>{{ registry.authenticated ? [registry.credential?.user, registry.credential?.team].filter(Boolean).join(' · ') : 'Public entries only' }}</dd></div><div><dt>Libraries</dt><dd>{{ libraries.length ? libraries.map((item) => item.name).join(', ') : 'No connected Libraries' }}</dd></div></dl>
+        <dl><div><dt>Endpoint</dt><dd><code>{{ registry.url }}</code></dd></div><div><dt>Access</dt><dd>{{ registry.authenticated ? [registry.credential?.user, registry.credential?.team].filter(Boolean).join(' · ') : 'Public entries only' }}</dd></div><div><dt>Libraries</dt><dd><span v-if="!libraries.length">No connected Libraries</span><span v-else class="resource-reference-list"><ResourceLink v-for="library in libraries" :key="library.name" kind="library" :name="library.name" /></span></dd></div></dl>
+      </section>
+
+      <section class="catalog-panel registry-pipeline-panel">
+        <header class="section-heading"><div><h2>Trusted compiler Pipelines</h2><p>Recipes this Registry can use to compile signed build variants from one immutable source release.</p></div><span class="count">{{ pipelines.data.value?.pipelines.length ?? 0 }}</span></header>
+        <div v-if="pipelines.isPending.value" class="skeleton-stack catalog-skeleton"><span v-for="n in 3" :key="n" /></div>
+        <section v-else-if="pipelines.isError.value" class="recovery-panel"><div><h2>Pipeline catalog unavailable</h2><p>{{ pipelines.error.value?.message }}</p><AppButton @click="pipelines.refetch()">Retry</AppButton></div></section>
+        <RegistryPipelineDataTable v-else :rows="pipelines.data.value?.pipelines ?? []" @inspect="selectedPipeline = $event" />
       </section>
 
       <section class="catalog-panel">
-        <header class="catalog-toolbar">
-          <form role="search" @submit.prevent="applySearch"><Search :size="17" aria-hidden="true" /><input v-model="queryText" aria-label="Search Registry" placeholder="Search identity, namespace, name, or description" /><AppButton type="submit" size="sm">Search</AppButton></form>
-          <div class="segment-control" aria-label="Catalog type"><button v-for="option in (['all', 'dkb', 'collection'] as const)" :key="option" type="button" :aria-pressed="type === option" @click="selectType(option)">{{ option === 'all' ? 'All' : option === 'dkb' ? 'DKBs' : 'Collections' }}</button></div>
-        </header>
         <div v-if="catalog.isPending.value" class="skeleton-stack catalog-skeleton"><span v-for="n in 6" :key="n" /></div>
         <section v-else-if="catalog.isError.value" class="recovery-panel"><div><h2>Catalog unavailable</h2><p>{{ catalog.error.value?.message }}</p><AppButton @click="catalog.refetch()">Retry</AppButton></div></section>
         <EmptyState v-else-if="entries.length === 0" title="No matching Registry entries" message="Try a broader search or choose another catalog type." />
-        <template v-else>
-          <div class="catalog-grid">
-            <RouterLink v-for="entry in entries" :key="`${entry.type}:${entry.id}`" class="catalog-entry" :to="entryRoute(entry)">
-              <component :is="entry.type === 'dkb' ? PackageOpen : UsersRound" :size="20" />
-              <span><small>{{ entry.type === 'dkb' ? 'DKB' : 'Collection' }}</small><strong>{{ entry.id }}</strong><em>{{ entry.description || 'No description provided.' }}</em></span>
-              <span class="catalog-entry-meta"><StatusBadge :status="entry.visibility" /><b>{{ releaseLabel(entry) }}</b><small>{{ formatDate(entry.publishedAt) }}</small><ChevronRight :size="17" /></span>
-            </RouterLink>
-          </div>
-          <ConsolePagination v-if="lastPage > 1" :page="page" :total-pages="lastPage" :summary="paginationSummary" pagination-label="Registry catalog pagination" :disabled="catalog.isFetching.value" @update:page="page = $event" />
-        </template>
+        <RegistryCatalogDataTable v-else :rows="entries" :registry="props.registry" />
       </section>
     </template>
+    <RegistryPipelineDetailsDrawer :open="Boolean(selectedPipeline)" :pipeline="selectedPipeline" @update:open="!$event && (selectedPipeline = undefined)" />
   </div>
 </template>

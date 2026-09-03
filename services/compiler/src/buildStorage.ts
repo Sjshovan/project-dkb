@@ -15,7 +15,8 @@ import {
   type DkbPackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
 import type { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbIndexProvider } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbIndexProvider, DkbJsonValue } from '@sjshovan/dkb-pipeline/types.js';
+import { providerReceipt, semanticProviderReceipts } from './providerReceipts.js';
 import type {
   AtomicCompileArtifactTimings,
   CompilerArtifactState,
@@ -26,7 +27,9 @@ export async function writeAtomicCompileArtifacts(
   root: string,
   state: RegistryCompileState,
   createLock: (stageRoot: string, buildGraph: DkbPackageBuildGraph) => Promise<DkbLockManifest>,
+  signal?: AbortSignal,
 ): Promise<{ lock: DkbLockManifest; timings: AtomicCompileArtifactTimings; buildGraph: DkbPackageBuildGraph }> {
+  signal?.throwIfAborted();
   const totalStart = performance.now();
   const timings: AtomicCompileArtifactTimings = {
     stagePrepare: 0,
@@ -54,8 +57,10 @@ export async function writeAtomicCompileArtifacts(
     const retrievalStart = performance.now();
     const stagedArtifactsRoot = path.join(stageParent, 'retrieval-artifacts');
     await writeRetrievalArtifacts(stagedArtifactsRoot, state.compilerArtifacts, state.providerHost, {
-      compatibility: state.retrievalProfileLock?.compatibility ?? {},
+      compatibility: (state.retrievalProfileLock?.compatibility ?? {}) as unknown as Record<string, DkbJsonValue>,
+      signal,
     });
+    signal?.throwIfAborted();
     timings.retrievalArtifacts = elapsedMs(retrievalStart);
 
     const buildGraphStart = performance.now();
@@ -73,22 +78,29 @@ export async function writeAtomicCompileArtifacts(
 
     const lockStart = performance.now();
     const lock = await createLock(stageRoot, buildGraph);
+    signal?.throwIfAborted();
     timings.lock = elapsedMs(lockStart);
 
     const promotionStart = performance.now();
     const promotedBuilds: string[] = [];
+    let promotedBuildGraph: DkbPackageBuildGraph;
 
     try {
-      for (const source of [buildGraph.evidencePath, buildGraph.retrievalPath]) {
+      for (const [source, lockName] of [
+        [buildGraph.evidencePath, 'evidence.lock.json'],
+        [buildGraph.retrievalPath, 'retrieval.lock.json'],
+      ] as const) {
+        signal?.throwIfAborted();
         const target = path.join(root, path.relative(stageRoot, source));
-        if (await promoteBuildDirectory(source, target)) promotedBuilds.push(target);
+        if (await promoteBuildDirectory(source, target, lockName)) promotedBuilds.push(target);
       }
+      promotedBuildGraph = await validatePackageBuildGraph(root, buildGraph.selection);
+      signal?.throwIfAborted();
     } catch (error) {
       await Promise.all(promotedBuilds.map((target) => fs.rm(target, { recursive: true, force: true })));
       throw error;
     }
 
-    const promotedBuildGraph = await validatePackageBuildGraph(root, buildGraph.selection);
     timings.promotion = elapsedMs(promotionStart);
     timings.total = elapsedMs(totalStart);
 
@@ -112,10 +124,13 @@ async function writeBuildGraph(
   const artifact = state.compilerArtifacts[0]!;
   const packageReceipt = state.packages[artifact.dkb.manifest.id];
   if (!packageReceipt) throw new DkbError(`Compiled package receipt is missing for ${artifact.dkb.manifest.id}`);
-  const sourceDigest = stableHash({
+  const sourceDigest = state.packageSourceDigest ?? stableHash({
     manifestHash: packageReceipt.manifestHash,
     sourceInventoryHash: packageReceipt.sourceInventoryHash,
   });
+  if (!/^sha256:[a-f0-9]{64}$/u.test(sourceDigest)) {
+    throw new DkbError(`Package source digest must be a canonical sha256 digest: ${sourceDigest}`);
+  }
 
   return writePackageBuildGraph({
     root: stageRoot,
@@ -125,6 +140,8 @@ async function writeBuildGraph(
       sourceDigest,
     },
     evidence: artifact.evidence,
+    evidenceProviderReceipts: semanticProviderReceipts(artifact.compiled.receipts, 'evidence'),
+    retrievalProviderReceipts: semanticProviderReceipts(artifact.compiled.receipts, 'retrieval'),
     retrievalProfile: state.retrievalProfileLock,
     artifactsRoot,
     target: state.resolvedProfile.target,
@@ -135,7 +152,7 @@ async function writeRetrievalArtifacts(
   artifactsRoot: string,
   compilerArtifacts: CompilerArtifactState[],
   providerHost: DkbProviderHost,
-  options: { compatibility: Record<string, unknown> },
+  options: { compatibility: Record<string, DkbJsonValue>; signal?: AbortSignal },
 ): Promise<void> {
   if (compilerArtifacts.length === 0) return;
   if (compilerArtifacts.length !== 1) {
@@ -150,21 +167,34 @@ async function writeRetrievalArtifacts(
   }
 
   await fs.mkdir(artifactsRoot, { recursive: true });
-  await indexProvider.compilePackage({
+  const priorReceipts = primary.compiled.receipts;
+  const receipt = await indexProvider.compilePackage({
     artifactsRoot,
     dkb: primary.dkb,
-    compiled: primary.compiled,
+    compiled: { ...primary.compiled, receipts: structuredClone(priorReceipts) },
     compatibility: options.compatibility,
     options: providerHost.optionsFor(target.index),
+    signal: options.signal,
   });
+  options.signal?.throwIfAborted();
+  primary.compiled.receipts = [
+    ...priorReceipts,
+    providerReceipt(providerHost, 'index', receipt === null ? { build: {} } : receipt),
+    providerReceipt(providerHost, 'retrieval', { build: {} }),
+  ];
 }
 
-async function promoteBuildDirectory(source: string, target: string): Promise<boolean> {
+async function promoteBuildDirectory(source: string, target: string, lockName: string): Promise<boolean> {
+  let existing = false;
   try {
     await fs.access(target);
-    return false;
+    existing = true;
   } catch {
     // The immutable build is new to this root.
+  }
+  if (existing) {
+    await assertMatchingBuildReceipt(source, target, lockName);
+    return false;
   }
   await fs.mkdir(path.dirname(target), { recursive: true });
   try {
@@ -172,8 +202,21 @@ async function promoteBuildDirectory(source: string, target: string): Promise<bo
     return true;
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
-    if (code === 'EEXIST' || code === 'ENOTEMPTY') return false;
+    if (code === 'EEXIST' || code === 'ENOTEMPTY') {
+      await assertMatchingBuildReceipt(source, target, lockName);
+      return false;
+    }
     throw error;
+  }
+}
+
+async function assertMatchingBuildReceipt(source: string, target: string, lockName: string): Promise<void> {
+  const receipts = await Promise.all([source, target].map(async (root) => {
+    const { generatedAt: _generatedAt, ...receipt } = JSON.parse(await fs.readFile(path.join(root, lockName), 'utf8'));
+    return receipt;
+  }));
+  if (stableHash(receipts[0]) !== stableHash(receipts[1])) {
+    throw new DkbError(`Content-addressed build receipt collision at ${target}`);
   }
 }
 

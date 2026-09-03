@@ -17,6 +17,6 @@ const query = useQuery({
     <PageHeader title="Activity" description="Redacted command history from this Console. DKB resources remain the authoritative state." />
     <div v-if="query.isPending.value" class="skeleton-stack"><span v-for="n in 8" :key="n" /></div>
     <section v-else-if="query.isError.value" class="recovery-panel"><div><h2>Activity unavailable</h2><p>{{ query.error.value?.message }}</p><button type="button" @click="query.refetch()">Retry</button></div></section>
-    <section v-else class="activity-table-shell"><ActivityDataTable :rows="query.data.value?.activities ?? []" /></section>
+    <ActivityDataTable v-else :rows="query.data.value?.activities ?? []" />
   </div>
 </template>

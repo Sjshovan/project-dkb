@@ -71,6 +71,8 @@ export interface DkbRetrieveKnowledgeResponse {
       chunkEnd?: number;
       storeId: string;
       type: string;
+      score: number;
+      channels: string[];
       matchedTokens: string[];
       matchedPhrases: string[];
       matchedIdentifiers: string[];
@@ -94,6 +96,7 @@ export interface DkbQueryTargetDescription {
   defaultLimit: number;
   maxLimit: number;
   score: number;
+  channels: string[];
 }
 
 export interface DkbQueryTargetResponse {
@@ -104,13 +107,12 @@ export interface DkbQueryTargetResponse {
 }
 
 export async function describeQueryTargets(root: string, query: string, limit = 10, queryContext?: QueryContext, runtime?: DkbRuntimeContext): Promise<DkbQueryTargetResponse> {
-  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
+  const context = requiredQueryContext(queryContext);
   const result = await semanticSearch(root, query, limit, undefined, context);
   const unitsById = new Map(context.evidenceRecords.map(runtimeEvidenceUnit).map((unit) => [unit.id, unit]));
-  const targets = result.results
-    .map((hit) => unitsById.get(hit.id))
-    .filter((unit): unit is RuntimeEvidenceUnit => Boolean(unit))
-    .map((unit, index) => ({
+  const targets = result.results.flatMap((hit) => {
+    const unit = unitsById.get(hit.id);
+    return unit ? [{
       target: `${unit.dkbId}/${unit.id}`,
       dkbId: unit.dkbId,
       sourceId: unit.id,
@@ -123,8 +125,10 @@ export async function describeQueryTargets(root: string, query: string, limit = 
       fields: unit.queryable?.fields ?? {},
       defaultLimit: unit.queryable?.defaultLimit ?? 10,
       maxLimit: unit.queryable?.maxLimit ?? 100,
-      score: result.results[index]?.score ?? 0,
-    }));
+      score: hit.score,
+      channels: [...hit.channels],
+    }] : [];
+  });
 
   return {
     status: targets.length > 0 ? 'ready' : 'empty',
@@ -140,7 +144,7 @@ export async function retrieveKnowledge(
   queryContext?: QueryContext,
   runtime?: DkbRuntimeContext,
 ): Promise<DkbRetrieveKnowledgeResponse> {
-  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
+  const context = requiredQueryContext(queryContext);
   const query = retrievalQueryText(request);
   const limit = Math.max(1, Math.min(request.limit ?? 8, 100));
   const evidenceCatalog = {
@@ -163,7 +167,7 @@ export async function retrieveKnowledge(
   const vectorMatches = vectorResult.hits
     .flatMap((hit) => {
       const unit = sourceUnitsById.get(hit.evidenceId);
-      return unit ? [matchForUnit(unit, queryEvidence, hit.matchedTokens ?? [])] : [];
+      return unit ? [matchForUnit(unit, queryEvidence, hit)] : [];
     });
   const candidateChunkMatches = vectorMatches.slice(0, candidateLimit);
   const exactMatchRequired = requiresExactCompiledMatch(request, queryEvidence);
@@ -254,6 +258,8 @@ function compiledChunkResultsForMatches(
       matchedPhrases: match.evidence.phrases,
       matchedIdentifiers: match.evidence.identifiers,
       matchedKeywords: match.evidence.keywords,
+      retrievalScore: match.retrieval.score,
+      retrievalChannels: match.retrieval.channels,
       requestedLimit: request.limit,
       query,
     },
@@ -405,6 +411,8 @@ function sourceUnitMatchesForMatches(
       chunkEnd: match.unit.chunkEnd,
       storeId: match.unit.storeId,
       type: match.unit.type,
+      score: match.retrieval.score,
+      channels: [...match.retrieval.channels],
       matchedTokens: match.evidence.tokens,
       matchedPhrases: match.evidence.phrases,
       matchedIdentifiers: match.evidence.identifiers,
@@ -456,13 +464,7 @@ function roundMs(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-async function contextFor(root: string, runtime: DkbRuntimeContext): Promise<QueryContext> {
-  const { loadLibrary } = await import('@sjshovan/dkb-protocol/manifest.js');
-  const library = await loadLibrary(root);
-  return getQueryContext(library.root, library.manifest.id, runtime);
-}
-
-function requiredRuntime(runtime: DkbRuntimeContext | undefined): DkbRuntimeContext {
-  if (!runtime) throw new DkbError('A DKB Runtime context is required when no query context is supplied.');
-  return runtime;
+function requiredQueryContext(context: QueryContext | undefined): QueryContext {
+  if (!context) throw new DkbError('A validated Runtime activation is required for retrieval.', 'runtime_activation_required');
+  return context;
 }

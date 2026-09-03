@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveDockerImageIdentity } from '@sjshovan/dkb-pipeline/serviceIdentity.js';
+import { fastEmbedModelPin } from './model.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -18,7 +20,10 @@ const starts = new Map<string, Promise<FastEmbedServiceStatus>>();
 export interface FastEmbedServiceStatus {
   docker: boolean;
   image: string;
+  imageId?: string;
   model: string;
+  modelRepository: string;
+  modelRevision: string;
   container: string;
   running: boolean;
   ready: boolean;
@@ -29,19 +34,23 @@ export interface FastEmbedServiceStatus {
 
 export async function ensureFastEmbedService(options: {
   image?: string;
+  imageDigest?: string;
   model?: string;
+  modelRepository?: string;
+  modelRevision?: string;
   restart?: boolean;
 } = {}): Promise<FastEmbedServiceStatus> {
   const image = options.image ?? process.env.DKB_FASTEMBED_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
   const model = options.model ?? DEFAULT_FASTEMBED_MODEL;
-  const key = `${image}\0${model}`;
+  const pin = fastEmbedModelPin(model, options);
+  const key = fastEmbedContainerName({ image, imageDigest: options.imageDigest, model, modelRepository: pin.repository, modelRevision: pin.revision });
   const existing = starts.get(key);
 
   if (existing && !options.restart) {
     return existing;
   }
 
-  const starting = startFastEmbedService({ image, model, restart: options.restart });
+  const starting = startFastEmbedService({ image, imageDigest: options.imageDigest, model, modelRepository: pin.repository, modelRevision: pin.revision, restart: options.restart });
   starts.set(key, starting);
 
   try {
@@ -55,26 +64,37 @@ export async function ensureFastEmbedService(options: {
 
 export async function fastEmbedServiceStatus(options: {
   image?: string;
+  imageDigest?: string;
   model?: string;
+  modelRepository?: string;
+  modelRevision?: string;
 } = {}): Promise<FastEmbedServiceStatus> {
   const image = options.image ?? process.env.DKB_FASTEMBED_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
   const model = options.model ?? DEFAULT_FASTEMBED_MODEL;
-  const container = fastEmbedContainerName(model);
+  const pin = fastEmbedModelPin(model, options);
+  const identity = { model, modelRepository: pin.repository, modelRevision: pin.revision };
+  const container = fastEmbedContainerName({ ...identity, image, imageDigest: options.imageDigest });
 
   try {
     await execFile('docker', ['--version'], { timeout: 30_000 });
   } catch {
-    return { docker: false, image, model, container, running: false, ready: false, drift: ['docker_unavailable'] };
+    return { docker: false, image, ...identity, container, running: false, ready: false, drift: ['docker_unavailable'] };
   }
 
   const inspected = await inspectContainer(container).catch(() => null);
   const running = inspected?.State?.Running === true;
   const drift: string[] = [];
+  const imageId = await resolveDockerImageIdentity(image, options.imageDigest).catch(() => {
+    drift.push('image_identity_unverified');
+    return undefined;
+  });
 
   if (inspected) {
-    if (inspected.Config?.Image !== image) drift.push('image_mismatch');
+    if (!imageId || inspected.Image !== imageId) drift.push('image_mismatch');
     if (inspected.Config?.Labels?.['org.dkb.embedding.service.version'] !== FASTEMBED_PROVIDER_SERVICE_VERSION) drift.push('service_version_mismatch');
     if (inspected.Config?.Labels?.['org.dkb.embedding.model'] !== model) drift.push('model_mismatch');
+    if (inspected.Config?.Labels?.['org.dkb.embedding.model-repository'] !== pin.repository) drift.push('model_repository_mismatch');
+    if (inspected.Config?.Labels?.['org.dkb.embedding.model-revision'] !== pin.revision) drift.push('model_revision_mismatch');
   }
 
   const port = running ? await hostPort(container).catch(() => undefined) : undefined;
@@ -84,14 +104,15 @@ export async function fastEmbedServiceStatus(options: {
 
   if (url) {
     health = await readHealth(url).catch((error) => ({ ok: false, error: errorMessage(error) }));
-    ready = isReady(health, model);
+    ready = isReady(health, identity);
     if (!ready) drift.push('service_unhealthy');
   }
 
   return {
     docker: true,
     image,
-    model,
+    ...(imageId ? { imageId } : {}),
+    ...identity,
     container,
     running,
     ready,
@@ -101,9 +122,12 @@ export async function fastEmbedServiceStatus(options: {
   };
 }
 
-export async function stopFastEmbedService(options: { model?: string } = {}): Promise<FastEmbedServiceStatus> {
+export async function stopFastEmbedService(options: { image?: string; imageDigest?: string; model?: string; modelRepository?: string; modelRevision?: string } = {}): Promise<FastEmbedServiceStatus> {
+  const image = options.image ?? process.env.DKB_FASTEMBED_IMAGE ?? FASTEMBED_PROVIDER_IMAGE;
   const model = options.model ?? DEFAULT_FASTEMBED_MODEL;
-  const container = fastEmbedContainerName(model);
+  const pin = fastEmbedModelPin(model, options);
+  const identity = { model, modelRepository: pin.repository, modelRevision: pin.revision };
+  const container = fastEmbedContainerName({ ...identity, image, imageDigest: options.imageDigest });
 
   try {
     await execFile('docker', ['rm', '-f', container], { timeout: 30_000 });
@@ -111,10 +135,10 @@ export async function stopFastEmbedService(options: { model?: string } = {}): Pr
     if (!/No such container/i.test(errorMessage(error))) throw error;
   }
 
-  return fastEmbedServiceStatus({ model });
+  return fastEmbedServiceStatus({ ...identity, image, imageDigest: options.imageDigest });
 }
 
-export async function doctorFastEmbedService(options: { image?: string; model?: string } = {}): Promise<{
+export async function doctorFastEmbedService(options: { image?: string; imageDigest?: string; model?: string; modelRepository?: string; modelRevision?: string } = {}): Promise<{
   ok: boolean;
   status: FastEmbedServiceStatus;
   recovery?: string;
@@ -133,15 +157,16 @@ export async function doctorFastEmbedService(options: { image?: string; model?: 
 }
 
 export function fastEmbedEndpoint(status: FastEmbedServiceStatus): string {
-  if (!status.ready || !status.url) {
+  if (!status.ready || status.drift.length > 0 || !status.url) {
     throw new DkbError(`FastEmbed provider service ${status.container} is not ready`);
   }
 
   return `${status.url}/embed`;
 }
 
-async function startFastEmbedService(options: { image: string; model: string; restart?: boolean }): Promise<FastEmbedServiceStatus> {
+async function startFastEmbedService(options: { image: string; imageDigest?: string; model: string; modelRepository: string; modelRevision: string; restart?: boolean }): Promise<FastEmbedServiceStatus> {
   await ensureImage(options.image);
+  const imageId = await resolveDockerImageIdentity(options.image, options.imageDigest);
   const current = await fastEmbedServiceStatus(options);
 
   if (current.ready && current.drift.length === 0 && !options.restart) {
@@ -149,20 +174,24 @@ async function startFastEmbedService(options: { image: string; model: string; re
   }
   // Docker retains stopped containers and their names. Always remove a
   // non-ready instance before creating its deterministic replacement.
-  await stopFastEmbedService({ model: options.model });
+  await stopFastEmbedService(options);
 
-  const container = fastEmbedContainerName(options.model);
+  const container = fastEmbedContainerName(options);
   try {
     await execFile('docker', [
       'run', '-d',
       '--name', container,
       '--label', `org.dkb.embedding.service.version=${FASTEMBED_PROVIDER_SERVICE_VERSION}`,
       '--label', `org.dkb.embedding.model=${options.model}`,
+      '--label', `org.dkb.embedding.model-repository=${options.modelRepository}`,
+      '--label', `org.dkb.embedding.model-revision=${options.modelRevision}`,
       '--label', 'org.dkb.component=fastembed-provider-service',
       '-p', `127.0.0.1::${FASTEMBED_PROVIDER_SERVICE_PORT}`,
       '--mount', 'type=volume,src=dkb-fastembed-cache,dst=/cache/fastembed',
       '-e', `DKB_FASTEMBED_MODEL=${options.model}`,
-      options.image,
+      '-e', `DKB_FASTEMBED_MODEL_REPOSITORY=${options.modelRepository}`,
+      '-e', `DKB_FASTEMBED_MODEL_REVISION=${options.modelRevision}`,
+      imageId,
       'python', '-m', 'uvicorn', 'embedder:app', '--host', '0.0.0.0', '--port', String(FASTEMBED_PROVIDER_SERVICE_PORT),
     ], { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
   } catch (error) {
@@ -205,13 +234,14 @@ async function ensureImage(image: string): Promise<void> {
 }
 
 async function inspectContainer(container: string): Promise<{
+  Image?: string;
   State?: { Running?: boolean };
   Config?: { Image?: string; Labels?: Record<string, string> };
 }> {
   const { stdout } = await execFile('docker', ['inspect', container], { timeout: 30_000, maxBuffer: 2 * 1024 * 1024 });
   const parsed = JSON.parse(stdout) as unknown;
   if (!Array.isArray(parsed) || !parsed[0] || typeof parsed[0] !== 'object') throw new DkbError(`Invalid Docker inspection for ${container}`);
-  return parsed[0] as { State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> } };
+  return parsed[0] as { Image?: string; State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> } };
 }
 
 async function hostPort(container: string): Promise<number | undefined> {
@@ -227,15 +257,17 @@ async function readHealth(url: string): Promise<unknown> {
   return body;
 }
 
-function isReady(value: unknown, model: string): boolean {
+function isReady(value: unknown, identity: { model: string; modelRepository: string; modelRevision: string }): boolean {
   return Boolean(value)
     && typeof value === 'object'
     && (value as { ok?: unknown }).ok === true
-    && (value as { model?: unknown }).model === model;
+    && (value as { model?: unknown }).model === identity.model
+    && (value as { modelRepository?: unknown }).modelRepository === identity.modelRepository
+    && (value as { modelRevision?: unknown }).modelRevision === identity.modelRevision;
 }
 
-function fastEmbedContainerName(model: string): string {
-  const key = createHash('sha256').update(model).digest('hex').slice(0, 12);
+function fastEmbedContainerName(identity: { image: string; imageDigest?: string; model: string; modelRepository: string; modelRevision: string }): string {
+  const key = createHash('sha256').update(`${identity.imageDigest ?? identity.image}\0${identity.model}\0${identity.modelRepository}\0${identity.modelRevision}`).digest('hex').slice(0, 12);
   return `dkb-fastembed-${key}`;
 }
 

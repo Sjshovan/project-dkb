@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveDockerImageIdentity } from '@sjshovan/dkb-pipeline/serviceIdentity.js';
 import {
   FAISS_HELPER_TIMEOUT_MS,
   FAISS_PROVIDER_IMAGE,
@@ -16,7 +17,9 @@ export interface FaissSearchHit {
   score: number;
 }
 
-export async function faissProviderHealth(): Promise<{ ok: boolean; detail: string }> {
+export interface FaissExecutionOptions { imageDigest?: string }
+
+export async function faissProviderHealth(options: FaissExecutionOptions = {}): Promise<{ ok: boolean; detail: string }> {
   const serviceUrl = configuredFaissServiceUrl();
   if (serviceUrl) {
     try {
@@ -30,9 +33,10 @@ export async function faissProviderHealth(): Promise<{ ok: boolean; detail: stri
   const dockerImage = configuredFaissDockerImage();
   try {
     if (dockerImage) {
-      await execFile('docker', ['image', 'inspect', dockerImage], { timeout: FAISS_HELPER_TIMEOUT_MS });
-      return { ok: true, detail: `FAISS helper image ${dockerImage}` };
+      const imageId = await resolveDockerImageIdentity(dockerImage, options.imageDigest);
+      return { ok: true, detail: `FAISS helper image ${imageId}` };
     }
+    assertNativeExecutionAllowed(options);
     await execFile(faissPython(), ['-c', 'import faiss; print(faiss.__version__)'], { timeout: FAISS_HELPER_TIMEOUT_MS });
     return { ok: true, detail: `FAISS available through ${faissPython()}` };
   } catch (error) {
@@ -49,6 +53,8 @@ export class FaissHelperClient {
   private dockerSegmentMounts: Array<{ hostDir: string; containerDir: string }> = [];
   private readonly serviceUrl = configuredFaissServiceUrl();
   private serviceSessionId?: string;
+
+  constructor(private readonly execution: FaissExecutionOptions = {}) {}
 
   async load(input: { dimensions: number; segments: Array<{ path: string }> }): Promise<void> {
     if (this.serviceUrl) {
@@ -138,7 +144,9 @@ export class FaissHelperClient {
       return;
     }
     const helperPath = faissHelperPath();
-    const dockerImage = configuredFaissDockerImage();
+    const selectedImage = configuredFaissDockerImage();
+    if (!selectedImage) assertNativeExecutionAllowed(this.execution);
+    const dockerImage = selectedImage ? await resolveDockerImageIdentity(selectedImage, this.execution.imageDigest) : null;
     this.dockerImage = dockerImage;
     const child = dockerImage
       ? spawn('docker', [
@@ -283,7 +291,7 @@ function isFaissSearchHit(value: unknown): value is FaissSearchHit {
     && typeof (value as { score?: unknown }).score === 'number';
 }
 
-export async function runFaissHelper(args: string[]): Promise<void> {
+export async function runFaissHelper(args: string[], options: FaissExecutionOptions = {}): Promise<void> {
   const serviceUrl = configuredFaissServiceUrl();
   if (serviceUrl && args[0] === 'build') {
     const vectors = optionValue(args, '--vectors');
@@ -301,10 +309,11 @@ export async function runFaissHelper(args: string[]): Promise<void> {
   const dockerImage = configuredFaissDockerImage();
 
   if (dockerImage && args[0] === 'build') {
-    await runFaissHelperInDocker(dockerImage, args);
+    await runFaissHelperInDocker(await resolveDockerImageIdentity(dockerImage, options.imageDigest), args);
 
     return;
   }
+  assertNativeExecutionAllowed(options);
 
   try {
     await execFile(faissPython(), [faissHelperPath(), ...args], {
@@ -358,6 +367,10 @@ async function runFaissHelperInDocker(image: string, args: string[]): Promise<vo
 
 function faissPython(): string {
   return process.env.DKB_FAISS_PYTHON ?? process.env.PYTHON ?? 'python';
+}
+
+function assertNativeExecutionAllowed(options: FaissExecutionOptions): void {
+  if (options.imageDigest) throw new DkbError('FAISS native Python cannot verify the selected imageDigest. Enable the pinned Docker helper or configure its trusted service endpoint.');
 }
 
 function configuredFaissDockerImage(): string | null {
@@ -418,7 +431,6 @@ function optionValue(args: string[], option: string): string | null {
 function faissHelperPath(): string {
   const current = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.resolve(process.cwd(), 'providers/index-faiss/python/faiss/faiss_helper.py'),
     path.resolve(current, '../python/faiss/faiss_helper.py'),
   ];
   const found = candidates.find((candidate) => existsSync(candidate));
@@ -436,4 +448,3 @@ function commandDetail(error: unknown): string {
   }
   return error instanceof Error ? error.message : String(error);
 }
-

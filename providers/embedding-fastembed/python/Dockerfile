@@ -11,7 +11,7 @@ ENV FASTEMBED_CACHE_PATH=/cache/fastembed
 WORKDIR /embedder
 COPY requirements.txt ./
 RUN python -m pip install --upgrade pip && python -m pip install -r requirements.txt
-COPY embedder.py ./
+COPY embedder.py model-pins.json ./
 
 LABEL org.opencontainers.image.title="DKB FastEmbed Provider" \
       org.opencontainers.image.version="${DKB_VERSION}" \

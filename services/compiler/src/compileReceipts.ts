@@ -91,6 +91,7 @@ export async function cachedCompileResultFor(
   const lock = validateDkbLockManifest(parseLock(lockSource, lockPath), lockPath);
 
   return {
+    type: 'package',
     registryId: lock.registry.id,
     recordCount: lock.compiled?.recordCount ?? Object.values(lock.packages).reduce((total, item) => total + item.recordCount, 0),
     evidenceCatalogPath: path.join(graph.evidencePath, DKB_EVIDENCE_CATALOG_FILENAME),
@@ -185,6 +186,14 @@ export async function lockForState(
     compiled: {
       recordCount: state.sourceUnits.length,
       compiledAt,
+      providerDiagnostics: state.compilerArtifacts.flatMap((artifact) => artifact.compiled.receipts
+        .flatMap((receipt) => receipt.diagnostics ? [{
+          packageId: artifact.dkb.manifest.id,
+          kind: receipt.kind,
+          providerId: receipt.providerId,
+          providerIntegrityDigest: receipt.providerIntegrityDigest,
+          diagnostics: receipt.diagnostics,
+        }] : [])),
     },
   };
 }

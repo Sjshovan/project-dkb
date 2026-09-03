@@ -22,14 +22,18 @@ import {
 } from '@sjshovan/dkb-library/builds.js';
 import { DKB_PACKAGE_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
 import { createDkbPackageArchive, DKB_PACKAGE_EXTENSION, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
-import { resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { summarizeCompilerDeliveryStatistics } from './buildStatistics.js';
 import { createCompilerWorkDirectory } from './workRoot.js';
+import { resolveRegistryCompilerTarget } from './registryTargets.js';
+import { assertCompilerBuildCurrent, readCompilerBuildIdentity } from './compilerCapabilities.js';
+import type { RegistryCompileExecution } from './registryJobControl.js';
 
 export interface RegistryCompileRequest {
   jobId: string;
   request: {
+    execution?: RegistryCompileExecution;
+    expectedCompilerBuildDigest?: string;
     package?: {
       id?: string;
       name?: string;
@@ -39,6 +43,10 @@ export interface RegistryCompileRequest {
     };
     target?: string;
     stage?: 'pipeline' | 'retrieval';
+    evidenceProfileDigest?: string;
+    retrievalProfileDigest?: string;
+    compatibilityDigest?: string;
+    providerBuildDigest?: string;
   };
   sourceArchive: {
     fileName?: string;
@@ -63,9 +71,16 @@ export async function compileRegistryPackage(
   options: {
     distribution: DkbDistribution;
     contextRoot: string;
+    signal?: AbortSignal;
     deliver?: (compiled: CompiledRegistryPackageDelivery) => Promise<void>;
   },
 ): Promise<Record<string, unknown>> {
+  options.signal?.throwIfAborted();
+  await assertCompilerBuildCurrent();
+  const compilerIdentity = await readCompilerBuildIdentity();
+  if (input.request.expectedCompilerBuildDigest !== compilerIdentity.buildDigest) {
+    throw new DkbError('Registry compiler installation changed after queueing; request a new build with the current compiler identity.', 'compiler_build_drift');
+  }
   if (!/^[a-zA-Z0-9._-]+$/.test(input.jobId)) {
     throw new DkbError('jobId may contain only letters, numbers, dots, dashes, and underscores');
   }
@@ -85,12 +100,20 @@ export async function compileRegistryPackage(
   const requestedPackageId = input.request.package?.id;
   const buildRoot = path.join(scratch, safeId(requestedPackageId ?? 'build'));
   const archivePath = path.join(scratch, 'compiled.dkbpkg');
-  const contextConfig = await resolveContextConfig(options.contextRoot, { defaults: options.distribution.defaults });
-  const target = input.request.target ?? contextConfig.activeTarget;
-  if (target !== contextConfig.activeTarget) {
-    throw new DkbError(`Registry compiler accepts only its active target "${contextConfig.activeTarget}", not "${target}"`);
-  }
   try {
+    const selectedTarget = await resolveRegistryCompilerTarget({
+      distribution: options.distribution,
+      contextRoot: options.contextRoot,
+      target: input.request.target,
+      expected: {
+        ...(input.request.evidenceProfileDigest ? { evidenceProfileDigest: input.request.evidenceProfileDigest } : {}),
+        ...(input.request.retrievalProfileDigest ? { retrievalProfileDigest: input.request.retrievalProfileDigest } : {}),
+        ...(input.request.compatibilityDigest ? { compatibilityDigest: input.request.compatibilityDigest } : {}),
+        ...(input.request.providerBuildDigest ? { providerBuildDigest: input.request.providerBuildDigest } : {}),
+      },
+    });
+    const target = selectedTarget.name;
+    options.signal?.throwIfAborted();
     await fs.writeFile(uploadPath, sourceArchive);
     await extractDkbPackageArchive(uploadPath, extractedRoot);
     await copyDkbSourceOnly(extractedRoot, buildRoot);
@@ -112,6 +135,7 @@ export async function compileRegistryPackage(
     const compiled = stage === 'retrieval'
       ? await compileRetrievalStage(
           input,
+          actualHash,
           buildRoot,
           evidenceUploadPath,
           evidenceExtractedRoot,
@@ -123,10 +147,12 @@ export async function compileRegistryPackage(
       : await compileComposeProject(buildRoot, {
           distribution: options.distribution,
           force: true,
-          mode: 'package',
           target,
           contextRoot: options.contextRoot,
+          sourceDigest: actualHash,
+          signal: options.signal,
         });
+    options.signal?.throwIfAborted();
     const graph = await validatePackageBuildGraph(buildRoot);
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
     const packageTreeHash = (await inspectPackageTree(buildRoot)).hash;
@@ -138,6 +164,15 @@ export async function compileRegistryPackage(
     const archiveSize = (await fs.stat(archivePath)).size;
     const archiveFileName = packageArchiveFileName(packageId, version);
     const payload: Record<string, unknown> = {
+      compiler: {
+        id: 'dkb.registry.package',
+        installedBuildDigest: compilerIdentity.buildDigest,
+        target: selectedTarget.name,
+        buildDigest: selectedTarget.buildDigest,
+        compatibilityDigest: selectedTarget.compatibilityDigest,
+        profileDigest: selectedTarget.retrievalProfileDigest,
+        providers: selectedTarget.providers,
+      },
       build: {
         target,
         evidenceProfileDigest: graph.evidence.evidenceProfileDigest,
@@ -186,11 +221,14 @@ export async function compileRegistryPackage(
         : undefined,
     };
 
+    await assertCompilerBuildCurrent();
+    options.signal?.throwIfAborted();
     if (options.deliver) {
       await options.deliver({ payload, archivePath, archiveSize });
       return payload;
     }
     const archive = await fs.readFile(archivePath);
+    options.signal?.throwIfAborted();
     return {
       ...payload,
       archive: {
@@ -206,13 +244,14 @@ export async function compileRegistryPackage(
 
 async function compileRetrievalStage(
   input: RegistryCompileRequest,
+  sourceDigest: string,
   buildRoot: string,
   evidenceUploadPath: string,
   evidenceExtractedRoot: string,
   target: string,
   packageId: string,
   version: string,
-  options: { distribution: DkbDistribution; contextRoot: string },
+  options: { distribution: DkbDistribution; contextRoot: string; signal?: AbortSignal },
 ) {
   if (!input.evidenceArchive) throw new DkbError('Retrieval-only compilation requires evidenceArchive');
   const bytes = Buffer.from(input.evidenceArchive.contents, 'base64');
@@ -228,6 +267,7 @@ async function compileRetrievalStage(
   const lock = validateEvidenceBuildLock(JSON.parse(await fs.readFile(lockPath, 'utf8')), lockPath);
   if (lock.package.id !== packageId
     || lock.package.version !== version
+    || lock.package.sourceDigest !== sourceDigest
     || lock.evidenceProfileDigest !== evidence.evidenceProfileDigest
     || lock.evidenceDigest !== evidence.evidenceDigest
     || lock.recordCount !== evidence.evidence.length
@@ -239,6 +279,9 @@ async function compileRetrievalStage(
     distribution: options.distribution,
     target,
     contextRoot: options.contextRoot,
+    sourceDigest,
+    evidenceLock: lock,
+    signal: options.signal,
   });
 }
 

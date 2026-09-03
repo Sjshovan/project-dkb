@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { DKB_CONFIG_FORMAT, resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import { resolveBuildProfiles } from '@sjshovan/dkb-pipeline/buildProfiles.js';
@@ -14,17 +15,26 @@ import { DKB_RUNTIME_ACTIVATION_PATH } from '@sjshovan/dkb-protocol/paths.js';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { validateEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { meilisearchIndexId, meilisearchIndexPrefix } from '@sjshovan/dkb-index-meilisearch/meilisearchProvider.js';
-import { readRetrievalProfileLock, resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
+import { readRetrievalProfileLock, resolveProviderRetrievalProfile, retrievalProfileLockForRetrievalPipelines } from '@sjshovan/dkb-pipeline/profile.js';
 import { listPackageBuilds, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { runtimePipelineCatalog } from '@sjshovan/dkb-runtime/runtime/pipelineCatalog.js';
+import { materializeBundledProviderFixtures } from './bundled-provider-fixture.mjs';
 
-const allPlugin = {
-  apiVersion: 2,
-  id: '@test/all',
-  version: '1.0.0',
-  setup(context) {
-    context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { providerId: '@test/all', providerVersion: '1.0.0', build: {} } }; } });
+const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
+const integrityFor = (id, version = '1.0.0') => ({
+  apiVersion: 3,
+  id,
+  version,
+  externalDigests: {},
+  protocols: [],
+  artifactFormats: [],
+});
+const pluginFixture = (id, setup, version = '1.0.0') => ({ apiVersion: 3, id, version, sourceUrl: import.meta.url, optionsSchema, integrity: integrityFor(id, version), setup });
+
+const allPlugin = pluginFixture('@test/all',
+  (context) => {
+    context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { build: {} } }; } });
     context.registerProvider({
       kind: 'embedding',
       async embedDocuments({ texts }) { return texts.map(() => [1]); },
@@ -38,14 +48,44 @@ const allPlugin = {
         };
       },
     });
-    context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } });
-    context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+    context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', capabilities: { vectors: 'required' }, async compilePackage() { return null; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'test', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; } });
+    context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: '@test/all', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
   },
-};
+);
 
-function distributionWith(plugins, defaults = DEFAULT_DKB_DISTRIBUTION.defaults) {
-  return { ...DEFAULT_DKB_DISTRIBUTION, defaults, plugins };
+async function distributionWith(t, plugins, defaults = DEFAULT_DKB_DISTRIBUTION.defaults) {
+  return materializeBundledProviderFixtures(t, { ...DEFAULT_DKB_DISTRIBUTION, defaults, plugins });
 }
+
+test('Pipeline labels do not alter recipe identities while options and loaded provider code remain bound', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-pipeline-alias-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const recipe = { evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all', options: { '@test/all': { dimensions: 1 } } };
+  const distribution = await distributionWith(t, [allPlugin], {
+    format: DKB_CONFIG_FORMAT, activeTarget: 'default', targets: {
+      default: recipe, renamed: structuredClone(recipe),
+      changed: { ...recipe, options: { '@test/all': { dimensions: 2 } } },
+    },
+  });
+  const hosts = [];
+  t.after(async () => { await Promise.all(hosts.map((host) => host.dispose())); });
+  for (const target of ['default', 'renamed', 'changed']) hosts.push(await DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution, target }));
+  const descriptions = hosts.map((host) => host.describe());
+  const profiles = await Promise.all(hosts.map(resolveProviderRetrievalProfile));
+  assert.equal(descriptions[0].target, 'default');
+  assert.equal(descriptions[1].target, 'renamed');
+  for (const field of ['configDigest', 'buildDigest']) {
+    assert.equal(descriptions[0][field], descriptions[1][field], field);
+    assert.notEqual(descriptions[0][field], descriptions[2][field], `options affect ${field}`);
+  }
+  for (const field of ['configDigest', 'providerBuildDigest', 'evidenceProfileDigest', 'retrievalProfileDigest']) assert.equal(profiles[0][field], profiles[1][field], field);
+  assert.deepEqual(profiles[0].compatibility, profiles[1].compatibility);
+  assert.notEqual(profiles[0].retrievalProfileDigest, profiles[2].retrievalProfileDigest);
+  assert.notDeepEqual(profiles[0].compatibility, profiles[2].compatibility);
+  await fs.appendFile(fileURLToPath(distribution.plugins[0].sourceUrl), '\n// changed shipped provider bytes\n');
+  await assert.rejects(hosts[0].assertCurrent(), /changed|drift|restart/i);
+  await assert.rejects(hosts[1].assertCurrent(), /changed|drift|restart/i);
+});
 
 test('bundled 384, 768, FastEmbed, and TEI targets share Evidence IR only when ingestion is identical', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-bundled-spaces-'));
@@ -76,22 +116,91 @@ test('bundled 384, 768, FastEmbed, and TEI targets share Evidence IR only when i
   assert.equal(resolved[4].retrieval.embedding.modelRevision, 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a');
 });
 
+test('bundled provider receipts bind host-attested OCI digests instead of mutable image tags', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-oci-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const evidenceDigest = `sha256:${'1'.repeat(64)}`;
+  const embeddingDigest = `sha256:${'2'.repeat(64)}`;
+  const indexDigest = `sha256:${'3'.repeat(64)}`;
+  const host = await DkbProviderHost.create({
+    root,
+    globalRoot: path.join(root, 'global'),
+    distribution: DEFAULT_DKB_DISTRIBUTION,
+    target: 'default',
+    targetOptions: {
+      '@dkb/evidence-docling-llamaindex': { imageDigest: evidenceDigest },
+      '@dkb/embedding-tei': { imageDigest: embeddingDigest },
+      '@dkb/index-faiss': { imageDigest: indexDigest },
+    },
+  });
+
+  try {
+    await resolveProviderRetrievalProfile(host);
+    assert.equal(host.providerIntegrity('evidence').externalDigests['image:evidence-worker'], evidenceDigest);
+    assert.equal(host.providerIntegrity('embedding').externalDigests['image:embedding-service'], embeddingDigest);
+    assert.equal(host.providerIntegrity('index').externalDigests['image:index-helper'], indexDigest);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('a lexical-only Pipeline resolves and locks without an embedding provider or dummy vectors', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-lexical-pipeline-'));
+  const runtimeRoot = path.join(root, 'runtime');
+  const libraryRoot = path.join(root, 'library');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const plugin = pluginFixture('@test/lexical', (context) => {
+    context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { build: {} } }; } });
+    context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.lexical.v1', capabilities: { vectors: 'none' }, async compilePackage() { return { build: {} }; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'lexical', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; } });
+    context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'none' }, openRuntime() { return { providerId: '@test/lexical', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  });
+  const defaults = {
+    format: DKB_CONFIG_FORMAT,
+    activeTarget: 'lexical',
+    targets: { lexical: { evidence: '@test/lexical', index: '@test/lexical', retrieval: '@test/lexical' } },
+  };
+  const host = await DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution: await distributionWith(t, [plugin], defaults) });
+
+  try {
+    const builds = await resolveBuildProfiles(host);
+    const resolved = await resolveProviderRetrievalProfile(host);
+    const lock = retrievalProfileLockForRetrievalPipelines(resolved, [{ documents: [], chunks: [], records: [], vectors: [], receipts: [] }], { generatedAt: '2026-09-02T00:00:00.000Z' });
+    assert.equal(builds.retrieval.embedding, undefined);
+    assert.equal(builds.retrieval.compatibility.embeddingProvider, undefined);
+    assert.equal(resolved.embedding, undefined);
+    assert.equal(lock.profile.embedding, undefined);
+    assert.deepEqual(lock.profile.retrieval.providers.map((provider) => provider.kind), ['index', 'retrieval']);
+  } finally {
+    await host.dispose();
+  }
+
+  const catalog = await runtimePipelineCatalog({
+    distribution: await distributionWith(t, [plugin], defaults),
+    root: runtimeRoot,
+    libraryRoot,
+    globalRoot: path.join(root, 'global'),
+  });
+  assert.equal(catalog.activeTarget, 'lexical');
+  assert.equal(catalog.targets.length, 1);
+  assert.equal(catalog.targets[0].health, 'ready');
+  assert.equal(catalog.targets[0].dimensions, null);
+  assert.deepEqual(catalog.targets[0].providers, ['@test/lexical', '@test/lexical', '@test/lexical']);
+  assert.deepEqual(catalog.targets[0].healthDetails.map((item) => item.kind), ['index', 'retrieval']);
+});
+
 test('Runtime Pipeline catalog shares health probes for identical resolved provider chains', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-pipeline-health-'));
   const libraryRoot = path.join(root, 'library');
   const runtimeRoot = path.join(root, 'runtime');
   const healthCalls = [];
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const plugin = {
-    apiVersion: 2,
-    id: '@test/health',
-    version: '1.0.0',
-    setup(context) {
+  const plugin = pluginFixture('@test/health',
+    (context) => {
       const health = (kind) => async () => {
         healthCalls.push(kind);
         return { ok: true, detail: `${kind} ready` };
       };
-      context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { providerId: '@test/health', providerVersion: '1.0.0', build: {} } }; } });
+      context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { build: {} } }; } });
       context.registerProvider({
         kind: 'embedding',
         async embedDocuments({ texts }) { return texts.map(() => [1]); },
@@ -99,17 +208,18 @@ test('Runtime Pipeline catalog shares health probes for identical resolved provi
         compatibility() { return { embeddingSpace: 'health-space', dimensions: 1, metric: 'cosine', normalized: true }; },
         health: health('embedding'),
       });
-      context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; }, health: health('index') });
+      context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', capabilities: { vectors: 'required' }, async compilePackage() { return null; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'test', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; }, health: health('index') });
       context.registerProvider({
         kind: 'retrieval',
         protocol: 'test.evidence.v1',
+        capabilities: { vectors: 'optional' },
         openRuntime() { return { providerId: '@test/health', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; },
         health: health('retrieval'),
       });
     },
-  };
+  );
   const sharedTarget = { evidence: '@test/health', embedding: '@test/health', index: '@test/health', retrieval: '@test/health' };
-  const distribution = distributionWith([plugin], {
+  const distribution = await distributionWith(t, [plugin], {
     format: DKB_CONFIG_FORMAT,
     activeTarget: 'first',
     targets: { first: sharedTarget, second: sharedTarget },
@@ -119,6 +229,110 @@ test('Runtime Pipeline catalog shares health probes for identical resolved provi
 
   assert.deepEqual(catalog.targets.map((target) => target.health), ['ready', 'ready']);
   assert.deepEqual(healthCalls.sort(), ['embedding', 'index', 'retrieval']);
+});
+
+test('Runtime Pipeline catalog reports a target with unresolved external identity without hiding healthy targets', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-pipeline-identity-'));
+  const libraryRoot = path.join(root, 'library');
+  const runtimeRoot = path.join(root, 'runtime');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sharedTarget = { evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all' };
+  const attestedPlugin = {
+    ...allPlugin,
+    identity: ({ options }) => ({ external: options.imageDigest ? [{ kind: 'image', name: 'test-worker', digest: options.imageDigest }] : [] }),
+  };
+  const distribution = {
+    ...await distributionWith(t, [attestedPlugin], {
+      format: DKB_CONFIG_FORMAT,
+      activeTarget: 'healthy',
+      targets: { healthy: { ...sharedTarget, options: { '@test/all': { imageDigest: `sha256:${'1'.repeat(64)}` } } }, unresolved: sharedTarget },
+    }),
+    services: [{
+      id: 'test-worker',
+      kind: 'docker',
+      providerId: '@test/all',
+      requiredBy: ['unresolved'],
+      providerExternalIdentities: [{ kind: 'image', name: 'test-worker', option: 'imageDigest' }],
+    }],
+  };
+
+  const catalog = await runtimePipelineCatalog({ distribution, root: runtimeRoot, libraryRoot });
+
+  const healthy = catalog.targets.find((target) => target.name === 'healthy');
+  const unresolved = catalog.targets.find((target) => target.name === 'unresolved');
+  assert.equal(healthy.health, 'ready');
+  assert.match(healthy.compatibilityDigest, /^sha256:/u);
+  assert.equal(unresolved.health, 'unavailable');
+  assert.equal(unresolved.compatibilityDigest, null);
+  assert.equal(unresolved.evidenceProfileDigest, null);
+  assert.equal(unresolved.retrievalProfileDigest, null);
+  assert.match(unresolved.healthDetails[0].detail, /cannot establish immutable image:test-worker identity/u);
+});
+
+test('renaming a target cannot drop bundled external identity requirements but a local replacement owns its own contract', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-renamed-identity-target-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const distribution = {
+    ...await distributionWith(t, [allPlugin], { format: DKB_CONFIG_FORMAT, activeTarget: 'renamed', targets: { renamed: { evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all' } } }),
+    services: [{ id: 'test-worker', kind: 'docker', providerId: '@test/all', requiredBy: ['original-name'], providerExternalIdentities: [{ kind: 'image', name: 'test-worker', option: 'imageDigest' }] }],
+  };
+  const bundled = await DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution });
+  assert.throws(() => bundled.assertRequiredExternalIdentities(), /cannot establish immutable image:test-worker/u);
+  await bundled.dispose();
+  await writeAllPlugin(pluginPath(path.join(root, '.dkb/plugins'), '@test/all'), '1.0.0', 'local replacement');
+  const local = await DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution });
+  try { assert.doesNotThrow(() => local.assertRequiredExternalIdentities()); } finally { await local.dispose(); }
+});
+
+test('query observers settle independently and report exact selected-plugin health', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-query-observer-settlement-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const calls = [];
+  const healthy = pluginFixture('@test/healthy-observer', (context) => {
+    context.registerQueryObserver({
+      id: '@test/healthy-observer',
+      version: '1.0.0',
+      async observe(event) { calls.push(`healthy:${event.eventId}`); },
+    });
+  });
+  const degraded = pluginFixture('@test/degraded-observer', (context) => {
+    context.registerQueryObserver({
+      id: '@test/degraded-observer',
+      version: '1.0.0',
+      async observe(event) {
+        calls.push(`degraded:${event.eventId}`);
+        throw new Error('observer export failed');
+      },
+    });
+  });
+  const target = {
+    evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all',
+    observers: ['@test/healthy-observer', '@test/degraded-observer'],
+  };
+  const host = await DkbProviderHost.create({
+    root,
+    globalRoot: path.join(root, 'global'),
+    distribution: await distributionWith(t, [allPlugin, healthy, degraded], {
+      format: DKB_CONFIG_FORMAT,
+      activeTarget: 'observer-proof',
+      targets: { 'observer-proof': target },
+    }),
+  });
+
+  try {
+    const results = await host.observeQuery({
+      eventId: 'observer-event', recordedAt: '2026-09-02T00:00:00.000Z', runtimeId: 'runtime',
+      channel: 'cli', status: 'success', data: {},
+    });
+
+    assert.deepEqual(calls.sort(), ['degraded:observer-event', 'healthy:observer-event']);
+    assert.deepEqual(results.map((result) => ({ id: result.id, ok: result.ok, detail: result.detail })), [
+      { id: '@test/healthy-observer', ok: true, detail: undefined },
+      { id: '@test/degraded-observer', ok: false, detail: 'observer export failed' },
+    ]);
+  } finally {
+    await host.dispose();
+  }
 });
 
 test('Meilisearch managed indexes isolate compatibility spaces for the same package release', () => {
@@ -135,6 +349,96 @@ test('Meilisearch managed indexes isolate compatibility spaces for the same pack
     meilisearchIndexId(root, 'Proof Library', '@test/package', '1.0.0', stableHash({ space: 'fastembed' })),
   );
 });
+
+test('query observer deadlines isolate stalls and prevent overlapping late deliveries', async (t) => {
+  const pending = Promise.withResolvers();
+  const signals = [];
+  let calls = 0;
+  let healthyCalls = 0;
+  const host = await observerHost(t, [
+    { id: '@test/stalled', version: '1.0.0', observe(_event, { signal }) {
+      calls += 1;
+      signals.push(signal);
+      if (calls === 1) return pending.promise;
+    } },
+    { id: '@test/healthy', version: '1.0.0', observe() { healthyCalls += 1; } },
+  ]);
+  t.after(() => pending.resolve());
+  const first = await host.observeQuery(observerEvent(), undefined, 15);
+  assert.deepEqual(first.map(({ ok }) => ok), [false, true]);
+  assert.match(first[0].detail, /exceeded its 15 ms delivery budget/u);
+  assert.equal(signals[0].aborted, true);
+  const second = await host.observeQuery(observerEvent(), undefined, 15);
+  assert.match(second[0].detail, /unfinished delivery/u);
+  assert.equal(calls, 1);
+  assert.equal(healthyCalls, 2);
+  pending.reject(new Error('late observer failure'));
+  await new Promise((resolve) => setImmediate(resolve));
+  const third = await host.observeQuery(observerEvent(), undefined, 15);
+  assert.deepEqual(third.map(({ ok }) => ok), [true, true]);
+  assert.equal(calls, 2);
+  assert.equal(healthyCalls, 3);
+});
+
+test('query observers honour pre-cancellation, caller cancellation, and host disposal', async (t) => {
+  const pending = Promise.withResolvers();
+  let calls = 0;
+  let started = Promise.withResolvers();
+  const host = await observerHost(t, [{
+    id: '@test/cancelled-observer', version: '1.0.0', observe(_event, { signal }) {
+      calls += 1;
+      started.resolve(signal);
+      return pending.promise;
+    },
+  }]);
+  t.after(() => pending.resolve());
+  const cancelled = AbortSignal.abort(new Error('cancelled before observer delivery'));
+  assert.match((await host.observeQuery(observerEvent(), cancelled))[0].detail, /cancelled before/u);
+  assert.equal(calls, 0);
+
+  const controller = new AbortController();
+  const running = host.observeQuery(observerEvent(), controller.signal);
+  const signal = await started.promise;
+  controller.abort(new Error('caller stopped telemetry'));
+  assert.match((await running)[0].detail, /caller stopped/u);
+  assert.equal(signal.aborted, true);
+  pending.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  started = Promise.withResolvers();
+  const unsettled = Promise.withResolvers();
+  const other = await observerHost(t, [{
+    id: '@test/disposed-observer', version: '1.0.0', observe(_event, { signal: closingSignal }) {
+      started.resolve(closingSignal);
+      return unsettled.promise;
+    },
+  }]);
+  t.after(() => unsettled.resolve());
+  const closing = other.observeQuery(observerEvent());
+  const closingSignal = await started.promise;
+  await other.dispose();
+  assert.match((await closing)[0].detail, /host closed/u);
+  assert.equal(closingSignal.aborted, true);
+});
+
+async function observerHost(t, observers) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-observer-delivery-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const plugins = observers.map((observer) => pluginFixture(observer.id, (context) => context.registerQueryObserver(observer)));
+  const target = { evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all', observers: observers.map(({ id }) => id) };
+  const host = await DkbProviderHost.create({
+    root, globalRoot: path.join(root, 'global'),
+    distribution: await distributionWith(t, [allPlugin, ...plugins], {
+      format: DKB_CONFIG_FORMAT, activeTarget: 'observers', targets: { observers: target },
+    }),
+  });
+  t.after(() => host.dispose());
+  return host;
+}
+
+function observerEvent() {
+  return { eventId: 'deadline-proof', recordedAt: '2026-09-03T00:00:00.000Z', runtimeId: 'runtime', channel: 'cli', status: 'success', data: {} };
+}
 
 test('context configuration merges bundled, global, and local targets deterministically', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-config-'));
@@ -217,7 +521,7 @@ test('provider host loads only selected plugins and prefers a local override', a
   await fs.mkdir(path.dirname(pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/unselected')), { recursive: true });
   await fs.writeFile(pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/unselected'), 'throw new Error("must not load");\n', 'utf8');
 
-  const host = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) });
+  const host = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: await distributionWith(t, [allPlugin]) });
   t.after(() => host.dispose());
   const description = host.describe();
 
@@ -235,14 +539,113 @@ test('local plugin code drift changes the provider build digest even when versio
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await writeAllPlugin(entrypoint, '1.0.0', 'first');
   await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
-  const first = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) });
+  const first = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: await distributionWith(t, [allPlugin]) });
   const firstDigest = first.describe().buildDigest;
   await first.dispose();
 
   await fs.writeFile(path.join(path.dirname(entrypoint), 'implementation.txt'), 'changed', 'utf8');
-  const second = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) });
+  const second = await DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: await distributionWith(t, [allPlugin]) });
   t.after(() => second.dispose());
   assert.notEqual(second.describe().buildDigest, firstDigest);
+});
+
+test('provider profile identity ignores install paths and non-shipped TypeScript build metadata', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-portable-identity-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profiles = [];
+  const descriptions = [];
+
+  for (const [name, buildMetadata] of [['first', 'windows-build-state'], ['second', 'linux-build-state']]) {
+    const contextRoot = path.join(root, name);
+    const entrypoint = pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/all');
+    await writeAllPlugin(entrypoint, '1.0.0', 'portable');
+    await fs.writeFile(path.join(path.dirname(entrypoint), '.tsbuildinfo'), buildMetadata, 'utf8');
+    await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
+    const host = await DkbProviderHost.create({
+      root: contextRoot,
+      globalRoot: path.join(root, 'global'),
+      distribution: await distributionWith(t, [allPlugin]),
+    });
+    descriptions.push(host.describe());
+    profiles.push(await resolveBuildProfiles(host));
+    await host.dispose();
+  }
+
+  assert.notEqual(descriptions[0].providers[0].sourcePath, descriptions[1].providers[0].sourcePath);
+  assert.equal(descriptions[0].providers[0].sourceDigest, descriptions[1].providers[0].sourceDigest);
+  assert.equal(descriptions[0].buildDigest, descriptions[1].buildDigest);
+  assert.equal(profiles[0].evidence.profileDigest, profiles[1].evidence.profileDigest);
+  assert.equal(profiles[0].retrieval.profileDigest, profiles[1].retrieval.profileDigest);
+  assert.equal(profiles[0].retrieval.compatibilityDigest, profiles[1].retrieval.compatibilityDigest);
+});
+
+test('local provider external identity changes only its profile while operational options do not', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-external-identity-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const contextRoot = path.join(root, 'library');
+  const serviceA = `sha256:${'a'.repeat(64)}`;
+  const serviceB = `sha256:${'b'.repeat(64)}`;
+  const corePlugin = pluginFixture('@test/identity-core', (context) => {
+    context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { build: {} } }; } });
+    context.registerProvider({ kind: 'index', mode: 'packaged', format: 'identity.v1', capabilities: { vectors: 'required' }, async compilePackage() { return null; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'identity', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; } });
+    context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: '@test/identity-core', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  });
+  const pluginSource = `
+export const apiVersion = 3;
+export const id = '@test/external-embedding';
+export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: { model: 'test-model', timeoutMs: 1000, ...(value ?? {}) } }; } } };
+export function identity({ options }) { return { profileOptions: { model: options.model } }; }
+export function setup(context) {
+  context.registerProvider({
+    kind: 'embedding',
+    identity: ({ options }) => ({ external: [{ kind: 'service', name: 'embedding-api', digest: options.serviceDigest }] }),
+    async embedDocuments({ texts }) { return texts.map(() => [1]); },
+    async embedQuery() { return [1]; },
+    compatibility() { return { embeddingSpace: 'test-model', dimensions: 1, metric: 'cosine', normalized: true }; },
+  });
+}
+`;
+  const defaults = {
+    format: DKB_CONFIG_FORMAT,
+    activeTarget: 'identity',
+    targets: {
+      identity: {
+        evidence: '@test/identity-core',
+        embedding: '@test/external-embedding',
+        index: '@test/identity-core',
+        retrieval: '@test/identity-core',
+      },
+    },
+  };
+  const target = pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/external-embedding');
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, pluginSource, 'utf8');
+  const profiles = [];
+  const receipts = [];
+  for (const options of [
+    { serviceDigest: serviceA, timeoutMs: 1000 },
+    { serviceDigest: serviceB, timeoutMs: 1000 },
+    { serviceDigest: serviceB, timeoutMs: 9000 },
+  ]) {
+    await writeJson(path.join(contextRoot, '.dkb/config.json'), {
+      format: DKB_CONFIG_FORMAT,
+      targets: { identity: { options: { '@test/external-embedding': options } } },
+    });
+    const host = await DkbProviderHost.create({
+      root: contextRoot,
+      globalRoot: path.join(root, 'global'),
+      distribution: await distributionWith(t, [corePlugin], defaults),
+    });
+    profiles.push(await resolveBuildProfiles(host));
+    receipts.push(host.providerIntegrity('embedding'));
+    await host.dispose();
+  }
+
+  assert.equal(new Set(profiles.map((profile) => profile.evidence.profileDigest)).size, 1);
+  assert.notEqual(profiles[0].retrieval.profileDigest, profiles[1].retrieval.profileDigest);
+  assert.equal(profiles[1].retrieval.profileDigest, profiles[2].retrieval.profileDigest);
+  assert.deepEqual(receipts[1].externalDigests, { 'service:embedding-api': serviceB });
 });
 
 test('a broken local override fails instead of falling back', async (t) => {
@@ -253,16 +656,16 @@ test('a broken local override fails instead of falling back', async (t) => {
   await writeAllPlugin(pluginPath(path.join(globalRoot, 'plugins'), '@test/all'), '2.0.0', 'global');
   const local = pluginPath(path.join(contextRoot, '.dkb/plugins'), '@test/all');
   await fs.mkdir(path.dirname(local), { recursive: true });
-  await fs.writeFile(local, 'export const apiVersion = 2; export const id = "@test/wrong"; export const version = "1"; export function setup() {}\n', 'utf8');
+  await fs.writeFile(local, 'export const apiVersion = 3; export const id = "@test/wrong"; export const version = "1"; export const optionsSchema = { "~standard": { version: 1, vendor: "test", validate(value) { return { value: value ?? {} }; } } }; export function setup() {}\n', 'utf8');
   await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
 
   await assert.rejects(
-    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) }),
-    /Invalid plugin.*expected exports apiVersion=2, id=@test\/all/i,
+    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: await distributionWith(t, [allPlugin]) }),
+    /plugin API v3 requires.*id=@test\/all/i,
   );
 });
 
-test('plugin API v1 is rejected instead of being loaded through a compatibility path', async (t) => {
+test('plugin API v1 and v2 are rejected instead of being loaded through a compatibility path', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-api-v1-'));
   const globalRoot = path.join(root, 'global');
   const contextRoot = path.join(root, 'library');
@@ -273,8 +676,13 @@ test('plugin API v1 is rejected instead of being loaded through a compatibility 
   await writeJson(path.join(contextRoot, '.dkb/config.json'), targetConfig('@test/all'));
 
   await assert.rejects(
-    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: distributionWith([allPlugin]) }),
-    /Invalid plugin.*expected exports apiVersion=2, id=@test\/all/i,
+    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: await distributionWith(t, [allPlugin]) }),
+    /plugin API v3 requires.*id=@test\/all/i,
+  );
+  await fs.writeFile(local, 'export const apiVersion = 2; export const id = "@test/all"; export const version = "2"; export const optionsSchema = {}; export function setup() {}\n', 'utf8');
+  await assert.rejects(
+    DkbProviderHost.create({ root: contextRoot, globalRoot, distribution: await distributionWith(t, [allPlugin]) }),
+    /plugin API v3 requires.*id=@test\/all/i,
   );
 });
 
@@ -284,27 +692,23 @@ test('processor order is deterministic and hosts dispose independently', async (
   const firstRoot = path.join(root, 'first');
   const secondRoot = path.join(root, 'second');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const processor = (id, suffix) => ({
-    apiVersion: 2,
-    id,
-    version: '1.0.0',
-    setup(context) {
+  const processor = (id, suffix) => pluginFixture(id,
+    (context) => {
       context.registerProcessor({
         id,
         version: '1.0.0',
         stage: 'record',
         mutate(value) { return { ...value, text: `${value.text}${suffix}` }; },
       });
-    },
-  });
+    });
   const bundled = [allPlugin, processor('@test/first', '-first'), processor('@test/second', '-second')];
   await writeJson(path.join(firstRoot, '.dkb/config.json'), targetConfig('@test/all', ['@test/first', '@test/second']));
   await writeJson(path.join(secondRoot, '.dkb/config.json'), targetConfig('@test/all', ['@test/second']));
-  const first = await DkbProviderHost.create({ root: firstRoot, globalRoot, distribution: distributionWith(bundled) });
-  const second = await DkbProviderHost.create({ root: secondRoot, globalRoot, distribution: distributionWith(bundled) });
+  const first = await DkbProviderHost.create({ root: firstRoot, globalRoot, distribution: await distributionWith(t, bundled) });
+  const second = await DkbProviderHost.create({ root: secondRoot, globalRoot, distribution: await distributionWith(t, bundled) });
   t.after(() => Promise.all([first.dispose(), second.dispose()]));
 
-  const seed = [{ id: 'r', chunkId: 'c', text: 'seed', metadata: {} }];
+  const seed = [{ id: 'r', chunkId: 'c', text: 'seed', provenance: { assetId: 'a', storeId: 's', sourceType: 'filesystem', locator: { path: 'proof.md' }, assetLocator: { path: 'proof.md' }, title: 'Proof', sourceHash: stableHash('source'), updatedAt: new Date(0).toISOString(), chunkOrdinal: 0, chunkStart: 0, chunkEnd: 4 }, metadata: {} }];
   assert.equal((await first.mutate('record', seed))[0].text, 'seed-first-second');
   assert.equal((await second.mutate('record', seed))[0].text, 'seed-second');
   await first.dispose();
@@ -312,17 +716,100 @@ test('processor order is deterministic and hosts dispose independently', async (
   assert.throws(() => first.describe(), /disposed/i);
 });
 
+test('processor output is validated after each middleware step', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-step-validation-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const invalid = pluginFixture('@test/invalid-step', (context) => context.registerProcessor({
+    id: '@test/invalid-step',
+    version: '1.0.0',
+    stage: 'record',
+    mutate(value) { return { ...value, metadata: { ...value.metadata, invalid: new Date(0) } }; },
+  }));
+  const repair = pluginFixture('@test/repair-step', (context) => context.registerProcessor({
+    id: '@test/repair-step',
+    version: '1.0.0',
+    stage: 'record',
+    mutate(value) { const { invalid: _invalid, ...metadata } = value.metadata; return { ...value, metadata }; },
+  }));
+  await writeJson(path.join(root, '.dkb/config.json'), targetConfig('@test/all', ['@test/invalid-step', '@test/repair-step']));
+  const host = await DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution: await distributionWith(t, [allPlugin, invalid, repair]) });
+  t.after(() => host.dispose());
+  const record = { id: 'record', chunkId: 'chunk', text: 'proof', provenance: { assetId: 'asset', storeId: 'filesystem', sourceType: 'filesystem', locator: { path: 'proof.md' }, assetLocator: { path: 'proof.md' }, title: 'Proof', sourceHash: stableHash('proof'), updatedAt: new Date(0).toISOString(), chunkOrdinal: 0, chunkStart: 0, chunkEnd: 5 }, metadata: {} };
+
+  await assert.rejects(host.mutate('record', [record]), /not JSON-safe|non-plain object/u);
+});
+
+test('fused Evidence pipelines fail closed on processor stages they cannot interleave', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-fused-stage-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const processor = pluginFixture('@test/document-after-fused', (context) => context.registerProcessor({
+    id: '@test/document-after-fused',
+    version: '1.0.0',
+    stage: 'document',
+    mutate(value) { return value; },
+  }));
+  await writeJson(path.join(root, '.dkb/config.json'), targetConfig('@test/all', ['@test/document-after-fused']));
+
+  await assert.rejects(
+    DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution: await distributionWith(t, [allPlugin, processor]) }),
+    /fused Evidence provider.*only record processors/iu,
+  );
+});
+
+test('DKB replaces provider-supplied reserved metadata with canonical identities', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-reserved-metadata-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sourceHash = stableHash('source bytes');
+  const plugin = pluginFixture('@test/canonical-metadata', (context) => {
+    context.registerProvider({
+      kind: 'evidence',
+      async compile() {
+        return {
+          records: [{
+            id: 'native-record',
+            chunkId: 'native-chunk',
+            text: 'trusted identity proof',
+            provenance: { assetId: 'asset', storeId: 'filesystem', sourceType: 'filesystem', locator: { path: 'proof.md', chunk: 0 }, assetLocator: { path: 'proof.md' }, title: 'Proof', sourceHash, updatedAt: new Date(0).toISOString(), chunkOrdinal: 0, chunkStart: 0, chunkEnd: 22 },
+            metadata: { custom: 'kept', dkb_package_id: '@hostile/claim', dkb_package_version: '999.0.0', dkb_path: '../../hostile', dkb_source_hash: stableHash('hostile'), dkb_text_hash: stableHash('hostile') },
+          }],
+          receipt: { build: {} },
+        };
+      },
+    });
+    context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [1]); }, async embedQuery() { return [1]; }, compatibility() { return { embeddingSpace: 'canonical', dimensions: 1, metric: 'cosine', normalized: true }; } });
+    context.registerProvider({ kind: 'index', mode: 'packaged', format: 'canonical.v1', capabilities: { vectors: 'required' }, async compilePackage() { return null; }, async validatePackage() { return { documentCount: 1 }; }, async verifyRuntime() { return { indexId: 'canonical', documentCount: 1, status: 'ready' }; }, async openRuntime() { return null; } });
+    context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: '@test/canonical-metadata', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  });
+  const defaults = { format: DKB_CONFIG_FORMAT, activeTarget: 'default', targets: { default: { evidence: plugin.id, embedding: plugin.id, index: plugin.id, retrieval: plugin.id } } };
+  const host = await DkbProviderHost.create({ root, globalRoot: path.join(root, 'global'), distribution: await distributionWith(t, [plugin], defaults) });
+  t.after(() => host.dispose());
+  const compiled = await compileDkbWithProviderHost(host, {
+    root,
+    manifestPath: path.join(root, 'dkb.json'),
+    manifestHash: stableHash('manifest'),
+    manifest: { manifestVersion: 1, type: 'dkb', id: '@test/canonical-package', name: '@test/canonical-package', version: '1.2.3', adapter: 'folder', entrypoint: '.', permissions: { read: true, write: false } },
+  });
+  const record = compiled.records[0];
+
+  assert.equal(record.metadata.custom, 'kept');
+  assert.equal(record.metadata.dkb_package_id, '@test/canonical-package');
+  assert.equal(record.metadata.dkb_package_version, '1.2.3');
+  assert.equal(record.metadata.dkb_path, 'proof.md');
+  assert.equal(record.metadata.dkb_source_hash, sourceHash);
+  assert.equal(record.metadata.dkb_text_hash, stableHash(record.text));
+});
+
 test('separate parser, chunker, embedder, and middleware providers share one compilation contract', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-separate-'));
   const library = path.join(root, 'library');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const provider = (id, setup) => ({ apiVersion: 2, id, version: '1.0.0', setup });
+  const provider = (id, setup) => pluginFixture(id, setup);
   const bundled = [
-    provider('@test/parser', (context) => context.registerProvider({ kind: 'parser', async parse() { return [{ id: 'doc', path: 'proof.md', text: 'parsed', metadata: {} }]; } })),
-    provider('@test/chunker', (context) => context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'chunk', documentId: documents[0].id, text: `${documents[0].text}-chunked`, metadata: {} }]; } })),
+    provider('@test/parser', (context) => context.registerProvider({ kind: 'parser', async parse() { return [{ id: 'doc', path: 'proof.md', text: 'parsed', provenance: { assetId: 'proof.md', storeId: 'filesystem', sourceType: 'filesystem', assetLocator: { path: 'proof.md' }, title: 'Proof', sourceHash: 'sha256:' + 'a'.repeat(64), updatedAt: '2026-01-01T00:00:00.000Z' }, metadata: { sourceHash: 'untrusted custom label' } }]; } })),
+    provider('@test/chunker', (context) => context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'chunk', documentId: documents[0].id, text: `${documents[0].text}-chunked`, provenance: { locator: { path: 'proof.md', section: 'first' }, chunkOrdinal: 0, chunkStart: 0, chunkEnd: documents[0].text.length }, metadata: { chunkStart: 9999, sourceHash: 'must not override source provenance' } }]; } })),
     provider('@test/embedder', (context) => context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [0.5, 0.5]); }, async embedQuery() { return [0.5, 0.5]; }, compatibility() { return { embeddingSpace: 'test', dimensions: 2, metric: 'cosine', normalized: true }; } })),
-    provider('@test/index', (context) => context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } })),
-    provider('@test/retrieval', (context) => context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } })),
+    provider('@test/index', (context) => context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', capabilities: { vectors: 'required' }, async compilePackage() { return null; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'test', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; } })),
+    provider('@test/retrieval', (context) => context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } })),
     provider('@test/document-mutator', (context) => context.registerProcessor({ id: '@test/document-mutator', version: '1.0.0', stage: 'document', mutate(value) { return { ...value, text: `${value.text}-document` }; } })),
     provider('@test/chunk-mutator', (context) => context.registerProcessor({ id: '@test/chunk-mutator', version: '1.0.0', stage: 'chunk', mutate(value) { return { ...value, text: `${value.text}-chunk` }; } })),
     provider('@test/record-mutator', (context) => context.registerProcessor({ id: '@test/record-mutator', version: '1.0.0', stage: 'record', mutate(value) { return { ...value, text: `${value.text}-record` }; } })),
@@ -340,7 +827,7 @@ test('separate parser, chunker, embedder, and middleware providers share one com
       },
     },
   });
-  const host = await DkbProviderHost.create({ root: library, globalRoot: path.join(root, 'global'), distribution: distributionWith(bundled) });
+  const host = await DkbProviderHost.create({ root: library, globalRoot: path.join(root, 'global'), distribution: await distributionWith(t, bundled) });
   t.after(() => host.dispose());
   const compiled = await compileDkbWithProviderHost(host, {
     root: library,
@@ -352,6 +839,11 @@ test('separate parser, chunker, embedder, and middleware providers share one com
   assert.equal(compiled.documents[0].text, 'parsed-document');
   assert.equal(compiled.chunks[0].text, 'parsed-document-chunked-chunk');
   assert.equal(compiled.records[0].text, 'parsed-document-chunked-chunk-record');
+  assert.equal(compiled.records[0].provenance.sourceHash, `sha256:${'a'.repeat(64)}`);
+  assert.equal(compiled.records[0].provenance.chunkStart, 0);
+  assert.equal(compiled.records[0].provenance.chunkEnd, 'parsed-document'.length);
+  assert.deepEqual(compiled.records[0].provenance.locator, { path: 'proof.md', section: 'first' });
+  assert.notEqual(compiled.records[0].provenance.sourceHash, stableHash(compiled.documents[0].text));
   assert.equal('embedding' in compiled.records[0], false);
   assert.deepEqual(compiled.vectors, [{ evidenceId: compiled.records[0].id, values: [0.5, 0.5] }]);
   assert.deepEqual(
@@ -392,34 +884,37 @@ test('separate providers compile a complete package without a LlamaIndex-native 
   await fs.writeFile(plugin, `
 import fs from 'node:fs/promises';
 import path from 'node:path';
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/separate';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
-  context.registerProvider({ kind: 'parser', async parse({ dkb }) { const counter = path.join(dkb.root, '.dkb', 'parse-count.txt'); await fs.mkdir(path.dirname(counter), { recursive: true }); const count = Number.parseInt(await fs.readFile(counter, 'utf8').catch(() => '0'), 10); await fs.writeFile(counter, String(count + 1)); return [{ id: 'proof', path: 'proof.md', text: 'SOURCE-PROOF-14', metadata: {} }]; } });
-  context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'proof-chunk', documentId: documents[0].id, text: documents[0].text, metadata: {} }]; } });
+  context.registerProvider({ kind: 'parser', async parse({ dkb }) { const counter = path.join(dkb.root, '.dkb', 'parse-count.txt'); await fs.mkdir(path.dirname(counter), { recursive: true }); const count = Number.parseInt(await fs.readFile(counter, 'utf8').catch(() => '0'), 10); await fs.writeFile(counter, String(count + 1)); return [{ id: 'proof', path: 'proof.md', text: 'SOURCE-PROOF-14', provenance: { assetId: 'proof.md', storeId: 'filesystem', sourceType: 'filesystem', assetLocator: { path: 'proof.md' }, title: 'Proof', sourceHash: 'sha256:' + 'a'.repeat(64), updatedAt: '2026-01-01T00:00:00.000Z' }, metadata: {} }]; } });
+  context.registerProvider({ kind: 'chunker', async chunk({ documents }) { return [{ id: 'proof-chunk', documentId: documents[0].id, text: documents[0].text, provenance: { locator: { path: 'proof.md', chunk: 0 }, chunkOrdinal: 0, chunkStart: 0, chunkEnd: documents[0].text.length }, metadata: {} }]; } });
   context.registerProvider({
-    kind: 'index', mode: 'packaged', format: 'test.index.v1',
+    kind: 'index', mode: 'packaged', format: 'test.index.v1', capabilities: { vectors: 'required' },
     async compilePackage({ artifactsRoot, compiled }) {
       const target = path.join(artifactsRoot, 'test-index.json');
       const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values]));
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) }))));
-      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
+      return { build: { recordCount: compiled.records.length } };
     },
     async validatePackage() { return { documentCount: 1 }; },
+    async verifyRuntime() { return { indexId: 'test', documentCount: 1, status: 'ready' }; },
     async openRuntime() { return null; },
   });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: id, protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
   context.registerProcessor({ id, version, stage: 'record', mutate(value) { return { ...value, text: value.text + '-MUTATED' }; } });
 }
 `, 'utf8');
   const initialEmbedding = pluginPath(path.join(root, '.dkb/plugins'), '@test/initial-embedding');
   await fs.mkdir(path.dirname(initialEmbedding), { recursive: true });
   await fs.writeFile(initialEmbedding, `
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/initial-embedding';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [0.6, 0.8]); }, async embedQuery() { return [0.6, 0.8]; }, compatibility() { return { embeddingSpace: 'test-space-v1', dimensions: 2, metric: 'cosine', normalized: true }; } });
 }
@@ -427,9 +922,10 @@ export function setup(context) {
   const alternate = pluginPath(path.join(root, '.dkb/plugins'), '@test/alternate');
   await fs.mkdir(path.dirname(alternate), { recursive: true });
   await fs.writeFile(alternate, `
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/alternate';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [1, 0]); }, async embedQuery() { return [1, 0]; }, compatibility() { return { embeddingSpace: 'test-space-v2', dimensions: 2, metric: 'cosine', normalized: true }; } });
 }
@@ -445,7 +941,7 @@ export function setup(context) {
   };
   await writeJson(path.join(root, '.dkb/config.json'), config);
 
-  const result = await compileComposeProject(root, { force: true, mode: 'package' });
+  const result = await compileComposeProject(root, { force: true });
   const graph = await validatePackageBuildGraph(root);
   const [catalog, evidence, profile, indexRecords] = await Promise.all([
     Promise.resolve(readEvidenceCatalog(graph.evidencePath)),
@@ -494,7 +990,7 @@ export function setup(context) {
 
 test('embedding cache reuses exact text within one space and misses after a space change', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-embedding-cache-'));
-  const counterPath = path.join(root, 'embed-count.txt');
+  const counterPath = path.join(root, '.dkb', 'embed-count.txt');
   const previousCounter = process.env.DKB_TEST_EMBED_COUNTER;
   process.env.DKB_TEST_EMBED_COUNTER = counterPath;
   t.after(async () => {
@@ -535,28 +1031,30 @@ test('embedding cache reuses exact text within one space and misses after a spac
   await fs.writeFile(core, `
 import fs from 'node:fs/promises';
 import path from 'node:path';
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/cache-core';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({
     kind: 'evidence',
     async compile({ dkb }) {
       const text = await fs.readFile(path.join(dkb.root, 'knowledge.md'), 'utf8');
-      return { records: [{ id: 'cache', chunkId: 'cache', text, embedding: [999], metadata: { assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem', locator: { path: 'knowledge.md' }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', hash: 'sha256:cache', updatedAt: '2026-08-28T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length, sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:cache-source' } } }], receipt: { providerId: id, providerVersion: version, build: {} } };
+      return { records: [{ id: 'cache', chunkId: 'cache', text, provenance: { assetId: 'knowledge.md', storeId: 'filesystem', sourceType: 'filesystem', locator: { path: 'knowledge.md' }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', sourceHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', updatedAt: '2026-08-28T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length }, metadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }], receipt: { build: {} } };
     },
   });
-  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', async compilePackage({ artifactsRoot, compiled }) { const target = path.join(artifactsRoot, 'cache-index.json'); const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values])); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) })))); return { providerId: id, providerVersion: version, build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async openRuntime() { return null; } });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'cache.index.v1', capabilities: { vectors: 'required' }, async compilePackage({ artifactsRoot, compiled }) { const target = path.join(artifactsRoot, 'cache-index.json'); const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values])); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) })))); return { build: {} }; }, async validatePackage() { return { documentCount: 1 }; }, async verifyRuntime() { return { indexId: 'test', documentCount: 1, status: 'ready' }; }, async openRuntime() { return null; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: id, protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
   const embedding = pluginPath(path.join(root, '.dkb/plugins'), '@test/cache-embedding');
   await fs.mkdir(path.dirname(embedding), { recursive: true });
   await fs.writeFile(embedding, `
 import fs from 'node:fs/promises';
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/cache-embedding';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({
     kind: 'embedding',
@@ -567,21 +1065,21 @@ export function setup(context) {
 }
 `, 'utf8');
 
-  await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
-  await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
+  await compileComposeProject(root, { force: true, target: 'first' });
+  await compileComposeProject(root, { force: true, target: 'first' });
   assert.equal(await fs.readFile(counterPath, 'utf8'), '1');
   const firstGraph = await validatePackageBuildGraph(root);
   const firstIndex = JSON.parse(await fs.readFile(path.join(firstGraph.retrievalPath, 'artifacts', 'cache-index.json'), 'utf8'));
   assert.deepEqual(firstIndex[0].embedding, [0.25]);
 
-  await compileComposeProject(root, { force: true, mode: 'package', target: 'second' });
+  await compileComposeProject(root, { force: true, target: 'second' });
   assert.equal(await fs.readFile(counterPath, 'utf8'), '2');
   const builds = await listPackageBuilds(root);
   assert.equal(builds.evidence.length, 1);
   assert.equal(builds.retrieval.length, 2);
 
   await fs.writeFile(path.join(root, '.dkb', 'cache', 'embeddings.sqlite'), 'not a sqlite database', 'utf8');
-  await compileComposeProject(root, { force: true, mode: 'package', target: 'first' });
+  await compileComposeProject(root, { force: true, target: 'first' });
   assert.equal(await fs.readFile(counterPath, 'utf8'), '3');
   assert.ok((await fs.readdir(path.join(root, '.dkb', 'cache'))).some((name) => name.startsWith('embeddings.sqlite.corrupt-')));
   assert.equal((await listPackageBuilds(root)).retrieval.length, 2);
@@ -618,7 +1116,7 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   const library = path.join(root, 'library');
   const globalRoot = path.join(root, 'global');
   const configPath = path.join(library, '.dkb/config.json');
-  const distribution = distributionWith([allPlugin], targetConfig('@test/all'));
+  const distribution = await distributionWith(t, [allPlugin], targetConfig('@test/all'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   const promoted = await setPipelineTarget({
@@ -654,12 +1152,42 @@ test('pipeline changes validate before atomic promotion and preserve the prior c
   assert.equal(await fs.readFile(configPath, 'utf8'), before);
 });
 
+test('saving a recipe without activation validates that recipe and retains the default suggestion', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-save-'));
+  const library = path.join(root, 'library');
+  const globalRoot = path.join(root, 'global');
+  const configPath = path.join(library, '.dkb/config.json');
+  const defaults = targetConfig('@test/all');
+  defaults.targets.default.evidence = '@missing/unselected';
+  const distribution = await distributionWith(t, [allPlugin], defaults);
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const patch = {
+    evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all', processors: [],
+  };
+
+  const saved = await setPipelineTarget({ distribution, root: library, globalRoot, name: 'available', activate: false, patch });
+  assert.equal(saved.target, 'available');
+  assert.equal(JSON.parse(await fs.readFile(configPath, 'utf8')).activeTarget, undefined);
+
+  await setPipelineTarget({ distribution, root: library, globalRoot, name: 'available', activate: true, patch });
+  const before = await fs.readFile(configPath, 'utf8');
+  await assert.rejects(setPipelineTarget({
+    distribution, root: library, globalRoot, name: 'broken', activate: false,
+    patch: { ...patch, evidence: '@missing/saved-recipe' },
+  }), /Selected plugin @missing\/saved-recipe was not found/);
+  assert.equal(await fs.readFile(configPath, 'utf8'), before);
+
+  const alternate = await setPipelineTarget({ distribution, root: library, globalRoot, name: 'alternate', activate: false, patch });
+  assert.equal(alternate.target, 'alternate');
+  assert.equal(JSON.parse(await fs.readFile(configPath, 'utf8')).activeTarget, 'available');
+});
+
 test('Library Pipeline recipes are suggestions and never act as Runtime activation', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-compatible-promote-'));
   const library = path.join(root, 'library');
   const globalRoot = path.join(root, 'global');
   const configPath = path.join(library, '.dkb/config.json');
-  const distribution = distributionWith([allPlugin], targetConfig('@test/all'));
+  const distribution = await distributionWith(t, [allPlugin], targetConfig('@test/all'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   await setPipelineTarget({
@@ -742,14 +1270,15 @@ async function writeJson(target, value) {
 async function writeAllPlugin(target, version, source) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, `
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/all';
 export const version = '${version}';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
-  context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { providerId: id, providerVersion: version, build: { source: '${source}' } } }; } });
-  context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [${Number(version[0])}]); }, async embedQuery() { return [${Number(version[0])}]; }, compatibility() { return { dimensions: 1 }; } });
-  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', async openRuntime() { return null; } });
-  context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { build: { source: '${source}' } } }; } });
+  context.registerProvider({ kind: 'embedding', async embedDocuments({ texts }) { return texts.map(() => [${Number(version[0])}]); }, async embedQuery() { return [${Number(version[0])}]; }, compatibility() { return { embeddingSpace: 'test', dimensions: 1, metric: 'cosine', normalized: true }; } });
+  context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.v1', capabilities: { vectors: 'required' }, async compilePackage() { return null; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'test', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'test.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: id, protocol: 'test.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
 }
@@ -758,9 +1287,10 @@ async function writePluginSource(target, id, version) {
   await fs.mkdir(target, { recursive: true });
   await fs.writeFile(path.join(target, 'helper.txt'), 'support', 'utf8');
   await fs.writeFile(path.join(target, 'plugin.mjs'), `
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '${id}';
 export const version = '${version}';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProcessor({ id, version, stage: 'record', mutate(value) { return value; } });
 }

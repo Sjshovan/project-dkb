@@ -12,6 +12,7 @@ export type ConsoleCommandId =
   | 'runtime.library.show'
   | 'runtime.library.use'
   | 'runtime.refresh'
+  | 'runtime.audit.list'
   | 'runtime.register'
   | 'runtime.unregister'
   | 'runtime.use'
@@ -24,6 +25,9 @@ export type ConsoleCommandId =
   | 'registry.catalog'
   | 'registry.entry'
   | 'registry.contents'
+  | 'registry.pipeline.list'
+  | 'registry.build'
+  | 'registry.build.cancel'
   | 'stack.list'
   | 'stack.use'
   | 'stack.up'
@@ -32,7 +36,10 @@ export type ConsoleCommandId =
   | 'package.show'
   | 'package.contents'
   | 'package.preview'
+  | 'package.evidence'
   | 'package.verify'
+  | 'package.build.verify'
+  | 'package.publish'
   | 'package.uninstall'
   | 'package.upgrade'
   | 'pipeline.list'
@@ -62,6 +69,7 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   'pipeline.list': read('pipeline.list', ['pipeline', 'list'], runtimeNameInput, (input) => ['--runtime', text(input.runtime)], verificationTimeout),
   'pipeline.show': read('pipeline.show', ['pipeline', 'show'], pipelineReadInput, (input) => [text(input.target), '--runtime', text(input.runtime)]),
   'pipeline.verify': read('pipeline.verify', ['pipeline', 'verify'], pipelineReadInput, (input) => [text(input.target), '--runtime', text(input.runtime)], verificationTimeout),
+  'runtime.audit.list': read('runtime.audit.list', ['runtime', 'audit', 'list'], runtimeAuditInput, (input) => [text(input.runtime), '--limit', text(input.limit)]),
   'registry.list': read('registry.list', ['registry', 'list'], checkInput),
   'registry.catalog': read('registry.catalog', ['search'], registryCatalogInput, (input) => [
     ...(input.query ? [text(input.query)] : []), '--url', text(input.url), '--type', text(input.type),
@@ -76,6 +84,7 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
     text(input.identity), '--url', text(input.url), '--version', text(input.version), '--contents', text(input.path),
     '--limit', text(input.limit), ...(input.cursor ? ['--cursor', text(input.cursor)] : []),
   ]),
+  'registry.pipeline.list': read('registry.pipeline.list', ['registry', 'pipeline', 'list'], registryPipelineInput, (input) => ['--url', text(input.url)]),
   'stack.list': read('stack.list', ['stack', 'list'], checkInput),
   'stack.use': mutation('stack.use', ['stack', 'use'], namedInput('stack'), (input) => [text(input.name)], (input) => `host:stack:${text(input.name)}`),
   'package.show': read('package.show', ['show'], packageMutationInput, (input) => [text(input.identity), '--library', text(input.library)]),
@@ -86,9 +95,19 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
   'package.preview': read('package.preview', ['show'], packagePreviewInput, (input) => [
     text(input.identity), '--library', text(input.library), '--preview', text(input.file),
   ]),
+  'package.evidence': read('package.evidence', ['show'], packageEvidenceInput, (input) => [
+    text(input.identity), '--library', text(input.library), '--version', text(input.version),
+    '--evidence-build', text(input.evidenceDigest), '--evidence', text(input.evidenceId),
+  ]),
   'package.verify': read('package.verify', ['show'], packageMutationInput, (input) => [
     text(input.identity), '--library', text(input.library), '--verify',
   ], verificationTimeout),
+  'package.build.verify': read('package.build.verify', ['show'], packageBuildVerificationInput, (input) => [
+    text(input.identity), '--library', text(input.library), '--verify-build', text(input.buildDigest),
+  ], verificationTimeout),
+  'package.publish': mutation('package.publish', ['publish'], packagePublishInput, (input) => [
+    '--installed', text(input.identity), '--library', text(input.library), '--url', text(input.url), '--pipeline', text(input.pipeline),
+  ], (input) => `library:${text(input.library)}`),
   'library.register': mutation('library.register', ['library', 'register'], libraryRegistrationInput, (input) => [
     text(input.path), ...(input.name ? ['--name', text(input.name)] : []),
   ], (input) => `host:library:${text(input.name ?? input.path)}`),
@@ -115,6 +134,12 @@ const definitions: Record<ConsoleCommandId, ConsoleCommandDefinition> = {
     '--url', text(input.url), ...(input.revoke ? ['--revoke'] : []),
   ], (input) => `host:registry-auth:${text(input.url)}`),
   'registry.use': mutation('registry.use', ['registry', 'use'], namedInput('registry'), (input) => [text(input.name), '--global'], (input) => `host:registry:${text(input.name)}`),
+  'registry.build': mutation('registry.build', ['registry', 'build'], registryBuildInput, (input) => [
+    text(input.identity), '--version', text(input.version), '--pipeline', text(input.pipeline), '--url', text(input.url),
+  ], (input) => `registry:${text(input.url)}:${text(input.identity)}@${text(input.version)}`),
+  'registry.build.cancel': mutation('registry.build.cancel', ['registry', 'cancel-build'], registryBuildCancelInput, (input) => [
+    text(input.identity), '--version', text(input.version), '--job', text(input.jobId), '--url', text(input.url),
+  ], (input) => `registry:${text(input.url)}:${text(input.identity)}@${text(input.version)}`),
   'runtime.library.use': mutation('runtime.library.use', ['runtime', 'library', 'use'], runtimeLibraryInput, (input) => [
     text(input.library), '--runtime', text(input.runtime), ...(input.handle ? ['--handle', text(input.handle)] : []),
   ], (input) => `runtime:${text(input.runtime)}`),
@@ -259,6 +284,19 @@ function stackInput(value: unknown): Record<string, unknown> {
   };
 }
 
+function packagePublishInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['library', 'identity', 'url', 'pipeline']);
+  return { library: hostName(input.library, 'Library'), identity: packageIdentity(input.identity), url: endpointUrl(input.url, 'Registry URL'), pipeline: hostName(input.pipeline, 'Pipeline') };
+}
+
+function packageBuildVerificationInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['library', 'identity', 'buildDigest']);
+  if (typeof input.buildDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/u.test(input.buildDigest)) throw new ConsoleInputError('Build digest must be an exact sha256 digest.');
+  return { library: hostName(input.library, 'Library'), identity: packageIdentity(input.identity), buildDigest: input.buildDigest };
+}
+
 function packageMutationInput(value: unknown): Record<string, unknown> {
   const input = record(value);
   exactKeys(input, ['library', 'identity', 'runtimeUrl']);
@@ -337,6 +375,43 @@ function registryContentsInput(value: unknown): Record<string, unknown> {
     path: portablePackagePath(input.path ?? '.', true),
     ...(input.cursor === undefined || input.cursor === '' ? {} : { cursor: safeValue(input.cursor, 'Source inventory cursor') }),
     limit: boundedInteger(input.limit ?? 100, 1, 200, 'Source inventory page size'),
+  };
+}
+
+function registryPipelineInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['url']);
+  return { url: endpointUrl(input.url, 'Registry URL') };
+}
+
+function registryBuildInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['url', 'identity', 'version', 'pipeline']);
+  return {
+    url: endpointUrl(input.url, 'Registry URL'),
+    identity: packageIdentity(input.identity),
+    version: safeValue(input.version, 'Version'),
+    pipeline: hostName(input.pipeline, 'Registry Pipeline'),
+  };
+}
+
+function registryBuildCancelInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['url', 'identity', 'version', 'jobId']);
+  return {
+    url: endpointUrl(input.url, 'Registry URL'),
+    identity: packageIdentity(input.identity),
+    version: safeValue(input.version, 'Version'),
+    jobId: boundedInteger(input.jobId, 1, Number.MAX_SAFE_INTEGER, 'Compile job ID'),
+  };
+}
+
+function runtimeAuditInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['runtime', 'limit']);
+  return {
+    runtime: hostName(input.runtime, 'Runtime'),
+    limit: boundedInteger(input.limit ?? 100, 1, 100, 'Runtime audit limit'),
   };
 }
 
@@ -447,6 +522,16 @@ function packageIdentity(value: unknown): string {
   const result = safeValue(value, 'Package identity').toLowerCase();
   if (!/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u.test(result)) throw new ConsoleInputError('Package identity must be @namespace/name.');
   return result;
+}
+
+function packageEvidenceInput(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  exactKeys(input, ['library', 'identity', 'version', 'evidenceDigest', 'evidenceId']);
+  for (const field of ['evidenceDigest', 'evidenceId']) {
+    if (typeof input[field] !== 'string' || !/^sha256:[a-f0-9]{64}$/u.test(input[field])) throw new ConsoleInputError(`${field} must be an exact SHA-256 identity.`);
+  }
+  return { library: hostNameOrAbsolutePath(input.library, 'Library'), identity: packageIdentity(input.identity),
+    version: safeValue(input.version, 'Version'), evidenceDigest: input.evidenceDigest, evidenceId: input.evidenceId };
 }
 
 function portablePackagePath(value: unknown, allowRoot: boolean): string {

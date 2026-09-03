@@ -1,19 +1,24 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { prepareHostProofContext } from './lib/host-proof-composition.mjs';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
-import { getQueryContext, closeQueryContext } from '../services/runtime/dist/indexes/queryContext.js';
-import { semanticSearch } from '../services/runtime/dist/read/navigation.js';
-import { loadDkb, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { resolveContextConfig } from '@sjshovan/dkb-pipeline/config.js';
+import { closeQueryContext } from '@sjshovan/dkb-runtime/runtime/queryCache.js';
+import { searchRuntime, readRuntime } from '@sjshovan/dkb-runtime/runtime/queryAccess.js';
+import { ensureRuntimeState, removeDkbFromRuntime } from '@sjshovan/dkb-runtime/runtime/state.js';
+import { switchRuntimePipelineFromRegistry } from '@sjshovan/dkb-runtime/runtime/pipelineSwitch.js';
+import { listQueryAudit } from '@sjshovan/dkb-runtime/runtime/queryAudit.js';
+import { addLibraryRoot } from '@sjshovan/dkb-library/resolver.js';
+import { DKB_COMPILER_CAPABILITIES_FORMAT } from '@sjshovan/dkb-protocol/compilerCapabilities.js';
 import { DKB_ARTIFACT_MANIFEST_FILENAME, validateArtifactManifest } from '@sjshovan/dkb-protocol/artifacts.js';
 import { createDkbPackageArchive, extractDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
-import { prepareRuntimeIndexPackage } from '../services/runtime/dist/providers/runtimeIndex.js';
 import { serveDkbRegistryCompiler } from '@sjshovan/dkb-compiler/server.js';
 import { readEvidenceBuild, readRetrievalBuildProfile, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
-import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../services/runtime/dist/defaultComposition.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '@sjshovan/dkb-runtime/defaultComposition.js';
 import {
   compilerServiceStatus,
   stopLlamaIndexCompilerService,
@@ -29,32 +34,37 @@ import {
 
 const configuredCompilerUrl = process.env.DKB_PROOF_COMPILER_URL?.replace(/\/+$/, '');
 const target = process.env.DKB_PROOF_TARGET ?? 'default';
-const targetRecipe = DEFAULT_DKB_DISTRIBUTION.defaults.targets[target];
-if (!targetRecipe) throw new Error(`Unknown DKB_PROOF_TARGET ${target}`);
-const embeddingOptions = targetRecipe.options?.[targetRecipe.embedding] ?? {};
-const embeddingModel = typeof embeddingOptions.model === 'string' ? embeddingOptions.model : 'provider-defined';
-const embeddingDimensions = Number.isInteger(embeddingOptions.dimensions) ? embeddingOptions.dimensions : null;
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-proof-'));
 const sourceRoot = path.join(proofRoot, 'source');
 const localRoot = path.join(proofRoot, 'local');
 const remoteRoot = path.join(proofRoot, 'remote');
 const queryRoot = path.join(proofRoot, 'query-library');
+const runtimeRoot = path.join(proofRoot, 'runtime');
 const sourceArchive = path.join(proofRoot, 'source.dkbpkg');
 const remoteArchive = path.join(proofRoot, 'remote.dkbpkg');
 const compilerContextRoot = path.join(proofRoot, 'compiler-context');
 const previousContextRoot = process.env.DKB_CONTEXT_ROOT;
-const initialEvidenceService = await compilerServiceStatus();
-const initialEmbeddingService = targetRecipe.embedding === '@dkb/embedding-fastembed'
-  ? await fastEmbedServiceStatus({ model: embeddingModel })
-  : targetRecipe.embedding === '@dkb/embedding-tei'
-    ? await teiServiceStatus(embeddingOptions)
-    : null;
+let targetRecipe;
+let embeddingOptions = {};
+let embeddingModel = null;
+let embeddingDimensions = null;
+let initialEvidenceService = null;
+let initialEmbeddingService = null;
 let compilerServer;
 let compilerUrl = configuredCompilerUrl;
+let activated = false;
 
 try {
   await fs.mkdir(compilerContextRoot, { recursive: true });
   await writePipelineConfig(compilerContextRoot);
+  const resolved = await resolveContextConfig(compilerContextRoot, { defaults: DEFAULT_DKB_DISTRIBUTION.defaults, target });
+  targetRecipe = resolved.target;
+  embeddingOptions = targetRecipe.options?.[targetRecipe.embedding] ?? {};
+  embeddingModel = typeof embeddingOptions.model === 'string' ? embeddingOptions.model : null;
+  embeddingDimensions = Number.isInteger(embeddingOptions.dimensions) ? embeddingOptions.dimensions : null;
+  if (targetRecipe.evidence === '@dkb/evidence-docling-llamaindex') initialEvidenceService = await compilerServiceStatus();
+  if (targetRecipe.embedding === '@dkb/embedding-fastembed') initialEmbeddingService = await fastEmbedServiceStatus({ model: embeddingModel });
+  if (targetRecipe.embedding === '@dkb/embedding-tei') initialEmbeddingService = await teiServiceStatus(embeddingOptions);
   if (!compilerUrl) {
     process.env.DKB_CONTEXT_ROOT = compilerContextRoot;
     compilerServer = await serveDkbRegistryCompiler({ host: '127.0.0.1', port: 0 });
@@ -72,6 +82,13 @@ try {
   });
   await createDkbPackageArchive(sourceRoot, sourceArchive);
   const sourceContents = await fs.readFile(sourceArchive);
+  const catalogResponse = await fetch(`${compilerUrl}/capabilities`, { signal: AbortSignal.timeout(120_000) });
+  const catalog = await catalogResponse.json();
+  assert.ok(catalogResponse.ok, `Compiler capabilities failed: ${JSON.stringify(catalog)}`);
+  assert.equal(catalog.format, DKB_COMPILER_CAPABILITIES_FORMAT);
+  assert.match(catalog.compiler?.buildDigest ?? '', /^sha256:[a-f0-9]{64}$/u);
+  const selected = catalog.allowedTargets.find((entry) => entry.name === target);
+  assert.ok(selected?.available, `Compiler target ${target} is absent or unhealthy`);
   const response = await fetch(`${compilerUrl}/compile`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -86,6 +103,12 @@ try {
           registryId: 'proof-registry',
         },
         target,
+        execution: { id: randomUUID(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
+        expectedCompilerBuildDigest: catalog.compiler.buildDigest,
+        evidenceProfileDigest: selected.evidenceProfileDigest,
+        retrievalProfileDigest: selected.retrievalProfileDigest,
+        compatibilityDigest: selected.compatibilityDigest,
+        providerBuildDigest: selected.buildDigest,
       },
       sourceArchive: {
         fileName: 'source.dkbpkg',
@@ -100,6 +123,7 @@ try {
   if (!response.ok) {
     throw new Error(`Remote compile failed (${response.status}): ${JSON.stringify(remote)}`);
   }
+  assert.equal(remote.compiler.installedBuildDigest, catalog.compiler.buildDigest);
   await fs.writeFile(remoteArchive, Buffer.from(remote.archive.contents, 'base64'));
   await extractDkbPackageArchive(remoteArchive, remoteRoot);
 
@@ -127,39 +151,37 @@ try {
   await assert.rejects(fs.access(path.join(remoteRoot, '.dkb/config.json')), (error) => error?.code === 'ENOENT');
 
   await fs.mkdir(queryRoot, { recursive: true });
-  await fs.cp(localRoot, path.join(queryRoot, 'knowledge'), { recursive: true });
+  await fs.cp(localRoot, path.join(queryRoot, 'comparative-corpus'), { recursive: true });
   await fs.writeFile(path.join(queryRoot, 'dkb.json'), `${JSON.stringify({
     manifestVersion: 1,
     type: 'library',
     name: 'Provider Proof Library',
-    roots: { '@proof/comparative-corpus': { path: 'knowledge' } },
+    roots: {},
   }, null, 2)}\n`, 'utf8');
   await writePipelineConfig(queryRoot);
-  const queryLibraryId = (await loadLibrary(queryRoot)).manifest.id;
-  const prepared = await prepareRuntimeIndexPackage({
-    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-    libraryRoot: queryRoot,
-    libraryId: queryLibraryId,
-    dkb: await loadDkb(path.join(queryRoot, 'knowledge')),
-  });
-  const queryContext = await getQueryContext(queryRoot, queryLibraryId, DEFAULT_DKB_RUNTIME_CONTEXT);
+  await addLibraryRoot(queryRoot, '@proof/comparative-corpus');
+  await ensureRuntimeState(runtimeRoot, { runtimeId: 'provider-proof', libraryRoot: queryRoot, target });
+  await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: runtimeRoot, target });
+  activated = true;
   const searches = {};
 
-  try {
-    for (const marker of ['WHALE-BUBBLE-73', 'RUNTIME-MOUNT-28', 'SAFE-SOURCE-91']) {
-      const result = await semanticSearch(queryRoot, marker, 5, undefined, queryContext);
-      assert.ok(result.results.some((item) => item.preview.includes(marker)), `retrieval missed ${marker}`);
-      searches[marker] = result.results[0]?.id ?? null;
-    }
-  } finally {
-    await closeQueryContext(queryRoot);
-    await prepared.rollback();
+  for (const marker of ['WHALE-BUBBLE-73', 'RUNTIME-MOUNT-28', 'SAFE-SOURCE-91']) {
+    const result = await searchRuntime({ stateRoot: runtimeRoot, runtime: DEFAULT_DKB_RUNTIME_CONTEXT, query: marker, limit: 5 });
+    const hit = result.results.find((item) => item.preview.includes(marker));
+    assert.ok(hit, `retrieval missed ${marker}`);
+    const fetched = await readRuntime({ stateRoot: runtimeRoot, runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
+      request: { queries: [{ id: 'evidence', target: hit.evidenceId, operation: 'fetch' }] } });
+    assert.ok(JSON.stringify(fetched).includes(marker), `fetch missed ${marker}`);
+    searches[marker] = hit.evidenceId;
   }
+  const audit = await listQueryAudit(runtimeRoot, 20);
+  assert.equal(audit.length, 6, 'every search and fetch must be audited');
+  assert.ok(audit.every((event) => event.admission === 'admitted' && event.outcome === 'success' && event.library && event.pipeline));
 
   console.log(JSON.stringify({
     ok: true,
     target,
-    embedding: { provider: targetRecipe.embedding, model: embeddingModel, dimensions: embeddingDimensions },
+    embedding: targetRecipe.embedding ? { provider: targetRecipe.embedding, model: embeddingModel, dimensions: embeddingDimensions } : null,
     index: localArtifact.index,
     proofRoot,
     local: { recordCount: local.recordCount, buildDigest: localLock.buildDigest },
@@ -178,12 +200,21 @@ try {
   }, null, 2));
   process.exitCode = 1;
 } finally {
+  await closeQueryContext(runtimeRoot);
+  if (activated) {
+    await removeDkbFromRuntime('@proof/comparative-corpus', runtimeRoot, { runtime: DEFAULT_DKB_RUNTIME_CONTEXT }).then((result) => {
+      if (result.warning) throw new Error(result.warning);
+    }).catch((error) => {
+      process.stderr.write(`Proof Runtime cleanup needs attention: ${error.message}\n`);
+      process.exitCode = 1;
+    });
+  }
   if (compilerServer) {
     await new Promise((resolve, reject) => compilerServer.close((error) => error ? reject(error) : resolve()));
   }
   if (previousContextRoot === undefined) delete process.env.DKB_CONTEXT_ROOT;
   else process.env.DKB_CONTEXT_ROOT = previousContextRoot;
-  if (!initialEvidenceService.running) {
+  if (initialEvidenceService && !initialEvidenceService.running) {
     await stopLlamaIndexCompilerService().catch(() => undefined);
   }
   if (initialEmbeddingService && !initialEmbeddingService.running) {
@@ -194,6 +225,7 @@ try {
     }
   }
   if (process.env.DKB_KEEP_PROOF_ROOT !== '1') {
+    assert.equal(path.dirname(proofRoot), path.resolve(os.tmpdir()));
     await fs.rm(proofRoot, { recursive: true, force: true });
   }
 }
@@ -249,4 +281,5 @@ async function writePipelineConfig(root) {
     format: 'dkb.config.v2',
     activeTarget: target,
   }, null, 2)}\n`, 'utf8');
+  await prepareHostProofContext({ root, target });
 }

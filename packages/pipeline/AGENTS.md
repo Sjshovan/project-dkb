@@ -10,7 +10,10 @@ are authoritative.
 
 ## Dependency direction
 
-- Depend only on `@sjshovan/dkb-protocol` and Node platform APIs.
+- Domain dependencies stay limited to `@sjshovan/dkb-protocol` and Node APIs.
+  Standard Schema defines interoperable options; pinned Acorn inspects module
+  syntax without executing plugins. Native Node type stripping covers supported
+  TypeScript helpers. Do not replace import inspection with regular expressions.
 - Expose contracts consumed by compiler, Runtime, bundled providers, and CLI.
 - Keep every provider host isolated to one context root.
 

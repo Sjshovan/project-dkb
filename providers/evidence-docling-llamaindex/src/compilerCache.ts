@@ -1,5 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { replaceFileAtomically } from '@sjshovan/dkb-protocol/atomicFile.js';
+import { isSha256Digest } from '@sjshovan/dkb-pipeline/validation.js';
 import { DKB_CACHE_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import { LLAMAINDEX_COMPILER_ID } from './compilerConstants.js';
@@ -51,7 +54,7 @@ export async function writeRecordCache(
   }
 
   const cache: LlamaIndexRecordCache = {
-    version: 1,
+    version: 2,
     compilerId: LLAMAINDEX_COMPILER_ID,
     model,
     dkbId: dkb.manifest.id,
@@ -70,14 +73,18 @@ function isRecordCache(value: unknown): value is LlamaIndexRecordCache {
   }
   const candidate = value as Partial<LlamaIndexRecordCache>;
 
-  return candidate.version === 1
+  return candidate.version === 2
     && candidate.compilerId === LLAMAINDEX_COMPILER_ID
     && typeof candidate.model === 'string'
     && typeof candidate.dkbId === 'string'
     && typeof candidate.dkbVersion === 'string'
     && Boolean(candidate.entries)
     && typeof candidate.entries === 'object'
-    && !Array.isArray(candidate.entries);
+    && !Array.isArray(candidate.entries)
+    && Object.values(candidate.entries).every((entry) => entry
+      && isSha256Digest(entry.sourceHash)
+      && Array.isArray(entry.records)
+      && entry.records.every((record) => record && record.sourceHash === entry.sourceHash));
 }
 
 export async function readCheckpoint(checkpointPath: string): Promise<LlamaIndexCompileCheckpoint | null> {
@@ -140,9 +147,11 @@ export function llamaIndexCheckpointPath(root: string): string {
 }
 
 async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
-  const tempPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
-
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await fs.rm(target, { force: true });
-  await fs.rename(tempPath, target);
+  const tempPath = `${target}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    await replaceFileAtomically(tempPath, target);
+  } finally {
+    await fs.rm(tempPath, { force: true });
+  }
 }

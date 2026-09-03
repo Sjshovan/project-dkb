@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   evidenceBuildLock,
+  evidenceBuildReceiptDigest,
   retrievalBuildLock,
   validateEvidenceBuildLock,
   validateRetrievalBuildLock,
@@ -12,6 +13,7 @@ import {
 } from '@sjshovan/dkb-protocol/builds.js';
 import type { DkbRuntimeActivation, DkbRuntimeActivationEntry } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { assertProviderExecutionIdentities, type DkbProviderExecutionReceipt } from '@sjshovan/dkb-protocol/providerReceipts.js';
 import {
   DKB_ARTIFACT_MANIFEST_FILENAME,
   DKB_ARTIFACT_MANIFEST_FORMAT,
@@ -92,25 +94,6 @@ export interface DkbKnowledgeBuildVerification {
   type: 'library' | 'collection' | 'dkb';
   lockPath: string;
   checks: Array<{ name: string; ok: boolean; detail: string }>;
-}
-
-export async function resolveLibraryRuntimeBuilds(root: string): Promise<DkbResolvedPackageBuild[]> {
-  const library = await loadLibrary(root);
-  const dkbs = uniqueLoadedDkbs([
-    ...library.collections.flatMap((collection) => collection.dkbs),
-    ...library.dkbs,
-  ]);
-
-  return Promise.all(dkbs.map(async (dkb) => {
-    const graph = await validatePackageBuildGraph(dkb.root);
-
-    return {
-      dkb,
-      evidenceRoot: graph.evidencePath,
-      retrievalRoot: graph.retrievalPath,
-      artifactsRoot: path.join(graph.retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS),
-    };
-  }));
 }
 
 export async function resolveLibraryActivationBuilds(
@@ -201,6 +184,11 @@ export async function validateStoredPackageBuild(
     throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} profile receipt does not match its immutable build graph`);
   }
   assertEvidenceLayer(evidence, evidenceIr);
+  if (retrieval.evidenceReceiptDigest !== evidenceBuildReceiptDigest(evidence)) {
+    throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} Evidence receipt mismatch`);
+  }
+  assertProviderExecutionIdentities(evidence.providerReceipts, profile, 'evidence');
+  assertProviderExecutionIdentities(retrieval.providerReceipts, profile, 'retrieval');
 
   return { evidence, retrieval, profile, selection, evidencePath, retrievalPath };
 }
@@ -314,6 +302,14 @@ export async function mergeStoredPackageBuilds(sourceRoot: string, destinationRo
   return withDkbFileLock(destinationRoot, 'build-promotion', () => mergeStoredPackageBuildsUnlocked(sourceRoot, destinationRoot));
 }
 
+/** Merge immutable builds while the caller owns the package build-promotion lock. */
+export async function mergeStoredPackageBuildsWithinMutation(sourceRoot: string, destinationRoot: string): Promise<{
+  copied: string[];
+  reused: string[];
+}> {
+  return mergeStoredPackageBuildsUnlocked(sourceRoot, destinationRoot);
+}
+
 async function mergeStoredPackageBuildsUnlocked(sourceRoot: string, destinationRoot: string): Promise<{
   copied: string[];
   reused: string[];
@@ -323,36 +319,54 @@ async function mergeStoredPackageBuildsUnlocked(sourceRoot: string, destinationR
   const builds = await listPackageBuilds(source);
   const copied: string[] = [];
   const reused: string[] = [];
+  const staged: Array<{ path: string; target: string }> = [];
+  const stamp = `${process.pid}-${Date.now().toString(36)}`;
 
-  for (const build of [...builds.evidence, ...builds.retrieval]) {
-    const relative = path.relative(source, build.path);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new DkbError(`Stored Build escapes its package root: ${build.path}`);
-    }
-    const target = path.join(destination, relative);
-    const targetExists = await fs.stat(target).then((stat) => stat.isDirectory()).catch(() => false);
-    if (targetExists) {
-      const [sourceTree, targetTree] = await Promise.all([
-        immutableBuildTreeReceipt(build.path),
-        immutableBuildTreeReceipt(target),
-      ]);
-      if (stableHash(sourceTree) !== stableHash(targetTree)) {
-        throw new DkbError(`Stored Build collision while retaining inactive build ${relative}`);
+  try {
+    for (const build of [...builds.evidence, ...builds.retrieval]) {
+      const relative = path.relative(source, build.path);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new DkbError(`Stored Build escapes its package root: ${build.path}`);
       }
-      reused.push(target);
-      continue;
+      const target = path.join(destination, relative);
+      const targetExists = await fs.stat(target).then((stat) => stat.isDirectory()).catch(() => false);
+      if (targetExists) {
+        const [sourceTree, targetTree] = await Promise.all([
+          immutableBuildTreeReceipt(build.path),
+          immutableBuildTreeReceipt(target),
+        ]);
+        if (stableHash(sourceTree) !== stableHash(targetTree)) {
+          throw new DkbError(`Stored Build collision while retaining inactive build ${relative}`);
+        }
+        reused.push(target);
+        continue;
+      }
+      const stagedPath = `${target}.stage-${stamp}-${staged.length}`;
+      await fs.rm(stagedPath, { recursive: true, force: true });
+      staged.push({ path: stagedPath, target });
+      await cloneTree(build.path, stagedPath);
     }
-    await cloneTree(build.path, target);
-    copied.push(target);
-  }
 
-  return { copied, reused };
+    for (const item of staged) {
+      await fs.mkdir(path.dirname(item.target), { recursive: true });
+      await fs.rename(item.path, item.target);
+      copied.push(item.target);
+    }
+    return { copied, reused };
+  } catch (error) {
+    await Promise.all(copied.map((target) => fs.rm(target, { recursive: true, force: true })));
+    throw error;
+  } finally {
+    await Promise.all(staged.map((item) => fs.rm(item.path, { recursive: true, force: true })));
+  }
 }
 
 export async function writePackageBuildGraph(input: {
   root: string;
   package: { id: string; version: string; sourceDigest: string };
   evidence: DkbEvidenceIr;
+  evidenceProviderReceipts: DkbProviderExecutionReceipt[];
+  retrievalProviderReceipts: DkbProviderExecutionReceipt[];
   retrievalProfile: DkbRetrievalProfileLock;
   artifactsRoot: string;
   target: string;
@@ -362,12 +376,15 @@ export async function writePackageBuildGraph(input: {
   const root = path.resolve(input.root);
   const evidence = validateEvidenceIr(input.evidence);
   const generatedAt = input.generatedAt ?? new Date().toISOString();
+  assertProviderExecutionIdentities(input.evidenceProviderReceipts, input.retrievalProfile, 'evidence');
+  assertProviderExecutionIdentities(input.retrievalProviderReceipts, input.retrievalProfile, 'retrieval');
   const evidenceLock = evidenceBuildLock({
     package: input.package,
     evidenceProfileDigest: evidence.evidenceProfileDigest,
     evidenceDigest: evidence.evidenceDigest,
     recordCount: evidence.evidence.length,
     chunkCount: evidence.chunks.length,
+    providerReceipts: input.evidenceProviderReceipts,
     generatedAt,
   });
   const evidencePath = evidenceBuildPath(root, evidence.evidenceProfileDigest, evidence.evidenceDigest);
@@ -386,8 +403,10 @@ export async function writePackageBuildGraph(input: {
     evidenceProfileDigest: evidence.evidenceProfileDigest,
     evidenceDigest: evidence.evidenceDigest,
     retrievalProfileDigest: input.retrievalProfile.profileDigest,
+    evidenceReceiptDigest: evidenceBuildReceiptDigest(evidenceLock),
     compatibilityDigest: input.retrievalProfile.compatibilityDigest,
     artifactTreeDigest: stableHash(artifactTree),
+    providerReceipts: input.retrievalProviderReceipts,
     generatedAt,
   };
   const retrievalLock = retrievalBuildLock(partialRetrieval);
@@ -462,6 +481,11 @@ export async function validatePackageBuildGraph(root: string, selected?: DkbRunt
     throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} profile receipt does not match its immutable build graph`);
   }
   assertEvidenceLayer(evidence, evidenceIr);
+  if (retrieval.evidenceReceiptDigest !== evidenceBuildReceiptDigest(evidence)) {
+    throw new DkbError(`Retrieval Build ${retrieval.retrievalBuildDigest} Evidence receipt mismatch`);
+  }
+  assertProviderExecutionIdentities(evidence.providerReceipts, profile, 'evidence');
+  assertProviderExecutionIdentities(retrieval.providerReceipts, profile, 'retrieval');
 
   return { evidence, retrieval, profile, selection: entry, evidencePath, retrievalPath };
 }
@@ -692,6 +716,7 @@ async function treeReceipt(
 async function immutableBuildTreeReceipt(root: string): Promise<Array<{ path: string; hash: string; size: number }>> {
   const receipt = await treeReceipt(root);
   const generatedLocks = new Set([
+    DKB_ARTIFACT_MANIFEST_FILENAME,
     DKB_EVIDENCE_BUILD_LOCK,
     DKB_RETRIEVAL_BUILD_LOCK,
     DKB_RETRIEVAL_BUILD_PROFILE_LOCK,

@@ -4,12 +4,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { maybeReadRuntimeActivation } from '@sjshovan/dkb-runtime/runtime/activation.js';
-import { DKB_RUNTIME_ACTIVATION_PATH, DKB_RUNTIME_BINDING_PATH, resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
+import { initializeRuntimeBinding, maybeReadRuntimeActivation, maybeReadRuntimeBindingFromStateRoot } from '@sjshovan/dkb-runtime/runtime/state.js';
+import { DKB_RUNTIME_ACTIVATION_PATH, resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
+import { replaceFileAtomically } from '@sjshovan/dkb-protocol/atomicFile.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import type { DkbDistribution, DkbDistributionService } from '@sjshovan/dkb-pipeline/host.js';
+import { resolvePluginSource } from '@sjshovan/dkb-pipeline/host.js';
+import { DKB_CONFIG_FORMAT, DKB_CONFIG_PATH, readDkbContextConfig, resolveContextConfigDocuments, type DkbContextConfig, type DkbResolvedContextConfig } from '@sjshovan/dkb-pipeline/config.js';
+import { isSha256Digest } from '@sjshovan/dkb-pipeline/validation.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import type { DkbStackContext, DkbStackTarget } from './types.js';
+import type { DkbStackContext, DkbStackControlContext, DkbStackTarget } from './types.js';
 
 export async function prepareDkbStack(
   distribution: DkbDistribution,
@@ -22,22 +26,24 @@ export async function prepareDkbStack(
 ): Promise<DkbStackContext> {
   const normalizedName = stackName(name);
   const root = path.join(stackStateRoot(), normalizedName);
-  await migrateLegacyStackLibrary(root);
-  const target = options.compilerTarget ?? distributionDefaultTarget(distribution);
-  const recipe = targetRecipe(distribution, target);
   const composeFile = await resolveComposeFile();
   const envFile = path.join(root, 'stack.env');
+  const existing = await readEnvironmentFile(envFile);
   const runtimeRoot = path.join(root, 'runtime');
-  const libraryRoot = path.resolve(options.libraryRoot ?? path.join(root, 'library'));
+  const libraryRoot = path.resolve(options.libraryRoot ?? existing.DKB_LIBRARY_HOST_PATH ?? path.join(root, 'library'));
+  const activeRuntimeBuild = await maybeReadStackRuntimeActivation(runtimeRoot);
+  const existingBinding = await maybeReadRuntimeBindingFromStateRoot(runtimeRoot);
+  const selection = await resolveStackSelection(distribution, root, libraryRoot, {
+    compilerTarget: options.compilerTarget ?? (process.env.DKB_COMPILER_DEFAULT_TARGET?.trim()
+      || existing.DKB_COMPILER_DEFAULT_TARGET || existing.DKB_PIPELINE_TARGET),
+    runtimeTarget: options.runtimeTarget ?? activeRuntimeBuild?.target ?? existing.DKB_RUNTIME_PIPELINE_TARGET,
+    allowedTargets: process.env.DKB_COMPILER_ALLOWED_TARGETS ?? existing.DKB_COMPILER_ALLOWED_TARGETS ?? '',
+  });
+  const { target, runtimeTarget, requiredServices } = selection;
+  const serviceEnvironment = selectedServiceEnvironment(selection);
+  await migrateLegacyStackLibrary(root);
   await ensureStackLibrary(libraryRoot, `${normalizedName} Library`);
   await removeLegacyPackageRuntimeLocks(libraryRoot);
-  const activeRuntimeBuild = await maybeReadStackRuntimeActivation(runtimeRoot);
-  const existing = await readEnvironmentFile(envFile);
-  const runtimeTarget = parseStoredTarget(
-    distribution,
-    options.runtimeTarget ?? activeRuntimeBuild?.target ?? existing.DKB_RUNTIME_PIPELINE_TARGET ?? target,
-  );
-  const requiredServices = requiredStackServices(distribution, [target, runtimeTarget]);
 
   await Promise.all([
     fs.mkdir(path.join(root, 'registry', 'data'), { recursive: true }),
@@ -55,6 +61,8 @@ export async function prepareDkbStack(
     DKB_STACK_NAME: normalizedName,
     DKB_STACK_STATE: root.replace(/\\/gu, '/'),
     DKB_PIPELINE_TARGET: target,
+    DKB_COMPILER_ALLOWED_TARGETS: selection.allowedTargets.join(','),
+    DKB_COMPILER_DEFAULT_TARGET: target,
     DKB_RUNTIME_PIPELINE_TARGET: runtimeTarget,
     DKB_LIBRARY_HOST_PATH: libraryRoot.replace(/\\/gu, '/'),
     DKB_BUILD_COMMIT: existing.DKB_BUILD_COMMIT ?? process.env.DKB_BUILD_COMMIT ?? 'development',
@@ -80,13 +88,8 @@ export async function prepareDkbStack(
     for (const environment of stack.secretEnvironment ?? []) {
       values[environment] = existing[environment] ?? randomBytes(32).toString('base64url');
     }
-    if (!requiredServices.some((candidate) => candidate.id === service.id) || !service.providerId) continue;
-    const providerOptions = recipe.options?.[service.providerId] ?? {};
-    for (const [option, environment] of Object.entries(stack.optionEnvironment ?? {})) {
-      const value = providerOptions[option];
-      if (value !== undefined) values[environment] = environmentValue(value, service.id, option);
-    }
   }
+  Object.assign(values, serviceEnvironment);
 
   const runtimePort = values.DKB_RUNTIME_PORT ?? '7331';
   values.DKB_PUBLIC_URL = process.env.DKB_PUBLIC_URL
@@ -107,19 +110,40 @@ export async function prepareDkbStack(
 
   await writeEnvironmentFile(envFile, values);
   await writePipelineConfig(path.join(root, 'compiler-context', '.dkb', 'config.json'), target);
-  await writePipelineConfig(
-    path.join(runtimeRoot, '.dkb', 'config.json'),
-    runtimeTarget,
-  );
-  await writeAtomic(path.join(runtimeRoot, ...DKB_RUNTIME_BINDING_PATH.split('/')), `${JSON.stringify({
-    format: 'dkb.runtime-binding.v1',
+  // A requested Stack target is not an activated Runtime selection. In particular,
+  // changing this default before Docker starts invalidates the still-serving host.
+  if (!existingBinding) await writePipelineConfig(path.join(runtimeRoot, '.dkb', 'config.json'), runtimeTarget);
+  await initializeRuntimeBinding(runtimeRoot, {
     runtimeId: `${normalizedName}-runtime`,
-    library: { kind: 'local', path: '/library', name: path.basename(libraryRoot) },
+    libraryRoot,
+    runtimeLibraryRoot: '/library',
+    libraryName: path.basename(libraryRoot),
     target: runtimeTarget,
-    updatedAt: new Date().toISOString(),
-  }, null, 2)}\n`);
+  });
 
-  return contextFrom(distribution, root, libraryRoot, runtimeRoot, composeFile, envFile, values, runtimeTarget);
+  return contextFrom(distribution, root, libraryRoot, runtimeRoot, composeFile, envFile, values, selection);
+}
+
+export async function writeStackProviderIdentityConfig(
+  context: DkbStackContext,
+  imageDigests: Readonly<Record<string, string>>,
+  distribution: DkbDistribution,
+): Promise<void> {
+  const values = await readEnvironmentFile(context.envFile);
+  const selection = await resolveStackSelection(distribution, context.root, context.libraryRoot, {
+    compilerTarget: context.target, runtimeTarget: context.runtimeTarget,
+    allowedTargets: values.DKB_COMPILER_ALLOWED_TARGETS ?? '',
+  });
+  const selectedServices = selection.requiredServices.map((service) => service.id).sort().join(',');
+  if (selectedServices !== context.requiredServices.map((service) => service.id).sort().join(',')
+    || Object.entries(selectedServiceEnvironment(selection)).some(([key, value]) => values[key] !== value)) {
+    throw new DkbError('Stack provider configuration changed while images were being verified. Prepare the Stack again; existing recipe configuration was preserved.');
+  }
+  const updates = await Promise.all([
+    prepareIdentityConfig(path.join(context.root, 'compiler-context', DKB_CONFIG_PATH), context.target, selection.compiler, selection.compilerServices, context, imageDigests, values),
+    prepareIdentityConfig(path.join(context.runtimeStateRoot, DKB_CONFIG_PATH), context.runtimeTarget, selection.runtime, selection.runtimeServices, context, imageDigests, values),
+  ]);
+  for (const update of updates) await writeAtomic(update.path, `${JSON.stringify(update.config, null, 2)}\n`);
 }
 
 export async function readDkbStack(distribution: DkbDistribution, name: string): Promise<DkbStackContext> {
@@ -129,12 +153,25 @@ export async function readDkbStack(distribution: DkbDistribution, name: string):
   if (Object.keys(values).length === 0) {
     throw new DkbError(`Unknown DKB stack ${name}. Create it with: dkb stack up ${name}`);
   }
-  const runtimeTarget = parseStoredTarget(
-    distribution,
-    (await maybeReadStackRuntimeActivation(path.join(root, 'runtime')))?.target ?? values.DKB_PIPELINE_TARGET,
-  );
   const libraryRoot = path.resolve(values.DKB_LIBRARY_HOST_PATH ?? path.join(root, 'library'));
-  return contextFrom(distribution, root, libraryRoot, path.join(root, 'runtime'), await resolveComposeFile(), envFile, values, runtimeTarget);
+  const selection = await resolveStackSelection(distribution, root, libraryRoot, {
+    compilerTarget: values.DKB_COMPILER_DEFAULT_TARGET || values.DKB_PIPELINE_TARGET,
+    runtimeTarget: (await maybeReadStackRuntimeActivation(path.join(root, 'runtime')))?.target ?? values.DKB_RUNTIME_PIPELINE_TARGET,
+    allowedTargets: values.DKB_COMPILER_ALLOWED_TARGETS ?? '',
+  });
+  return contextFrom(distribution, root, libraryRoot, path.join(root, 'runtime'), await resolveComposeFile(), envFile, values, selection);
+}
+
+/** Stop/log controls need project topology, never a valid or healthy retrieval recipe. */
+export async function readDkbStackControl(distribution: DkbDistribution, name: string): Promise<DkbStackControlContext> {
+  const normalized = stackName(name);
+  const root = path.join(stackStateRoot(), normalized);
+  const envFile = path.join(root, 'stack.env');
+  const values = await readEnvironmentFile(envFile);
+  if (!Object.keys(values).length) throw new DkbError(`Unknown DKB stack ${normalized}.`);
+  if (values.DKB_STACK_NAME && values.DKB_STACK_NAME !== normalized) throw new DkbError(`Stack control identity mismatch for ${normalized}; inspect ${envFile} before controlling services.`);
+  return { name: normalized, projectName: `dkb-${normalized}`, root, envFile,
+    composeFile: await resolveComposeFile(), allProfiles: serviceProfiles(distribution.services) };
 }
 
 export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<string | undefined> {
@@ -203,11 +240,18 @@ export async function writeEnvironmentFile(target: string, values: Record<string
 }
 
 export async function writeAtomic(target: string, source: string): Promise<void> {
-  const temporary = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  if (await fs.readFile(target, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  }) === source) return;
+  const temporary = `${target}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(temporary, source, 'utf8');
-  await fs.rm(target, { force: true });
-  await fs.rename(temporary, target);
+  try {
+    await fs.writeFile(temporary, source, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    await replaceFileAtomically(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
 }
 
 export async function pathExists(target: string): Promise<boolean> {
@@ -231,11 +275,10 @@ function contextFrom(
   composeFile: string,
   envFile: string,
   values: Record<string, string>,
-  runtimeTarget: DkbStackTarget,
+  selection: StackSelection,
 ): DkbStackContext {
-  const target = parseStoredTarget(distribution, values.DKB_PIPELINE_TARGET);
+  const { target, runtimeTarget, requiredServices } = selection;
   const name = stackName(values.DKB_STACK_NAME ?? path.basename(root));
-  const requiredServices = requiredStackServices(distribution, [target, runtimeTarget]);
   const servicePorts = Object.fromEntries(distribution.services.flatMap((service) => {
     const health = service.stack?.health;
     return health ? [[service.id, positivePort(values[health.portEnvironment], health.component)]] : [];
@@ -248,6 +291,7 @@ function contextFrom(
     projectName: `dkb-${name}`,
     target,
     runtimeTarget,
+    compilerTargets: selection.compilerTargets,
     root,
     libraryRoot,
     runtimeStateRoot,
@@ -317,8 +361,57 @@ async function removeLegacyPackageRuntimeLocks(libraryRoot: string): Promise<voi
     }));
 }
 
-async function writePipelineConfig(targetPath: string, target: DkbStackTarget): Promise<void> {
-  await writeAtomic(targetPath, `${JSON.stringify({ format: 'dkb.config.v2', activeTarget: target }, null, 2)}\n`);
+async function writePipelineConfig(
+  targetPath: string,
+  target: DkbStackTarget,
+): Promise<void> {
+  const existing = await readDkbContextConfig(targetPath);
+  await writeAtomic(targetPath, `${JSON.stringify({
+    ...existing,
+    activeTarget: target,
+  }, null, 2)}\n`);
+}
+
+async function prepareIdentityConfig(
+  configPath: string,
+  activeTarget: string,
+  recipes: Record<string, DkbResolvedContextConfig>,
+  bindings: Record<string, string[]>,
+  context: DkbStackContext,
+  imageDigests: Readonly<Record<string, string>>,
+  environment: Readonly<Record<string, string>>,
+): Promise<{ path: string; config: DkbContextConfig }> {
+  const config = structuredClone(await readDkbContextConfig(configPath));
+  for (const [name, services] of Object.entries(bindings)) {
+    for (const serviceId of services) {
+      const service = context.requiredServices.find((candidate) => candidate.id === serviceId);
+      if (!service?.providerId) continue;
+      const recipeImage = recipes[name]!.target.options?.[service.providerId]?.image;
+      const deployedImage = service.stack ? environment[service.stack.imageEnvironment] ?? service.image : service.image;
+      if (recipeImage !== undefined && recipeImage !== deployedImage) {
+        if (name === activeTarget) throw new DkbError(`Pipeline "${name}" configures a different ${service.id} image than the prepared Stack. Prepare the Stack again before attesting it.`);
+        continue;
+      }
+      for (const identity of service.providerExternalIdentities ?? []) {
+        if (identity.kind !== 'image') continue;
+        const digest = imageDigests[service.id];
+        if (!isSha256Digest(digest)) throw new DkbError(`Immutable OCI digest for required provider service ${service.id} was not resolved`);
+        const configured = recipes[name]!.target.options?.[service.providerId]?.[identity.option];
+        if (configured !== undefined) {
+          if (name === activeTarget && (!isSha256Digest(configured) || configured !== digest)) {
+            throw new DkbError(`Pipeline "${name}" pins ${service.providerId}.${identity.option} to a different or invalid image identity. `
+              + `The Stack resolved ${digest}. Update the trusted recipe explicitly or restore its pinned image; DKB will not overwrite operator options.`);
+          }
+          continue;
+        }
+        const targets = config.targets ??= {};
+        const target = targets[name] ??= {};
+        const options = target.options ??= {};
+        options[service.providerId] = { ...options[service.providerId], [identity.option]: digest };
+      }
+    }
+  }
+  return { path: configPath, config };
 }
 
 async function resolveComposeFile(): Promise<string> {
@@ -343,19 +436,106 @@ function hostPortFor(name: string, defaultPort: number, namedPortBase: number): 
   return namedPortBase + offset;
 }
 
-function targetRecipe(distribution: DkbDistribution, target: DkbStackTarget) {
-  const recipe = distribution.defaults.targets?.[target];
-  if (!recipe) {
-    const available = Object.keys(distribution.defaults.targets ?? {}).sort().join(', ');
-    throw new DkbError(`Pipeline target ${target} is not available in ${distribution.id}. Available targets: ${available || 'none'}.`);
-  }
-  return recipe;
+interface StackSelection {
+  target: string;
+  runtimeTarget: string;
+  compilerTargets: string[];
+  allowedTargets: string[];
+  compiler: Record<string, DkbResolvedContextConfig>;
+  runtime: Record<string, DkbResolvedContextConfig>;
+  compilerServices: Record<string, string[]>;
+  runtimeServices: Record<string, string[]>;
+  requiredServices: DkbDistributionService[];
 }
 
-function requiredStackServices(distribution: DkbDistribution, targets: readonly DkbStackTarget[]): DkbDistributionService[] {
-  const resolvedTargets = [...new Set(targets)];
-  for (const target of resolvedTargets) targetRecipe(distribution, target);
-  return distribution.services.filter((service) => resolvedTargets.some((target) => service.requiredBy.includes(target)));
+async function resolveStackSelection(distribution: DkbDistribution, root: string, libraryRoot: string, input: {
+  compilerTarget?: string; runtimeTarget?: string; allowedTargets: string;
+}): Promise<StackSelection> {
+  const compilerScope = await stackScope(distribution, path.join(root, 'compiler-context'));
+  const compilerDefault = compilerScope.resolve(input.compilerTarget);
+  const allowedTargets = [...new Set(input.allowedTargets.split(',').map((value) => value.trim()).filter(Boolean))].sort();
+  if (allowedTargets.length > 128) throw new DkbError('DKB_COMPILER_ALLOWED_TARGETS must contain at most 128 Pipeline names.');
+  const compilerNames = allowedTargets.length ? allowedTargets : compilerScope.names;
+  for (const name of compilerNames) {
+    if (!compilerScope.names.includes(name)) throw new DkbError(`DKB_COMPILER_ALLOWED_TARGETS contains unknown target "${name}". Available targets: ${compilerScope.names.join(', ')}`);
+  }
+  const target = compilerDefault.activeTarget;
+  if (!compilerNames.includes(target)) throw new DkbError(`Registry compiler default target "${target}" is not allowed by DKB_COMPILER_ALLOWED_TARGETS. Select an allowed default or explicitly update the restriction.`);
+  const runtimeScope = await stackScope(distribution, path.join(root, 'runtime'), libraryRoot);
+  const runtimeDefault = runtimeScope.resolve(input.runtimeTarget ?? runtimeScope.local.activeTarget ?? runtimeScope.library.activeTarget ?? target);
+  const resolvable = (scope: typeof compilerScope, names: string[], active: DkbResolvedContextConfig) => {
+    const recipes: Record<string, DkbResolvedContextConfig> = { [active.activeTarget]: active };
+    for (const name of names) {
+      if (name === active.activeTarget) continue;
+      try { recipes[name] = scope.resolve(name); } catch {
+        // An unresolved inactive recipe remains allowed. The compiler catalog reports its failure;
+        // Stack startup does not rewrite it or replace it with a bundled recipe.
+      }
+    }
+    return recipes;
+  };
+  const compiler = resolvable(compilerScope, compilerNames, compilerDefault);
+  const runtime = resolvable(runtimeScope, runtimeScope.names, runtimeDefault);
+  const services = async (recipes: Record<string, DkbResolvedContextConfig>, active: string) => Object.fromEntries(await Promise.all(
+    Object.entries(recipes).map(async ([name, config]) => {
+      const ids = new Set([config.target.evidence, config.target.parser, config.target.chunker,
+        config.target.embedding, config.target.index, config.target.retrieval,
+        ...(config.target.processors ?? []), ...(config.target.observers ?? [])].filter(Boolean));
+      const selected: string[] = [];
+      for (const service of distribution.services) {
+        if (!service.providerId || !ids.has(service.providerId)) continue;
+        try {
+          if ((await resolvePluginSource(config, distribution, service.providerId)).source === 'bundled') selected.push(service.id);
+        } catch (error) {
+          if (name === active) throw error;
+          // Do not attest an unresolved inactive implementation. Its catalog row remains visible.
+        }
+      }
+      return [name, selected];
+    }),
+  ));
+  const compilerServices = await services(compiler, target);
+  const runtimeServices = await services(runtime, runtimeDefault.activeTarget);
+  const selected = new Set([...compilerServices[target]!, ...runtimeServices[runtimeDefault.activeTarget]!]);
+  // Unbound services are Stack infrastructure; provider services belong to selected implementations, never target labels.
+  const requiredServices = distribution.services.filter((service) => !service.providerId || selected.has(service.id));
+  return { target, runtimeTarget: runtimeDefault.activeTarget, compilerTargets: compilerNames, allowedTargets, compiler, runtime, compilerServices, runtimeServices, requiredServices };
+}
+
+async function stackScope(distribution: DkbDistribution, root: string, libraryRoot?: string) {
+  const local = await readDkbContextConfig(path.join(root, DKB_CONFIG_PATH));
+  const library = libraryRoot ? await readDkbContextConfig(path.join(libraryRoot, DKB_CONFIG_PATH)) : { format: DKB_CONFIG_FORMAT } as DkbContextConfig;
+  // Containers mount their trusted context and (for Runtime) Library, not the host's user-global directory.
+  // Reusing the already-searched local plugin directory as the empty global scope keeps planning inside those mounts.
+  const globalRoot = path.join(root, '.dkb');
+  const resolve = (target?: string) => resolveContextConfigDocuments(root, globalRoot, distribution.defaults,
+    { format: DKB_CONFIG_FORMAT }, local, target, library, libraryRoot);
+  const names = [...new Set([...Object.keys(distribution.defaults.targets ?? {}), ...Object.keys(library.targets ?? {}), ...Object.keys(local.targets ?? {})])].sort();
+  return { names, local, library, resolve };
+}
+
+function selectedServiceEnvironment(selection: StackSelection): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [recipe, bindings] of [
+    [selection.compiler[selection.target]!, selection.compilerServices[selection.target]!],
+    [selection.runtime[selection.runtimeTarget]!, selection.runtimeServices[selection.runtimeTarget]!],
+  ] as const) {
+    for (const service of selection.requiredServices) {
+      if (!service.providerId || !bindings.includes(service.id)) continue;
+      const mappedOptions = { ...service.stack?.optionEnvironment,
+        ...(service.stack ? { image: service.stack.imageEnvironment } : {}) };
+      for (const [option, environment] of Object.entries(mappedOptions)) {
+        const value = recipe.target.options?.[service.providerId]?.[option];
+        if (value === undefined) continue;
+        const encoded = environmentValue(value, service.id, option);
+        if (result[environment] !== undefined && result[environment] !== encoded) {
+          throw new DkbError(`Compiler and Runtime recipes require different ${service.id}.${option} values for one shared Stack service. Use separately configured services or Stacks; neither recipe was changed.`);
+        }
+        result[environment] = encoded;
+      }
+    }
+  }
+  return result;
 }
 
 function serviceProfiles(services: readonly DkbDistributionService[]): string[] {
@@ -368,20 +548,8 @@ function requiredServicePort(distribution: DkbDistribution, ports: Record<string
   return port;
 }
 
-function parseStoredTarget(distribution: DkbDistribution, value: string | undefined): DkbStackTarget {
-  const target = value ?? distributionDefaultTarget(distribution);
-  targetRecipe(distribution, target);
-  return target;
-}
-
-function distributionDefaultTarget(distribution: DkbDistribution): string {
-  const target = distribution.defaults.activeTarget;
-  if (!target) throw new DkbError(`Distribution ${distribution.id} does not define a default pipeline target.`);
-  return target;
-}
-
 function environmentValue(value: unknown, serviceId: string, option: string): string {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if ((typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') && !/[\r\n]/u.test(String(value))) return String(value);
   throw new DkbError(`Stack option ${serviceId}.${option} must be a string, number, or boolean to map into a service environment variable.`);
 }
 

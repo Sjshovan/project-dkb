@@ -46,20 +46,37 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .description('Publish a DKB or immutable Collection revision to the configured Registry')
     .argument('[path]', 'DKB or Collection folder to publish', '.')
     .option('--url <url>', 'Registry API URL')
+    .option('--installed <identity>', 'Publish one editable local DKB installed in a Library')
+    .option('--library <library>', 'Library containing the editable DKB selected by --installed')
     .option('--account <id>', 'Publisher account id')
     .option('--name <name>', 'Publisher display name')
     .option('--email <email>', 'Publisher email')
     .option('--force', 'Replace an existing package version')
+    .option('--pipeline <name>', 'Trusted Registry Pipeline used to compile this release')
     .option('--remote-url <url>', 'Register a public hosted runtime after publishing')
     .option('--public', 'Publish the package to the public catalog')
-    .action(async (target: string, options: { url?: string; account?: string; name?: string; email?: string; force?: boolean; remoteUrl?: string; public?: boolean }) => {
-      const sourcePath = path.resolve(target);
+    .action(async (target: string, options: { url?: string; installed?: string; library?: string; account?: string; name?: string; email?: string; force?: boolean; pipeline?: string; remoteUrl?: string; public?: boolean }) => {
+      let sourcePath = path.resolve(target);
+      let installedLibrary: string | undefined;
+      if (options.library && !options.installed) throw new DkbError('--library requires --installed. For an arbitrary folder, use dkb publish <path>.');
+      if (options.installed) {
+        if (target !== '.') throw new DkbError('A publish path cannot be combined with --installed.');
+        installedLibrary = await currentLibraryRoot(options.library);
+        const { inspectInstalledPackage } = await import('@sjshovan/dkb-library/packageInfo.js');
+        const entry = await inspectInstalledPackage(installedLibrary, options.installed);
+        if (entry.kind !== 'dkb' || entry.source !== 'local' || entry.status !== 'installed') {
+          throw new DkbError('Only an editable local DKB can be published. Registry-origin releases must request trusted builds from their Registry.');
+        }
+        sourcePath = await fs.realpath(entry.path);
+        const relative = path.relative(await fs.realpath(installedLibrary), sourcePath);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) throw new DkbError('Editable DKB path escapes its Library.');
+      }
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { configuredRegistry } = await import('./registryConfig.js');
       const sourceManifest = await loadManifest(sourcePath);
       const libraryRoot = sourceManifest.type === 'collection'
         ? await currentLibraryRoot(undefined, sourcePath)
-        : undefined;
+        : installedLibrary;
       const registryConfig = await configuredRegistry({ url: options.url, root: libraryRoot });
       const client = new DkbRegistryClient({ baseUrl: registryConfig.url });
       if (sourceManifest.type === 'collection') {
@@ -81,6 +98,7 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
         accountName: options.name,
         accountEmail: options.email,
         force: Boolean(options.force),
+        pipeline: options.pipeline,
         remoteUrl: options.remoteUrl,
         visibility: options.public || options.remoteUrl ? 'public' : 'private',
       }), summarizePublishResult);
@@ -185,9 +203,6 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
   registerRemoteCommands(program, {
     presenter,
     printJson,
-    currentRuntimeAdminClient,
-    parsePositiveInteger,
-    parseLimit,
   });
   registerRuntimeImportCommand(
     runtime.command('import'),
@@ -428,13 +443,12 @@ async function prepareCompiledRuntimeImport(source: string, id?: string, name?: 
     if (id && parseDkbIdentity(id, 'Imported DKB identity').identity !== identity) {
       throw new DkbError(`Imported DKB identity override ${id} does not match its manifest ${identity}.`);
     }
-    const { compileComposeProject } = await import('@sjshovan/dkb-compiler/compile.js');
+    const { compileLocalComposeProject } = await import('../providers/localCompilation.js');
     // Compile the sanitized staging copy with the trusted local source as its
     // provider context. This preserves Library-local pipeline overrides while
     // ensuring plugin code and configuration never enter the import artifact.
-    await compileComposeProject(packageRoot, {
+    await compileLocalComposeProject(packageRoot, {
       force: true,
-      mode: 'package',
       contextRoot: resolvedSource,
     });
 

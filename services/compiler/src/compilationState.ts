@@ -17,7 +17,7 @@ import {
   type DkbEvidenceIr,
 } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbProviderHost, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbEvidencePipeline, IndexedSourceUnit } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbEvidencePipeline, DkbJsonValue, IndexedSourceUnit } from '@sjshovan/dkb-pipeline/types.js';
 import { evidenceSourceRecordFromPipelineRecord, indexedSourceUnitFromPipelineRecord } from './records.js';
 import { embedDkbEvidenceWithProviderHost, ingestDkbWithProviderHost } from './pipelineRunner.js';
 import { summarizeEvidenceCorpus } from './buildStatistics.js';
@@ -47,25 +47,26 @@ export function pipelineFromEvidenceIr(evidence: DkbEvidenceIr): DkbEvidencePipe
         id: record.evidenceId,
         chunkId: chunk.chunkId,
         text: record.text,
-        metadata: {
+        provenance: {
           assetId: record.assetId,
           storeId: record.storeId,
-          type: record.sourceType,
-          locator: record.locator,
-          assetLocator: record.assetLocator,
+          sourceType: record.sourceType,
+          locator: record.locator as Record<string, DkbJsonValue>,
+          assetLocator: record.assetLocator as Record<string, DkbJsonValue>,
           title: record.title,
-          hash: record.textHash,
-          updatedAt: '1970-01-01T00:00:00.000Z',
+          sourceHash: record.sourceHash,
+          updatedAt: typeof record.provenance.dkb_updated_at === 'string' ? record.provenance.dkb_updated_at : '1970-01-01T00:00:00.000Z',
           chunkOrdinal: chunk.ordinal,
           chunkStart: chunk.start,
           chunkEnd: chunk.end,
-          sourceMetadata: {
-            ...record.provenance,
-            dkb_package_id: record.packageId,
-            dkb_package_version: record.packageVersion,
-            dkb_source_hash: record.sourceHash,
-            dkb_evidence_id: record.evidenceId,
-          },
+        },
+        metadata: {
+          ...(record.provenance as Record<string, DkbJsonValue>),
+          dkb_package_id: record.packageId,
+          dkb_package_version: record.packageVersion,
+          dkb_source_hash: record.sourceHash,
+          dkb_evidence_id: record.evidenceId,
+          dkb_text_hash: record.textHash,
         },
       };
     }),
@@ -82,13 +83,13 @@ export function providerStageStatistics(
       .map((provider) => provider.id) ?? []);
     const evidenceReceipt = artifact.compiled.receipts.find((receipt) => evidenceProviderIds.has(receipt.providerId));
     const embeddingReceipt = artifact.compiled.receipts.find((receipt) => {
-      return receipt.providerId === state.resolvedProfile?.embedding.provider
-        && isRecord(receipt.build.timingsMs);
+      return receipt.providerId === state.resolvedProfile?.embedding?.provider
+        && isRecord(receipt.diagnostics?.timingsMs);
     });
-    const evidenceExecution = isRecord(evidenceReceipt?.build.execution) ? evidenceReceipt.build.execution : undefined;
+    const evidenceExecution = isRecord(evidenceReceipt?.diagnostics?.execution) ? evidenceReceipt.diagnostics.execution : undefined;
     const ingestionTimingsMs = numberRecord(evidenceExecution?.timingsMs);
     const ingestionWrapperTimingsMs = numberRecord(evidenceExecution?.wrapperTimingsMs);
-    const embeddingTimingsMs = numberRecord(embeddingReceipt?.build.timingsMs);
+    const embeddingTimingsMs = numberRecord(embeddingReceipt?.diagnostics?.timingsMs);
 
     return {
       packageId: artifact.dkb.manifest.id,
@@ -104,16 +105,24 @@ export async function collectRegistryState(
   desiredProfile: DkbResolvedRetrievalProfile,
   distribution: DkbDistribution,
   contextRoot = registry.root,
+  targetOptions?: Record<string, Record<string, unknown>>,
+  signal?: AbortSignal,
 ): Promise<RegistryCompileState> {
+  signal?.throwIfAborted();
   const allDkbs = uniqueDkbs([
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const providerHost = await DkbProviderHost.create({ root: contextRoot, distribution, target: desiredProfile.target });
+  const providerHost = await DkbProviderHost.create({
+    root: contextRoot,
+    distribution,
+    target: desiredProfile.target,
+    ...(targetOptions ? { targetOptions } : {}),
+  });
   let packageEntries: Awaited<ReturnType<typeof collectDkbState>>[];
 
   try {
-    packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost)));
+    packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost, signal)));
   } catch (error) {
     await providerHost.dispose();
     throw error;
@@ -140,12 +149,14 @@ export async function resolvedProviderProfile(
   distribution: DkbDistribution,
   target?: string,
   libraryRoot?: string,
+  targetOptions?: Record<string, Record<string, unknown>>,
 ): Promise<DkbResolvedRetrievalProfile> {
   const host = await DkbProviderHost.create({
     root,
     distribution,
     ...(target ? { target } : {}),
     ...(libraryRoot ? { libraryRoot } : {}),
+    ...(targetOptions ? { targetOptions } : {}),
   });
 
   try {
@@ -218,12 +229,13 @@ async function collectDkbState(
   desiredProfile: DkbResolvedRetrievalProfile,
   artifactRoot: string,
   providerHost: DkbProviderHost,
+  signal?: AbortSignal,
 ): Promise<{
   package: DkbLockManifest['packages'][string];
   sourceUnits: IndexedSourceUnit[];
   compilerArtifact?: CompilerArtifactState;
 }> {
-  const built = await buildSourceUnitsForDkb(dkb, desiredProfile, providerHost);
+  const built = await buildSourceUnitsForDkb(dkb, desiredProfile, providerHost, signal);
 
   return {
     package: await lockPackageForDkb(dkb, built.units, artifactRoot),
@@ -243,8 +255,10 @@ async function buildSourceUnitsForDkb(
   dkb: LoadedDkb,
   desiredProfile: DkbResolvedRetrievalProfile,
   providerHost: DkbProviderHost,
+  signal?: AbortSignal,
 ) {
-  const ingested = await ingestDkbWithProviderHost(providerHost, dkb);
+  const ingested = await ingestDkbWithProviderHost(providerHost, dkb, { signal });
+  signal?.throwIfAborted();
   const evidenceRecords = ingested.records.map((record) => evidenceSourceRecordFromPipelineRecord(dkb, record));
   const evidence = buildEvidenceIr([{ records: evidenceRecords }], {
     evidenceProfileDigest: desiredProfile.evidenceProfileDigest,
@@ -253,11 +267,11 @@ async function buildSourceUnitsForDkb(
   const corpus = summarizeEvidenceCorpus(evidence, sourceStatistics);
   const diskCapacity = await assertDiskCapacity(
     dkb.root,
-    estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding.dimensions),
+    estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding?.dimensions ?? 0),
     `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
   );
   const annotated = annotateEvidenceIds(dkb, ingested, evidence.evidenceProfileDigest);
-  const compiled = await embedDkbEvidenceWithProviderHost(providerHost, annotated);
+  const compiled = await embedDkbEvidenceWithProviderHost(providerHost, annotated, { signal });
   const unique = new Map<string, IndexedSourceUnit>();
 
   for (const record of compiled.records) {
@@ -285,17 +299,12 @@ function annotateEvidenceIds(
       const source = evidenceSourceRecordFromPipelineRecord(dkb, record);
       const sourceEvidenceId = evidenceIdentityForRecord(source).evidenceId;
       const evidenceId = stableHash({ sourceEvidenceId, evidenceProfileDigest });
-      const sourceMetadata = isRecord(record.metadata.sourceMetadata) ? record.metadata.sourceMetadata : {};
-
       return {
         ...record,
         id: evidenceId,
         metadata: {
           ...record.metadata,
-          sourceMetadata: {
-            ...sourceMetadata,
-            dkb_evidence_id: evidenceId,
-          },
+          dkb_evidence_id: evidenceId,
         },
       };
     }),

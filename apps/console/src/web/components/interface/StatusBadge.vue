@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, XCircle } from '@lucide/vue'
 
 const props = defineProps<{ status?: string }>();
 const normalized = computed(() => (props.status ?? 'unknown').toLowerCase().replaceAll('_', ' '));
-const tone = computed(() => ['ready', 'online', 'active', 'installed', 'ok', 'succeeded', 'passed', 'present', 'verified'].includes(normalized.value)
+const tone = computed(() => ['ready', 'online', 'active', 'installed', 'ok', 'succeeded', 'passed', 'present', 'verified', 'available', 'registry signed', 'registry verified'].includes(normalized.value)
   ? 'positive'
   : ['failed', 'offline', 'missing', 'invalid', 'unavailable', 'cancelled'].includes(normalized.value)
     ? 'negative'

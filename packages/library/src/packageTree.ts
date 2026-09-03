@@ -183,7 +183,7 @@ function resolvePortableTarget(root: string, relative: string): string {
   return target;
 }
 
-function isExcludedPortableName(name: string): boolean {
+export function isExcludedPortableName(name: string): boolean {
   return name === '.dkb' || EXCLUDED_ROOT_FILES.has(name);
 }
 

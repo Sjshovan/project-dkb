@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { replaceFileAtomically } from '@sjshovan/dkb-protocol/atomicFile.js';
+import { assertNoInlineSecrets } from './optionsSecurity.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
@@ -12,12 +15,18 @@ export interface DkbPipelineTargetConfig {
   evidence?: string;
   parser?: string;
   chunker?: string;
-  embedding: string;
+  embedding?: string;
   index: string;
   retrieval: string;
   processors?: string[];
+  observers?: string[];
   options?: Record<string, Record<string, unknown>>;
 }
+
+/** A persisted target may explicitly clear an embedding inherited from a broader scope. */
+export type DkbPipelineTargetOverride = Omit<Partial<DkbPipelineTargetConfig>, 'embedding'> & {
+  embedding?: string | null;
+};
 
 export interface DkbContextConfig {
   format: typeof DKB_CONFIG_FORMAT;
@@ -25,7 +34,7 @@ export interface DkbContextConfig {
     url?: string;
   };
   activeTarget?: string;
-  targets?: Record<string, Partial<DkbPipelineTargetConfig>>;
+  targets?: Record<string, DkbPipelineTargetOverride>;
 }
 
 export interface DkbResolvedPipelineTarget extends DkbPipelineTargetConfig {
@@ -52,7 +61,14 @@ export function defaultDkbGlobalRoot(): string {
 
 export async function resolveContextConfig(
   root: string,
-  options: { defaults: DkbContextConfig; globalRoot?: string; libraryRoot?: string; target?: string },
+  options: {
+    defaults: DkbContextConfig;
+    globalRoot?: string;
+    libraryRoot?: string;
+    target?: string;
+    /** Trusted, process-local options applied after every persisted scope. */
+    targetOptions?: Record<string, Record<string, unknown>>;
+  },
 ): Promise<DkbResolvedContextConfig> {
   const resolvedRoot = path.resolve(root);
   const globalRoot = path.resolve(options.globalRoot ?? defaultDkbGlobalRoot());
@@ -64,7 +80,17 @@ export async function resolveContextConfig(
       : Promise.resolve({ format: DKB_CONFIG_FORMAT } as DkbContextConfig),
     readDkbContextConfig(path.join(resolvedRoot, DKB_CONFIG_PATH)),
   ]);
-  return resolveContextConfigDocuments(resolvedRoot, globalRoot, options.defaults, global, local, options.target, library, libraryRoot);
+  return resolveContextConfigDocuments(
+    resolvedRoot,
+    globalRoot,
+    options.defaults,
+    global,
+    local,
+    options.target,
+    library,
+    libraryRoot,
+    options.targetOptions,
+  );
 }
 
 export function resolveContextConfigDocuments(
@@ -76,6 +102,7 @@ export function resolveContextConfigDocuments(
   selectedTarget?: string,
   library: DkbContextConfig = { format: DKB_CONFIG_FORMAT },
   libraryRoot?: string,
+  targetOptions?: Record<string, Record<string, unknown>>,
 ): DkbResolvedContextConfig {
   const activeTarget = selectedTarget?.trim()
     || local.activeTarget?.trim()
@@ -93,7 +120,10 @@ export function resolveContextConfigDocuments(
     throw new DkbError(`Pipeline target "${activeTarget}" is not configured in ${resolvedRoot}, ${globalRoot}, or DKB's bundled defaults`);
   }
 
-  const merged = mergeTarget(mergeTarget(mergeTarget(bundledTarget, globalTarget), libraryTarget), localTarget);
+  const merged = mergeTarget(
+    mergeTarget(mergeTarget(mergeTarget(bundledTarget, globalTarget), libraryTarget), localTarget),
+    targetOptions ? { options: targetOptions } : undefined,
+  );
   const target = validateTarget(activeTarget, merged);
 
   return {
@@ -138,12 +168,16 @@ export async function readDkbContextConfig(target: string): Promise<DkbContextCo
 export async function writeDkbContextConfig(target: string, config: DkbContextConfig): Promise<void> {
   validateContextConfig(config, target);
   const resolved = path.resolve(target);
-  const temp = `${resolved}.${process.pid}.${Date.now().toString(36)}.tmp`;
-
+  const temp = `${resolved}.${randomUUID()}.tmp`;
   await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-  await fs.rm(resolved, { force: true });
-  await fs.rename(temp, resolved);
+  try {
+    await fs.writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    // Rename replaces one complete document with another. Never expose an
+    // absent higher-priority config or erase the previous value on failure.
+    await replaceFileAtomically(temp, resolved);
+  } finally {
+    await fs.rm(temp, { force: true });
+  }
 }
 
 export function validateContextConfig(value: unknown, source = DKB_CONFIG_PATH): DkbContextConfig {
@@ -170,10 +204,13 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
   if (!target.evidence && (!target.parser || !target.chunker)) {
     throw new DkbError(`Pipeline target "${name}" requires both parser and chunker providers`);
   }
-  for (const key of ['embedding', 'index', 'retrieval'] as const) {
+  for (const key of ['index', 'retrieval'] as const) {
     if (!isPluginId(target[key])) {
       throw new DkbError(`Pipeline target "${name}" requires a namespaced ${key} provider id`);
     }
+  }
+  if (target.embedding !== undefined && !isPluginId(target.embedding)) {
+    throw new DkbError(`Pipeline target "${name}" embedding must be a namespaced provider id when supplied`);
   }
   for (const providerId of [target.evidence, target.parser, target.chunker].filter(Boolean)) {
     if (!isPluginId(providerId)) {
@@ -182,6 +219,9 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
   }
   if (target.processors && (!Array.isArray(target.processors) || target.processors.some((id) => !isPluginId(id)))) {
     throw new DkbError(`Pipeline target "${name}" processors must be namespaced plugin ids`);
+  }
+  if (target.observers && (!Array.isArray(target.observers) || target.observers.some((id) => !isPluginId(id)))) {
+    throw new DkbError(`Pipeline target "${name}" observers must be namespaced plugin ids`);
   }
   if (target.options && !isRecord(target.options)) {
     throw new DkbError(`Pipeline target "${name}" options must be an object keyed by provider id`);
@@ -193,7 +233,6 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
     assertNoInlineSecrets(options, `Pipeline target "${name}" options for ${providerId}`);
   }
 
-  const embedding = target.embedding as string;
   const index = target.index as string;
   const retrieval = target.retrieval as string;
 
@@ -201,26 +240,28 @@ function validateTarget(name: string, target: Partial<DkbPipelineTargetConfig> |
     ...(target.evidence ? { evidence: target.evidence } : {}),
     ...(target.parser ? { parser: target.parser } : {}),
     ...(target.chunker ? { chunker: target.chunker } : {}),
-    embedding,
+    ...(target.embedding ? { embedding: target.embedding } : {}),
     index,
     retrieval,
     processors: [...(target.processors ?? [])],
+    observers: [...(target.observers ?? [])],
     options: cloneOptions(target.options),
   };
 }
 
 function mergeTarget(
-  base: Partial<DkbPipelineTargetConfig> | undefined,
-  override: Partial<DkbPipelineTargetConfig> | undefined,
+  base: DkbPipelineTargetOverride | undefined,
+  override: DkbPipelineTargetOverride | undefined,
 ): Partial<DkbPipelineTargetConfig> | undefined {
   if (!base && !override) {
     return undefined;
   }
 
-  const result: Partial<DkbPipelineTargetConfig> = {
+  const result: DkbPipelineTargetOverride = {
     ...base,
     ...override,
     processors: override && Object.hasOwn(override, 'processors') ? [...(override.processors ?? [])] : [...(base?.processors ?? [])],
+    observers: override && Object.hasOwn(override, 'observers') ? [...(override.observers ?? [])] : [...(base?.observers ?? [])],
     options: mergeOptions(base?.options, override?.options),
   };
 
@@ -230,8 +271,11 @@ function mergeTarget(
   } else if (override?.parser || override?.chunker) {
     delete result.evidence;
   }
+  if (result.embedding === null) {
+    delete result.embedding;
+  }
 
-  return result;
+  return result as Partial<DkbPipelineTargetConfig>;
 }
 
 function mergeOptions(
@@ -264,19 +308,6 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
 
 function cloneOptions(options: Record<string, Record<string, unknown>> | undefined): Record<string, Record<string, unknown>> {
   return Object.fromEntries(Object.entries(options ?? {}).map(([id, value]) => [id, deepMerge({}, value)]));
-}
-
-function assertNoInlineSecrets(value: Record<string, unknown>, source: string, pathPrefix = ''): void {
-  for (const [key, nested] of Object.entries(value)) {
-    const optionPath = pathPrefix ? `${pathPrefix}.${key}` : key;
-
-    if (/^(api[_-]?key|access[_-]?token|token|password|secret)$/i.test(key)) {
-      throw new DkbError(`${source} cannot store ${optionPath}; use an environment or secret reference option instead`);
-    }
-    if (isRecord(nested)) {
-      assertNoInlineSecrets(nested, source, optionPath);
-    }
-  }
 }
 
 export function isPluginId(value: unknown): value is string {

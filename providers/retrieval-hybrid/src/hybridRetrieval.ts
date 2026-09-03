@@ -4,6 +4,7 @@ import type {
   DkbRetrievalRuntime,
   DkbRetrievalScope,
 } from '@sjshovan/dkb-pipeline/types.js';
+import { evidenceMatchesRetrievalScope } from '@sjshovan/dkb-pipeline/validation.js';
 
 type DkbRetrievalEvidenceRecord = Parameters<DkbRetrievalProvider['openRuntime']>[0]['evidence']['records'][number];
 
@@ -13,8 +14,10 @@ export function createHybridRetrievalProvider(providerId: string): DkbRetrievalP
   return {
     kind: 'retrieval',
     protocol: DKB_HYBRID_RETRIEVAL_PROTOCOL,
+    capabilities: { vectors: 'optional' },
     openRuntime({ index, evidence }) {
       let closed = false;
+      const evidenceById = new Map(evidence.records.map((record) => [record.evidenceId, record]));
       const runtime: DkbRetrievalRuntime = {
         providerId,
         protocol: DKB_HYBRID_RETRIEVAL_PROTOCOL,
@@ -26,7 +29,15 @@ export function createHybridRetrievalProvider(providerId: string): DkbRetrievalP
             index?.search(query, candidateLimit, signal) ?? Promise.resolve({ hits: [], trace: { status: 'unavailable' } }),
             Promise.resolve(searchEvidenceLexically(evidence.records, query, candidateLimit, scope)),
           ]);
-          const hits = fuseCandidates(lexical, vector.hits, limit);
+          const scopedVector = scope
+            ? vector.hits.filter((hit) => {
+                const record = evidenceById.get(hit.id);
+                return !record || evidenceMatchesRetrievalScope(record, scope);
+              })
+            : vector.hits;
+          const ranked = fuseCandidates(lexical, scopedVector, limit);
+          const coverage = searchEvidenceCoverage(query, ranked);
+          const hits = coverage > 0.5 ? ranked : [];
 
           return {
             hits,
@@ -34,8 +45,11 @@ export function createHybridRetrievalProvider(providerId: string): DkbRetrievalP
               engine: providerId,
               status: hits.length > 0 ? 'ready' : 'empty',
               strategy: 'weighted-rank-fusion',
+              relevancePolicy: 'meaningful-token-coverage',
+              tokenCoverage: coverage,
               lexicalCandidates: lexical.length,
-              vectorCandidates: vector.hits.length,
+              vectorCandidates: scopedVector.length,
+              vectorCandidatesRejectedByScope: vector.hits.length - scopedVector.length,
               index: vector.trace,
             },
           };
@@ -61,10 +75,7 @@ function searchEvidenceLexically(
   if (tokens.length === 0) return [];
 
   return records.flatMap((record) => {
-    if (scope?.dkbId && scope.dkbId !== record.packageId) return [];
-    if (scope?.packageVersion && scope.packageVersion !== record.packageVersion) return [];
-    if (scope?.assetId && scope.assetId !== record.assetId) return [];
-    if (scope?.sourceType && scope.sourceType !== record.sourceType) return [];
+    if (!evidenceMatchesRetrievalScope(record, scope)) return [];
     const title = new Set(tokenize(record.title));
     const keywords = new Set(record.keywords.flatMap(tokenize));
     const text = new Set(tokenize(record.text));
@@ -83,6 +94,22 @@ function tokenize(value: string): string[] {
   return (value.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/gu) ?? [])
     .flatMap((token) => token.includes('-') ? [token, ...token.split('-')] : [token]);
 }
+
+// Keep the bundled provider's conservative relevance policy here, so CLI, HTTP,
+// and MCP see the same approved results. Coverage is not a calibrated confidence
+// score or a rule for other providers.
+function searchEvidenceCoverage(query: string, hits: readonly DkbRetrievalHit[]): number {
+  const tokens = [...new Set(tokenize(query))].filter((token) => token.length > 2 && !SEARCH_STOPWORDS.has(token));
+  if (tokens.length === 0) return hits.length > 0 ? 1 : 0;
+  const matched = new Set(hits.flatMap((hit) => hit.matchedTokens ?? []));
+  return Math.round(tokens.filter((token) => matched.has(token)).length / tokens.length * 10_000) / 10_000;
+}
+
+const SEARCH_STOPWORDS = new Set([
+  'what', 'which', 'where', 'when', 'who', 'how', 'does', 'are', 'for',
+  'explain', 'especially', 'find', 'show', 'tell', 'about', 'that', 'this',
+  'with', 'from', 'the', 'and', 'project',
+]);
 
 function fuseCandidates(
   lexical: readonly { unitId: string; score: number; matchedTokens: string[] }[],

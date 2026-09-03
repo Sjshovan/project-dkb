@@ -20,7 +20,9 @@ RUN npm ci
 COPY packages packages
 COPY providers providers
 COPY services/compiler services/compiler
-RUN npm run build --workspace @sjshovan/dkb-compiler
+COPY scripts/generate-provider-integrity.mjs scripts/generate-provider-integrity.mjs
+RUN npm run build --workspace @sjshovan/dkb-compiler \
+    && node scripts/generate-provider-integrity.mjs --verify --copy-to /provider-distribution
 
 FROM node:22-bookworm-slim AS runtime
 
@@ -54,13 +56,10 @@ COPY --from=build /workspace/packages/library/dist packages/library/dist
 COPY --from=build /workspace/packages/pipeline/dist packages/pipeline/dist
 COPY --from=build /workspace/packages/registry-client/dist packages/registry-client/dist
 COPY --from=build /workspace/packages/distribution-default/dist packages/distribution-default/dist
-COPY --from=build /workspace/providers/evidence-docling-llamaindex/dist providers/evidence-docling-llamaindex/dist
-COPY --from=build /workspace/providers/embedding-fastembed/dist providers/embedding-fastembed/dist
-COPY --from=build /workspace/providers/embedding-tei/dist providers/embedding-tei/dist
-COPY --from=build /workspace/providers/index-faiss/dist providers/index-faiss/dist
-COPY --from=build /workspace/providers/index-meilisearch/dist providers/index-meilisearch/dist
-COPY --from=build /workspace/providers/retrieval-hybrid/dist providers/retrieval-hybrid/dist
+COPY --from=build /provider-distribution/providers providers
 COPY --from=build /workspace/services/compiler/dist services/compiler/dist
+COPY scripts/generate-provider-integrity.mjs scripts/generate-provider-integrity.mjs
+RUN node scripts/generate-provider-integrity.mjs --verify
 
 ENV NODE_ENV=production \
     DKB_COMPILER_HOST=0.0.0.0 \

@@ -13,6 +13,7 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { validateSourceInventory } from '@sjshovan/dkb-protocol/registryCatalog.js';
 import {
   evidenceBuildLock,
+  evidenceBuildReceiptDigest,
   retrievalBuildLock,
   validateRetrievalBuildLock,
 } from '@sjshovan/dkb-protocol/builds.js';
@@ -24,6 +25,7 @@ import {
   validatePackageBuildGraph,
   writePackageBuildGraph,
 } from '@sjshovan/dkb-library/builds.js';
+import { fixtureProviderReceipts } from './provider-receipt-fixture.mjs';
 
 const image = 'dkb-evidence-docling-llamaindex:0.1.0';
 
@@ -136,15 +138,18 @@ test('build locks bind retrieval artifacts to one exact Evidence Build', () => {
     evidenceDigest,
     recordCount: 1,
     chunkCount: 1,
+    providerReceipts: [],
     generatedAt: '2026-08-27T00:00:00.000Z',
   });
   const retrieval = retrievalBuildLock({
     package: packageIdentity,
     evidenceProfileDigest: evidence.evidenceProfileDigest,
     evidenceDigest: evidence.evidenceDigest,
+    evidenceReceiptDigest: evidenceBuildReceiptDigest(evidence),
     retrievalProfileDigest: stableHash({ retrieval: 'tei-faiss' }),
     compatibilityDigest: stableHash({ compatibility: 'tei-faiss' }),
     artifactTreeDigest: stableHash({ artifacts: ['index.faiss'] }),
+    providerReceipts: [],
     generatedAt: '2026-08-27T00:00:00.000Z',
   });
 
@@ -180,6 +185,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     package: packageIdentity,
     evidence,
     retrievalProfile: smallLock,
+    ...fixtureProviderReceipts(smallLock),
     artifactsRoot: artifacts,
     target: 'fastembed-small',
   });
@@ -190,6 +196,7 @@ test('stored Retrieval Builds switch atomically without recompiling and keep Evi
     package: packageIdentity,
     evidence,
     retrievalProfile: baseLock,
+    ...fixtureProviderReceipts(baseLock),
     artifactsRoot: artifacts,
     target: 'fastembed-base',
   });
@@ -238,7 +245,8 @@ test('downloaded package layers retain existing compatible builds and reject dig
     fs.rm(source, { force: true, recursive: true }),
     fs.rm(destination, { force: true, recursive: true }),
   ]));
-  const generatedAt = '2026-08-28T00:00:00.000Z';
+  const sourceGeneratedAt = '2026-08-28T00:00:00.000Z';
+  const destinationGeneratedAt = '2026-08-29T00:00:00.000Z';
   const packageIdentity = {
     id: '@test/merge-builds',
     version: '1.0.0',
@@ -249,19 +257,27 @@ test('downloaded package layers retain existing compatible builds and reject dig
   const evidence = buildEvidenceIr([compilerResult(small.embedding.space, 384)], {
     evidenceProfileDigest: small.evidenceProfileDigest,
   });
-  const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.space, 384)], { generatedAt });
-  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.space, 768)], { generatedAt });
+  const baseLock = retrievalProfileLockForRetrievalPipelines(base, [compilerResult(base.embedding.space, 768)], {
+    generatedAt: sourceGeneratedAt,
+  });
 
-  for (const root of [source, destination]) {
+  for (const [root, generatedAt] of [
+    [source, sourceGeneratedAt],
+    [destination, destinationGeneratedAt],
+  ]) {
     const artifacts = path.join(root, 'staged-retrieval-artifacts');
     await fs.mkdir(artifacts, { recursive: true });
     await fs.writeFile(path.join(artifacts, 'evidence.ir.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
     await fs.writeFile(path.join(artifacts, 'selected.index'), 'small\n', 'utf8');
+    const smallLock = retrievalProfileLockForRetrievalPipelines(small, [compilerResult(small.embedding.space, 384)], {
+      generatedAt,
+    });
     await writePackageBuildGraph({
       root,
       package: packageIdentity,
       evidence,
       retrievalProfile: smallLock,
+      ...fixtureProviderReceipts(smallLock),
       artifactsRoot: artifacts,
       target: 'fastembed-small',
       generatedAt,
@@ -275,9 +291,10 @@ test('downloaded package layers retain existing compatible builds and reject dig
     package: packageIdentity,
     evidence,
     retrievalProfile: baseLock,
+    ...fixtureProviderReceipts(baseLock),
     artifactsRoot: sourceArtifacts,
     target: 'fastembed-base',
-    generatedAt,
+    generatedAt: sourceGeneratedAt,
   });
 
   const merged = await mergeStoredPackageBuilds(source, destination);
@@ -310,7 +327,7 @@ test('immutable Retrieval Build profiles are validated and retired root profiles
   await fs.writeFile(path.join(root, 'knowledge.md'), '# Proof\n\nStable source text.\n', 'utf8');
   await writeTestPipeline(root);
 
-  await compileComposeProject(root, { mode: 'package', force: true });
+  await compileComposeProject(root, { force: true });
   const graph = await validatePackageBuildGraph(root);
   assert.equal(graph.selection.evidenceDigest, graph.evidence.evidenceDigest);
   assert.equal(graph.selection.retrievalBuildDigest, graph.retrieval.retrievalBuildDigest);
@@ -385,6 +402,7 @@ function providerReceipt(id, kind) {
     source: 'bundled',
     sourcePath: `bundled:${id}`,
     sourceDigest: stableHash({ id, kind, version: '1.0.0' }),
+    integrityDigest: stableHash({ id, kind, version: '1.0.0', integrity: true }),
   };
 }
 
@@ -405,9 +423,10 @@ async function writeTestPipeline(root) {
   await fs.writeFile(path.join(pluginRoot, 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/pipeline';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({
     kind: 'evidence',
@@ -416,15 +435,10 @@ export function setup(context) {
       return {
         records: [{
           id: 'test-record', chunkId: 'test-record', text,
-          metadata: {
-            assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem',
-            locator: { path: 'knowledge.md', chunk: 0 }, assetLocator: { path: 'knowledge.md' },
-            title: 'knowledge.md', hash: 'sha256:test-record', updatedAt: '2026-08-27T00:00:00.000Z',
-            chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length,
-            sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:test-source' },
-          },
+          provenance: { assetId: 'knowledge.md', storeId: 'filesystem', sourceType: 'filesystem', locator: { path: 'knowledge.md', chunk: 0 }, assetLocator: { path: 'knowledge.md' }, title: 'knowledge.md', sourceHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', updatedAt: '2026-08-27T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length },
+          metadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
         }],
-        receipt: { providerId: id, providerVersion: version, build: {} },
+        receipt: { build: {} },
       };
     },
   });
@@ -435,18 +449,19 @@ export function setup(context) {
     compatibility() { return { embeddingSpace: 'test', dimensions: 1, metric: 'cosine', normalized: true }; },
   });
   context.registerProvider({
-    kind: 'index', mode: 'packaged', format: 'test.index.v1',
+    kind: 'index', mode: 'packaged', format: 'test.index.v1', capabilities: { vectors: 'required' },
     async compilePackage({ artifactsRoot, compiled }) {
       const target = path.join(artifactsRoot, 'test-index.json');
       const vectors = new Map(compiled.vectors.map((vector) => [vector.evidenceId, vector.values]));
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records.map((record) => ({ ...record, embedding: vectors.get(record.id) }))));
-      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
+      return { build: { recordCount: compiled.records.length } };
     },
     async validatePackage() { return { documentCount: 1 }; },
+    async verifyRuntime() { return { indexId: 'test', documentCount: 1, status: 'ready' }; },
     async openRuntime() { return null; },
   });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: id, protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
 }

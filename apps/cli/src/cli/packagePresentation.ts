@@ -88,6 +88,57 @@ export function summarizeRegistryContents(value: unknown): string[] {
   ];
 }
 
+export function summarizeRegistryPipelines(value: unknown): string[] {
+  const record = isRecord(value) ? value : {};
+  const pipelines = Array.isArray(record.pipelines) ? record.pipelines.filter(isRecord) : [];
+  return [
+    `default Pipeline: ${String(record.default ?? '-')}`,
+    ...humanSummary({
+      pipelines: pipelines.map((pipeline) => ({
+        name: pipeline.name ?? '-',
+        default: pipeline.default === true ? 'YES' : '',
+        status: pipeline.available === true ? 'AVAILABLE' : 'UNAVAILABLE',
+        providers: Array.isArray(pipeline.providers)
+          ? pipeline.providers.filter(isRecord).map((provider) => provider.id).join(' -> ')
+          : '-',
+        services: Array.isArray(pipeline.requiredServices) && pipeline.requiredServices.length > 0
+          ? pipeline.requiredServices.join(', ')
+          : pipeline.resolutionError ? 'not resolved' : 'none',
+      })),
+    }),
+  ];
+}
+
+export function summarizeRegistryPipeline(value: unknown): string[] {
+  const pipeline = isRecord(value) ? value : {};
+  return [
+    `Pipeline: ${String(pipeline.name ?? '-')}${pipeline.default === true ? ' (default)' : ''}`,
+    `status: ${pipeline.available === true ? 'available' : 'unavailable'}`,
+    ...(isRecord(pipeline.resolutionError) ? [`Recovery: ${String(pipeline.resolutionError.message)}`] : []),
+    `Evidence Profile: ${String(pipeline.evidenceProfileDigest ?? '-')}`,
+    `Retrieval Profile: ${String(pipeline.retrievalProfileDigest ?? '-')}`,
+    `compatibility: ${String(pipeline.compatibilityDigest ?? '-')}`,
+    `compiler build: ${String(pipeline.buildDigest ?? '-')}`,
+    `required services: ${Array.isArray(pipeline.requiredServices) && pipeline.requiredServices.length > 0 ? pipeline.requiredServices.join(', ') : pipeline.resolutionError ? 'not resolved' : 'none'}`,
+    ...humanSummary({ providers: Array.isArray(pipeline.providers) ? pipeline.providers : [] }),
+    ...humanSummary({ processors: Array.isArray(pipeline.processors) ? pipeline.processors : [] }),
+  ];
+}
+
+export function summarizeRegistryBuildRequest(value: unknown): string[] {
+  const record = isRecord(value) ? value : {};
+  return [
+    `package: ${String(record.packageId ?? '-')}`,
+    `version: ${String(record.version ?? '-')}`,
+    `Pipeline: ${String(record.target ?? '-')}`,
+    `status: ${String(record.status ?? '-')}`,
+    record.evidenceDigest ? `Evidence: ${String(record.evidenceDigest)}` : '',
+    record.jobId ? `job: ${String(record.jobId)}` : '',
+    record.warning ? `Warning: ${String(record.warning)}` : '',
+    record.retryCommand ? `Retry: ${String(record.retryCommand)}` : '',
+  ];
+}
+
 function shortDigest(value: string): string {
   return value.length > 20 ? `${value.slice(0, 18)}…` : value;
 }

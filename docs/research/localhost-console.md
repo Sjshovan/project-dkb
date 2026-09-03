@@ -1,7 +1,14 @@
 # Localhost management console research
 
-Status: proposed, not implemented  
-Reviewed: 2026-08-28
+Status: historical research; superseded by
+[ADR 0007](../decisions/0007-host-console-cli-control-and-authentication.md)
+Originally reviewed: 2026-08-28
+
+> This document preserves the pre-implementation evaluation. It is not the
+> current Console architecture. The implemented Console deliberately uses the
+> CLI as its single typed, allowlisted control plane, as documented in the
+> [current system map](../architecture/system-map.md). Current behavior and
+> acceptance evidence take precedence over the recommendations below.
 
 ## Recommendation
 

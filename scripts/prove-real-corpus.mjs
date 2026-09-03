@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { containsSensitiveCorpusContent, isSensitiveCorpusPath } from './lib/corpus-sanitizer.mjs';
+import { proofStackLibraryRoot } from './lib/disposable-stack.mjs';
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,7 +19,7 @@ const stackRoot = path.join(stackStateRoot, stackName);
 const stackEnvironment = parseEnvironment(await fs.readFile(path.join(stackRoot, 'stack.env'), 'utf8'));
 const registryUrl = `http://127.0.0.1:${stackEnvironment.DKB_REGISTRY_PORT}`;
 const runtimeUrl = `http://127.0.0.1:${stackEnvironment.DKB_RUNTIME_PORT}`;
-const libraryRoot = path.join(stackRoot, 'runtime');
+const libraryRoot = proofStackLibraryRoot(stackRoot, stackEnvironment);
 const namespace = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_NAMESPACE, 'Registry bootstrap namespace');
 const registryToken = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_TOKEN, 'Registry bootstrap token');
 const runtimeAdminToken = required(stackEnvironment.DKB_RUNTIME_ADMIN_TOKEN, 'Runtime admin token');

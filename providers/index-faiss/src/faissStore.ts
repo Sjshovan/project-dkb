@@ -10,7 +10,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbRetrievalPipeline, DkbRuntimePackageBuild } from '@sjshovan/dkb-pipeline/types.js';
-import { FaissHelperClient, runFaissHelper } from './faissHelperClient.js';
+import { FaissHelperClient, runFaissHelper, type FaissExecutionOptions } from './faissHelperClient.js';
 
 export { faissProviderHealth } from './faissHelperClient.js';
 export type { FaissSearchHit } from './faissHelperClient.js';
@@ -104,6 +104,7 @@ export async function writeFaissPackageArtifacts(
   dkb: LoadedDkb,
   compiled: DkbRetrievalPipeline,
   compatibility: Record<string, unknown>,
+  execution: FaissExecutionOptions = {},
 ): Promise<FaissPackageManifest | null> {
   if (compiled.records.length === 0) {
     return null;
@@ -140,7 +141,7 @@ export async function writeFaissPackageArtifacts(
   try {
     await writeFaissCatalog(tempCatalog, dkb, numericIdToRecord);
     await writeFaissVectors(tempVectors, dkb, records);
-    await runFaissHelper(['build', '--vectors', tempVectors, '--out', tempSegment]);
+    await runFaissHelper(['build', '--vectors', tempVectors, '--out', tempSegment], execution);
 
     await fs.mkdir(path.dirname(catalogPath), { recursive: true });
     await replaceFile(tempCatalog, catalogPath);
@@ -233,6 +234,7 @@ export async function buildFaissRuntimeSnapshot(
   root: string,
   registryId: string,
   packages: readonly DkbRuntimePackageBuild[],
+  execution: FaissExecutionOptions = {},
 ): Promise<FaissRuntimeSnapshot | null> {
   const ready = await Promise.all(packages.map(({ dkb, artifactsRoot }) => loadFaissPackageArtifact(dkb, artifactsRoot)));
 
@@ -241,7 +243,7 @@ export async function buildFaissRuntimeSnapshot(
   }
 
   const embedding = assertSingleEmbeddingProfile(ready.map((item) => item.manifest.embedding));
-  const helper = new FaissHelperClient();
+  const helper = new FaissHelperClient(execution);
 
   try {
     await helper.load({
@@ -296,14 +298,18 @@ export async function searchFaissSnapshot(
   snapshot: FaissRuntimeSnapshot,
   query: string,
   limit: number,
-  embedQuery: (query: string) => Promise<number[]>,
+  embedQuery: (query: string, signal?: AbortSignal) => Promise<number[]>,
+  signal?: AbortSignal,
 ): Promise<FaissSearchResult> {
-  const vector = await embedQuery(query);
+  signal?.throwIfAborted();
+  const vector = await embedQuery(query, signal);
+  signal?.throwIfAborted();
 
   if (vector.length !== snapshot.embedding.dimensions) {
     throw new DkbError(`Query embedding dimension mismatch: expected ${snapshot.embedding.dimensions}, got ${vector.length}`);
   }
   const helperResult = await snapshot.helper.search(vector, limit);
+  signal?.throwIfAborted();
 
   return {
     hits: helperResult.hits.flatMap((hit) => {
@@ -342,10 +348,11 @@ export async function validateFaissRuntimeReady(input: {
   packages: readonly DkbRuntimePackageBuild[];
   packageId?: string;
   packageVersion?: string;
+  execution?: FaissExecutionOptions;
 }): Promise<FaissPackageMutationResult> {
   const started = performanceNow();
   const loadStart = performanceNow();
-  const snapshot = await buildFaissRuntimeSnapshot(input.root, input.registryId, input.packages);
+  const snapshot = await buildFaissRuntimeSnapshot(input.root, input.registryId, input.packages, input.execution);
   const loadMs = performanceNow() - loadStart;
 
   try {

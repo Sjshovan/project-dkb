@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { DKB_LOCKS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
@@ -11,17 +12,18 @@ const COMPILE_LOCK_TIMEOUT_MS = 30_000;
 const COMPILE_LOCK_STALE_MS = 10 * 60_000;
 const COMPILE_LOCK_RETRY_MS = 100;
 
-export async function withCompileLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
-  const lock = await acquireCompileLock(root);
+export async function withCompileLock<T>(root: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const lock = await acquireCompileLock(root, signal);
 
   try {
+    signal?.throwIfAborted();
     return await operation();
   } finally {
     await releaseCompileLock(lock);
   }
 }
 
-async function acquireCompileLock(root: string): Promise<{ path: string; token: string }> {
+async function acquireCompileLock(root: string, signal?: AbortSignal): Promise<{ path: string; token: string }> {
   const lockPath = resolveFrom(root, COMPILE_LOCK_PATH);
   const token = stableHash({
     pid: process.pid,
@@ -35,6 +37,7 @@ async function acquireCompileLock(root: string): Promise<{ path: string; token: 
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
   while (true) {
+    signal?.throwIfAborted();
     try {
       await fs.mkdir(lockPath);
       await fs.writeFile(path.join(lockPath, 'owner.json'), `${JSON.stringify({
@@ -60,7 +63,7 @@ async function acquireCompileLock(root: string): Promise<{ path: string; token: 
         throw new DkbError(`Timed out waiting for compile lock at ${lockPath}`);
       }
 
-      await delay(COMPILE_LOCK_RETRY_MS);
+      await delay(COMPILE_LOCK_RETRY_MS, undefined, { signal });
     }
   }
 }
@@ -105,10 +108,4 @@ function errorCode(error: unknown): string {
   return typeof error === 'object' && error && 'code' in error
     ? String((error as { code: unknown }).code)
     : '';
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

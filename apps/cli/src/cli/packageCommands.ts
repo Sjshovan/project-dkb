@@ -57,17 +57,45 @@ export function registerPackageLifecycleCommands(
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--contents <directory>', 'List one portable package directory; use . for the root')
     .option('--preview <file>', 'Read a bounded inert text preview of one portable package file')
+    .option('--evidence <id>', 'Inspect one inert Evidence record from an exact retained build')
+    .option('--evidence-build <digest>', 'Exact Evidence Build digest for --evidence')
+    .option('--version <version>', 'Exact installed package version for --evidence')
     .option('--verify', 'Recheck portable-tree, build, receipt-chain, and Registry signatures')
+    .option('--verify-build <digest>', 'Verify one exact stored build against its installed origin and pinned receipt chain')
     .option('--cursor <path>', 'Continue a directory listing after this relative path')
     .option('--limit <number>', 'Maximum directory entries, from 1 to 100', parseContentsLimit, 100)
-    .action(async (identity: string, options: { library?: string; contents?: string; preview?: string; verify?: boolean; cursor?: string; limit: number }) => {
+    .action(async (identity: string, options: { library?: string; contents?: string; preview?: string; evidence?: string; evidenceBuild?: string; version?: string; verify?: boolean; verifyBuild?: string; cursor?: string; limit: number }) => {
       const libraryRoot = await dependencies.resolveLibraryRoot(options.library);
-      const selected = [options.contents !== undefined, options.preview !== undefined, Boolean(options.verify)].filter(Boolean).length;
-      if (selected > 1) throw new DkbError('--contents, --preview, and --verify cannot be combined.');
+      const selected = [options.contents !== undefined, options.preview !== undefined, options.evidence !== undefined, Boolean(options.verify), options.verifyBuild !== undefined].filter(Boolean).length;
+      if (selected > 1) throw new DkbError('--contents, --preview, --evidence, --verify, and --verify-build cannot be combined.');
+      if (options.evidence ? !options.evidenceBuild || !options.version : options.evidenceBuild || options.version) throw new DkbError('--evidence requires --evidence-build and --version; these options must be used together.');
       if ((options.cursor || options.limit !== 100) && options.contents === undefined) {
         throw new DkbError('--cursor and --limit require --contents.');
       }
       const inspection = await import('@sjshovan/dkb-library/packageInfo.js');
+
+      if (options.evidence) {
+        const result = await inspection.inspectInstalledEvidence({ libraryRoot, identity, version: options.version!, evidenceDigest: options.evidenceBuild!, evidenceId: options.evidence });
+        dependencies.presenter().print(result, () => [
+          `${result.identity}@${result.version} · ${result.evidenceId}`,
+          `Evidence Build: ${result.evidenceDigest}`,
+          'Inert source data; inspection does not certify Registry signatures or activate a Runtime.',
+          result.title.value, result.text.value,
+          ...(result.text.truncated ? [`Text truncated from ${result.text.bytes} bytes.`] : []),
+          `Source locator: ${result.locator.value}`,
+        ]);
+        return;
+      }
+
+      if (options.verifyBuild) {
+        const { verifyInstalledBuildTrust } = await import('@sjshovan/dkb-runtime/runtime/buildTrust.js');
+        const result = await dependencies.presenter().check(`Verifying build for ${identity}`,
+          () => verifyInstalledBuildTrust({ libraryRoot, identity, buildDigest: options.verifyBuild! }),
+          (value) => value.status.endsWith('-verified'),
+          (value) => humanSummary({ status: value.status, message: value.message, buildDigest: value.buildDigest }));
+        if (result.status === 'failed' || result.status === 'unverified') process.exitCode = 1;
+        return;
+      }
 
       if (options.contents !== undefined) {
         dependencies.presenter().print(await inspection.listInstalledPackageContents({

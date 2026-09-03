@@ -17,7 +17,8 @@ RUN apt-get update \
     && python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.13.0 torchvision==0.28.0 \
     && python -m pip install -r requirements.txt
 
-COPY compile.py service.py ./
+COPY compile.py service.py model-pins.json model_assets.py assets.json ./
+RUN python model_assets.py --backend torch
 LABEL org.opencontainers.image.title="DKB Docling LlamaIndex Evidence Worker" \
       org.opencontainers.image.version="${DKB_VERSION}" \
       org.opencontainers.image.revision="${DKB_COMMIT}" \

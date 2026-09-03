@@ -6,6 +6,7 @@ import { defaultRuntimeStateRoot } from '../runtime/state.js';
 import { createDkbReadOnlyMcpServer, fetchRemoteEvidence } from './readOnly.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
 import type { DkbRuntimeContext } from '../runtime/context.js';
+import { runtimeClientForRequest, withRuntimeClient } from '../runtime/clientContext.js';
 
 export interface ServeDkbMcpHttpOptions {
   runtime?: DkbRuntimeContext;
@@ -74,7 +75,7 @@ export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = 
         sendJson(response, 401, { error: 'unauthorized' });
         return true;
       }
-      await transport.handleRequest(request, response);
+      await withRuntimeClient(runtimeClientForRequest(request), () => transport.handleRequest(request, response));
       return true;
     },
     async close() {

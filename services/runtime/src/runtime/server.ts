@@ -14,11 +14,9 @@ import {
   runtimeStatus,
 } from './state.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
-import { attachRemoteSession, detachRemoteSession, listRemoteSessions, retrieveFromRemoteSession } from '../remote/sessions.js';
-import { discoverRemoteDkb } from '../remote/discovery.js';
 import { getTrace, latestTrace, listTraces } from './trace.js';
-import { closeQueryAuditQueue } from './queryAudit.js';
-import { resolveRegistryContext } from '@sjshovan/dkb-registry-client/config.js';
+import { closeQueryAuditQueue, listQueryAudit } from './queryAudit.js';
+import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js';
 import { refreshRuntimeActivation, switchRuntimeLibrary, switchRuntimePipelineFromRegistry } from './pipelineSwitch.js';
@@ -26,6 +24,9 @@ import { withRuntimeMutation } from './mutation.js';
 import { runtimePipelineCatalog } from './pipelineCatalog.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
 import type { DkbRuntimeContext } from './context.js';
+import { runtimeClientForRequest, withRuntimeClient } from './clientContext.js';
+import { describeRuntimeTargets, readRuntime, searchRuntime } from './queryAccess.js';
+import type { DkbReadRequest } from '@sjshovan/dkb-protocol/types.js';
 
 export interface ServeRuntimeOptions {
   runtime?: DkbRuntimeContext;
@@ -65,19 +66,21 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
     : null;
 
   const server = http.createServer(async (request, response) => {
-    try {
-      if (mcp && await mcp.handle(request, response)) return;
-      await routeRequest(request, response, stateRoot, runtime, adminToken);
-    } catch (error) {
-      if (!response.headersSent) {
-        sendJson(response, 500, {
-          error: 'runtime_http_error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } else {
-        response.end();
+    await withRuntimeClient(runtimeClientForRequest(request), async () => {
+      try {
+        if (mcp && await mcp.handle(request, response)) return;
+        await routeRequest(request, response, stateRoot, runtime, adminToken);
+      } catch (error) {
+        if (!response.headersSent) {
+          sendJson(response, 500, {
+            error: 'runtime_http_error',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } else {
+          response.end();
+        }
       }
-    }
+    });
   });
   installGracefulShutdown(server, mcp);
 
@@ -148,6 +151,14 @@ async function routeRequest(
       }));
     }
 
+    if (request.method === 'GET' && pathName === '/api/runtime/audit') {
+      const requested = Number(url.searchParams.get('limit') ?? 100);
+      if (!Number.isInteger(requested) || requested < 1 || requested > 100) {
+        throw new DkbError('Runtime audit limit must be an integer between 1 and 100.');
+      }
+      return sendJson(response, 200, { events: await listQueryAudit(stateRoot, requested), limit: requested });
+    }
+
     if (request.method === 'POST' && pathName === '/api/runtime/reload') {
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, async () => {
         await refreshRuntimeActivation({ runtime, stateRoot });
@@ -159,20 +170,21 @@ async function routeRequest(
       const body = await readJsonBody<{
         target: string;
         registryUrl?: string;
-        grants?: Record<string, { build: unknown; installGrant: string }>;
+        grants?: Record<string, { plan: unknown; installGrant: string }>;
       }>(request);
 
-      const { validateRetrievalBuildGrant } = await import('@sjshovan/dkb-protocol/builds.js');
+      const { validateInstallPlan } = await import('@sjshovan/dkb-protocol/builds.js');
       const grants = Object.fromEntries(Object.entries(body.grants ?? {}).map(([identity, grant]) => [identity, {
         installGrant: requiredString(grant.installGrant, `grants.${identity}.installGrant`),
-        build: validateRetrievalBuildGrant(grant.build, `Runtime pipeline grant for ${identity}`),
+        plan: validateInstallPlan(grant.plan, `Runtime pipeline install plan for ${identity}`),
       }]));
 
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => switchRuntimePipelineFromRegistry({
         runtime,
         stateRoot,
         target: requiredString(body.target, 'target'),
-        ...(process.env.DKB_REGISTRY_URL || body.registryUrl ? { registryUrl: process.env.DKB_REGISTRY_URL ?? body.registryUrl } : {}),
+        ...(body.registryUrl ? { registryUrl: body.registryUrl } : {}),
+        ...(process.env.DKB_REGISTRY_URL ? { registryTransportUrl: process.env.DKB_REGISTRY_URL } : {}),
         grants,
       })));
     }
@@ -223,7 +235,8 @@ async function routeRequest(
 
       return sendJson(response, 201, await withRuntimeMutation(stateRoot, () => installDkbFromRuntimeGrant({
         runtime,
-        registryUrl: process.env.DKB_REGISTRY_URL ?? requiredString(body.registryUrl, 'registryUrl'),
+        registryUrl: requiredString(body.registryUrl, 'registryUrl'),
+        ...(process.env.DKB_REGISTRY_URL ? { registryTransportUrl: process.env.DKB_REGISTRY_URL } : {}),
         installGrant: requiredString(body.installGrant, 'installGrant'),
         plan: validateInstallPlan(body.plan, 'Runtime install plan'),
         force: body.force,
@@ -243,6 +256,34 @@ async function routeRequest(
       return sendJson(response, 200, await retrieveFromRuntime(body, stateRoot, runtime));
     }
 
+    if (request.method === 'POST' && pathName === '/api/search') {
+      const body = await readJsonBody<{ query: string; limit?: number; dkbId?: string }>(request);
+      return sendJson(response, 200, await searchRuntime({
+        stateRoot,
+        runtime,
+        channel: 'runtime-http',
+        query: requiredString(body.query, 'query'),
+        limit: body.limit,
+        ...(body.dkbId ? { scope: { dkbId: requiredString(body.dkbId, 'dkbId') } } : {}),
+      }));
+    }
+
+    if (request.method === 'POST' && pathName === '/api/read-targets') {
+      const body = await readJsonBody<{ query: string; limit?: number }>(request);
+      return sendJson(response, 200, await describeRuntimeTargets({
+        stateRoot,
+        runtime,
+        channel: 'runtime-http',
+        query: requiredString(body.query, 'query'),
+        limit: body.limit,
+      }));
+    }
+
+    if (request.method === 'POST' && pathName === '/api/read') {
+      const body = await readJsonBody<DkbReadRequest>(request);
+      return sendJson(response, 200, await readRuntime({ stateRoot, runtime, channel: 'runtime-http', request: body }));
+    }
+
     if (request.method === 'GET' && pathName === '/api/traces/latest') {
       return sendJson(response, 200, await latestTrace(stateRoot));
     }
@@ -255,37 +296,6 @@ async function routeRequest(
 
     if (request.method === 'GET' && traceMatch) {
       return sendJson(response, 200, await getTrace(stateRoot, decodeURIComponent(traceMatch[1]!)));
-    }
-
-    if (request.method === 'POST' && pathName === '/api/remote/discover') {
-      const body = await readJsonBody<{ url: string }>(request);
-
-      return sendJson(response, 200, await discoverRemoteDkb(requiredString(body.url, 'url')));
-    }
-
-    if (request.method === 'POST' && pathName === '/api/remote/session/attach') {
-      const body = await readJsonBody<{ url: string; ttlSeconds?: number }>(request);
-
-      return sendJson(response, 201, await attachRemoteSession({
-        url: requiredString(body.url, 'url'),
-        ttlSeconds: body.ttlSeconds,
-      }));
-    }
-
-    if (request.method === 'GET' && pathName === '/api/remote/sessions') {
-      return sendJson(response, 200, { sessions: listRemoteSessions() });
-    }
-
-    const remoteSessionMatch = pathName.match(/^\/api\/remote\/session\/([^/]+)(?:\/(retrieve))?$/);
-
-    if (remoteSessionMatch && request.method === 'DELETE' && !remoteSessionMatch[2]) {
-      return sendJson(response, 200, detachRemoteSession(decodeURIComponent(remoteSessionMatch[1]!)));
-    }
-
-    if (remoteSessionMatch && request.method === 'POST' && remoteSessionMatch[2] === 'retrieve') {
-      const body = await readJsonBody<DkbRetrieveKnowledgeRequest>(request);
-
-      return sendJson(response, 200, await retrieveFromRemoteSession(decodeURIComponent(remoteSessionMatch[1]!), body));
     }
 
     return sendJson(response, 404, { error: 'not_found', message: `Unknown DKB Runtime route: ${request.method} ${pathName}` });
@@ -310,8 +320,7 @@ function requiredString(value: unknown, label: string): string {
 
 async function runtimeDiscoveryDocument(stateRoot: string, requestHost?: string) {
   const runtime = await runtimeStatus(stateRoot);
-  const registry = await resolveRegistryContext({ root: runtime.libraryPath });
-  const registryUrl = registry.source === 'default' ? undefined : registry.url;
+  const libraryState = await readLibraryState(runtime.libraryPath);
   const site = process.env.DKB_PUBLIC_URL
     ?? (requestHost ? 'http://' + requestHost : 'http://127.0.0.1:' + (process.env.DKB_RUNTIME_PORT ?? '7331'));
   const packages = Array.isArray((runtime as { packages?: unknown }).packages)
@@ -331,21 +340,33 @@ async function runtimeDiscoveryDocument(stateRoot: string, requestHost?: string)
       url: site,
       access: 'public-read',
     }],
-    packages: packages.map((item) => ({
-      id: String(item.id ?? item.packageId ?? ''),
-      version: typeof item.version === 'string' ? item.version : undefined,
-      ...(typeof item.packageTreeHash === 'string' ? { packageTreeHash: item.packageTreeHash } : {}),
-      ...(registryUrl && typeof item.id === 'string' && typeof item.version === 'string' && typeof item.packageTreeHash === 'string'
-        ? {
-            install: {
-              registryUrl,
-              packageId: item.id,
-              version: item.version,
-              packageTreeHash: item.packageTreeHash,
-            },
-          }
-        : {}),
-    })),
+    packages: packages.map((item) => {
+      const id = String(item.id ?? item.packageId ?? '');
+      const version = typeof item.version === 'string' ? item.version : undefined;
+      const packageTreeHash = typeof item.packageTreeHash === 'string' ? item.packageTreeHash : undefined;
+      const entry = libraryState.entries[id];
+      const installable = entry?.kind === 'dkb'
+        && entry.status === 'installed'
+        && entry.source === 'registry'
+        && typeof entry.registryUrl === 'string'
+        && entry.version === version
+        && entry.digest === packageTreeHash;
+      return {
+        id,
+        ...(version ? { version } : {}),
+        ...(packageTreeHash ? { packageTreeHash } : {}),
+        ...(installable
+          ? {
+              install: {
+                registryUrl: entry.registryUrl,
+                packageId: id,
+                version,
+                packageTreeHash,
+              },
+            }
+          : {}),
+      };
+    }),
     policy: {
       scrape: 'disallow',
       ttlSeconds: 300,
@@ -392,11 +413,10 @@ function setCommonHeaders(response: ServerResponse): void {
 
 function isManagementRoute(method: string | undefined, pathName: string): boolean {
   if (method === 'GET' && pathName === '/api/runtime/pipelines') return true;
+  if (method === 'GET' && pathName === '/api/runtime/audit') return true;
   if (pathName === '/api/runtime/reload' || pathName === '/api/runtime/pipeline' || pathName === '/api/runtime/library' || pathName === '/api/dkbs/import-artifact' || pathName === '/api/dkbs/install-registry') return true;
   if (method === 'DELETE' && pathName.startsWith('/api/dkbs/')) return true;
   if (pathName.startsWith('/api/traces')) return true;
-  if (pathName.startsWith('/api/remote/')) return true;
-
   return false;
 }
 

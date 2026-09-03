@@ -6,7 +6,6 @@ import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type {
   LlamaIndexCompilerRecord,
   LlamaIndexCompilerRequest,
-  LlamaIndexDatabaseSourceRequest,
   LlamaIndexRecordCache,
   SourceCandidate,
 } from './compiler.js';
@@ -21,8 +20,15 @@ export function requestFor(dkb: LoadedDkb): {
     includePaths?: string[];
     excludePaths?: string[];
   }>;
-  externalSources: LlamaIndexDatabaseSourceRequest[];
 } {
+  const providerMetadata = dkb.manifest.meta?.llamaIndex;
+  if (providerMetadata && typeof providerMetadata === 'object' && Object.hasOwn(providerMetadata, 'sources')) {
+    throw new DkbError(
+      'Manifest meta.llamaIndex.sources is not supported. Export an immutable database snapshot into package-owned SQLite or JSON source files. '
+      + 'Credentials and connection configuration must not come from a source manifest.',
+      'unsupported_source_configuration',
+    );
+  }
   const stores = (dkb.manifest.stores ?? []).flatMap((store) => {
     if ((store.type !== 'filesystem' && store.type !== 'sqlite') || !store.path || store.permissions?.read === false) {
       return [];
@@ -44,17 +50,14 @@ export function requestFor(dkb: LoadedDkb): {
     }];
   });
 
-  const externalSources = externalDatabaseSourcesFor(dkb);
-
-  if (stores.length === 0 && externalSources.length === 0) {
-    throw new DkbError(`DKB ${dkb.manifest.id} has no readable local sources or configured LlamaIndex database sources`);
+  if (stores.length === 0) {
+    throw new DkbError(`DKB ${dkb.manifest.id} has no readable package-owned sources`);
   }
 
   return {
     dkbId: dkb.manifest.id,
     version: dkb.manifest.version,
     stores,
-    externalSources,
   };
 }
 
@@ -158,7 +161,7 @@ export function requestForChangedSources(
     return [store];
   });
 
-  if (stores.length === 0 && request.externalSources.length === 0) {
+  if (stores.length === 0) {
     throw new DkbError('LlamaIndex compiler cache plan selected no changed sources to compile');
   }
 
@@ -197,57 +200,6 @@ function isExcludedSourceEntry(name: string): boolean {
 
 function sourceCacheKey(dkb: LoadedDkb, storeId: string, type: SourceCandidate['type'], sourcePath: string): string {
   return `${dkb.manifest.id}:${dkb.manifest.version}:${storeId}:${type}:${sourcePath.replace(/\\/g, '/')}`;
-}
-
-function externalDatabaseSourcesFor(dkb: LoadedDkb): LlamaIndexDatabaseSourceRequest[] {
-  const config = dkb.manifest.meta?.llamaIndex;
-  const sources = config && typeof config === 'object' && Array.isArray((config as { sources?: unknown }).sources)
-    ? (config as { sources: unknown[] }).sources
-    : [];
-
-  return sources.map((value, index) => {
-    if (!value || typeof value !== 'object') {
-      throw new DkbError(`meta.llamaIndex.sources[${index}] must be an object`);
-    }
-    const source = value as Record<string, unknown>;
-    if (source.kind !== 'database' || typeof source.id !== 'string' || source.id.length === 0) {
-      throw new DkbError(`meta.llamaIndex.sources[${index}] must declare id and kind: "database"`);
-    }
-    const envName = typeof source.connectionEnv === 'string' ? source.connectionEnv : undefined;
-    const direct = typeof source.connection === 'string' ? source.connection : undefined;
-    const connection = envName ? process.env[envName] : direct;
-    if (!connection) {
-      throw new DkbError(`Database source ${source.id} requires ${envName ? `environment variable ${envName}` : 'connectionEnv'}`);
-    }
-    if (direct && !envName && source.developmentOnly !== true) {
-      throw new DkbError(`Database source ${source.id} has an inline connection. Use connectionEnv, or set developmentOnly: true for local-only testing.`);
-    }
-    const includeTables = Array.isArray(source.includeTables)
-      ? source.includeTables.filter((item): item is string => typeof item === 'string')
-      : undefined;
-
-    return {
-      id: source.id,
-      kind: 'database' as const,
-      connection: connectionForCompiler(dkb.root, connection),
-      ...(typeof source.query === 'string' ? { query: source.query } : {}),
-      ...(includeTables?.length ? { includeTables } : {}),
-    };
-  });
-}
-
-function connectionForCompiler(root: string, connection: string): string {
-  const localSqlite = /^sqlite:\/\/\/(.+)$/i.exec(connection);
-  if (!localSqlite) {
-    return connection;
-  }
-  const sourcePath = path.resolve(localSqlite[1]!.replace(/^\//, ''));
-  const relative = path.relative(root, sourcePath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    return connection;
-  }
-
-  return `sqlite:////input/${relative.replace(/\\/g, '/')}`;
 }
 
 async function hashFile(file: string): Promise<string> {

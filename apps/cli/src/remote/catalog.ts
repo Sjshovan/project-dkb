@@ -5,7 +5,6 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbDiscoveryDocument, DkbDiscoveryPackage, DkbRemoteEndpointAttestation, DkbRemoteEndpointType } from '@sjshovan/dkb-runtime/remote/types.js';
 
 export type DkbRemoteCatalogStatus = 'verified' | 'behind' | 'mismatch' | 'unavailable' | 'unregistered';
-export type DkbRemoteOfferState = 'presented' | 'accepted' | 'declined' | 'installed';
 
 export interface DkbPersistentRemote {
   id: string;
@@ -21,8 +20,6 @@ export interface DkbPersistentRemote {
   status: DkbRemoteCatalogStatus;
   verificationLeaseExpiresAt?: string;
   attestation?: DkbRemoteEndpointAttestation;
-  offerId?: string;
-  offerState?: DkbRemoteOfferState;
   createdAt: string;
   updatedAt: string;
   lastError?: string;
@@ -84,9 +81,6 @@ export async function registerRemoteInCatalog(
   const id = remoteId(input.registryUrl, packageId, input.package?.version, endpoint.url);
   const remotes = await loadRemoteCatalog(stateRoot);
   const previous = remotes.find((remote) => remote.id === id);
-  const offerId = packageId && input.package?.version && input.package.packageTreeHash
-    ? remoteOfferId(input.registryUrl ?? input.discovery.site, packageId, input.package.version, input.package.packageTreeHash)
-    : undefined;
   const next: DkbPersistentRemote = {
     id,
     origin: input.registryUrl ? 'registry' : 'direct',
@@ -101,7 +95,6 @@ export async function registerRemoteInCatalog(
     status: input.status ?? (input.registryUrl ? 'verified' : 'unregistered'),
     ...(input.verificationLeaseExpiresAt ? { verificationLeaseExpiresAt: input.verificationLeaseExpiresAt } : {}),
     ...(input.attestation ? { attestation: input.attestation } : {}),
-    ...(offerId ? { offerId, offerState: previous?.offerState } : {}),
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
   };
@@ -121,24 +114,6 @@ export async function removeRemoteFromCatalog(stateRoot: string, id: string): Pr
   await saveRemoteCatalog(stateRoot, remotes.filter((remote) => remote.id !== id));
 }
 
-export async function markRemoteOfferPresented(stateRoot: string, id: string): Promise<DkbPersistentRemote> {
-  return updateRemoteOfferState(stateRoot, id, 'presented');
-}
-
-export async function updateRemoteOfferState(stateRoot: string, id: string, state: DkbRemoteOfferState): Promise<DkbPersistentRemote> {
-  const remotes = await loadRemoteCatalog(stateRoot);
-  const remote = remotes.find((candidate) => candidate.id === id);
-
-  if (!remote) {
-    throw new DkbError(`Unknown remote DKB: ${id}`);
-  }
-
-  const next = { ...remote, offerState: state, updatedAt: new Date().toISOString() };
-  await saveRemoteCatalog(stateRoot, remotes.map((candidate) => candidate.id === id ? next : candidate));
-
-  return next;
-}
-
 export function packageFromDiscovery(discovery: DkbDiscoveryDocument, packageId?: string): DkbDiscoveryPackage | undefined {
   return discovery.packages?.find((item) => !packageId || item.id === packageId);
 }
@@ -147,8 +122,4 @@ export function remoteId(registryUrl: string | undefined, packageId: string | un
   const value = [registryUrl ?? 'direct', packageId ?? 'remote', version ?? 'latest', endpointUrl].join('|');
 
   return `remote_${createHash('sha256').update(value).digest('hex').slice(0, 16)}`;
-}
-
-export function remoteOfferId(registryUrl: string, packageId: string, version: string, packageTreeHash: string): string {
-  return `offer_${createHash('sha256').update([registryUrl, packageId, version, packageTreeHash].join('|')).digest('hex').slice(0, 24)}`;
 }

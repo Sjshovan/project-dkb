@@ -2,6 +2,7 @@ import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import type { DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import {
   compileComposeProject as compileComposeProjectCore,
+  compileKnowledgeTarget as compileKnowledgeTargetCore,
   compileRetrievalFromEvidence as compileRetrievalFromEvidenceCore,
   ensurePackageBuildForTarget as ensurePackageBuildForTargetCore,
 } from './compilerCore.js';
@@ -10,12 +11,12 @@ export {
   COMPILE_CACHE_PATH,
   COMPILE_LOCK_PATH,
   COMPILE_RECEIPT_PATH,
-  compileCollection,
   verifyComposeProject,
 } from './compilerCore.js';
 export type {
-  CompiledCollection,
   CompiledComposeProject,
+  CompiledKnowledgeTarget,
+  CompiledLibraryProject,
   CompileComposeProfile,
   PreparedPackageBuildTarget,
   VerifyComposeProjectResult,
@@ -23,18 +24,26 @@ export type {
 
 export interface CompileComposeProjectOptions {
   force?: boolean;
-  mode?: 'library' | 'package';
   target?: string;
   contextRoot?: string;
+  targetOptions?: Record<string, Record<string, unknown>>;
 }
 
 export interface CompileRetrievalFromEvidenceOptions {
   target: string;
   contextRoot?: string;
+  targetOptions?: Record<string, Record<string, unknown>>;
 }
 
 export async function compileComposeProject(root: string, options: CompileComposeProjectOptions = {}) {
   return compileComposeProjectCore(root, {
+    ...options,
+    distribution: DEFAULT_DKB_DISTRIBUTION,
+  });
+}
+
+export async function compileKnowledgeTarget(root: string, options: CompileComposeProjectOptions = {}) {
+  return compileKnowledgeTargetCore(root, {
     ...options,
     distribution: DEFAULT_DKB_DISTRIBUTION,
   });
@@ -53,7 +62,12 @@ export async function compileRetrievalFromEvidence(
 
 export async function ensurePackageBuildForTarget(
   root: string,
-  options: { target: string; contextRoot?: string; libraryRoot?: string },
+  options: {
+    target: string;
+    contextRoot?: string;
+    libraryRoot?: string;
+    targetOptions?: Record<string, Record<string, unknown>>;
+  },
 ) {
   return ensurePackageBuildForTargetCore(root, {
     ...options,

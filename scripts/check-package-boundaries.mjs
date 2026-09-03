@@ -13,6 +13,8 @@ const retiredProductPaths = [
   'apps/cli/src/registry/server.ts',
   'apps/cli/src/mcp/server.ts',
   'apps/cli/src/mcp/tools.ts',
+  'apps/cli/src/writes',
+  'services/runtime/src/remote/sessions.ts',
 ];
 
 for (const retiredPath of retiredProductPaths) {
@@ -91,8 +93,62 @@ if (/\b(?:compiler|extraction)\s*:\s*\{|\b(?:richParser|richChunker|fallbackPars
   errors.push('packages/protocol/src/retrievalProfile.ts contains a concrete compiler or extraction-shaped receipt contract');
 }
 
+const runtimeManifest = workspaceByName.get('@sjshovan/dkb-runtime')?.manifest;
+if (runtimeManifest?.exports?.['./runtime/activation.js']) {
+  errors.push('services/runtime/package.json exposes the internal Runtime activation writer module');
+}
+for (const rawRetrievalExport of [
+  './indexes/queryContext.js',
+  './read/navigation.js',
+  './read/runtime.js',
+  './router/search.js',
+]) {
+  if (runtimeManifest?.exports?.[rawRetrievalExport]) {
+    errors.push(`services/runtime/package.json exposes raw retrieval entry point ${rawRetrievalExport}`);
+  }
+}
+if (runtimeManifest?.exports?.['./remote/sessions.js']) {
+  errors.push('services/runtime/package.json exposes the retired remote query gateway');
+}
+const runtimeServerSource = await fs.readFile(path.join(root, 'services/runtime/src/runtime/server.ts'), 'utf8');
+if (/\/api\/remote\//u.test(runtimeServerSource)) {
+  errors.push('services/runtime/src/runtime/server.ts exposes the retired remote query gateway');
+}
+const runtimeClientSource = await fs.readFile(path.join(root, 'services/runtime/src/runtime/client.ts'), 'utf8');
+if (/\bremote(?:Discover|Attach|Sessions|Detach|Retrieve)\b/u.test(runtimeClientSource)) {
+  errors.push('services/runtime/src/runtime/client.ts exposes a retired remote query method');
+}
+for (const file of await listTypeScript(path.join(root, 'services/runtime/src'))) {
+  const relative = relativePath(file);
+  if (relative === 'services/runtime/src/runtime/activation.ts' || relative === 'services/runtime/src/runtime/pipelineSwitch.ts') continue;
+  const source = await fs.readFile(file, 'utf8');
+  if (/\bpromoteRuntimeSelection\b|\bwriteRuntime(?:Activation|Binding|Selection)\b/u.test(source)) {
+    errors.push(`${relative} bypasses the owning Runtime activation service`);
+  }
+}
+for (const sourceRoot of ['apps', 'services', 'packages', 'providers']) {
+  for (const file of await sourceFiles(path.join(root, sourceRoot))) {
+    const relative = relativePath(file);
+    if (relative.startsWith('services/runtime/src/') || relative === 'packages/protocol/src/paths.ts') continue;
+    const source = await fs.readFile(file, 'utf8');
+    const referencesRuntimeBinding = /\bDKB_RUNTIME_BINDING_PATH\b|runtime-binding\.json/u.test(source);
+    if (referencesRuntimeBinding) {
+      errors.push(`${relative} accesses Runtime binding storage directly outside the owning Runtime service`);
+    }
+  }
+}
+for (const file of await listTypeScript(path.join(root, 'services/runtime/src'))) {
+  const relative = relativePath(file);
+  if (relative === 'services/runtime/src/runtime/queryOperation.ts' || relative === 'services/runtime/src/runtime/querySnapshot.ts') continue;
+  const source = await fs.readFile(file, 'utf8');
+  if (/\bgetOrOpenRuntimeQueryContext\b/u.test(source)) {
+    errors.push(`${relative} opens a Runtime query context outside the audited operation gate`);
+  }
+}
+
 const approvedDistributionImports = new Set([
   'apps/cli/src/cli/index.ts',
+  'apps/cli/src/providers/localCompilation.ts',
   'services/compiler/src/compile.ts',
   'services/compiler/src/server.ts',
   'services/runtime/src/defaultComposition.ts',
@@ -158,6 +214,7 @@ function importSpecifiers(source) {
   const matches = [
     ...source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g),
     ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+    ...source.matchAll(/\bimport\.meta\.resolve\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
   ];
   return matches.map((match) => match[1]);
 }

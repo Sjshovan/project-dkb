@@ -5,21 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { canonicalJson, stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import {
-  validateRetrievalBuildGrant,
+  validateInstallPlan,
   type DkbInstallPlan,
-  type DkbRetrievalBuildGrant,
 } from '@sjshovan/dkb-protocol/builds.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { loadDkbPackage, loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
-import { evidenceBuildPath, retrievalBuildPath, retrievalBuildReceiptPath } from '@sjshovan/dkb-protocol/paths.js';
+import { evidenceBuildPath, retrievalBuildPath } from '@sjshovan/dkb-protocol/paths.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbLockManifest, DkbPackageReceipt, DkbSigningKeyRecord, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { mergeStoredPackageBuilds, selectStoredPackageBuild, validateCompiledPackage } from '@sjshovan/dkb-library/builds.js';
+import {
+  mergeStoredPackageBuildsWithinMutation,
+  selectStoredPackageBuild,
+  validateStoredPackageBuild,
+  validateCompiledPackage,
+} from '@sjshovan/dkb-library/builds.js';
+import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
   DKB_INSTALL_PLAN_RECEIPT_PATH,
+  DKB_INSTALL_PLAN_RECEIPTS_DIR,
   DKB_PACKAGE_RECEIPT_PATH,
+  installPlanReceiptPath,
   packageReceiptPayloadMatchesLock,
   parsePackageReceipt,
   parsePersistedPackageReceipt,
@@ -37,6 +44,9 @@ import {
   importCompiledDkbArtifactIntoRuntime,
 } from './state.js';
 import type { DkbRuntimeContext } from './context.js';
+import type { DkbRuntimeActivation } from '@sjshovan/dkb-protocol/runtimeActivation.js';
+import { parseRegistryTrustedKeys, pinRegistryTrustedKeys, readPinnedRegistryKeys } from './registryTrust.js';
+export { parseRegistryTrustedKeys } from './registryTrust.js';
 
 export interface DkbInstallCandidate {
   packageId: string;
@@ -85,19 +95,64 @@ export async function installDkbFromRegistry(options: {
   await loadLibrary(libraryRoot);
   const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: options.registryToken });
   const release = await client.packageRelease(options.packageId, options.version);
+
+  // Installing the same immutable release without selecting another target is
+  // a package-lifecycle no-op. Only take this fast path when the Registry
+  // release exposes the exact package-tree digest and the authoritative
+  // Library ledger already records that same Registry DKB/version/digest.
+  // Targeted installs must continue through the signed plan so a missing build
+  // chain can be acquired and verified.
+  if (!options.force && !options.target && release.packageTreeHash) {
+    const installed = (await readLibraryState(libraryRoot)).entries[release.packageId];
+    if (installed?.kind === 'dkb'
+      && installed.source === 'registry'
+      && installed.status === 'installed'
+      && installed.version === release.version
+      && installed.digest === release.packageTreeHash) {
+      const existing = await preflightDkbInstall({
+        libraryRoot,
+        candidate: {
+          packageId: release.packageId,
+          version: release.version,
+          packageTreeHash: release.packageTreeHash,
+        },
+        registryUrl: client.baseUrl,
+      });
+      if (existing) return existing;
+    }
+  }
+
+  const plan = await client.installPlan(options.packageId, release.version, options.target);
+  const trustedKeys = parseRegistryTrustedKeys(await client.publicKeys());
+  const verified = await verifySignedInstallPlan(plan, trustedKeys);
+  const packageTreeHash = requiredSignedPackageTreeHash(verified);
   const existing = await preflightDkbInstall({
     libraryRoot,
-    candidate: release,
+    candidate: {
+      packageId: release.packageId,
+      version: release.version,
+      packageTreeHash,
+    },
     registryUrl: client.baseUrl,
     force: options.force,
   });
-  if (existing) return existing;
+  if (existing) {
+    await verifyInstalledSourceForPlan(existing.packagePath, verified, trustedKeys);
+    await ensureExistingSignedBuildChain({
+      client,
+      plan,
+      trustedKeys,
+      libraryRoot,
+      registryUrl: client.baseUrl,
+      packageRoot: existing.packagePath,
+      progress: options.progress,
+    });
+    return existing;
+  }
 
   const downloadRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-download-'));
 
   try {
-    const plan = await client.installPlan(options.packageId, release.version, options.target);
-    const publicKeys = await client.publicKeys() as { keys: DkbSigningKeyRecord[] };
     for (const artifact of plan.artifacts) {
       const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
       await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
@@ -105,57 +160,133 @@ export async function installDkbFromRegistry(options: {
     return await installDkbPlanIntoLibrary({
       plan,
       layerRoot: downloadRoot,
-      trustedKeys: publicKeys.keys,
+      trustedKeys,
       libraryRoot,
       registryUrl: client.baseUrl,
       force: options.force,
       progress: options.progress,
     });
   } finally {
-    await fs.rm(downloadRoot, { recursive: true, force: true });
+    await fs.rm(downloadRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
 export async function installDkbFromRuntimeGrant(options: {
   runtime: DkbRuntimeContext;
   registryUrl: string;
+  registryTransportUrl?: string;
   installGrant: string;
   plan: DkbInstallPlan;
   runtimeRoot?: string;
   force?: boolean;
   progress?: DkbProgressReporter;
 }): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
+  const plan = validateInstallPlan(options.plan, 'Runtime Registry install plan');
   const runtime = await ensureRuntimeState(options.runtimeRoot);
+  const client = new DkbRegistryClient({
+    baseUrl: options.registryTransportUrl ?? options.registryUrl,
+    installGrant: options.installGrant,
+    token: '',
+  });
+  const trustedKeys = parseRegistryTrustedKeys(await client.publicKeys());
+  const verified = await verifySignedInstallPlan(plan, trustedKeys);
+  const packageTreeHash = requiredSignedPackageTreeHash(verified);
   const existing = await preflightDkbInstall({
     libraryRoot: runtime.libraryRoot,
     registryUrl: options.registryUrl,
     candidate: {
-      packageId: options.plan.package.id,
-      version: options.plan.package.version,
+      packageId: plan.package.id,
+      version: plan.package.version,
+      packageTreeHash,
     },
     force: options.force,
   });
-  if (existing) return existing;
-  const client = new DkbRegistryClient({ baseUrl: options.registryUrl, installGrant: options.installGrant, token: '' });
+  if (existing) {
+    await verifyInstalledSourceForPlan(existing.packagePath, verified, trustedKeys);
+    await ensureExistingSignedBuildChain({
+      client,
+      plan,
+      trustedKeys,
+      libraryRoot: runtime.libraryRoot,
+      registryUrl: options.registryUrl,
+      packageRoot: existing.packagePath,
+      progress: options.progress,
+    });
+    return existing;
+  }
   const downloadRoot = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-registry-grant-download-'));
   try {
-    const publicKeys = await client.publicKeys() as { keys: DkbSigningKeyRecord[] };
-    for (const artifact of options.plan.artifacts) {
+    for (const artifact of plan.artifacts) {
       const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
       await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
     }
     return await installDkbPlanIntoRuntime({
       runtime: options.runtime,
-      plan: options.plan,
+      plan,
       layerRoot: downloadRoot,
-      trustedKeys: publicKeys.keys,
+      trustedKeys,
       runtimeRoot: runtime.stateRoot,
-      registryUrl: client.baseUrl,
+      registryUrl: normalizeRegistryUrl(options.registryUrl),
       force: options.force,
       progress: options.progress,
     });
   } finally {
-    await fs.rm(downloadRoot, { recursive: true, force: true });
+    await fs.rm(downloadRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function ensureExistingSignedBuildChain(options: {
+  client: DkbRegistryClient;
+  plan: DkbInstallPlan;
+  trustedKeys: DkbSigningKeyRecord[];
+  libraryRoot: string;
+  registryUrl: string;
+  packageRoot: string;
+  progress?: DkbProgressReporter;
+}): Promise<void> {
+  try {
+    const graph = await selectStoredPackageBuild({
+      root: options.packageRoot,
+      target: options.plan.target,
+      evidenceProfileDigest: options.plan.evidenceProfileDigest,
+      retrievalProfileDigest: options.plan.retrievalProfileDigest,
+      compatibilityDigest: options.plan.compatibilityDigest,
+    });
+    await verifyStoredSignedBuildChain({
+      packageRoot: options.packageRoot,
+      graph,
+      target: options.plan.target,
+      trustedKeys: options.trustedKeys,
+    });
+    await pinRegistryTrustedKeys({ libraryRoot: options.libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys });
+    return;
+  } catch {
+    // The exact signed child chain is absent or untrusted; authenticate downloads and attach it below.
+  }
+
+  const downloadRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-build-chain-'));
+  try {
+    await options.client.writeInstallLayer(
+      options.plan.artifacts[1],
+      path.join(downloadRoot, 'evidence.dkbevidence'),
+      { progress: options.progress },
+    );
+    await options.client.writeInstallLayer(
+      options.plan.artifacts[2],
+      path.join(downloadRoot, 'retrieval.dkbbuild'),
+      { progress: options.progress },
+    );
+    await attachSignedBuildChain({
+      plan: options.plan,
+      layerRoot: downloadRoot,
+      libraryRoot: options.libraryRoot,
+      registryUrl: options.registryUrl,
+      packageRoot: options.packageRoot,
+      trustedKeys: options.trustedKeys,
+      progress: options.progress,
+    });
+  } finally {
+    await fs.rm(downloadRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -181,6 +312,7 @@ export async function installDkbPlanIntoRuntime(options: {
       trustedKeys: options.trustedKeys,
       progress: options.progress,
     });
+    await pinRegistryTrustedKeys({ libraryRoot: runtime.libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys });
     const imported = await importCompiledDkbArtifactIntoRuntime({
       runtime: options.runtime,
       sourcePath: extractedRoot,
@@ -203,7 +335,7 @@ export async function installDkbPlanIntoRuntime(options: {
       ...(imported.warning ? { warning: imported.warning } : {}),
     };
   } finally {
-    await fs.rm(installParent, { recursive: true, force: true });
+    await fs.rm(installParent, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -241,6 +373,7 @@ async function installDkbPlanIntoLibraryInternal(
       trustedKeys: options.trustedKeys,
       progress: options.progress,
     });
+    await pinRegistryTrustedKeys({ libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys, mutationLockHeld });
     const importPackage = mutationLockHeld
       ? importCompiledDkbArtifactIntoLibraryWithinMutation
       : importCompiledDkbArtifactIntoLibrary;
@@ -264,7 +397,7 @@ async function installDkbPlanIntoLibraryInternal(
       catalog: { recordCount, packageCount: 1 },
     };
   } finally {
-    await fs.rm(installParent, { recursive: true, force: true });
+    await fs.rm(installParent, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -281,49 +414,12 @@ export async function materializeDkbInstallPlan(options: {
   installDigest: string;
 }> {
   const destinationRoot = path.resolve(options.destinationRoot);
-  const resolver = ({ role, signature }: { role: 'publisher' | 'registry'; signature: { keyId: string } }) => {
-    const key = options.trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
-    return key && key.status !== 'revoked' ? key.publicKeyPem : null;
-  };
-  const [source, evidence, retrieval] = options.plan.artifacts;
+  const verified = await verifySignedInstallPlan(options.plan, options.trustedKeys);
+  const { plan, sourceReceipt } = verified;
+  const [source, evidence, retrieval] = plan.artifacts;
   const sourcePath = path.join(options.layerRoot, 'source.dkbpkg');
   const evidencePath = path.join(options.layerRoot, 'evidence.dkbevidence');
   const retrievalPath = path.join(options.layerRoot, 'retrieval.dkbbuild');
-  const sourceReceipt = parsePersistedPackageReceipt(source.receipt, 'Install plan source receipt');
-  const sourceVerification = await verifyPackageReceipt(sourceReceipt, resolver);
-  const evidenceVerification = await verifyLayerReceipt(evidence.receipt, resolver, 'Install plan Evidence receipt');
-  const retrievalVerification = await verifyLayerReceipt(retrieval.receipt, resolver, 'Install plan Retrieval receipt');
-  const planVerification = await verifyLayerReceipt(options.plan.receipt, resolver, 'Install plan receipt');
-  const planPayload = { ...options.plan } as Record<string, unknown>;
-  delete planPayload.receipt;
-  const receiptChecks = [
-    sourceVerification.ok,
-    evidenceVerification.ok,
-    retrievalVerification.ok,
-    planVerification.ok,
-    stableHash(source.receipt) === source.receiptHash,
-    evidenceVerification.receiptHash === evidence.receiptHash,
-    retrievalVerification.receiptHash === retrieval.receiptHash,
-    evidenceVerification.receipt.parentReceiptHash === source.receiptHash,
-    retrievalVerification.receipt.parentReceiptHash === evidence.receiptHash,
-    canonicalJson(planVerification.receipt.payload) === canonicalJson(planPayload),
-    sourceReceipt.package.id === options.plan.package.id,
-    sourceReceipt.package.version === options.plan.package.version,
-    source.digest === options.plan.package.sourceDigest,
-    evidenceVerification.receipt.package.id === options.plan.package.id,
-    evidenceVerification.receipt.package.version === options.plan.package.version,
-    retrievalVerification.receipt.package.id === options.plan.package.id,
-    retrievalVerification.receipt.package.version === options.plan.package.version,
-    evidenceVerification.receipt.payload.evidenceProfileDigest === options.plan.evidenceProfileDigest,
-    evidenceVerification.receipt.payload.evidenceDigest === options.plan.evidenceDigest,
-    retrievalVerification.receipt.payload.target === options.plan.target,
-    retrievalVerification.receipt.payload.evidenceProfileDigest === options.plan.evidenceProfileDigest,
-    retrievalVerification.receipt.payload.evidenceDigest === options.plan.evidenceDigest,
-    retrievalVerification.receipt.payload.retrievalProfileDigest === options.plan.retrievalProfileDigest,
-    retrievalVerification.receipt.payload.retrievalBuildDigest === options.plan.retrievalBuildDigest,
-    retrievalVerification.receipt.payload.compatibilityDigest === options.plan.compatibilityDigest,
-  ];
-  if (receiptChecks.some((check) => !check)) throw new DkbError('Registry install plan receipt chain or build identity is invalid');
 
   const archiveDigests = await Promise.all([
     hashArchiveFile(sourcePath),
@@ -347,14 +443,14 @@ export async function materializeDkbInstallPlan(options: {
     fs.rm(path.join(destinationRoot, 'dkb-release.json'), { force: true }),
     fs.rm(path.join(destinationRoot, DKB_PACKAGE_RECEIPT_PATH), { force: true }),
   ]);
-  const evidenceTarget = evidenceBuildPath(destinationRoot, options.plan.evidenceProfileDigest, options.plan.evidenceDigest);
-  const retrievalTarget = retrievalBuildPath(destinationRoot, options.plan.retrievalProfileDigest, options.plan.retrievalBuildDigest);
+  const evidenceTarget = evidenceBuildPath(destinationRoot, plan.evidenceProfileDigest, plan.evidenceDigest);
+  const retrievalTarget = retrievalBuildPath(destinationRoot, plan.retrievalProfileDigest, plan.retrievalBuildDigest);
   await extractDkbPackageArchive(evidencePath, evidenceTarget, { progress: options.progress });
   await extractDkbPackageArchive(retrievalPath, retrievalTarget, { progress: options.progress });
   await fs.writeFile(path.join(destinationRoot, DKB_PACKAGE_RECEIPT_PATH), `${JSON.stringify(sourceReceipt, null, 2)}\n`, 'utf8');
   const installReceiptPath = path.join(destinationRoot, ...DKB_INSTALL_PLAN_RECEIPT_PATH.split('/'));
   await fs.mkdir(path.dirname(installReceiptPath), { recursive: true });
-  await fs.writeFile(installReceiptPath, `${JSON.stringify(options.plan, null, 2)}\n`, 'utf8');
+  await fs.writeFile(installReceiptPath, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
   const { receipt, verification } = await verifyExtractedPackage(
     destinationRoot,
     options.trustedKeys,
@@ -371,6 +467,14 @@ export async function materializeDkbInstallPlan(options: {
       + (failed ? ` (${failed})` : ''),
     );
   }
+  const graph = await selectStoredPackageBuild({
+    root: destinationRoot,
+    target: plan.target,
+    evidenceProfileDigest: plan.evidenceProfileDigest,
+    retrievalProfileDigest: plan.retrievalProfileDigest,
+    compatibilityDigest: plan.compatibilityDigest,
+  });
+  assertBuildGraphMatchesPlan(graph, plan);
 
   return {
     root: destinationRoot,
@@ -380,78 +484,381 @@ export async function materializeDkbInstallPlan(options: {
   };
 }
 
-export async function attachSignedRetrievalBuild(options: {
-  grant: DkbRetrievalBuildGrant;
-  archivePath: string;
+interface AttachSignedBuildChainWithinMutationOptions {
+  plan: DkbInstallPlan;
+  layerRoot: string;
   packageRoot: string;
   trustedKeys: DkbSigningKeyRecord[];
+  libraryRoot?: string;
+  registryUrl?: string;
   progress?: DkbProgressReporter;
+}
+
+export async function attachSignedBuildChain(options: AttachSignedBuildChainWithinMutationOptions & {
+  libraryRoot: string;
 }): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
-  const grant = validateRetrievalBuildGrant(options.grant);
+  const libraryRoot = path.resolve(options.libraryRoot);
   const packageRoot = path.resolve(options.packageRoot);
-  const resolver = ({ role, signature }: { role: 'publisher' | 'registry'; signature: { keyId: string } }) => {
-    const key = options.trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
-    return key && key.status !== 'revoked' ? key.publicKeyPem : null;
-  };
-  const verification = await verifyLayerReceipt(grant.artifact.receipt, resolver, 'Retrieval Build grant receipt');
-  const receipt = verification.receipt;
-  const receiptChecks = [
-    verification.ok,
-    verification.receiptHash === grant.artifact.receiptHash,
-    receipt.package.id === grant.package.id,
-    receipt.package.version === grant.package.version,
-    receipt.package.sourceHash === grant.package.sourceDigest,
-    receipt.payload.target === grant.target,
-    receipt.payload.evidenceProfileDigest === grant.evidenceProfileDigest,
-    receipt.payload.evidenceDigest === grant.evidenceDigest,
-    receipt.payload.retrievalProfileDigest === grant.retrievalProfileDigest,
-    receipt.payload.compatibilityDigest === grant.compatibilityDigest,
-    receipt.payload.retrievalBuildDigest === grant.retrievalBuildDigest,
-  ];
-  if (receiptChecks.some((check) => !check)) {
-    throw new DkbError('Signed Retrieval Build grant does not match its package, Evidence Build, or Runtime profile.');
-  }
-  const archiveDigest = await hashArchiveFile(options.archivePath, options.progress);
-  if (archiveDigest !== grant.artifact.digest) {
-    throw new DkbError(`Registry retrieval layer hash mismatch: expected ${grant.artifact.digest}, got ${archiveDigest}.`);
+  assertPackageWithinLibrary(libraryRoot, packageRoot);
+  return withDkbFileLock(libraryRoot, 'library-mutation', () => attachSignedBuildChainWithinMutation({
+    ...options,
+    packageRoot,
+  }));
+}
+
+/** Attach an exact signed build chain while the caller owns the Library mutation lock. */
+export async function attachSignedBuildChainWithinMutation(
+  options: AttachSignedBuildChainWithinMutationOptions,
+): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+  const verified = await verifySignedInstallPlan(options.plan, options.trustedKeys);
+  const plan = verified.plan;
+  const packageRoot = path.resolve(options.packageRoot);
+  await verifyInstalledSourceForPlan(packageRoot, verified, options.trustedKeys);
+  if (options.registryUrl) {
+    if (!options.libraryRoot) throw new DkbError('Pinning Registry build trust requires its owning Library root');
+    await pinRegistryTrustedKeys({ libraryRoot: options.libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys, mutationLockHeld: true });
   }
 
-  const candidateRoot = await fs.mkdtemp(path.join(path.dirname(packageRoot), '.dkb-retrieval-candidate-'));
-  const candidateTarget = retrievalBuildPath(candidateRoot, grant.retrievalProfileDigest, grant.retrievalBuildDigest);
-  let copied: string[] = [];
+  const evidenceArchive = path.join(options.layerRoot, 'evidence.dkbevidence');
+  const retrievalArchive = path.join(options.layerRoot, 'retrieval.dkbbuild');
+  const [, evidence, retrieval] = plan.artifacts;
+  const archiveDigests = await Promise.all([
+    hashArchiveFile(evidenceArchive, options.progress),
+    hashArchiveFile(retrievalArchive, options.progress),
+  ]);
+  const expectedDigests = [evidence.digest, retrieval.digest];
+  const mismatchedArchive = archiveDigests.findIndex((digest, index) => digest !== expectedDigests[index]);
+  if (mismatchedArchive >= 0) {
+    const kind = plan.artifacts[mismatchedArchive + 1]!.kind;
+    throw new DkbError(
+      `Registry ${kind} layer hash mismatch: expected ${expectedDigests[mismatchedArchive]}, got ${archiveDigests[mismatchedArchive]}.`,
+    );
+  }
+
+  const candidateRoot = await fs.mkdtemp(path.join(path.dirname(packageRoot), '.dkb-build-chain-candidate-'));
   try {
-    await extractDkbPackageArchive(options.archivePath, candidateTarget, { progress: options.progress });
-    const promoted = await mergeStoredPackageBuilds(candidateRoot, packageRoot);
-    copied = promoted.copied;
-    const graph = await selectStoredPackageBuild({
-      root: packageRoot,
-      target: grant.target,
-      evidenceProfileDigest: grant.evidenceProfileDigest,
-      retrievalProfileDigest: grant.retrievalProfileDigest,
-      compatibilityDigest: grant.compatibilityDigest,
+    await extractDkbPackageArchive(
+      evidenceArchive,
+      evidenceBuildPath(candidateRoot, plan.evidenceProfileDigest, plan.evidenceDigest),
+      { progress: options.progress },
+    );
+    await extractDkbPackageArchive(
+      retrievalArchive,
+      retrievalBuildPath(candidateRoot, plan.retrievalProfileDigest, plan.retrievalBuildDigest),
+      { progress: options.progress },
+    );
+    const candidate = await selectStoredPackageBuild({
+      root: candidateRoot,
+      target: plan.target,
+      evidenceProfileDigest: plan.evidenceProfileDigest,
+      retrievalProfileDigest: plan.retrievalProfileDigest,
+      compatibilityDigest: plan.compatibilityDigest,
     });
-    if (graph.evidence.package.id !== grant.package.id
-      || graph.evidence.package.version !== grant.package.version
-      || graph.evidence.evidenceDigest !== grant.evidenceDigest
-      || graph.retrieval.retrievalBuildDigest !== grant.retrievalBuildDigest) {
-      throw new DkbError('Downloaded Retrieval Build does not attach to the installed source and Evidence Build.');
+    assertBuildGraphMatchesPlan(candidate, plan);
+
+    return await withDkbFileLock(packageRoot, 'build-promotion', async () => {
+      await verifyInstalledSourceForPlan(packageRoot, verified, options.trustedKeys);
+      const promoted = await mergeStoredPackageBuildsWithinMutation(candidateRoot, packageRoot);
+      const receiptPath = installPlanReceiptPath(packageRoot, stableHash(plan));
+      let receiptCreated = false;
+      try {
+        receiptCreated = await writeImmutableJson(receiptPath, plan, 'Stored install-plan receipt');
+        const graph = await selectStoredPackageBuild({
+          root: packageRoot,
+          target: plan.target,
+          evidenceProfileDigest: plan.evidenceProfileDigest,
+          retrievalProfileDigest: plan.retrievalProfileDigest,
+          compatibilityDigest: plan.compatibilityDigest,
+        });
+        assertBuildGraphMatchesPlan(graph, plan);
+        return graph;
+      } catch (error) {
+        await Promise.all(promoted.copied.map((target) => fs.rm(target, { recursive: true, force: true })));
+        if (receiptCreated) await fs.rm(receiptPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    });
+  } finally {
+    await fs.rm(candidateRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** Verify that a retained Registry build is backed by its exact signed install-plan chain. */
+export async function verifyStoredSignedBuildChain(options: {
+  packageRoot: string;
+  graph: Awaited<ReturnType<typeof selectStoredPackageBuild>>;
+  target: string;
+  trustedKeys: DkbSigningKeyRecord[];
+}): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+  const packageRoot = path.resolve(options.packageRoot);
+  const primaryReceiptPath = path.join(packageRoot, ...DKB_INSTALL_PLAN_RECEIPT_PATH.split('/'));
+  const receiptRoot = path.join(packageRoot, ...DKB_INSTALL_PLAN_RECEIPTS_DIR.split('/'));
+  const attachedReceipts = await fs.readdir(receiptRoot).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [] as string[];
+    throw error;
+  });
+  const candidates = [
+    primaryReceiptPath,
+    ...attachedReceipts
+      .filter((file) => file.endsWith('.json'))
+      .sort()
+      .map((file) => path.join(receiptRoot, file)),
+  ];
+  let lastError: unknown;
+  for (const receiptPath of candidates) {
+    try {
+      const value = JSON.parse(await fs.readFile(receiptPath, 'utf8')) as unknown;
+      const verified = await verifySignedInstallPlan(
+        validateInstallPlan(value, `Stored Registry install plan at ${receiptPath}`),
+        options.trustedKeys,
+      );
+      await verifyInstalledSourceForPlan(packageRoot, verified, options.trustedKeys);
+      assertBuildGraphMatchesPlan(options.graph, verified.plan);
+      return options.graph;
+    } catch (error) {
+      lastError = error;
     }
-    const receiptPath = retrievalBuildReceiptPath(packageRoot, grant.retrievalBuildDigest);
-    await fs.mkdir(path.dirname(receiptPath), { recursive: true });
-    await fs.writeFile(receiptPath, `${JSON.stringify(grant.artifact.receipt, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
-      .catch(async (error: NodeJS.ErrnoException) => {
-        if (error.code !== 'EEXIST') throw error;
-        const current = JSON.parse(await fs.readFile(receiptPath, 'utf8')) as unknown;
-        if (stableHash(current) !== stableHash(grant.artifact.receipt)) {
-          throw new DkbError(`Stored Retrieval Build receipt collision at ${receiptPath}`);
-        }
-      });
+  }
+  throw new DkbError(
+    `No exact signed Registry install-plan receipt verifies retained build ${options.graph.retrieval.retrievalBuildDigest}`
+    + (lastError instanceof Error ? `: ${lastError.message}` : '.'),
+  );
+}
+
+/** Revalidate an installed Registry build offline using origin-pinned, last-known trust. */
+export async function verifyRetainedRegistryBuild(options: {
+  libraryRoot: string;
+  registryUrl: string;
+  packageRoot: string;
+  graph: Awaited<ReturnType<typeof selectStoredPackageBuild>>;
+  target: string;
+}): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+  const graph = await validateStoredPackageBuild(options.packageRoot, options.graph.selection);
+  const entry = (await readLibraryState(options.libraryRoot)).entries[graph.evidence.package.id];
+  if (!entry || entry.source !== 'registry' || entry.status !== 'installed'
+    || entry.version !== graph.evidence.package.version || !entry.registryUrl
+    || normalizeRegistryUrl(entry.registryUrl) !== normalizeRegistryUrl(options.registryUrl)
+    || path.resolve(options.libraryRoot, entry.path) !== path.resolve(options.packageRoot)) {
+    throw new DkbError('Retained Registry build does not match its authoritative Library origin and installed release.', 'registry_build_untrusted');
+  }
+  try {
+    const trustedKeys = await readPinnedRegistryKeys(options.libraryRoot, entry.registryUrl);
+    await verifyStoredSignedBuildChain({ ...options, graph, trustedKeys });
+    const source = parsePersistedPackageReceipt(JSON.parse(await fs.readFile(path.join(options.packageRoot, DKB_PACKAGE_RECEIPT_PATH), 'utf8')), 'Retained Registry source receipt');
+    if (!entry.digest || entry.digest !== source.payload.packageTreeHash) {
+      throw new DkbError('Retained Registry source receipt differs from the installed release digest.');
+    }
     return graph;
   } catch (error) {
-    await Promise.all(copied.map((target) => fs.rm(target, { recursive: true, force: true })));
+    throw new DkbError(
+      `Cannot trust retained ${entry.identity}@${entry.version}: ${error instanceof Error ? error.message : String(error)} `
+      + `Recover with: dkb install ${entry.identity} --version ${entry.version} --target ${options.target} --url "${entry.registryUrl}" --library "${path.resolve(options.libraryRoot)}".`,
+      error instanceof DkbError && error.code.startsWith('registry_') ? error.code : 'registry_build_untrusted',
+    );
+  }
+}
+
+/** Cold admission checks Registry trust; no request may fetch or bootstrap keys. */
+export async function verifyRuntimeRegistryBuilds(libraryRoot: string, activation: DkbRuntimeActivation): Promise<void> {
+  const state = await readLibraryState(libraryRoot);
+  for (const [id, selection] of Object.entries(activation.packages)) {
+    const entry = state.entries[id];
+    if (!entry || entry.source !== 'registry') continue;
+    if (!entry.registryUrl) throw new DkbError(`Registry DKB ${id} has no pinned origin. Reinstall it from its Registry.`, 'registry_build_untrusted');
+    const packageRoot = path.resolve(libraryRoot, entry.path);
+    const graph = await validateStoredPackageBuild(packageRoot, selection);
+    await verifyRetainedRegistryBuild({ libraryRoot, registryUrl: entry.registryUrl, packageRoot, graph, target: activation.target });
+  }
+}
+
+/** Authenticate a complete Registry layer plan and bind it to the installed source before downloading children. */
+export async function verifySignedInstallPlanForInstalledSource(options: {
+  plan: DkbInstallPlan;
+  packageRoot: string;
+  trustedKeys: DkbSigningKeyRecord[];
+}): Promise<DkbInstallPlan> {
+  const verified = await verifySignedInstallPlan(options.plan, options.trustedKeys);
+  await verifyInstalledSourceForPlan(path.resolve(options.packageRoot), verified, options.trustedKeys);
+  return verified.plan;
+}
+
+interface VerifiedInstallPlan {
+  plan: DkbInstallPlan;
+  sourceReceipt: DkbPackageReceipt;
+}
+
+async function verifySignedInstallPlan(
+  input: DkbInstallPlan,
+  trustedKeys: DkbSigningKeyRecord[],
+): Promise<VerifiedInstallPlan> {
+  const plan = validateInstallPlan(input);
+  const resolver = signingKeyResolver(trustedKeys);
+  const [source, evidence, retrieval] = plan.artifacts;
+  const sourceReceipt = parsePersistedPackageReceipt(source.receipt, 'Install plan source receipt');
+  const [sourceVerification, evidenceVerification, retrievalVerification, planVerification] = await Promise.all([
+    verifyPackageReceipt(sourceReceipt, resolver),
+    verifyLayerReceipt(evidence.receipt, resolver, 'Install plan Evidence receipt'),
+    verifyLayerReceipt(retrieval.receipt, resolver, 'Install plan Retrieval receipt'),
+    verifyLayerReceipt(plan.receipt, resolver, 'Install plan receipt'),
+  ]);
+  const planPayload = { ...plan } as Record<string, unknown>;
+  delete planPayload.receipt;
+  const receiptChecks = [
+    sourceVerification.ok,
+    evidenceVerification.ok,
+    retrievalVerification.ok,
+    planVerification.ok,
+    sourceReceipt.package.publisherId === sourceReceipt.publisher.accountId,
+    sourceReceipt.package.registryId === undefined || sourceReceipt.package.registryId === sourceReceipt.registry.registryId,
+    stableHash(sourceReceipt) === source.receiptHash,
+    evidenceVerification.receiptHash === evidence.receiptHash,
+    retrievalVerification.receiptHash === retrieval.receiptHash,
+    evidenceVerification.receipt.type === 'dkb.evidence.receipt',
+    retrievalVerification.receipt.type === 'dkb.retrieval.receipt',
+    planVerification.receipt.type === 'dkb.install-plan.receipt',
+    evidenceVerification.receipt.parentReceiptHash === source.receiptHash,
+    retrievalVerification.receipt.parentReceiptHash === evidence.receiptHash,
+    evidenceVerification.receipt.payload.sourceReceiptHash === source.receiptHash,
+    retrievalVerification.receipt.payload.evidenceReceiptHash === evidence.receiptHash,
+    canonicalJson(planVerification.receipt.payload) === canonicalJson(planPayload),
+    sourceReceipt.package.id === plan.package.id,
+    sourceReceipt.package.version === plan.package.version,
+    source.digest === plan.package.sourceDigest,
+    evidenceVerification.receipt.package.id === plan.package.id,
+    evidenceVerification.receipt.package.version === plan.package.version,
+    evidenceVerification.receipt.package.sourceHash === plan.package.sourceDigest,
+    retrievalVerification.receipt.package.id === plan.package.id,
+    retrievalVerification.receipt.package.version === plan.package.version,
+    retrievalVerification.receipt.package.sourceHash === plan.package.sourceDigest,
+    planVerification.receipt.package.id === plan.package.id,
+    planVerification.receipt.package.version === plan.package.version,
+    planVerification.receipt.package.sourceHash === plan.package.sourceDigest,
+    evidenceVerification.receipt.publisher.accountId === sourceReceipt.publisher.accountId,
+    retrievalVerification.receipt.publisher.accountId === sourceReceipt.publisher.accountId,
+    planVerification.receipt.publisher.accountId === sourceReceipt.publisher.accountId,
+    evidenceVerification.receipt.registry.registryId === sourceReceipt.registry.registryId,
+    retrievalVerification.receipt.registry.registryId === sourceReceipt.registry.registryId,
+    planVerification.receipt.registry.registryId === sourceReceipt.registry.registryId,
+    evidenceVerification.receipt.payload.evidenceProfileDigest === plan.evidenceProfileDigest,
+    evidenceVerification.receipt.payload.evidenceDigest === plan.evidenceDigest,
+    retrievalVerification.receipt.payload.target === plan.target,
+    retrievalVerification.receipt.payload.evidenceProfileDigest === plan.evidenceProfileDigest,
+    retrievalVerification.receipt.payload.evidenceDigest === plan.evidenceDigest,
+    retrievalVerification.receipt.payload.retrievalProfileDigest === plan.retrievalProfileDigest,
+    retrievalVerification.receipt.payload.retrievalBuildDigest === plan.retrievalBuildDigest,
+    retrievalVerification.receipt.payload.compatibilityDigest === plan.compatibilityDigest,
+  ];
+  if (receiptChecks.some((check) => !check)) {
+    throw new DkbError('Registry install plan receipt chain or build identity is invalid');
+  }
+  requiredSignedPackageTreeHash({ plan, sourceReceipt });
+  return { plan, sourceReceipt };
+}
+
+function requiredSignedPackageTreeHash(verified: VerifiedInstallPlan): string {
+  const packageTreeHash = verified.sourceReceipt.payload.packageTreeHash;
+  if (!packageTreeHash) {
+    throw new DkbError('Signed Registry source receipt does not bind an immutable package tree.');
+  }
+  return packageTreeHash;
+}
+
+async function verifyInstalledSourceForPlan(
+  packageRoot: string,
+  verified: VerifiedInstallPlan,
+  trustedKeys: DkbSigningKeyRecord[],
+): Promise<void> {
+  const receiptPath = path.join(packageRoot, DKB_PACKAGE_RECEIPT_PATH);
+  const installedReceipt = parsePersistedPackageReceipt(
+    JSON.parse(await fs.readFile(receiptPath, 'utf8')) as unknown,
+    receiptPath,
+  );
+  if (!verified.sourceReceipt.payload.packageTreeHash) {
+    throw new DkbError('Signed Registry source receipt does not bind an immutable package tree.');
+  }
+  const [signatureVerification, dkb, sourceTree] = await Promise.all([
+    verifyPackageReceipt(installedReceipt, signingKeyResolver(trustedKeys)),
+    loadDkbPackage(packageRoot, verified.plan.package.id),
+    hashPortablePackageTree(packageRoot),
+  ]);
+  const exactSource = signatureVerification.ok
+    && packageReceiptPayloadMatchesLock(installedReceipt)
+    && stableHash(installedReceipt) === verified.plan.artifacts[0].receiptHash
+    && stableHash(installedReceipt) === stableHash(verified.sourceReceipt)
+    && installedReceipt.package.id === verified.plan.package.id
+    && installedReceipt.package.version === verified.plan.package.version
+    && dkb.manifest.id === verified.plan.package.id
+    && dkb.manifest.version === verified.plan.package.version
+    && sourceTree.hash === verified.sourceReceipt.payload.packageTreeHash;
+  if (!exactSource) {
+    throw new DkbError(
+      `Installed Registry source ${verified.plan.package.id}@${verified.plan.package.version} `
+      + 'does not match the signed source parent of the requested build chain.',
+    );
+  }
+}
+
+function signingKeyResolver(trustedKeys: DkbSigningKeyRecord[]) {
+  return ({ role, signature }: { role: 'publisher' | 'registry'; signature: { keyId: string } }) => {
+    const subjectId = role === 'publisher'
+      ? (signature as { accountId?: string }).accountId
+      : (signature as { registryId?: string }).registryId;
+    const key = trustedKeys.find((candidate) => candidate.id === signature.keyId
+      && candidate.subjectType === role
+      && candidate.subjectId === subjectId);
+    return key && (key.status === 'active' || key.status === 'rotated') ? key.publicKeyPem : null;
+  };
+}
+
+function assertPackageWithinLibrary(libraryRoot: string, packageRoot: string): void {
+  const relative = path.relative(libraryRoot, packageRoot);
+  if (!relative || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
+    throw new DkbError(`Installed package path must be contained by its Library: ${packageRoot}`);
+  }
+}
+
+function assertBuildGraphMatchesPlan(
+  graph: Awaited<ReturnType<typeof selectStoredPackageBuild>>,
+  plan: DkbInstallPlan,
+): void {
+  if (graph.profile.profile.target !== plan.target
+    || graph.evidence.package.id !== plan.package.id
+    || graph.evidence.package.version !== plan.package.version
+    || graph.evidence.package.sourceDigest !== plan.package.sourceDigest
+    || graph.evidence.evidenceProfileDigest !== plan.evidenceProfileDigest
+    || graph.evidence.evidenceDigest !== plan.evidenceDigest
+    || graph.retrieval.package.id !== plan.package.id
+    || graph.retrieval.package.version !== plan.package.version
+    || graph.retrieval.evidenceProfileDigest !== plan.evidenceProfileDigest
+    || graph.retrieval.evidenceDigest !== plan.evidenceDigest
+    || graph.retrieval.retrievalProfileDigest !== plan.retrievalProfileDigest
+    || graph.retrieval.compatibilityDigest !== plan.compatibilityDigest
+    || graph.retrieval.retrievalBuildDigest !== plan.retrievalBuildDigest) {
+    throw new DkbError('Downloaded build layers do not match the exact signed Registry install plan.');
+  }
+}
+
+async function writeImmutableJson(target: string, value: unknown, label: string): Promise<boolean> {
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const temporary = `${target}.stage-${process.pid}-${Date.now().toString(36)}`;
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    try {
+      await fs.link(temporary, target);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const current = JSON.parse(await fs.readFile(target, 'utf8')) as unknown;
+      if (stableHash(current) !== stableHash(value)) throw new DkbError(`${label} collision at ${target}`);
+      return false;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new DkbError(`${label} staging collision at ${temporary}`);
+    }
     throw error;
   } finally {
-    await fs.rm(candidateRoot, { recursive: true, force: true });
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
@@ -586,7 +993,7 @@ export async function installDkbArchiveIntoRuntime(options: {
       ...(imported.warning ? { warning: imported.warning } : {}),
     };
   } finally {
-    await fs.rm(installParent, { recursive: true, force: true });
+    await fs.rm(installParent, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -634,7 +1041,7 @@ export async function installDkbArchiveIntoLibrary(options: {
       },
     };
   } finally {
-    await fs.rm(installParent, { recursive: true, force: true });
+    await fs.rm(installParent, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -655,7 +1062,7 @@ export async function verifyDkbArchiveFile(options: {
     await extractDkbPackageArchive(options.archivePath, extractedRoot, { progress: options.progress });
     return (await verifyExtractedPackage(extractedRoot, options.trustedKeys, options.progress)).verification;
   } finally {
-    await fs.rm(verifyParent, { recursive: true, force: true });
+    await fs.rm(verifyParent, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -686,10 +1093,7 @@ async function verifyExtractedPackage(
   const artifactChecks = options.verifyReceiptArtifacts === false
     ? []
     : await verifyLockArtifacts(root, receipt.payload.lock);
-  const signatures = await verifyPackageReceipt(receipt, ({ role, signature }) => {
-    const key = trustedKeys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
-    return key && key.status !== 'revoked' ? key.publicKeyPem : null;
-  });
+  const signatures = await verifyPackageReceipt(receipt, signingKeyResolver(trustedKeys));
   const dkb = await loadDkbPackage(root, packageId);
   const identityMatches = receipt.package.id === packageId
     && dkb.manifest.id === packageId

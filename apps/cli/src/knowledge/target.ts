@@ -1,8 +1,7 @@
 import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
-import type { LoadedCollection, LoadedDkb, QueryResponse, QueryTrace } from '@sjshovan/dkb-protocol/types.js';
-import { queryCollection, type QueryOptions } from '@sjshovan/dkb-runtime/router/search.js';
+import type { LoadedCollection, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 
 export type KnowledgeTargetType = 'dkb' | 'collection' | 'library';
 
@@ -177,63 +176,6 @@ function resolveLibraryTarget(library: Awaited<ReturnType<typeof loadLibrary>>, 
     includedDkbs,
     duplicateDkbRoots: duplicateTracker.duplicates,
   };
-}
-
-export async function queryKnowledgeTarget(
-  targetPath: string,
-  query: string,
-  options: QueryOptions = {},
-): Promise<{ target: KnowledgeTargetResolution; response: QueryResponse }> {
-  return queryResolvedKnowledgeTarget(await resolveKnowledgeTarget(targetPath), query, options);
-}
-
-export async function queryResolvedKnowledgeTarget(
-  target: KnowledgeTargetResolution,
-  query: string,
-  options: QueryOptions = {},
-): Promise<{ target: KnowledgeTargetResolution; response: QueryResponse }> {
-  const results: QueryResponse['results'] = [];
-  const trace: QueryTrace[] = [];
-
-  for (const unit of target.units) {
-    const response = await queryCollection(unit.collection, query, {
-      ...options,
-      resultProbabilityCutoff: options.resultProbabilityCutoff ?? 0,
-    });
-
-    results.push(...response.results);
-    trace.push(...response.trace);
-  }
-
-  const dedupedResults = dedupeHits(results);
-  results.length = 0;
-  results.push(...dedupedResults);
-  results.sort((a, b) => b.score - a.score || a.dkbId.localeCompare(b.dkbId) || a.id.localeCompare(b.id));
-
-  return {
-    target,
-    response: {
-      query,
-      collectionId: target.id,
-      results: results.slice(0, options.limit ?? 10),
-      trace,
-    },
-  };
-}
-
-function dedupeHits(results: QueryResponse['results']): QueryResponse['results'] {
-  const byId = new Map<string, QueryResponse['results'][number]>();
-
-  for (const result of results) {
-    const key = `${result.dkbId}/${result.id}`;
-    const previous = byId.get(key);
-
-    if (!previous || result.score > previous.score) {
-      byId.set(key, result);
-    }
-  }
-
-  return [...byId.values()];
 }
 
 export function summarizeKnowledgeTarget(target: KnowledgeTargetResolution): KnowledgeTargetSummary {

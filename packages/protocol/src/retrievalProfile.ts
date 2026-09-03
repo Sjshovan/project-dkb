@@ -14,6 +14,7 @@ export interface DkbProviderReceipt {
   source: DkbPluginReceiptSource;
   sourcePath: string;
   sourceDigest: string;
+  integrityDigest: string;
 }
 
 export interface DkbProcessorReceipt {
@@ -23,18 +24,19 @@ export interface DkbProcessorReceipt {
   source: DkbPluginReceiptSource;
   sourcePath: string;
   sourceDigest: string;
+  integrityDigest: string;
 }
 
 export interface DkbRetrievalCompatibilityReceipt extends Record<string, unknown> {
   evidenceProfileDigest: string;
-  embeddingProvider: string;
-  embeddingSpace: string;
-  dimensions: number;
-  metric: string;
-  normalized: boolean;
+  embeddingProvider?: string;
+  embeddingSpace?: string;
+  dimensions?: number;
+  metric?: string;
+  normalized?: boolean;
   modelRevision?: string;
-  queryTransformDigest: string;
-  documentTransformDigest: string;
+  queryTransformDigest?: string;
+  documentTransformDigest?: string;
   indexFormat: string;
   protocol: string;
 }
@@ -42,7 +44,7 @@ export interface DkbRetrievalCompatibilityReceipt extends Record<string, unknown
 export interface DkbRetrievalProfileLock {
   format: typeof DKB_RETRIEVAL_PROFILE_FORMAT;
   profile: {
-    embedding: {
+    embedding?: {
       provider: string;
       space: string;
       modelRevision?: string;
@@ -95,10 +97,10 @@ export function validateRetrievalProfileLock(
   if (candidate.format !== DKB_RETRIEVAL_PROFILE_FORMAT || !profile || typeof candidate.profileDigest !== 'string') {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: unsupported format or missing profile`);
   }
-  if (!profile.embedding || !profile.evidence || !profile.index || !profile.retrieval) {
+  if (!profile.evidence || !profile.index || !profile.retrieval) {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: incomplete profile`);
   }
-  if (!Number.isInteger(profile.embedding.dimensions) || profile.embedding.dimensions <= 0) {
+  if (profile.embedding && (!Number.isInteger(profile.embedding.dimensions) || profile.embedding.dimensions <= 0)) {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: dimensions must be a positive integer`);
   }
   if (!Array.isArray(profile.evidence.providers) || !Array.isArray(profile.evidence.processors)
@@ -140,7 +142,7 @@ export function assertMatchingRetrievalProfiles(
 ): void {
   if (expected.compatibilityDigest !== actual.compatibilityDigest) {
     throw new DkbError(
-      `Retrieval profile mismatch for ${label}: registry uses ${expected.profile.embedding.space}/${expected.profile.embedding.dimensions} (${expected.profileDigest}), package uses ${actual.profile.embedding.space}/${actual.profile.embedding.dimensions} (${actual.profileDigest})`,
+      `Retrieval profile mismatch for ${label}: registry uses ${embeddingLabel(expected)} (${expected.profileDigest}), package uses ${embeddingLabel(actual)} (${actual.profileDigest})`,
     );
   }
 }
@@ -149,22 +151,18 @@ function validateProviderReceipt(value: DkbProviderReceipt, source: string, allo
   if (!value || !allowedKinds.has(value.kind) || !PLUGIN_SOURCES.has(value.source)) {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: invalid provider receipt`);
   }
-  for (const field of ['id', 'version', 'sourcePath', 'sourceDigest'] as const) {
+  for (const field of ['id', 'version', 'sourcePath', 'sourceDigest', 'integrityDigest'] as const) {
     if (typeof value[field] !== 'string' || value[field].length === 0) {
       throw new DkbError(`Invalid retrieval profile lock at ${source}: provider ${field} must be a non-empty string`);
     }
   }
   assertDigest(value.sourceDigest, `Invalid retrieval profile lock at ${source}: provider sourceDigest`);
+  assertDigest(value.integrityDigest, `Invalid retrieval profile lock at ${source}: provider integrityDigest`);
 }
 
 function validateResolvedProfile(profile: DkbRetrievalProfileLock['profile'], source: string): void {
   for (const [label, value] of Object.entries({
     target: profile.target,
-    embeddingProvider: profile.embedding.provider,
-    embeddingSpace: profile.embedding.space,
-    embeddingMetric: profile.embedding.metric,
-    queryMode: profile.embedding.queryMode,
-    documentMode: profile.embedding.documentMode,
     indexProvider: profile.index.provider,
     indexFormat: profile.index.format,
     retrievalProvider: profile.retrieval.provider,
@@ -180,17 +178,30 @@ function validateResolvedProfile(profile: DkbRetrievalProfileLock['profile'], so
     evidenceProfileDigest: profile.evidence.profileDigest,
     retrievalProfileDigest: profile.retrieval.profileDigest,
   })) assertDigest(digest, `Invalid retrieval profile lock at ${source}: ${label}`);
-  if (!['packaged', 'managed'].includes(profile.index.mode) || typeof profile.embedding.normalized !== 'boolean') {
-    throw new DkbError(`Invalid retrieval profile lock at ${source}: invalid index mode or embedding normalization`);
+  if (!['packaged', 'managed'].includes(profile.index.mode)) {
+    throw new DkbError(`Invalid retrieval profile lock at ${source}: invalid index mode`);
   }
-  for (const [label, digest] of Object.entries({
-    queryTransformDigest: profile.embedding.queryTransformDigest,
-    documentTransformDigest: profile.embedding.documentTransformDigest,
-  })) assertDigest(digest, `Invalid retrieval profile lock at ${source}: ${label}`);
+  if (profile.embedding) {
+    for (const [label, value] of Object.entries({
+      embeddingProvider: profile.embedding.provider,
+      embeddingSpace: profile.embedding.space,
+      embeddingMetric: profile.embedding.metric,
+      queryMode: profile.embedding.queryMode,
+      documentMode: profile.embedding.documentMode,
+    })) {
+      if (typeof value !== 'string' || value.length === 0) throw new DkbError(`Invalid retrieval profile lock at ${source}: ${label} must be a non-empty string`);
+    }
+    if (typeof profile.embedding.normalized !== 'boolean') throw new DkbError(`Invalid retrieval profile lock at ${source}: invalid embedding normalization`);
+    for (const [label, digest] of Object.entries({
+      queryTransformDigest: profile.embedding.queryTransformDigest,
+      documentTransformDigest: profile.embedding.documentTransformDigest,
+    })) assertDigest(digest, `Invalid retrieval profile lock at ${source}: ${label}`);
+  }
 
   const retrievalProviders = new Map(profile.retrieval.providers.map((provider) => [provider.kind, provider.id]));
-  if (retrievalProviders.size !== 3 || profile.retrieval.providers.length !== 3
-    || retrievalProviders.get('embedding') !== profile.embedding.provider
+  const expectedProviderCount = profile.embedding ? 3 : 2;
+  if (retrievalProviders.size !== expectedProviderCount || profile.retrieval.providers.length !== expectedProviderCount
+    || (profile.embedding ? retrievalProviders.get('embedding') !== profile.embedding.provider : retrievalProviders.has('embedding'))
     || retrievalProviders.get('index') !== profile.index.provider
     || retrievalProviders.get('retrieval') !== profile.retrieval.provider) {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: selected provider receipts do not match the resolved retrieval profile`);
@@ -209,18 +220,30 @@ function validateCompatibility(
   compatibility: DkbRetrievalCompatibilityReceipt,
   source: string,
 ): void {
-  if (compatibility.modelRevision !== profile.embedding.modelRevision) {
+  if (!profile.embedding) {
+    for (const field of [
+      'embeddingProvider', 'embeddingSpace', 'dimensions', 'metric', 'normalized',
+      'modelRevision', 'queryTransformDigest', 'documentTransformDigest',
+    ] as const) {
+      if (compatibility[field] !== undefined) {
+        throw new DkbError(`Invalid retrieval profile lock at ${source}: lexical-only compatibility cannot declare ${field}`);
+      }
+    }
+  }
+  if (compatibility.modelRevision !== profile.embedding?.modelRevision) {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: compatibility modelRevision does not match the resolved profile`);
   }
   const expected = {
     evidenceProfileDigest: profile.evidence.profileDigest,
-    embeddingProvider: profile.embedding.provider,
-    embeddingSpace: profile.embedding.space,
-    dimensions: profile.embedding.dimensions,
-    metric: profile.embedding.metric,
-    normalized: profile.embedding.normalized,
-    queryTransformDigest: profile.embedding.queryTransformDigest,
-    documentTransformDigest: profile.embedding.documentTransformDigest,
+    ...(profile.embedding ? {
+      embeddingProvider: profile.embedding.provider,
+      embeddingSpace: profile.embedding.space,
+      dimensions: profile.embedding.dimensions,
+      metric: profile.embedding.metric,
+      normalized: profile.embedding.normalized,
+      queryTransformDigest: profile.embedding.queryTransformDigest,
+      documentTransformDigest: profile.embedding.documentTransformDigest,
+    } : {}),
     indexFormat: profile.index.format,
     protocol: profile.retrieval.protocol,
   };
@@ -229,6 +252,10 @@ function validateCompatibility(
       throw new DkbError(`Invalid retrieval profile lock at ${source}: compatibility ${field} does not match the resolved profile`);
     }
   }
+}
+
+function embeddingLabel(profile: DkbRetrievalProfileLock): string {
+  return profile.profile.embedding ? `${profile.profile.embedding.space}/${profile.profile.embedding.dimensions}` : 'lexical-only';
 }
 
 function assertDigest(value: unknown, label: string): void {
@@ -241,12 +268,13 @@ function validateProcessorReceipt(value: DkbProcessorReceipt, source: string): v
   if (!value || !PROCESSOR_STAGES.has(value.stage) || !PLUGIN_SOURCES.has(value.source)) {
     throw new DkbError(`Invalid retrieval profile lock at ${source}: invalid processor receipt`);
   }
-  for (const field of ['id', 'version', 'sourcePath', 'sourceDigest'] as const) {
+  for (const field of ['id', 'version', 'sourcePath', 'sourceDigest', 'integrityDigest'] as const) {
     if (typeof value[field] !== 'string' || value[field].length === 0) {
       throw new DkbError(`Invalid retrieval profile lock at ${source}: processor ${field} must be a non-empty string`);
     }
   }
   assertDigest(value.sourceDigest, `Invalid retrieval profile lock at ${source}: processor sourceDigest`);
+  assertDigest(value.integrityDigest, `Invalid retrieval profile lock at ${source}: processor integrityDigest`);
 }
 
 const EVIDENCE_PROVIDER_KINDS = new Set<DkbProviderReceiptKind>(['evidence', 'parser', 'chunker']);

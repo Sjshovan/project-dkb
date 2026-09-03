@@ -17,7 +17,6 @@ x-registry-environment: &registry-environment
   DKB_REGISTRY_ID: ${DKB_STACK_NAME:-local}
   DKB_REGISTRY_STORAGE_DISK: registry
   DKB_COMPILER_URL: http://dkb-compiler:7341
-  DKB_COMPILER_TARGET: ${DKB_PIPELINE_TARGET:-default}
   DKB_COMPILER_TIMEOUT: "3600"
   DB_QUEUE_RETRY_AFTER: "3720"
   DKB_REGISTRY_BOOTSTRAP_EMAIL: dkb@local.invalid
@@ -53,7 +52,7 @@ services:
     environment: *registry-environment
     volumes: *registry-volumes
     ports:
-      - "${DKB_REGISTRY_PORT:-8018}:8000"
+      - "127.0.0.1:${DKB_REGISTRY_PORT:-8018}:8000"
     depends_on:
       registry-bootstrap:
         condition: service_completed_successfully
@@ -88,6 +87,8 @@ services:
     environment:
       DKB_COMPILER_HOST: 0.0.0.0
       DKB_COMPILER_PORT: 7341
+      DKB_COMPILER_ALLOWED_TARGETS: ${DKB_COMPILER_ALLOWED_TARGETS-}
+      DKB_COMPILER_DEFAULT_TARGET: ${DKB_COMPILER_DEFAULT_TARGET:-default}
       DKB_CONTEXT_ROOT: /context
       DKB_COMPILER_WORK_ROOT: /jobs/api
       DKB_LLAMA_COMPILER_SERVICE_URL: http://dkb-compiler-worker:8091
@@ -142,6 +143,8 @@ services:
     command: ["python", "-m", "uvicorn", "embedder:app", "--host", "0.0.0.0", "--port", "8090"]
     environment:
       DKB_FASTEMBED_MODEL: ${DKB_FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}
+      DKB_FASTEMBED_MODEL_REPOSITORY: ${DKB_FASTEMBED_MODEL_REPOSITORY:-}
+      DKB_FASTEMBED_MODEL_REVISION: ${DKB_FASTEMBED_MODEL_REVISION:-}
     volumes:
       - dkb-fastembed-cache:/cache/fastembed
     healthcheck:

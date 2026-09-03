@@ -26,10 +26,14 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
       console.log(JSON.stringify({ ...base, sequence: 1, event: 'completion', status: 'failed' }));
       process.exit(1);
     }
-    const result = args.includes('runtime') && args.includes('show')
+    const result = args.includes('runtime') && args.includes('audit')
+      ? { events: [{ type: 'dkb.query_audit.v2', id: 1, eventId: 'audit-1', recordedAt: '2026-09-02T12:00:00.000Z', channel: 'mcp', client: { id: 'chatgpt' }, runtime: { id: 'proof-runtime', activationDigest: 'sha256:' + 'a'.repeat(64) }, library: { id: 'personal', generation: 1, stateDigest: 'sha256:' + 'b'.repeat(64) }, pipeline: { target: 'default', evidenceProfileDigest: 'sha256:' + 'c'.repeat(64), retrievalProfileDigest: 'sha256:' + 'd'.repeat(64), compatibilityDigest: 'sha256:' + 'e'.repeat(64) }, packages: [], requestId: 'request-1', query: 'proof query', intent: 'search', resultCount: 1, status: 'ok', outcome: 'success', candidates: [], citations: [], timing: {} }], limit: 100 }
+      : args.includes('runtime') && args.includes('show')
       ? { format: 'dkb.runtime-status.v1', runtimeId: args.at(-1), library: { kind: 'local', id: 'personal', name: 'Personal', path: 'C:/knowledge' }, target: 'default', activationGeneration: 3, stale: false, packageCoverage: { ready: 2, total: 2 }, compatibilityDigest: 'sha256:' + 'c'.repeat(64) }
-      : args.includes('pipeline') && args.includes('list')
+      : args.includes('pipeline') && args.includes('list') && !args.includes('registry')
         ? { runtime: args.at(-1), activeTarget: 'default', pipelines: [{ target: 'default', active: true, origin: 'bundled', providers: ['@dkb/evidence-docling-llamaindex', '@dkb/embedding-tei', '@dkb/index-faiss', '@dkb/retrieval-hybrid'], dimensions: 384, metric: 'cosine', requiredServices: ['tei'], health: 'healthy', coverage: { ready: 2, total: 2 }, compatibilityDigest: 'sha256:' + 'c'.repeat(64) }] }
+        : args.includes('registry') && args.includes('pipeline') && args.includes('list')
+          ? { default: 'default', pipelines: [{ name: 'default', default: true, available: true, providers: [], processors: [], buildDigest: 'sha256:' + 'a'.repeat(64), evidenceProfileDigest: 'sha256:' + 'b'.repeat(64), retrievalProfileDigest: 'sha256:' + 'c'.repeat(64), compatibilityDigest: 'sha256:' + 'd'.repeat(64), requiredServices: [], health: {} }] }
         : args.includes('search')
       ? { registryUrl: 'http://127.0.0.1:8018', entries: [{ type: 'dkb', id: '@proof/alpha', namespace: 'proof', name: 'Alpha', slug: 'alpha', visibility: 'public', latestVersion: '1.0.0' }, { type: 'collection', id: '@proof/bundle', namespace: 'proof', name: 'Proof bundle', slug: 'bundle', visibility: 'public', latestRevision: 1 }], pages: { dkbs: { currentPage: 1, perPage: 20, lastPage: 1, total: 1 }, collections: { currentPage: 1, perPage: 20, lastPage: 1, total: 1 } } }
       : args.includes('registry') && args.includes('show') && args.includes('--contents')
@@ -109,6 +113,9 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     const runtimePipelines = await fetch(`${server.url}/api/v1/runtimes/proof-runtime/pipelines`, { headers: { cookie } });
     assert.equal(runtimePipelines.status, 200);
     assert.equal((await runtimePipelines.json()).pipelines[0].active, true);
+    const runtimeAudit = await fetch(`${server.url}/api/v1/runtimes/proof-runtime/audit?limit=100`, { headers: { cookie } });
+    assert.equal(runtimeAudit.status, 200);
+    assert.equal((await runtimeAudit.json()).events[0].eventId, 'audit-1');
     const servingRuntimes = await fetch(`${server.url}/api/v1/libraries/personal/runtimes`, { headers: { cookie } });
     assert.equal(servingRuntimes.status, 200);
     assert.equal((await servingRuntimes.json()).runtimes[0].runtime.library.id, 'personal');
@@ -131,6 +138,9 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     const registryCatalog = await fetch(`${server.url}/api/v1/registries/proof-registry/catalog?q=proof&type=all&page=1&perPage=20`, { headers: { cookie } });
     assert.equal(registryCatalog.status, 200);
     assert.equal((await registryCatalog.json()).entries.length, 2);
+    const registryPipelines = await fetch(`${server.url}/api/v1/registries/proof-registry/pipelines`, { headers: { cookie } });
+    assert.equal(registryPipelines.status, 200);
+    assert.equal((await registryPipelines.json()).default, 'default');
     const unavailableRegistry = await fetch(`${server.url}/api/v1/registries/other-registry/catalog?type=all&page=1&perPage=20`, { headers: { cookie } });
     assert.equal(unavailableRegistry.status, 422);
     assert.deepEqual(await unavailableRegistry.json(), { error: 'Unable to reach registry http://127.0.0.1:8999: connection refused' });
@@ -231,6 +241,28 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.equal(registryLogin.status, 202);
     await waitForOperation(server.url, cookie, (await registryLogin.json()).operationId);
 
+    const registryBuild = await fetch(`${server.url}/api/v1/operations`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({
+        commandId: 'registry.build', input: { url: 'http://127.0.0.1:8018', identity: '@proof/alpha', version: '1.0.0', pipeline: 'default' },
+      }),
+    });
+    assert.equal(registryBuild.status, 202);
+    await waitForOperation(server.url, cookie, (await registryBuild.json()).operationId);
+
+    const cancelBuild = await fetch(`${server.url}/api/v1/operations`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({
+        commandId: 'registry.build.cancel', input: { url: 'http://127.0.0.1:8018', identity: '@proof/alpha', version: '1.0.0', jobId: 7 },
+      }),
+    });
+    assert.equal(cancelBuild.status, 202);
+    await waitForOperation(server.url, cookie, (await cancelBuild.json()).operationId);
+    const invalidCancel = await fetch(`${server.url}/api/v1/operations`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({
+        commandId: 'registry.build.cancel', input: { url: 'http://127.0.0.1:8018', identity: '@proof/alpha', version: '1.0.0', jobId: -7 },
+      }),
+    });
+    assert.equal(invalidCancel.status, 400);
+
     const invalid = await fetch(`${server.url}/api/v1/operations`, {
       method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-dkb-csrf': csrf }, body: JSON.stringify({ commandId: 'shell.run', input: { command: 'whoami' } }),
     });
@@ -245,6 +277,7 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.equal(missingOperation.status, 404);
     const invocations = (await fs.readFile(argvLog, 'utf8')).trim().split(/\r?\n/u).map((line) => JSON.parse(line));
     const includesInvocation = (expected) => invocations.some((actual) => JSON.stringify(actual) === JSON.stringify(expected));
+    assert.equal(includesInvocation(['--json-stream', 'registry', 'cancel-build', '@proof/alpha', '--version', '1.0.0', '--job', '7', '--url', 'http://127.0.0.1:8018']), true);
     assert.equal(includesInvocation(['--json-stream', 'library', 'list']), true);
     assert.equal(includesInvocation(['--json-stream', 'runtime', 'list', '--check']), true);
     assert.equal(includesInvocation(['--json-stream', 'show', '@proof/alpha', '--library', 'personal']), true);
@@ -256,6 +289,9 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     assert.equal(includesInvocation(['--json-stream', 'install', '@proof/alpha', '--library', 'other', '--version', '1.0.0', '--target', 'default', '--url', 'http://127.0.0.1:8018']), true);
     assert.equal(includesInvocation(['--json-stream', 'runtime', 'show', 'proof-runtime']), true);
     assert.equal(includesInvocation(['--json-stream', 'pipeline', 'list', '--runtime', 'proof-runtime']), true);
+    assert.equal(includesInvocation(['--json-stream', 'runtime', 'audit', 'list', 'proof-runtime', '--limit', '100']), true);
+    assert.equal(includesInvocation(['--json-stream', 'registry', 'pipeline', 'list', '--url', 'http://127.0.0.1:8018']), true);
+    assert.equal(includesInvocation(['--json-stream', 'registry', 'build', '@proof/alpha', '--version', '1.0.0', '--pipeline', 'default', '--url', 'http://127.0.0.1:8018']), true);
     assert.equal(includesInvocation(['--json-stream', 'runtime', 'library', 'use', 'other', '--runtime', 'proof-runtime']), true);
     assert.equal(includesInvocation(['--json-stream', 'runtime', 'refresh', 'proof-runtime']), true);
     assert.equal(includesInvocation(['--json-stream', 'pipeline', 'use', 'fastembed-faiss', '--runtime', 'proof-runtime']), true);

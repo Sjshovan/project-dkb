@@ -6,12 +6,12 @@ export {
 export {
   createRuntimeActivation,
   ensureRuntimeState,
+  initializeRuntimeBinding,
   maybeReadRuntimeActivation,
   maybeReadRuntimeBinding,
+  maybeReadRuntimeBindingFromStateRoot,
   resolveRuntimeLibraryHandle,
-  writeRuntimeActivation,
-  writeRuntimeBinding,
-  writeRuntimeSelection,
+  type InitializeRuntimeBindingOptions,
   type DkbRuntimeInstance,
 } from './activation.js';
 export {

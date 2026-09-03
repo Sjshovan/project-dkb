@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { startDisposableStack } from './lib/disposable-stack.mjs';
+import { prepareMultispaceFixture } from './lib/multispace-fixture.mjs';
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,6 +26,9 @@ const stack = await startDisposableStack({
   prefix: 'multispace-proof',
   target: initialTarget,
   environment: proofEnvironment,
+  ...(alternateTarget ? {
+    prepare: (input) => prepareMultispaceFixture({ ...input, repositoryRoot, initial: initialTarget, alternate: alternateTarget }),
+  } : {}),
 });
 
 try {

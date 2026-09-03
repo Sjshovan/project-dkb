@@ -15,7 +15,7 @@
     "!dist/.tsbuildinfo"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs",
     "check": "tsc -b --pretty false"
   },
   "dependencies": {

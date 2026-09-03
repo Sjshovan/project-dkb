@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { loadLibraryManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { verifyRegistryEndpoint } from '@sjshovan/dkb-registry-client/config.js';
 import { loadRegistryCredentialSync } from '@sjshovan/dkb-registry-client/credentials.js';
 import { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
@@ -12,6 +13,7 @@ export interface DkbHostLibraryListing {
     name: string;
     selected: boolean;
     displayName: string;
+    libraryId?: string;
     path: string;
     registry?: string;
     status: 'ready' | 'missing' | 'invalid';
@@ -197,12 +199,12 @@ export async function inspectHostRuntimes(options: { check?: boolean } = {}): Pr
   };
 }
 
-async function inspectLibrary(root: string): Promise<{ status: 'ready' | 'missing' | 'invalid'; message?: string }> {
+async function inspectLibrary(root: string): Promise<{ status: 'ready' | 'missing' | 'invalid'; libraryId?: string; message?: string }> {
   const manifestPath = path.join(root, 'dkb.json');
-  let manifest: unknown;
 
   try {
-    manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown;
+    await fs.access(manifestPath);
+    return { status: 'ready', libraryId: (await loadLibraryManifest(root)).id };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return { status: 'missing', message: `No Library manifest at ${manifestPath}.` };
@@ -210,9 +212,6 @@ async function inspectLibrary(root: string): Promise<{ status: 'ready' | 'missin
     return { status: 'invalid', message: error instanceof Error ? error.message : String(error) };
   }
 
-  return isRecord(manifest) && manifest.type === 'library'
-    ? { status: 'ready' }
-    : { status: 'invalid', message: `Expected ${manifestPath} to have type "library".` };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

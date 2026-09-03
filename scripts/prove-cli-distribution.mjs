@@ -3,12 +3,15 @@ import fs from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { distributableWorkspaces, findForbiddenPackagePaths } from './package-policy.mjs';
+import { fileURLToPath } from 'node:url';
+import { processProviderIntegrity, providerPackages } from './generate-provider-integrity.mjs';
+import { packDistribution } from './package-distribution.mjs';
 
 const repositoryRoot = process.cwd();
 const npmCli = process.env.npm_execpath;
 const windowsOnly = process.argv.includes('--windows-only');
 const linuxOnly = process.argv.includes('--linux-only');
+const integrityScript = fileURLToPath(new URL('./generate-provider-integrity.mjs', import.meta.url));
 
 if (!npmCli) {
   throw new Error('npm_execpath is unavailable. Run this proof through npm run proof:cli.');
@@ -17,38 +20,26 @@ if (windowsOnly && linuxOnly) {
   throw new Error('Choose at most one of --windows-only or --linux-only.');
 }
 
+const providers = new Map((await processProviderIntegrity(await providerPackages(), { verify: true }))
+  .map(result => [result.definition.manifest.name, result]));
+
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-distribution-'));
 const tarballRoot = path.join(proofRoot, 'packages');
 
 try {
   await fs.mkdir(tarballRoot, { recursive: true });
-  const tarballs = [];
-
-  for (const workspace of distributableWorkspaces) {
-    const result = run(process.execPath, [
-      npmCli,
-      'pack',
-      '--workspace',
-      workspace,
-      '--pack-destination',
-      tarballRoot,
-      '--json',
-    ]);
-    const report = JSON.parse(result.stdout)[0];
-    const paths = report.files.map((file) => file.path);
-    const rejected = findForbiddenPackagePaths(paths);
-    if (rejected.length > 0) {
-      throw new Error(`${workspace} package contains forbidden files: ${rejected.join(', ')}`);
-    }
-    if (workspace === '@sjshovan/dkb-cli' && !paths.includes('dist/version.js')) {
-      throw new Error('@sjshovan/dkb-cli package is missing dist/version.js required by the executable.');
-    }
-    tarballs.push(path.join(tarballRoot, report.filename));
-  }
+  const { packages } = await packDistribution({ outputDirectory: tarballRoot, npmCli });
+  const cli = packages.find(report => report.name === '@sjshovan/dkb-cli');
+  if (!cli?.paths.includes('dist/version.js')) throw new Error('@sjshovan/dkb-cli package is missing dist/version.js required by the executable.');
+  const tarballs = packages.map(report => report.archive);
 
   const results = {};
   if (!linuxOnly) results.windows = proveHostInstall(tarballs);
-  if (!windowsOnly) results.linux = proveLinuxInstall(tarballRoot, tarballs);
+  if (!windowsOnly) {
+    assertDockerAvailable(results.windows);
+    await fs.copyFile(integrityScript, path.join(tarballRoot, 'verify-providers.mjs'));
+    results.linux = proveLinuxInstall(tarballRoot, tarballs);
+  }
 
   console.log(JSON.stringify({
     status: 'passed',
@@ -69,7 +60,13 @@ function proveHostInstall(tarballs) {
   const executable = process.platform === 'win32'
     ? path.join(prefix, 'dkb.cmd')
     : path.join(prefix, 'bin', 'dkb');
-  const environment = { ...process.env, DKB_HOST_INVENTORY: inventory, NO_COLOR: '1' };
+  const environment = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('DKB_'))),
+    DKB_HOST_INVENTORY: inventory,
+    DKB_GLOBAL_ROOT: path.join(proofRoot, 'host-global'),
+    DKB_CLI_CONFIG: path.join(proofRoot, 'host-global', 'config.json'),
+    NO_COLOR: '1',
+  };
   const cliOptions = { cwd: unrelatedRoot, env: environment, shell: process.platform === 'win32' };
   const cliVersion = run(executable, ['--version'], cliOptions).stdout.trim();
   const componentVersions = run(executable, ['version'], cliOptions).stdout;
@@ -82,17 +79,25 @@ function proveHostInstall(tarballs) {
   if (!initialized.root || path.resolve(initialized.root) !== path.resolve(unrelatedRoot)) {
     throw new Error('Globally installed CLI did not initialize the unrelated host directory.');
   }
-  return { platform: process.platform, cliVersion, initialized: true };
+  const modulesRoot = path.join(prefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules');
+  const integrity = JSON.parse(run(process.execPath, [integrityScript, '--verify', '--trusted-sdk', path.join(modulesRoot, '@sjshovan/dkb-pipeline'),
+    ...[...providers.keys()].map(name => path.join(modulesRoot, name)),
+  ], { cwd: unrelatedRoot, env: environment }).stdout);
+  assertInstalledProviderProof(integrity);
+  return { platform: process.platform, cliVersion, initialized: true, verifiedProviders: integrity.providers.length };
 }
 
 function proveLinuxInstall(tarballRoot, tarballs) {
   const packageArguments = tarballs.map((file) => `/packages/${path.basename(file)}`).join(' ');
+  const providerArguments = [...providers.keys()].map(name => `/tmp/dkb-prefix/lib/node_modules/${name}`).join(' ');
   const script = [
     'set -eu',
     'mkdir -p /tmp/dkb-prefix /tmp/dkb-unrelated',
     `npm install --global --prefix /tmp/dkb-prefix ${packageArguments} >/tmp/npm-install.log`,
     'export PATH="/tmp/dkb-prefix/bin:$PATH"',
     'export DKB_HOST_INVENTORY=/tmp/dkb-host.json',
+    'export DKB_GLOBAL_ROOT=/tmp/dkb-global',
+    'export DKB_CLI_CONFIG=/tmp/dkb-global/config.json',
     'export NO_COLOR=1',
     'cd /tmp/dkb-unrelated',
     'dkb --version',
@@ -100,6 +105,8 @@ function proveLinuxInstall(tarballRoot, tarballs) {
     'dkb --help >/tmp/dkb-help.txt',
     'dkb --json init --yes >/tmp/dkb-init.json',
     'node -e "const fs=require(\'fs\');const x=JSON.parse(fs.readFileSync(\'/tmp/dkb-init.json\',\'utf8\'));if(x.root!==\'/tmp/dkb-unrelated\')process.exit(1)"',
+    `node /packages/verify-providers.mjs --verify --trusted-sdk /tmp/dkb-prefix/lib/node_modules/@sjshovan/dkb-pipeline ${providerArguments} >/tmp/dkb-provider-integrity.json`,
+    `node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/dkb-provider-integrity.json','utf8'));if(x.status!=='verified'||x.providers.length!==${providers.size})process.exit(1)"`,
   ].join('\n');
   const result = run('docker', [
     'run',
@@ -114,7 +121,32 @@ function proveLinuxInstall(tarballRoot, tarballs) {
   const lines = result.stdout.trim().split(/\r?\n/u);
   const cliVersion = lines[0];
   assertVersionProof(cliVersion, result.stdout);
-  return { container: 'node:22-bookworm-slim', cliVersion, initialized: true };
+  return { container: 'node:22-bookworm-slim', cliVersion, initialized: true, verifiedProviders: providers.size };
+}
+
+function assertInstalledProviderProof(result) {
+  const expected = [...providers.keys()].sort();
+  const actual = result.providers?.map(provider => provider.package).sort();
+  if (result.status !== 'verified' || JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error('Installed distribution did not verify every bundled provider and its actual runtime dependency closure.');
+  }
+}
+
+function assertDockerAvailable(windowsResult) {
+  const result = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+    cwd: repositoryRoot,
+    env: process.env,
+    encoding: 'utf8',
+  });
+  if (!result.error && result.status === 0 && result.stdout.trim()) return;
+  const hostProof = windowsResult
+    ? `The Windows host proof passed with CLI ${windowsResult.cliVersion}.`
+    : 'The host proof was not requested.';
+  throw new Error([
+    hostProof,
+    'The Linux CLI proof requires Docker Desktop with its Linux engine running.',
+    'Start Docker Desktop, wait until the engine is ready, then run: npm.cmd run proof:cli -- --linux-only',
+  ].join('\n'));
 }
 
 function assertVersionProof(cliVersion, componentVersions) {

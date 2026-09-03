@@ -124,3 +124,28 @@ export function summarizeHostMutation(value: unknown): string[] {
     result.retryCommand ? `retry: ${String(result.retryCommand)}` : '',
   ].filter(Boolean);
 }
+
+export function summarizeRuntimeAudit(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const events = Array.isArray(result.events) ? result.events : [];
+  return [
+    ...humanSummary({
+      results: events.map((value) => {
+        const event = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+        const runtime = event.runtime && typeof event.runtime === 'object' ? event.runtime as Record<string, unknown> : {};
+        const library = event.library && typeof event.library === 'object' ? event.library as Record<string, unknown> : {};
+        return {
+          recorded: event.recordedAt ?? '-',
+          channel: event.channel ?? '-',
+          outcome: event.outcome ?? '-',
+          runtime: runtime.id ?? '-',
+          library: library.id ?? '-',
+          results: event.resultCount ?? 0,
+          query: event.query ?? '-',
+        };
+      }),
+    }),
+    '',
+    `returned: ${events.length}`,
+  ];
+}

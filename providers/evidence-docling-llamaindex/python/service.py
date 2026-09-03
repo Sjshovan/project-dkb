@@ -26,6 +26,8 @@ class CompileRequest(BaseModel):
     jobId: str = Field(min_length=1)
     request: dict[str, Any]
     model: str | None = None
+    modelRevision: str | None = None
+    evidenceOptions: dict[str, Any] | None = None
     workers: int | None = None
 
 
@@ -70,7 +72,11 @@ async def compile_job(payload: CompileRequest) -> dict[str, Any]:
 
     async with compile_lock:
         started = time.perf_counter()
-        reset_compiler_state(payload.model or DEFAULT_MODEL, payload.workers)
+        reset_compiler_state(payload.model or DEFAULT_MODEL, payload.workers, payload.modelRevision)
+        try:
+            compiler.configure_evidence(payload.evidenceOptions)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         compiler.REQUEST = request_file
         compiler.OUTPUT = output_file
         compiler.INPUT_ROOT = input_root
@@ -86,8 +92,15 @@ async def compile_job(payload: CompileRequest) -> dict[str, Any]:
     return parsed
 
 
-def reset_compiler_state(model: str, workers: int | None) -> None:
+def reset_compiler_state(model: str, workers: int | None, revision: str | None = None) -> None:
+    resolved_revision = revision or compiler.MODEL_PINS.get(model)
+    if not isinstance(resolved_revision, str) or not re.fullmatch(r"[a-f0-9]{40}", resolved_revision):
+        raise HTTPException(status_code=400, detail="modelRevision must be an immutable model commit")
+    if compiler.MODEL != model or compiler.MODEL_REVISION != resolved_revision:
+        compiler._DOCLING_CONVERTER = None
+        compiler._DOCLING_CHUNKER = None
     compiler.MODEL = model
+    compiler.MODEL_REVISION = resolved_revision
     compiler.ASYNC_WORKERS = max(1, min(4, int(workers or os.environ.get("DKB_LLAMA_ASYNC_WORKERS", "1"))))
     compiler._COMPILER_TIMINGS = {
         "doclingTokenizer": 0.0,

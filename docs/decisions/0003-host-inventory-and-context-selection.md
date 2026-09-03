@@ -30,9 +30,11 @@ dkb registry list|register|unregister|use
 dkb runtime list|register|unregister|use
 ```
 
-There is deliberately no combined `dkb host` command. `dkb remote` continues
-to describe Registry-verified remote knowledge endpoints queried by a Runtime;
-it does not describe host Runtime instances.
+There is deliberately no combined `dkb host` command. `dkb remote` records
+Registry-verified endpoint discovery and attestation metadata; it does not
+describe host Runtime instances or proxy queries. A hosted Runtime that should
+be queried by the CLI is also registered in the host Runtime inventory. This
+clarification is superseded and enforced by Decision 0010.
 
 ## Resolution
 

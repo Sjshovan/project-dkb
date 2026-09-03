@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,6 +9,7 @@ import {
   LLAMAINDEX_COMPILER_IMAGE,
   LLAMAINDEX_COMPILER_SERVICE_VERSION,
   LLAMAINDEX_DOCUMENT_BATCH_SIZE,
+  compilerProviderHealth,
 } from '@sjshovan/dkb-evidence-docling-llamaindex/compiler.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,7 +33,35 @@ test('local, one-shot, Python, and Compose compiler defaults stay aligned', asyn
 
   const compose = YAML.parse(await readFile(path.join(root, 'deploy/compose.yaml'), 'utf8'));
   const environment = compose.services['dkb-compiler-worker'].environment;
+  const registryEnvironment = compose['x-registry-environment'];
   assert.equal(String(environment.DKB_LLAMA_DOCUMENT_BATCH_SIZE), '32');
   assert.equal(environment.DKB_LLAMA_EMBED_BATCH_SIZE, undefined);
   assert.equal(environment.DKB_LLAMA_INFERENCE_BATCH_SIZE, undefined);
+  assert.equal(
+    registryEnvironment.DKB_COMPILER_TARGET,
+    undefined,
+    'The Registry consumes the compiler capability catalog and must not restart when a Stack prepares another target',
+  );
+});
+
+test('Evidence provider health uses the configured remote worker inside a service deployment', async (t) => {
+  const previous = process.env.DKB_LLAMA_COMPILER_SERVICE_URL;
+  const server = http.createServer((_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ ok: true, serviceVersion: LLAMAINDEX_COMPILER_SERVICE_VERSION }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    if (previous === undefined) delete process.env.DKB_LLAMA_COMPILER_SERVICE_URL;
+    else process.env.DKB_LLAMA_COMPILER_SERVICE_URL = previous;
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  });
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+  process.env.DKB_LLAMA_COMPILER_SERVICE_URL = `http://127.0.0.1:${address.port}`;
+
+  assert.deepEqual(await compilerProviderHealth(), {
+    ok: true,
+    detail: `llamaindex.docling.evidence service v${LLAMAINDEX_COMPILER_SERVICE_VERSION} at http://127.0.0.1:${address.port}`,
+  });
 });

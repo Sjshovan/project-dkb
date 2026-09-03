@@ -9,19 +9,38 @@ import {
 } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
+import { resolvedProviderServices } from '@sjshovan/dkb-pipeline/capabilities.js';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbCapabilityServiceRequirement } from '@sjshovan/dkb-protocol/compilerCapabilities.js';
+import { verifyRetainedRegistryBuild } from './registryInstall.js';
+
+export interface DkbRuntimePipelinePackageCoverage {
+  id: string;
+  version: string | null;
+  source: 'local' | 'registry';
+  compatible: boolean;
+  ready: boolean;
+  trust: 'local' | 'registry-signed' | 'unverified';
+  detail?: string;
+}
 
 export interface DkbRuntimePipelineTarget {
   name: string;
   active: boolean;
   origin: 'runtime' | 'library' | 'global' | 'bundled';
   providers: string[];
-  dimensions: number;
-  metric: string;
+  dimensions: number | null;
+  metric: string | null;
   requiredServices: string[];
+  serviceRequirements: DkbCapabilityServiceRequirement[];
   health: 'ready' | 'unavailable';
   healthDetails: Array<{ id: string; kind: string; ok: boolean; detail?: string }>;
-  coverage: { ready: number; total: number };
-  compatibilityDigest: string;
+  coverage: { ready: number; compatible: number; total: number; packages: DkbRuntimePipelinePackageCoverage[] };
+  /** Stored build graph and origin trust are checked; activation still prepares provider indexes atomically. */
+  buildsReady: boolean;
+  evidenceProfileDigest: string | null;
+  retrievalProfileDigest: string | null;
+  compatibilityDigest: string | null;
 }
 
 export interface DkbRuntimePipelineCatalog {
@@ -54,38 +73,56 @@ export async function runtimePipelineCatalog(input: {
     .filter((entry) => entry.kind === 'dkb' && entry.status === 'installed');
   const healthByProvider = new Map<string, Promise<DkbRuntimePipelineTarget['healthDetails'][number]>>();
   const buildTarget = async (name: string): Promise<DkbRuntimePipelineTarget> => {
-    const target = resolveContextConfigDocuments(
-      resolved.root,
-      resolved.globalRoot,
-      input.distribution.defaults,
-      resolved.global,
-      resolved.local,
-      name,
-      resolved.library,
-      resolved.libraryRoot,
-    ).target;
-    const host = await DkbProviderHost.create({
-      root: resolved.root,
-      libraryRoot: input.libraryRoot,
-      globalRoot: resolved.globalRoot,
-      target: name,
-      distribution: input.distribution,
-    });
+    const origin = resolved.local.targets?.[name]
+      ? 'runtime' as const
+      : resolved.library.targets?.[name]
+        ? 'library' as const
+        : resolved.global.targets?.[name]
+          ? 'global' as const
+          : 'bundled' as const;
+    let serviceRequirements: DkbCapabilityServiceRequirement[] = [];
+    let target: DkbPipelineTargetConfig | undefined;
+    let host: DkbProviderHost | undefined;
     try {
-      const profile = await resolveProviderRetrievalProfile(host);
-      const description = host.describe();
-      const healthDetails = await Promise.all((['embedding', 'index', 'retrieval'] as const).map(async (kind) => {
+      target = resolveContextConfigDocuments(
+        resolved.root,
+        resolved.globalRoot,
+        input.distribution.defaults,
+        resolved.global,
+        resolved.local,
+        name,
+        resolved.library,
+        resolved.libraryRoot,
+      ).target;
+      host = await DkbProviderHost.create({
+        root: resolved.root,
+        libraryRoot: input.libraryRoot,
+        globalRoot: resolved.globalRoot,
+        target: name,
+        distribution: input.distribution,
+      });
+      const pipelineHost = host;
+      const profile = await resolveProviderRetrievalProfile(pipelineHost);
+      const description = pipelineHost.describe();
+      const healthKinds = [
+        ...(target.embedding ? ['embedding' as const] : []),
+        'index' as const,
+        'retrieval' as const,
+      ];
+      serviceRequirements = resolvedProviderServices(pipelineHost, input.distribution, healthKinds);
+      const healthDetails = await Promise.all(healthKinds.map(async (kind) => {
         const provider = description.providers.find((item) => item.kind === kind);
         if (!provider) throw new Error(`Resolved Pipeline ${name} has no ${kind} provider`);
         const healthKey = stableHash({
           id: provider.id,
           kind,
           sourceDigest: provider.sourceDigest,
-          options: host.optionsFor(provider.id),
+          integrityDigest: provider.integrityDigest,
+          options: pipelineHost.optionsFor(provider.id),
         });
         const existing = healthByProvider.get(healthKey);
         if (existing) return existing;
-        const health = host.health([kind]).then((result) => result[0] ?? ({
+        const health = pipelineHost.health([kind]).then((result) => result[0] ?? ({
           id: provider.id,
           kind,
           ok: false,
@@ -95,41 +132,77 @@ export async function runtimePipelineCatalog(input: {
         return health;
       }));
       const compatibilityDigest = stableHash(profile.compatibility);
-      const coverage = await Promise.all(packageEntries.map(async (entry) => {
+      const coverage = await Promise.all(packageEntries.map(async (entry): Promise<DkbRuntimePipelinePackageCoverage> => {
+        const base = { id: entry.identity, version: entry.version ?? null, source: entry.source };
+        let compatible = false;
         try {
-          await selectStoredPackageBuild({
-            root: path.resolve(input.libraryRoot, entry.path),
+          const packageRoot = path.resolve(input.libraryRoot, entry.path);
+          const graph = await selectStoredPackageBuild({
+            root: packageRoot,
             target: name,
             evidenceProfileDigest: profile.evidenceProfileDigest,
             retrievalProfileDigest: profile.retrievalProfileDigest,
             compatibilityDigest,
           });
-          return true;
-        } catch {
-          return false;
+          if (graph.evidence.package.id !== entry.identity || graph.evidence.package.version !== entry.version) {
+            throw new DkbError('Stored build does not match the installed package identity and version.');
+          }
+          compatible = true;
+          if (entry.source === 'registry') {
+            if (!entry.registryUrl) throw new DkbError('Registry package has no pinned origin. Reinstall it from its Registry.', 'registry_build_untrusted');
+            await verifyRetainedRegistryBuild({ libraryRoot: input.libraryRoot, registryUrl: entry.registryUrl, packageRoot, graph, target: name });
+          }
+          return { ...base, compatible, ready: true, trust: entry.source === 'registry' ? 'registry-signed' : 'local' };
+        } catch (error) {
+          return { ...base, compatible, ready: false, trust: 'unverified', detail: error instanceof Error ? error.message : String(error) };
         }
       }));
+      await pipelineHost.assertCurrent();
+      if (stableHash(state) !== stableHash(await readLibraryState(input.libraryRoot))) {
+        throw new DkbError('Library changed while checking build coverage. Refresh the Pipeline catalog.', 'runtime_refresh_required');
+      }
       return {
         name,
         active: name === resolved.activeTarget,
-        origin: resolved.local.targets?.[name]
-          ? 'runtime' as const
-          : resolved.library.targets?.[name]
-            ? 'library' as const
-            : resolved.global.targets?.[name]
-              ? 'global' as const
-              : 'bundled' as const,
+        origin,
         providers: selectedPluginIds(target),
-        dimensions: profile.embedding.dimensions,
-        metric: profile.compatibility.metric,
-        requiredServices: input.distribution.services.filter((service) => service.requiredBy.includes(name)).map((service) => service.id),
+        dimensions: profile.embedding?.dimensions ?? null,
+        metric: profile.compatibility.metric ?? null,
+        requiredServices: [...new Set(serviceRequirements.map((service) => service.id))],
+        serviceRequirements,
         health: healthDetails.every((item) => item.ok) ? 'ready' as const : 'unavailable' as const,
         healthDetails,
-        coverage: { ready: coverage.filter(Boolean).length, total: coverage.length },
+        coverage: { ready: coverage.filter((entry) => entry.ready).length, compatible: coverage.filter((entry) => entry.compatible).length, total: coverage.length, packages: coverage },
+        buildsReady: healthDetails.every((entry) => entry.ok) && coverage.every((entry) => entry.ready),
+        evidenceProfileDigest: profile.evidenceProfileDigest,
+        retrievalProfileDigest: profile.retrievalProfileDigest,
         compatibilityDigest,
       };
+    } catch (error) {
+      return {
+        name,
+        active: name === resolved.activeTarget,
+        origin,
+        providers: target ? selectedPluginIds(target) : [],
+        dimensions: null,
+        metric: null,
+        requiredServices: [...new Set(serviceRequirements.map((service) => service.id))],
+        serviceRequirements,
+        health: 'unavailable',
+        healthDetails: [{
+          id: name,
+          kind: 'pipeline',
+          ok: false,
+          detail: error instanceof Error ? error.message : String(error),
+        }],
+        coverage: { ready: 0, compatible: 0, total: packageEntries.length, packages: [] },
+        buildsReady: false,
+        evidenceProfileDigest: null,
+        retrievalProfileDigest: null,
+        compatibilityDigest: null,
+      };
     } finally {
-      await host.dispose();
+      await host?.dispose();
     }
   };
   // Resolve the active chain first. Its known-good sidecars then seed the

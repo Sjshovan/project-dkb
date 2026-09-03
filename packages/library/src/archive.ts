@@ -10,6 +10,7 @@ import {
   type DkbProgressReporter,
 } from '@sjshovan/dkb-protocol/progress.js';
 import { validateCompiledPackage, type ValidatePackageBuildResult } from './builds.js';
+import { isExcludedPortableName } from './packageTree.js';
 
 export const DKB_PACKAGE_EXTENSION = '.dkbpkg';
 export const DKB_PACKAGE_MEDIA_TYPE = 'application/vnd.dkb.package+gzip';
@@ -25,6 +26,15 @@ export interface PackCompiledPackageResult {
 }
 
 export async function createDkbPackageArchive(sourceRoot: string, archivePath: string): Promise<void> {
+  return createArchive(sourceRoot, archivePath, false);
+}
+
+/** Registry publication transports source only, never caller-produced builds. */
+export async function createDkbSourceArchive(sourceRoot: string, archivePath: string): Promise<void> {
+  return createArchive(sourceRoot, archivePath, true);
+}
+
+async function createArchive(sourceRoot: string, archivePath: string, sourceOnly: boolean): Promise<void> {
   const root = path.resolve(sourceRoot);
   const target = path.resolve(archivePath);
 
@@ -35,7 +45,12 @@ export async function createDkbPackageArchive(sourceRoot: string, archivePath: s
     gzip: true,
     portable: true,
     noMtime: true,
-    filter: (entryPath) => !isExcludedArchivePath(entryPath),
+    filter: (entryPath) => {
+      if (isExcludedArchivePath(entryPath)) return false;
+      if (!sourceOnly) return true;
+      const normalized = entryPath.replace(/\\/gu, '/').toLowerCase();
+      return !isSensitiveOrGeneratedPath(normalized) && !normalized.split('/').some(isExcludedPortableName);
+    },
   }, ['.']);
 }
 

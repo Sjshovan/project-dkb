@@ -5,10 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveDockerImageIdentity } from '@sjshovan/dkb-pipeline/serviceIdentity.js';
+import { tokenizerRevision } from './model.js';
 import {
+  LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
   LLAMAINDEX_COMPILER_SERVICE_VERSION,
   LLAMAINDEX_DOCUMENT_BATCH_SIZE,
@@ -17,6 +20,9 @@ import {
 const execFile = promisify(execFileCallback);
 const SERVICE_CONTAINER = 'dkb-llamaindex-compiler-service';
 const SERVICE_PORT = 8091;
+const starts = new Map<string, Promise<LlamaIndexCompilerServiceStatus>>();
+
+export interface CompilerServiceOptions { image?: string; imageDigest?: string; model?: string; modelRevision?: string }
 
 export interface CompilerServiceRequest {
   stores: Array<{
@@ -52,8 +58,8 @@ export interface LlamaIndexCompilerServiceStatus {
   health?: unknown;
 }
 
-export async function inspectLlamaIndexCompiler(): Promise<LlamaIndexCompilerInspection> {
-  const image = process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
+export async function inspectLlamaIndexCompiler(options: CompilerServiceOptions = {}): Promise<LlamaIndexCompilerInspection> {
+  const { image } = resolvedServiceOptions(options);
   try {
     await execFile('docker', ['--version'], { timeout: 30_000 });
   } catch {
@@ -61,7 +67,7 @@ export async function inspectLlamaIndexCompiler(): Promise<LlamaIndexCompilerIns
   }
 
   const available = await dockerImageExists(image);
-  const status = await compilerServiceStatus({ image }).catch(() => null);
+  const status = await compilerServiceStatus({ ...options, image }).catch(() => null);
   return {
     docker: true,
     image,
@@ -74,24 +80,25 @@ export async function inspectLlamaIndexCompiler(): Promise<LlamaIndexCompilerIns
   };
 }
 
-export async function compilerServiceStatus(options: { image?: string } = {}): Promise<LlamaIndexCompilerServiceStatus> {
-  const image = options.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
+export async function compilerServiceStatus(options: CompilerServiceOptions = {}): Promise<LlamaIndexCompilerServiceStatus> {
+  const selected = resolvedServiceOptions(options);
+  const { image } = selected;
+  const containerName = serviceContainerName(selected);
   try {
     await execFile('docker', ['--version'], { timeout: 30_000 });
   } catch {
-    return { docker: false, image, container: SERVICE_CONTAINER, running: false, ready: false, drift: ['docker_unavailable'] };
+    return { docker: false, image, container: containerName, running: false, ready: false, drift: ['docker_unavailable'] };
   }
 
-  const expectedImageId = await dockerImageId(image).catch(() => undefined);
-  const container = await inspectServiceContainer().catch(() => null);
+  const expectedImageId = await resolveDockerImageIdentity(image, selected.imageDigest).catch(() => undefined);
+  const container = await inspectServiceContainer(containerName).catch(() => null);
   const running = container?.state.Running === true;
-  const port = running ? await serviceHostPort(SERVICE_CONTAINER).catch(() => undefined) : undefined;
+  const port = running ? await serviceHostPort(containerName).catch(() => undefined) : undefined;
   const url = port ? `http://127.0.0.1:${port}` : undefined;
   const drift: string[] = [];
-  if (!expectedImageId) drift.push('image_missing');
+  if (!expectedImageId) drift.push('image_identity_unverified');
   if (container) {
-    if (container.config.Image && container.config.Image !== image) drift.push('image_tag_mismatch');
-    if (expectedImageId && container.imageId && container.imageId !== expectedImageId) drift.push('image_id_mismatch');
+    if (!expectedImageId || container.imageId !== expectedImageId) drift.push('image_id_mismatch');
     if (container.labels['org.dkb.compiler.service.version'] !== LLAMAINDEX_COMPILER_SERVICE_VERSION) drift.push('service_version_mismatch');
     if (container.labels['org.dkb.compiler.jobs-root'] !== path.resolve(compilerServiceJobsRoot())) drift.push('jobs_root_mismatch');
   }
@@ -110,7 +117,7 @@ export async function compilerServiceStatus(options: { image?: string } = {}): P
   return {
     docker: true,
     image,
-    container: SERVICE_CONTAINER,
+    container: containerName,
     running,
     ready,
     url,
@@ -122,16 +129,60 @@ export async function compilerServiceStatus(options: { image?: string } = {}): P
   };
 }
 
-export async function startLlamaIndexCompilerService(options: {
-  image?: string;
-  model?: string;
+export async function compilerProviderHealth(options: CompilerServiceOptions = {}): Promise<{ ok: boolean; detail: string }> {
+  const serviceUrl = process.env.DKB_LLAMA_COMPILER_SERVICE_URL?.trim().replace(/\/+$/u, '');
+  if (serviceUrl) {
+    try {
+      const health = await serviceHealth(serviceUrl);
+      const ready = isHealthyService(health);
+      const version = serviceVersionFromHealth(health);
+      return {
+        ok: ready,
+        detail: ready
+          ? `${LLAMAINDEX_COMPILER_ID} service v${version ?? 'unknown'} at ${serviceUrl}`
+          : `${LLAMAINDEX_COMPILER_ID} service at ${serviceUrl} returned incompatible health`,
+      };
+    } catch (error) {
+      return { ok: false, detail: `${LLAMAINDEX_COMPILER_ID} service at ${serviceUrl} is unavailable: ${commandDetail(error)}` };
+    }
+  }
+
+  const status = await compilerServiceStatus(options);
+  const available = status.docker && Boolean(status.expectedImageId);
+  return {
+    ok: available,
+    detail: available
+      ? `${LLAMAINDEX_COMPILER_ID} via ${status.image}`
+      : 'Docker or the Evidence worker image is unavailable',
+  };
+}
+
+export async function startLlamaIndexCompilerService(options: CompilerServiceOptions & {
   forceRestart?: boolean;
 } = {}): Promise<LlamaIndexCompilerServiceStatus> {
-  const image = options.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
-  await ensureServiceImage(image);
-  const current = await compilerServiceStatus({ image });
+  const selected = { ...resolvedServiceOptions(options), forceRestart: options.forceRestart };
+  const key = serviceContainerName(selected);
+  const existing = starts.get(key);
+  if (existing && !options.forceRestart) return existing;
+  const starting = startCompilerService(selected);
+  starts.set(key, starting);
+  try { return await starting; }
+  finally { if (starts.get(key) === starting) starts.delete(key); }
+}
+
+async function startCompilerService(options: ReturnType<typeof resolvedServiceOptions> & { forceRestart?: boolean }): Promise<LlamaIndexCompilerServiceStatus> {
+  const { image } = options;
+  const containerName = serviceContainerName(options);
+  if (options.imageDigest) {
+    const selectedId = await resolveDockerImageIdentity(image, options.imageDigest);
+    if (await dockerImageLabel(selectedId, 'org.dkb.compiler.service.version') !== LLAMAINDEX_COMPILER_SERVICE_VERSION) {
+      throw new DkbError(`Pinned compiler image ${image} does not implement service version ${LLAMAINDEX_COMPILER_SERVICE_VERSION}. Restore a compatible pinned image; DKB will not rebuild over the selected identity.`);
+    }
+  } else await ensureServiceImage(image);
+  const imageId = await resolveDockerImageIdentity(image, options.imageDigest);
+  const current = await compilerServiceStatus(options);
   if (current.ready && current.drift.length === 0 && !options.forceRestart) return current;
-  await stopLlamaIndexCompilerService();
+  await stopLlamaIndexCompilerService(options);
 
   const jobsRoot = compilerServiceJobsRoot();
   await fs.mkdir(jobsRoot, { recursive: true });
@@ -139,16 +190,17 @@ export async function startLlamaIndexCompilerService(options: {
     await execFile('docker', [
       'run', '-d',
       ...(environmentFlag(process.env.DKB_LLAMA_GPU) ? ['--gpus', 'all'] : []),
-      '--name', SERVICE_CONTAINER,
+      '--name', containerName,
       '--label', `org.dkb.compiler.service.version=${LLAMAINDEX_COMPILER_SERVICE_VERSION}`,
       '--label', `org.dkb.compiler.jobs-root=${path.resolve(jobsRoot)}`,
       '--label', 'org.dkb.component=llamaindex-compiler-service',
       '-p', `127.0.0.1::${SERVICE_PORT}`,
       '--mount', `type=bind,src=${path.resolve(jobsRoot)},dst=/jobs`,
-      '-e', `DKB_COMPILER_MODEL=${options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5'}`,
+      '-e', `DKB_COMPILER_MODEL=${options.model}`,
+      '-e', `DKB_COMPILER_MODEL_REVISION=${options.modelRevision}`,
       '-e', `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? String(LLAMAINDEX_DOCUMENT_BATCH_SIZE)}`,
       '-e', 'DKB_COMPILER_JOBS_ROOT=/jobs',
-      '--entrypoint', 'python', image,
+      '--entrypoint', 'python', imageId,
       '-m', 'uvicorn', 'service:app', '--host', '0.0.0.0', '--port', String(SERVICE_PORT),
     ], { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
   } catch (error) {
@@ -156,36 +208,37 @@ export async function startLlamaIndexCompilerService(options: {
   }
 
   const deadline = performance.now() + 60_000;
-  let lastStatus = await compilerServiceStatus({ image });
+  let lastStatus = await compilerServiceStatus(options);
   while (performance.now() < deadline) {
-    lastStatus = await compilerServiceStatus({ image });
+    lastStatus = await compilerServiceStatus(options);
     if (lastStatus.ready && lastStatus.drift.length === 0) return lastStatus;
     await sleep(250);
   }
   throw new DkbError(`LlamaIndex compiler service did not become ready. Last status: ${JSON.stringify(lastStatus)}`);
 }
 
-export async function stopLlamaIndexCompilerService(): Promise<LlamaIndexCompilerServiceStatus> {
-  const image = process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
+export async function stopLlamaIndexCompilerService(options: CompilerServiceOptions = {}): Promise<LlamaIndexCompilerServiceStatus> {
+  const selected = resolvedServiceOptions(options);
+  const containerName = serviceContainerName(selected);
   try {
-    await execFile('docker', ['rm', '-f', SERVICE_CONTAINER], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+    await execFile('docker', ['rm', '-f', containerName], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
   } catch (error) {
     const detail = commandDetail(error);
     if (!/no such (container|object)/iu.test(detail)) throw new DkbError(`Unable to stop LlamaIndex compiler service: ${detail}`);
   }
-  return compilerServiceStatus({ image });
+  return compilerServiceStatus(selected);
 }
 
-export async function doctorLlamaIndexCompilerService(): Promise<{
+export async function doctorLlamaIndexCompilerService(options: CompilerServiceOptions = {}): Promise<{
   ok: boolean;
   status: LlamaIndexCompilerServiceStatus;
   actions: string[];
 }> {
-  const image = process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
-  const status = await compilerServiceStatus({ image });
+  const { image } = resolvedServiceOptions(options);
+  const status = await compilerServiceStatus(options);
   const actions: string[] = [];
   if (!status.docker) actions.push('Start Docker Desktop, then run `dkb compiler start`.');
-  if (status.drift.includes('image_missing')) actions.push(`Build or allow DKB to build the compiler image: ${image}.`);
+  if (status.drift.includes('image_identity_unverified')) actions.push(`Restore the pinned compiler image: ${image}.`);
   if (status.drift.some((item) => item.endsWith('_mismatch'))) actions.push('Run `dkb compiler start --restart` to replace the stale compiler service.');
   if (status.docker && !status.ready) actions.push('Run `dkb compiler start` and retry the compile.');
   return { ok: status.ready && status.drift.length === 0, status, actions };
@@ -194,12 +247,12 @@ export async function doctorLlamaIndexCompilerService(): Promise<{
 export async function maybePrepareCompilerServiceJob(
   sourceRoot: string,
   request: CompilerServiceRequest,
-  options: { image: string; model: string; timeoutMs?: number; workers?: number },
+  options: { image: string; imageDigest?: string; model: string; modelRevision?: string; timeoutMs?: number; workers?: number },
 ): Promise<{ serviceUrl: string; jobId: string; jobRoot: string } | null> {
   if (process.env.DKB_LLAMA_COMPILER_SERVICE === '0' || process.env.DKB_LLAMA_COMPILER_SERVICE === 'false') return null;
   const serviceUrl = process.env.DKB_LLAMA_COMPILER_SERVICE_URL
     ? process.env.DKB_LLAMA_COMPILER_SERVICE_URL.trim().replace(/\/+$/u, '')
-    : (await startLlamaIndexCompilerService({ image: options.image, model: options.model })).url;
+    : (await startLlamaIndexCompilerService(options)).url;
   if (!serviceUrl) throw new DkbError('LlamaIndex compiler service did not provide a local URL');
 
   const jobId = `job-${process.pid}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -308,24 +361,20 @@ async function dockerImageExists(image: string): Promise<boolean> {
   }
 }
 
-async function dockerImageId(image: string): Promise<string> {
-  return (await execFile('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], { timeout: 30_000 })).stdout.trim();
-}
-
 async function dockerImageLabel(image: string, label: string): Promise<string | undefined> {
   const value = (await execFile('docker', ['image', 'inspect', image, '--format', `{{ index .Config.Labels "${label}" }}`], { timeout: 30_000 })).stdout.trim();
   return value && value !== '<no value>' ? value : undefined;
 }
 
-async function inspectServiceContainer(): Promise<{
+async function inspectServiceContainer(containerName: string): Promise<{
   state: { Running?: boolean };
   config: { Image?: string };
   labels: Record<string, string>;
   imageId: string;
 }> {
-  const { stdout } = await execFile('docker', ['inspect', SERVICE_CONTAINER], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+  const { stdout } = await execFile('docker', ['inspect', containerName], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
   const first = (JSON.parse(stdout) as Array<{ State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> }; Image?: string }>)[0];
-  if (!first) throw new DkbError(`Compiler service container ${SERVICE_CONTAINER} does not exist`);
+  if (!first) throw new DkbError(`Compiler service container ${containerName} does not exist`);
   return { state: first.State ?? {}, config: first.Config ?? {}, labels: first.Config?.Labels ?? {}, imageId: first.Image ?? '' };
 }
 
@@ -360,6 +409,17 @@ function compilerContextPath(): string {
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../python'),
   ];
   return candidates.find((candidate) => existsSync(path.join(candidate, 'Dockerfile'))) ?? candidates[0]!;
+}
+
+function resolvedServiceOptions(options: CompilerServiceOptions) {
+  const image = options.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
+  const model = options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5';
+  return { image, imageDigest: options.imageDigest, model, modelRevision: tokenizerRevision(model, options.modelRevision ?? process.env.DKB_COMPILER_MODEL_REVISION) };
+}
+
+function serviceContainerName(options: ReturnType<typeof resolvedServiceOptions>): string {
+  const key = createHash('sha256').update(`${options.imageDigest ?? options.image}\0${options.model}\0${options.modelRevision}\0${path.resolve(compilerServiceJobsRoot())}`).digest('hex').slice(0, 12);
+  return `${SERVICE_CONTAINER}-${key}`;
 }
 
 function isExcludedSourceEntry(name: string): boolean {

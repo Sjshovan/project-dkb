@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { ArrowLeft, ChevronRight, File, FileArchive, FileCode2, FileImage, Folder, FolderOpen } from '@lucide/vue';
+import { ArrowLeft, ChevronRight, FileArchive, FolderOpen } from '@lucide/vue';
 import type { DkbPackageContents, DkbPackagePreview } from '@sjshovan/dkb-protocol/packageInspection.js';
 import { getJson } from '../../api.js';
 import AppButton from '../interface/AppButton.vue';
 import EmptyState from '../interface/EmptyState.vue';
 import StatusBadge from '../interface/StatusBadge.vue';
+import PackageContentsDataTable from './PackageContentsDataTable.vue';
 
 const props = defineProps<{ library: string; namespace: string; name: string }>();
 const directory = ref('.');
 const listing = ref<DkbPackageContents>();
 const preview = ref<DkbPackagePreview>();
 const loading = ref(false);
-const loadingMore = ref(false);
 const previewLoading = ref(false);
 const error = ref<string>();
 const previewError = ref<string>();
@@ -29,24 +29,17 @@ async function openDirectory(path: string): Promise<void> {
   error.value = undefined;
   loading.value = true;
   try {
-    listing.value = await getJson<DkbPackageContents>(`${apiRoot.value}/contents?path=${encodeURIComponent(directory.value)}&limit=100`);
+    let page = await getJson<DkbPackageContents>(`${apiRoot.value}/contents?path=${encodeURIComponent(directory.value)}&limit=100`);
+    const entries = [...page.entries];
+    while (page.nextCursor) {
+      page = await getJson<DkbPackageContents>(`${apiRoot.value}/contents?path=${encodeURIComponent(directory.value)}&cursor=${encodeURIComponent(page.nextCursor)}&limit=100`);
+      entries.push(...page.entries);
+    }
+    listing.value = { ...page, entries };
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
     loading.value = false;
-  }
-}
-
-async function loadMore(): Promise<void> {
-  if (!listing.value?.nextCursor || loadingMore.value) return;
-  loadingMore.value = true;
-  try {
-    const page = await getJson<DkbPackageContents>(`${apiRoot.value}/contents?path=${encodeURIComponent(directory.value)}&cursor=${encodeURIComponent(listing.value.nextCursor)}&limit=100`);
-    listing.value = { ...page, entries: [...listing.value.entries, ...page.entries] };
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
-  } finally {
-    loadingMore.value = false;
   }
 }
 
@@ -73,13 +66,6 @@ function parentDirectory(): void {
   void openDirectory(parts.join('/') || '.');
 }
 
-function fileIcon(kind?: string): typeof File {
-  if (kind === 'code' || kind === 'config' || kind === 'text') return FileCode2;
-  if (kind === 'image') return FileImage;
-  if (kind === 'binary') return FileArchive;
-  return File;
-}
-
 function formatBytes(value?: number): string {
   if (value === undefined) return '';
   const units = ['B', 'KiB', 'MiB', 'GiB'];
@@ -103,18 +89,7 @@ function formatBytes(value?: number): string {
       <div v-if="loading" class="skeleton-stack contents-skeleton"><span v-for="n in 5" :key="n" /></div>
       <div v-else-if="error" class="recovery-panel"><div><h2>Contents unavailable</h2><p>{{ error }}</p><button type="button" @click="openDirectory(directory)">Try again</button></div></div>
       <EmptyState v-else-if="!listing?.entries.length" title="Empty directory" message="This directory contains no portable package files." />
-      <ul v-else class="file-list">
-        <li v-for="entry in listing.entries" :key="entry.path">
-          <button type="button" :disabled="entry.kind === 'file' && !entry.previewable" @click="entry.kind === 'directory' ? openDirectory(entry.path) : openFile(entry.path)">
-            <Folder v-if="entry.kind === 'directory'" :size="18" />
-            <component :is="fileIcon(entry.contentKind)" v-else :size="18" />
-            <span><strong>{{ entry.name }}</strong><small v-if="entry.kind === 'file'">{{ formatBytes(entry.bytes) }}<template v-if="entry.evidenceRecords"> · {{ entry.evidenceRecords }} evidence records</template></small><small v-else>Directory</small></span>
-            <StatusBadge v-if="entry.kind === 'file' && !entry.previewable" status="binary" />
-            <ChevronRight v-else :size="16" />
-          </button>
-        </li>
-      </ul>
-      <footer v-if="listing?.nextCursor"><AppButton :loading="loadingMore" @click="loadMore">Load more</AppButton></footer>
+      <PackageContentsDataTable v-else :rows="listing.entries" @open-directory="openDirectory" @open-file="openFile" />
     </div>
 
     <aside class="source-preview" :class="{ 'source-preview--open': preview || previewLoading || previewError }">

@@ -25,8 +25,9 @@ remain operator-controlled.
 
 > **Status:** developer preview. Formats and commands are being hardened on the
 > `development` branch. Do not treat this checkout as a production release.
-> Release candidates currently remain private in GitHub Packages and GHCR; see
-> [Private developer-preview releases](docs/private-releases.md).
+> This checkout produces local package candidates; it is not an available
+> standalone npm/GitHub Packages release. Intended release destinations remain
+> private; see [Private developer-preview releases](docs/private-releases.md).
 > Current limitations are explicit in
 > [Developer-preview boundaries](docs/developer-preview.md).
 
@@ -66,6 +67,8 @@ authoring and compilation do not require a running Registry.
 
 For a first non-sensitive proof, compile and query the
 [example operations handbook](examples/hello-dkb/README.md).
+For a complete alternate Pipeline without Docker or embeddings, use the
+[MiniSearch lexical plugin example](examples/lexical-pipeline/README.md).
 
 ## Package lifecycle
 
@@ -225,9 +228,12 @@ recovery, and [CLI UX](docs/cli-ux.md) for the output and exit-code contract.
 
 ## Architecture and contributor docs
 
+- [Complete system map and current status](docs/architecture/system-map.md)
 - [Architecture](docs/artifact-architecture.md)
 - [Libraries and Collections](docs/library-and-collections.md)
 - [Provider pipeline](docs/provider-pipeline.md)
+- [Plugin SDK v3](docs/plugin-authoring.md)
+- [Plugin API v3 migration](docs/plugin-migration-v3.md)
 - [CLI UX](docs/cli-ux.md)
 - [Operations](docs/operations.md)
 - [Security](docs/security.md)

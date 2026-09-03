@@ -8,6 +8,7 @@ import type { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import {
   summarizeHostMutation,
   summarizeHostRuntimes,
+  summarizeRuntimeAudit,
   summarizeStackListing,
   summarizeStackStatus,
 } from './summaries.js';
@@ -205,6 +206,17 @@ export function registerRuntimeCommands(program: Command, context: RuntimeComman
     .description('Alias for runtime show')
     .option('--url <url>')
     .action(async (options: { url?: string }) => context.printJson(await (await context.currentRuntimeAdminClient(options.url)).status()));
+
+  const runtimeAudit = runtime.command('audit').description('Inspect the canonical retrieval audit written by one Runtime');
+  runtimeAudit.command('list')
+    .description('List recent audited CLI, HTTP, and MCP retrieval operations')
+    .argument('[runtime]', 'Registered Runtime name')
+    .option('--url <url>', 'Runtime API URL')
+    .option('--limit <number>', 'Maximum events to return', context.parsePositiveInteger, 100)
+    .action(async (runtimeName: string | undefined, options: { url?: string; limit: number }) => {
+      const url = await runtimeUrlForName(runtimeName, options.url, context.currentRuntimeUrl);
+      context.presenter().print(await (await context.currentRuntimeAdminClient(url)).audit(Math.min(options.limit, 100)), summarizeRuntimeAudit);
+    });
 
   const runtimeLibrary = runtime.command('library').description('Inspect or change the Library served by one Runtime');
   runtimeLibrary.command('show')

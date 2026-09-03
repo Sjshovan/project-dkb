@@ -8,7 +8,9 @@ project guidance.
 
 Before changing behavior:
 
-1. Read `README.md` and the relevant document under `docs/`.
+1. Read `README.md`, the
+   [complete system map](docs/architecture/system-map.md), and the relevant
+   document under `docs/`.
 2. For architecture or cross-cutting changes, read
    `apps/cli/src/graphify-out/GRAPH_REPORT.md` before inferring CLI module boundaries.
 3. Read the nearest subsystem `AGENTS.md` before changing files under:
@@ -111,6 +113,9 @@ stays under `dkb runtime`.
   private package contents, personal data, temporary corpora, or local secrets.
 - Put durable decisions in `docs/decisions/`; do not add per-task agent journals
   or internal work logs to the repository.
+- Update `docs/architecture/system-map.md` when ownership, trust, build identity,
+  or lifecycle boundaries change. Date its proof status; never label an ADR or
+  older passing run as verification of later edits.
 
 ## Verification
 

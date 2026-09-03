@@ -120,10 +120,22 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     security.session(request);
     return resultOf(await runner.run('pipeline.list', { runtime: request.params.name }));
   });
+  app.get<{ Params: { name: string }; Querystring: { limit?: string } }>('/api/v1/runtimes/:name/audit', async (request) => {
+    security.session(request);
+    return resultOf(await runner.run('runtime.audit.list', {
+      runtime: request.params.name,
+      limit: request.query.limit ? Number(request.query.limit) : 100,
+    }));
+  });
   app.get<{ Params: { registry: string } }>('/api/v1/registries/:registry', async (request) => {
     security.session(request);
     const context = await registryContext(runner, request.params.registry);
     return context;
+  });
+  app.get<{ Params: { registry: string } }>('/api/v1/registries/:registry/pipelines', async (request) => {
+    security.session(request);
+    const context = await registryContext(runner, request.params.registry);
+    return resultOf(await runner.run('registry.pipeline.list', { url: context.registry.url }));
   });
   app.get<{
     Params: { registry: string };
@@ -192,6 +204,16 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
       library: request.params.library,
       identity: installedEntryIdentity(request.params.namespace, request.params.name),
       file: request.query.path,
+    }));
+  });
+  app.get<{
+    Params: { library: string; namespace: string; name: string };
+    Querystring: { version?: string; evidenceDigest?: string; evidenceId?: string };
+  }>('/api/v1/libraries/:library/entries/:namespace/:name/evidence', async (request) => {
+    security.session(request);
+    return resultOf(await runner.run('package.evidence', {
+      library: request.params.library, identity: installedEntryIdentity(request.params.namespace, request.params.name),
+      version: request.query.version, evidenceDigest: request.query.evidenceDigest, evidenceId: request.query.evidenceId,
     }));
   });
   app.get<{ Params: { library: string; namespace: string; name: string } }>('/api/v1/libraries/:library/entries/:namespace/:name', async (request) => {

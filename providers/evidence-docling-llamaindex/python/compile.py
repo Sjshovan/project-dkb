@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -15,18 +16,20 @@ os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.database import DatabaseReader
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine
+from model_assets import DEFAULT_ROOT, ModelIntegrityError, asset_digest, verify_assets
 
 
 REQUEST = Path(os.environ.get("DKB_COMPILER_REQUEST", "/request/request.json"))
 OUTPUT = Path(os.environ.get("DKB_COMPILER_OUTPUT", "/output/llamaindex-compiled.json"))
 INPUT_ROOT = Path(os.environ.get("DKB_COMPILER_INPUT", "/input"))
 MODEL = os.environ.get("DKB_COMPILER_MODEL", "BAAI/bge-small-en-v1.5")
+MODEL_PINS = json.loads(Path(__file__).with_name("model-pins.json").read_text(encoding="utf-8"))
+MODEL_REVISION = os.environ.get("DKB_COMPILER_MODEL_REVISION") or MODEL_PINS.get(MODEL)
 ASYNC_WORKERS = max(1, min(4, int(os.environ.get("DKB_LLAMA_ASYNC_WORKERS", "1"))))
 DOCUMENT_BATCH_SIZE = max(1, min(256, int(os.environ.get("DKB_LLAMA_DOCUMENT_BATCH_SIZE", "32"))))
-DOCLING_ENABLED = os.environ.get("DKB_DOCLING_RICH_FILES", "1").lower() not in {"0", "false", "no", "off"}
-DOCLING_FALLBACK = os.environ.get("DKB_DOCLING_FALLBACK", "1").lower() not in {"0", "false", "no", "off"}
 DEFAULT_DOCLING_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
+EVIDENCE_OPTIONS: dict[str, Any] = {}
 EXCLUDED_FILES = {"dkb.json", "dkb-lock.json", "dkb-profile.lock.json", "dkb-release.json", ".dkb-package.json"}
 SOURCE_UPDATED_AT = "1970-01-01T00:00:00.000Z"
 
@@ -39,6 +42,46 @@ _COMPILER_TIMINGS: dict[str, float] = {
 }
 _DOCLING_FILES = 0
 _DOCLING_FALLBACKS = 0
+
+
+def configure_evidence(value: dict[str, Any] | None = None) -> None:
+    global EVIDENCE_OPTIONS, _DOCLING_CONVERTER, _DOCLING_CHUNKER
+    value = value or {}
+    allowed = {"richFiles", "richFileFallback", "richFileExtensions", "ocrBackend", "ocrLanguage"}
+    if set(value) - allowed:
+        raise ValueError("Unknown Evidence extraction option")
+    for key in ("richFiles", "richFileFallback"):
+        if key in value and not isinstance(value[key], bool):
+            raise ValueError(f"{key} must be a boolean")
+    extensions = value.get("richFileExtensions", sorted(DEFAULT_DOCLING_EXTENSIONS))
+    if not isinstance(extensions, list) or any(item not in DEFAULT_DOCLING_EXTENSIONS for item in extensions):
+        raise ValueError("Unsupported richFileExtensions")
+    backend = value.get("ocrBackend", "torch")
+    language = value.get("ocrLanguage", "ch")
+    if backend not in {"torch", "onnxruntime"} or language not in {"ch", "en"}:
+        raise ValueError("Unsupported pinned OCR backend or language")
+    resolved = {
+        "richFiles": value.get("richFiles", True),
+        "richFileFallback": value.get("richFileFallback", True),
+        "richFileExtensions": sorted(set(extensions)),
+        "ocrBackend": backend,
+        "ocrLanguage": language,
+    }
+    if EVIDENCE_OPTIONS != resolved:
+        _DOCLING_CONVERTER = None
+        _DOCLING_CHUNKER = None
+    EVIDENCE_OPTIONS = resolved
+
+
+configure_evidence(json.loads(os.environ.get("DKB_EVIDENCE_OPTIONS", "{}")))
+
+
+def compiler_identity() -> dict[str, Any]:
+    return {
+        "id": "llamaindex.docling.evidence", "model": MODEL, "modelRevision": MODEL_REVISION,
+        "modelAssetsDigest": asset_digest(EVIDENCE_OPTIONS["ocrBackend"]),
+        "evidenceOptions": EVIDENCE_OPTIONS,
+    }
 
 
 def emit_event(event: str, **values: Any) -> None:
@@ -72,19 +115,11 @@ def quoted_identifier(value: str) -> str:
 
 
 def docling_extensions() -> set[str]:
-    configured = os.environ.get("DKB_DOCLING_EXTENSIONS")
-    if not configured:
-        return DEFAULT_DOCLING_EXTENSIONS
-
-    return {
-        item.strip().lower() if item.strip().startswith(".") else f".{item.strip().lower()}"
-        for item in configured.split(",")
-        if item.strip()
-    }
+    return set(EVIDENCE_OPTIONS["richFileExtensions"])
 
 
 def is_docling_rich_file(path_value: Path) -> bool:
-    return DOCLING_ENABLED and path_value.suffix.lower() in docling_extensions()
+    return EVIDENCE_OPTIONS["richFiles"] and path_value.suffix.lower() in docling_extensions()
 
 
 def source_files_for_store(root: Path, include: list[Any] | None, exclude: list[Any] | None) -> list[Path]:
@@ -125,6 +160,8 @@ def source_metadata(
     source_type: str,
     target: Path,
     contents: bytes | None = None,
+    *,
+    source_hash: str | None = None,
 ) -> dict[str, Any]:
     return {
         "dkb_package_id": request["dkbId"],
@@ -133,7 +170,7 @@ def source_metadata(
         "dkb_store_id": store_id,
         "dkb_source_type": source_type,
         "dkb_path": relative_path(target),
-        "dkb_source_hash": digest_bytes(contents if contents is not None else target.read_bytes()),
+        "dkb_source_hash": source_hash if source_hash is not None else digest_bytes(contents if contents is not None else target.read_bytes()),
     }
 
 
@@ -157,7 +194,7 @@ def file_documents(request: dict[str, Any], store: dict[str, Any]) -> dict[str, 
             try:
                 rich_chunks.extend(docling_chunks_for_file(request, store["id"], target))
             except Exception as exc:
-                if not DOCLING_FALLBACK:
+                if isinstance(exc, ModelIntegrityError) or not EVIDENCE_OPTIONS["richFileFallback"]:
                     raise RuntimeError(f"Docling failed for {relative_path(target)}: {exc}") from exc
                 fallback_reasons[relative_path(target)] = str(exc)
                 fallback_files.append(target)
@@ -256,13 +293,21 @@ def docling_tools() -> tuple[Any, Any]:
         return _DOCLING_CONVERTER, _DOCLING_CHUNKER
 
     started = time.perf_counter()
-    from docling.document_converter import DocumentConverter
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions, TableFormerMode
     from docling.chunking import HybridChunker
     from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL)
-    _DOCLING_CONVERTER = DocumentConverter()
+    if not isinstance(MODEL_REVISION, str) or not re.fullmatch(r"[a-f0-9]{40}", MODEL_REVISION):
+        raise RuntimeError("Evidence tokenizer must use an exact model revision commit")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION, trust_remote_code=False)
+    verify_assets(EVIDENCE_OPTIONS["ocrBackend"])
+    pdf = PdfPipelineOptions(artifacts_path=DEFAULT_ROOT)
+    pdf.ocr_options = RapidOcrOptions(backend=EVIDENCE_OPTIONS["ocrBackend"], lang=[EVIDENCE_OPTIONS["ocrLanguage"]])
+    pdf.table_structure_options.mode = TableFormerMode.ACCURATE
+    _DOCLING_CONVERTER = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf)})
     _DOCLING_CHUNKER = HybridChunker(
         tokenizer=HuggingFaceTokenizer(tokenizer=tokenizer, max_tokens=512),
         repeat_table_header=True,
@@ -319,7 +364,7 @@ def docling_chunk_record_base(
     if labels:
         locator["doclingLabels"] = sorted(set(labels))
 
-    metadata = source_metadata(request, store_id, f"file:{relative}", "filesystem", target)
+    metadata = source_metadata(request, store_id, f"file:{relative}", "filesystem", target, source_hash=source_hash)
     metadata.update({
         "dkb_rich_parser": "docling",
         "dkb_docling": {
@@ -336,13 +381,11 @@ def docling_chunk_record_base(
         "storeId": store_id,
         "type": "filesystem",
         "locator": locator,
-        "assetLocator": {
-            "path": relative,
-            "sourceHash": source_hash,
-        },
+        "assetLocator": {"path": relative},
         "title": target.name,
         "text": text,
         "hash": digest_text(text),
+        "sourceHash": source_hash,
         # Compilation time is not source provenance and would make identical
         # inputs produce different Evidence IR. Until a source adapter supplies
         # a durable source timestamp, use the protocol's deterministic epoch.
@@ -361,7 +404,7 @@ def string_list(value: Any) -> list[str]:
 
 
 def sqlite_documents(request: dict[str, Any], store: dict[str, Any]) -> list[Any]:
-    database_path = INPUT_ROOT / store["path"]
+    database_path = resolved_input_path(str(store["path"]))
     if not database_path.exists():
         raise RuntimeError(f"sqlite store path does not exist: {store['path']}")
     connection = sqlite3.connect(database_path)
@@ -404,50 +447,6 @@ def sqlite_documents(request: dict[str, Any], store: dict[str, Any]) -> list[Any
         connection.close()
 
 
-def database_documents(request: dict[str, Any], source: dict[str, Any]) -> list[Any]:
-    engine = create_engine(source["connection"])
-    inspector = inspect(engine)
-    dialect = engine.dialect.name
-    include_tables = set(source.get("includeTables") or inspector.get_table_names())
-    source_hash = digest_text(json.dumps({"id": source["id"], "dialect": dialect, "tables": sorted(include_tables)}, sort_keys=True))
-    docs: list[Any] = []
-
-    for table in sorted(include_tables):
-        if table not in inspector.get_table_names():
-            continue
-        primary_columns = inspector.get_pk_constraint(table).get("constrained_columns") or []
-        if not primary_columns:
-            continue
-        primary = primary_columns[0]
-        quote = engine.dialect.identifier_preparer.quote
-        table_identifier = quote(table)
-        primary_identifier = quote(primary)
-        source_id = f"database:{source['id']}:{table}"
-        sql = f'''select *,
-            '{request['dkbId'].replace("'", "''")}' as dkb_package_id,
-            '{request['version'].replace("'", "''")}' as dkb_package_version,
-            '{source_id.replace("'", "''")}' as dkb_source_id,
-            '{source['id'].replace("'", "''")}' as dkb_store_id,
-            'database' as dkb_source_type,
-            'database:{source['id'].replace("'", "''")}' as dkb_path,
-            '{source_hash}' as dkb_source_hash,
-            '{table.replace("'", "''")}' as dkb_table,
-            cast({primary_identifier} as text) as dkb_primary_key
-            from {table_identifier} order by {primary_identifier}'''
-        metadata_cols = [
-            "dkb_package_id", "dkb_package_version", "dkb_source_id", "dkb_store_id", "dkb_source_type",
-            "dkb_path", "dkb_source_hash", "dkb_table", "dkb_primary_key",
-        ]
-        reader = DatabaseReader(engine=engine)
-        docs.extend(reader.load_data(
-            query=sql,
-            metadata_cols=metadata_cols,
-            excluded_text_cols=metadata_cols,
-            document_id=lambda row: f"{row['dkb_package_id']}:{row['dkb_package_version']}:database:{row['dkb_table']}:{row['dkb_primary_key']}",
-        ))
-    return docs
-
-
 def node_record(node: Any) -> dict[str, Any]:
     metadata = dict(node.metadata)
     content = node.get_content(metadata_mode="none")
@@ -455,6 +454,7 @@ def node_record(node: Any) -> dict[str, Any]:
     locator: dict[str, Any] = {"path": metadata["dkb_path"]}
     if source_type in {"sqlite", "database"}:
         locator = {"type": "row", "table": metadata["dkb_table"], "primaryKey": metadata["dkb_primary_key"]}
+    asset_locator = {**locator, "path": metadata["dkb_path"]} if source_type == "sqlite" else locator
     start = node.start_char_idx if node.start_char_idx is not None else 0
     end = node.end_char_idx if node.end_char_idx is not None else start + len(content)
     identity = {
@@ -467,14 +467,15 @@ def node_record(node: Any) -> dict[str, Any]:
     }
     return {
         "id": digest_text(json.dumps(identity, sort_keys=True, separators=(",", ":"))),
-        "assetId": digest_text(json.dumps({k: identity[k] for k in ["dkbId", "storeId", "type", "locator"]}, sort_keys=True, separators=(",", ":"))),
+        "assetId": source_asset_id(metadata, source_type, asset_locator),
         "storeId": metadata["dkb_store_id"],
         "type": source_type,
         "locator": locator,
-        "assetLocator": locator,
+        "assetLocator": asset_locator,
         "title": metadata.get("file_name") or metadata.get("dkb_table") or metadata["dkb_source_id"],
         "text": content,
         "hash": digest_text(content),
+        "sourceHash": metadata["dkb_source_hash"],
         "updatedAt": SOURCE_UPDATED_AT,
         "chunkOrdinal": node.metadata.get("dkb_chunk_ordinal", 0),
         "chunkStart": start,
@@ -493,17 +494,21 @@ def rich_chunk_record(chunk: dict[str, Any]) -> dict[str, Any]:
         "ordinal": chunk["chunkOrdinal"],
         "text": chunk["text"],
     }
-    asset_identity = {
-        "dkbId": metadata["dkb_package_id"],
-        "storeId": chunk["storeId"],
-        "type": chunk["type"],
-        "assetLocator": chunk["assetLocator"],
-    }
     return {
         **chunk,
         "id": digest_text(json.dumps(identity, sort_keys=True, separators=(",", ":"))),
-        "assetId": digest_text(json.dumps(asset_identity, sort_keys=True, separators=(",", ":"))),
+        "assetId": source_asset_id(metadata, chunk["type"], chunk["assetLocator"]),
     }
+
+
+def source_asset_id(metadata: dict[str, Any], source_type: str, locator: dict[str, Any]) -> str:
+    identity = {
+        "dkbId": metadata["dkb_package_id"],
+        "storeId": metadata["dkb_store_id"],
+        "type": source_type,
+        "assetLocator": locator,
+    }
+    return digest_text(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 
 
 def node_asset_key(node: Any) -> str:
@@ -551,10 +556,21 @@ def write_rich_records(
     return first_record, record_count
 
 
+def validate_source_request(request: Any) -> None:
+    if not isinstance(request, dict):
+        raise ValueError("Evidence compiler request must be an object")
+    if "externalSources" in request:
+        raise ValueError(
+            "externalSources is not supported. Export an immutable database snapshot into package-owned SQLite or JSON source files. "
+            "Credentials and connection configuration must not come from a source manifest."
+        )
+
+
 async def main_async() -> None:
     global _DOCLING_FALLBACKS
     started = time.perf_counter()
     request = json.loads(REQUEST.read_text(encoding="utf-8"))
+    validate_source_request(request)
     Settings.llm = None
     document_tasks: list[Any] = []
     for store in request["stores"]:
@@ -562,9 +578,6 @@ async def main_async() -> None:
             document_tasks.append(asyncio.to_thread(file_documents, request, store))
         elif store["type"] == "sqlite":
             document_tasks.append(asyncio.to_thread(sqlite_documents, request, store))
-    for source in request.get("externalSources", []):
-        if source["kind"] == "database":
-            document_tasks.append(asyncio.to_thread(database_documents, request, source))
     loaded_at = time.perf_counter()
     docs: list[Any] = []
     rich_chunks: list[dict[str, Any]] = []
@@ -595,7 +608,7 @@ async def main_async() -> None:
     try:
         with temporary_output.open("w", encoding="utf-8") as output, temporary_records_output.open("w", encoding="utf-8") as records:
             output.write('{"compiler":')
-            json.dump({"id": "llamaindex.docling.evidence", "model": MODEL}, output, sort_keys=True, separators=(",", ":"))
+            json.dump(compiler_identity(), output, sort_keys=True, separators=(",", ":"))
             output.write(',"format":"dkb.llamaindex.compile.v2","records":[')
             first_record = True
             for offset in range(0, len(docs), DOCUMENT_BATCH_SIZE):
@@ -650,8 +663,8 @@ async def main_async() -> None:
                     "doclingChunk": round(_COMPILER_TIMINGS["doclingChunk"], 3),
                 },
                 "docling": {
-                    "enabled": DOCLING_ENABLED,
-                    "fallbackEnabled": DOCLING_FALLBACK,
+                    "enabled": EVIDENCE_OPTIONS["richFiles"],
+                    "fallbackEnabled": EVIDENCE_OPTIONS["richFileFallback"],
                     "extensions": sorted(docling_extensions()),
                     "files": _DOCLING_FILES,
                     "fallbacks": _DOCLING_FALLBACKS,
@@ -661,7 +674,7 @@ async def main_async() -> None:
             json.dump(execution, output, sort_keys=True, separators=(",", ":"))
             output.write("}")
         temporary_metadata_output.write_text(json.dumps({
-            "compiler": {"id": "llamaindex.docling.evidence", "model": MODEL},
+            "compiler": compiler_identity(),
             "execution": execution,
             "format": "dkb.llamaindex.compile.v2",
             "recordsFile": records_output.name,

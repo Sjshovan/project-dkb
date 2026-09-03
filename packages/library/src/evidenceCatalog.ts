@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { isDeepStrictEqual } from 'node:util';
 import {
   DKB_EVIDENCE_CATALOG_FILENAME,
   DKB_EVIDENCE_CATALOG_FORMAT,
@@ -15,10 +17,9 @@ import type { DkbStoreType, KnowledgeCapabilityProfile, KnowledgeQueryable } fro
 const EPOCH = '1970-01-01T00:00:00.000Z';
 
 export async function materializeEvidenceCatalog(evidenceRoot: string, input: DkbEvidenceIr): Promise<string> {
-  const evidence = validateEvidenceIr(input);
+  const snapshot = catalogSnapshotForEvidence(input);
   const target = path.join(evidenceRoot, DKB_EVIDENCE_CATALOG_FILENAME);
   const temporary = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
-  const chunks = new Map(evidence.chunks.map((chunk) => [chunk.evidenceId, chunk]));
 
   await fs.mkdir(evidenceRoot, { recursive: true });
   await fs.rm(temporary, { force: true });
@@ -68,8 +69,8 @@ export async function materializeEvidenceCatalog(evidenceRoot: string, input: Dk
     `);
     const insertMeta = database.prepare('insert into catalog_meta (key, value) values (?, ?)');
     insertMeta.run('format', DKB_EVIDENCE_CATALOG_FORMAT);
-    insertMeta.run('evidenceProfileDigest', evidence.evidenceProfileDigest);
-    insertMeta.run('evidenceDigest', evidence.evidenceDigest);
+    insertMeta.run('evidenceProfileDigest', snapshot.evidenceProfileDigest);
+    insertMeta.run('evidenceDigest', snapshot.evidenceDigest);
     const insertAsset = database.prepare(`insert or ignore into evidence_assets
       (package_id, asset_id, store_id, source_type, locator_json, title, source_hash, updated_at)
       values (?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -82,25 +83,19 @@ export async function materializeEvidenceCatalog(evidenceRoot: string, input: Dk
 
     database.exec('begin');
     try {
-      for (const record of evidence.evidence) {
-        const chunk = chunks.get(record.evidenceId);
-        if (!chunk) throw new DkbError(`Evidence catalog is missing chunk metadata for ${record.evidenceId}`);
-        const type = sourceType(record.sourceType);
-        const updatedAt = stringProvenance(record.provenance, 'dkb_updated_at') ?? EPOCH;
-        const capabilities = capabilitiesFor(type);
-        const keywords = tokenize(`${record.title} ${record.text}`).slice(0, 24);
-        const heading = stringProvenance(record.provenance, 'dkb_heading');
-
+      for (const asset of snapshot.assets) {
         insertAsset.run(
-          record.packageId,
-          record.assetId,
-          record.storeId,
-          type,
-          JSON.stringify(record.assetLocator),
-          record.title,
-          record.sourceHash,
-          updatedAt,
+          asset.packageId,
+          asset.id,
+          asset.storeId,
+          asset.type,
+          JSON.stringify(asset.locator),
+          asset.title,
+          asset.sourceHash,
+          asset.updatedAt,
         );
+      }
+      for (const record of snapshot.records) {
         insertRecord.run(
           record.evidenceId,
           record.sourceId,
@@ -108,7 +103,7 @@ export async function materializeEvidenceCatalog(evidenceRoot: string, input: Dk
           record.packageVersion,
           record.assetId,
           record.storeId,
-          type,
+          record.sourceType,
           JSON.stringify(record.locator),
           JSON.stringify(record.assetLocator),
           record.title,
@@ -116,14 +111,14 @@ export async function materializeEvidenceCatalog(evidenceRoot: string, input: Dk
           record.textHash,
           record.sourceHash,
           JSON.stringify(record.provenance),
-          JSON.stringify(keywords),
-          JSON.stringify(capabilities),
-          null,
-          chunk.ordinal,
-          chunk.start,
-          chunk.end,
-          heading ?? null,
-          updatedAt,
+          JSON.stringify(record.keywords),
+          JSON.stringify(record.capabilities),
+          record.queryable ? JSON.stringify(record.queryable) : null,
+          record.chunkOrdinal,
+          record.chunkStart,
+          record.chunkEnd,
+          record.heading ?? null,
+          record.updatedAt,
         );
       }
       database.exec('commit');
@@ -142,6 +137,8 @@ export async function materializeEvidenceCatalog(evidenceRoot: string, input: Dk
 
 export function readEvidenceCatalog(evidenceRoot: string): DkbEvidenceCatalogSnapshot {
   const target = path.join(evidenceRoot, DKB_EVIDENCE_CATALOG_FILENAME);
+  const evidencePath = path.join(evidenceRoot, 'evidence.ir.json');
+  const canonical = catalogSnapshotForEvidence(JSON.parse(readFileSync(evidencePath, 'utf8')), evidencePath);
   const database = new DatabaseSync(path.toNamespacedPath(target), { readOnly: true });
 
   try {
@@ -155,16 +152,83 @@ export function readEvidenceCatalog(evidenceRoot: string): DkbEvidenceCatalogSna
     const records = (database.prepare('select * from evidence_records order by evidence_id').all() as CatalogRecordRow[])
       .map(recordFromRow);
 
-    return {
+    const snapshot: DkbEvidenceCatalogSnapshot = {
       format: DKB_EVIDENCE_CATALOG_FORMAT,
       evidenceProfileDigest: requiredMeta(meta, 'evidenceProfileDigest', target),
       evidenceDigest: requiredMeta(meta, 'evidenceDigest', target),
       assets,
       records,
     };
+    if (!isDeepStrictEqual(snapshot, canonical)) {
+      throw new DkbError(
+        `Evidence catalog at ${target} does not match canonical Evidence IR. Reinstall the package or rebuild its local Evidence Build.`,
+        'invalid_evidence_catalog',
+      );
+    }
+    return snapshot;
   } finally {
     database.close();
   }
+}
+
+function catalogSnapshotForEvidence(input: unknown, source?: string): DkbEvidenceCatalogSnapshot {
+  const evidence = validateEvidenceIr(input, source);
+  const chunks = new Map(evidence.chunks.map((chunk) => [chunk.evidenceId, chunk]));
+  const assets = new Map<string, DkbEvidenceCatalogAsset>();
+  const records = evidence.evidence.map((record): DkbEvidenceCatalogRecord => {
+    const chunk = chunks.get(record.evidenceId);
+    if (!chunk) throw new DkbError(`Evidence catalog is missing chunk metadata for ${record.evidenceId}`);
+    const type = sourceType(record.sourceType);
+    const updatedAt = stringProvenance(record.provenance, 'dkb_updated_at') ?? EPOCH;
+    const heading = stringProvenance(record.provenance, 'dkb_heading');
+    const assetKey = JSON.stringify([record.packageId, record.assetId]);
+    if (!assets.has(assetKey)) {
+      assets.set(assetKey, {
+        id: record.assetId,
+        packageId: record.packageId,
+        storeId: record.storeId,
+        type,
+        locator: record.assetLocator,
+        title: record.title,
+        sourceHash: record.sourceHash,
+        updatedAt,
+      });
+    }
+    return {
+      evidenceId: record.evidenceId,
+      sourceId: record.sourceId,
+      packageId: record.packageId,
+      packageVersion: record.packageVersion,
+      assetId: record.assetId,
+      storeId: record.storeId,
+      sourceType: type,
+      locator: record.locator,
+      assetLocator: record.assetLocator,
+      title: record.title,
+      text: record.text,
+      textHash: record.textHash,
+      sourceHash: record.sourceHash,
+      provenance: record.provenance,
+      keywords: tokenize(`${record.title} ${record.text}`).slice(0, 24),
+      capabilities: capabilitiesFor(type),
+      chunkOrdinal: chunk.ordinal,
+      chunkStart: chunk.start,
+      chunkEnd: chunk.end,
+      ...(heading ? { heading } : {}),
+      updatedAt,
+    };
+  });
+  return {
+    format: DKB_EVIDENCE_CATALOG_FORMAT,
+    evidenceProfileDigest: evidence.evidenceProfileDigest,
+    evidenceDigest: evidence.evidenceDigest,
+    assets: [...assets.values()].sort((left, right) => compareSqliteText(left.packageId, right.packageId) || compareSqliteText(left.id, right.id)),
+    records: records.sort((left, right) => compareSqliteText(left.evidenceId, right.evidenceId)),
+  };
+}
+
+function compareSqliteText(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
 }
 
 type CatalogAssetRow = {

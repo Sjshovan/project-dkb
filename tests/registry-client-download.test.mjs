@@ -60,6 +60,105 @@ test('install layers stream through native HTTP with byte and digest verificatio
   assert.deepEqual(await fs.readFile(destination), payload);
 });
 
+test('install-layer URLs cannot carry Registry credentials across origins', async (context) => {
+  let attackerRequests = 0;
+  let attackerAuthorization;
+  const attacker = http.createServer((request, response) => {
+    attackerRequests += 1;
+    attackerAuthorization = request.headers.authorization;
+    response.end('unexpected');
+  });
+  await new Promise((resolve) => attacker.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve, reject) => attacker.close((error) => error ? reject(error) : resolve())));
+  const address = attacker.address();
+  assert.ok(address && typeof address !== 'string');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-cross-origin-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const client = new DkbRegistryClient({ baseUrl: 'http://registry.example.test', installGrant: 'secret-grant' });
+
+  await assert.rejects(
+    client.writeInstallLayer({
+      kind: 'retrieval',
+      digest: `sha256:${'0'.repeat(64)}`,
+      mediaType: 'application/vnd.dkb.retrieval-build+gzip',
+      bytes: 1,
+      url: `//127.0.0.1:${address.port}/steal`,
+      receiptHash: `sha256:${'1'.repeat(64)}`,
+      receipt: {},
+    }, path.join(root, 'retrieval.dkbbuild')),
+    /same-origin absolute path/u,
+  );
+  assert.equal(attackerRequests, 0);
+  assert.equal(attackerAuthorization, undefined);
+});
+
+test('install-layer streaming aborts as soon as bytes exceed the signed bound', async (context) => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/vnd.dkb.evidence+gzip' });
+    response.end(Buffer.from('too-many-bytes'));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-bounded-layer-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, 'evidence.dkbevidence');
+  const client = new DkbRegistryClient({ baseUrl: `http://127.0.0.1:${address.port}`, installGrant: 'bounded-grant' });
+
+  await assert.rejects(
+    client.writeInstallLayer({
+      kind: 'evidence',
+      digest: `sha256:${'0'.repeat(64)}`,
+      mediaType: 'application/vnd.dkb.evidence+gzip',
+      bytes: 4,
+      url: '/layer',
+      receiptHash: `sha256:${'1'.repeat(64)}`,
+      receipt: {},
+    }, destination),
+    /exceeded its signed 4-byte size/u,
+  );
+  await assert.rejects(fs.access(destination), (error) => error?.code === 'ENOENT');
+  assert.deepEqual(await fs.readdir(root), []);
+});
+
+test('install-layer streaming enforces a wall-clock deadline against trickle responses', async (context) => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/vnd.dkb.evidence+gzip' });
+    const interval = setInterval(() => response.write(Buffer.from('x')), 10);
+    response.once('close', () => clearInterval(interval));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-deadline-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, 'evidence.dkbevidence');
+  const client = new DkbRegistryClient({ baseUrl: `http://127.0.0.1:${address.port}`, installGrant: 'deadline-grant' });
+  const previousTimeout = process.env.DKB_REGISTRY_DOWNLOAD_TIMEOUT_MS;
+  process.env.DKB_REGISTRY_DOWNLOAD_TIMEOUT_MS = '60';
+  try {
+    await assert.rejects(
+      client.writeInstallLayer({
+        kind: 'evidence',
+        digest: `sha256:${'0'.repeat(64)}`,
+        mediaType: 'application/vnd.dkb.evidence+gzip',
+        bytes: 100,
+        url: '/layer',
+        receiptHash: `sha256:${'1'.repeat(64)}`,
+        receipt: {},
+      }, destination),
+      /timed out after 60 ms/u,
+    );
+  } finally {
+    if (previousTimeout === undefined) delete process.env.DKB_REGISTRY_DOWNLOAD_TIMEOUT_MS;
+    else process.env.DKB_REGISTRY_DOWNLOAD_TIMEOUT_MS = previousTimeout;
+  }
+  await assert.rejects(fs.access(destination), (error) => error?.code === 'ENOENT');
+  assert.deepEqual(await fs.readdir(root), []);
+});
+
 test('Registry authentication failures include exact recovery commands', async (context) => {
   const server = http.createServer((request, response) => {
     const status = request.headers.authorization === 'Bearer under-scoped' ? 403 : 401;

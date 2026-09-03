@@ -9,11 +9,52 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./buildProfiles.js": { "types": "./dist/buildProfiles.d.ts", "import": "./dist/buildProfiles.js" },
-    "./config.js": { "types": "./dist/config.d.ts", "import": "./dist/config.js" },
-    "./host.js": { "types": "./dist/host.d.ts", "import": "./dist/host.js" },
-    "./profile.js": { "types": "./dist/profile.d.ts", "import": "./dist/profile.js" },
-    "./types.js": { "types": "./dist/types.d.ts", "import": "./dist/types.js" }
+    "./capabilities.js": { "types": "./dist/capabilities.d.ts", "import": "./dist/capabilities.js" },
+    "./packageIntegrity.js": { "types": "./dist/packageIntegrity.d.ts", "import": "./dist/packageIntegrity.js" },
+    "./buildProfiles.js": {
+      "types": "./dist/buildProfiles.d.ts",
+      "import": "./dist/buildProfiles.js"
+    },
+    "./bundledIntegrity.js": {
+      "types": "./dist/bundledIntegrity.d.ts",
+      "import": "./dist/bundledIntegrity.js"
+    },
+    "./config.js": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./host.js": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
+    },
+    "./profile.js": {
+      "types": "./dist/profile.d.ts",
+      "import": "./dist/profile.js"
+    },
+    "./pluginModule.js": {
+      "types": "./dist/pluginModule.d.ts",
+      "import": "./dist/pluginModule.js"
+    },
+    "./sdk.js": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
+    },
+    "./serviceIdentity.js": {
+      "types": "./dist/serviceIdentity.d.ts",
+      "import": "./dist/serviceIdentity.js"
+    },
+    "./testing.js": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./types.js": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./validation.js": {
+      "types": "./dist/validation.d.ts",
+      "import": "./dist/validation.js"
+    }
   },
   "files": [
     "dist/",
@@ -24,7 +65,9 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@sjshovan/dkb-protocol": "2.0.0"
+    "@sjshovan/dkb-protocol": "2.0.0",
+    "@standard-schema/spec": "^1.1.0",
+    "acorn": "8.18.0"
   },
   "engines": {
     "node": ">=22.15.0"

@@ -20,7 +20,7 @@
     "dist/writes/"
   ],
   "scripts": {
-    "build": "tsc -b && node ../../scripts/copy-cli-assets.mjs",
+    "build": "tsc -b && node ../../scripts/copy-cli-assets.mjs && node ../../scripts/generate-provider-integrity.mjs",
     "check": "tsc -b --pretty false"
   },
   "dependencies": {

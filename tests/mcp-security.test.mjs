@@ -2,11 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
-import {
-  createDkbReadOnlyMcpServer,
-  hasSufficientSearchCoverage,
-  searchEvidenceCoverage,
-} from '../services/runtime/dist/mcp/readOnly.js';
+import { createDkbReadOnlyMcpServer } from '../services/runtime/dist/mcp/readOnly.js';
 import {
   renderModelEvidence,
   TRUSTED_FORMAT_EPILOG,
@@ -139,6 +135,22 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
     name: 'MCP origin test Library',
     roots: {},
   }, null, 2)}\n`);
+  await fs.mkdir(path.join(stateRoot, '.dkb'), { recursive: true });
+  const providerServices = DEFAULT_DKB_RUNTIME_CONTEXT.distribution.services
+    .filter((service) => service.providerId && service.providerExternalIdentities?.length);
+  await fs.writeFile(path.join(stateRoot, '.dkb', 'config.json'), `${JSON.stringify({
+    format: 'dkb.config.v2',
+    targets: Object.fromEntries(Object.keys(DEFAULT_DKB_RUNTIME_CONTEXT.distribution.defaults.targets).map((target) => [target, {
+      options: Object.fromEntries(providerServices
+        .filter((service) => service.requiredBy.includes(target))
+        .map((service, serviceIndex) => [service.providerId, Object.fromEntries(
+          service.providerExternalIdentities.map((identity) => [
+            identity.option,
+            `sha256:${String(serviceIndex + 1).repeat(64)}`,
+          ]),
+        )])),
+    }])),
+  }, null, 2)}\n`);
   const previousEnabled = process.env.DKB_MCP_HTTP_ENABLED;
   const previousToken = process.env.DKB_MCP_BEARER_TOKEN;
   process.env.DKB_MCP_HTTP_ENABLED = 'true';
@@ -186,13 +198,25 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
 
     const pipelineCatalog = await fetch(`${origin}/api/runtime/pipelines`);
     assert.equal(pipelineCatalog.status, 401);
+    const auditCatalog = await fetch(`${origin}/api/runtime/audit?limit=10`);
+    assert.equal(auditCatalog.status, 401);
     const authorizedPipelines = await fetch(`${origin}/api/runtime/pipelines`, {
       headers: { authorization: 'Bearer same-origin-admin-token' },
     });
-    assert.equal(authorizedPipelines.status, 200);
+    assert.equal(authorizedPipelines.status, 200, await authorizedPipelines.clone().text());
     const pipelineBody = await authorizedPipelines.json();
     assert.equal(pipelineBody.activeTarget, 'default');
     assert.equal(pipelineBody.targets.some((target) => target.name === 'default'), true);
+    const authorizedAudit = await fetch(`${origin}/api/runtime/audit?limit=10`, {
+      headers: { authorization: 'Bearer same-origin-admin-token' },
+    });
+    assert.equal(authorizedAudit.status, 200);
+    assert.deepEqual((await authorizedAudit.json()).events, []);
+
+    const retiredRemoteGateway = await fetch(`${origin}/api/remote/sessions`, {
+      headers: { authorization: 'Bearer same-origin-admin-token' },
+    });
+    assert.equal(retiredRemoteGateway.status, 404);
 
     const install = await fetch(`${origin}/api/dkbs/install-registry`, {
       method: 'POST',
@@ -270,17 +294,6 @@ test('search previews preserve facts but remove hostile source instructions', ()
   assert.match(preview, /SAFE-SOURCE-91/);
   assert.doesNotMatch(preview, /PWNED/);
   assert.doesNotMatch(preview, /Do not cite/);
-});
-
-test('MCP search rejects a query supported by only half of its meaningful terms', () => {
-  const weakQuery = 'What is the launch code for the moon base?';
-  const weakResults = [{ matchedTokens: ['base', 'code'] }];
-  assert.equal(searchEvidenceCoverage(weakQuery, weakResults), 0.5);
-  assert.equal(hasSufficientSearchCoverage(weakQuery, weakResults), false);
-  assert.equal(hasSufficientSearchCoverage(
-    'Which class registers ModuleManager?',
-    [{ matchedTokens: ['class', 'registers', 'modulemanager'] }],
-  ), true);
 });
 
 test('no-result rendering requires an evidence-insufficient answer', () => {

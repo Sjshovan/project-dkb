@@ -45,7 +45,22 @@
       "required": ["recordCount", "compiledAt"],
       "properties": {
         "recordCount": { "type": "integer", "minimum": 0 },
-        "compiledAt": { "type": "string" }
+        "compiledAt": { "type": "string" },
+        "providerDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["packageId", "kind", "providerId", "providerIntegrityDigest", "diagnostics"],
+            "properties": {
+              "packageId": { "type": "string" },
+              "kind": { "type": "string" },
+              "providerId": { "type": "string" },
+              "providerIntegrityDigest": { "type": "string" },
+              "diagnostics": { "type": "object" }
+            }
+          }
+        }
       }
     }
   },

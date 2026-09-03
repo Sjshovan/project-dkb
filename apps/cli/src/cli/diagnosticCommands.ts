@@ -42,12 +42,11 @@ export function registerDiagnosticCommands(program: Command, context: Diagnostic
 
   program
     .command('health')
-    .description('Check manifest, source, artifact, verification, queue, and space identity health')
+    .description('Check manifest, source, artifact, verification, and space identity health')
     .argument('[path]', 'Directory containing a Library or DKB manifest', process.env.DKB_LIBRARY_PATH || '.')
-    .option('--queue-root <path>', 'Write queue root to inspect', process.env.DKB_QUEUE_ROOT || process.env.DKB_WRITE_QUEUE_ROOT)
-    .action(async (target: string, options: { queueRoot?: string }) => {
+    .action(async (target: string) => {
       const { healthReport } = await import('../lifecycle/health.js');
-      const result = await healthReport(target, options.queueRoot);
+      const result = await healthReport(target);
 
       printJson(result);
 
@@ -68,38 +67,64 @@ export function registerDiagnosticCommands(program: Command, context: Diagnostic
 
   program
     .command('query')
-    .description('Run deterministic search against a DKB package or Library')
-    .argument('<library-path>', 'Directory containing a Library, Collection, or DKB manifest')
+    .description('Search the selected Runtime activation')
     .argument('<query>', 'Search query')
     .option('-l, --limit <number>', 'Maximum result count', parseLimit)
-    .action(async (target: string, query: string, options: { limit?: number }) => {
-      const { queryKnowledgeTarget } = await import('../knowledge/target.js');
-
-      presenter().print((await queryKnowledgeTarget(target, query, { limit: options.limit, runtime: await defaultRuntimeContext() })).response, summarizeQueryResult);
+    .option('--runtime <name>', 'Registered Runtime; defaults to the selected Runtime')
+    .action(async (query: string, options: { limit?: number; runtime?: string }) => {
+      const target = await diagnosticRuntime(options.runtime);
+      const runtime = await defaultRuntimeContext();
+      const response = target.stateRoot
+        ? await import('@sjshovan/dkb-runtime/runtime/queryAccess.js').then(({ searchRuntime }) => searchRuntime({
+          stateRoot: target.stateRoot,
+          runtime,
+          query,
+          limit: options.limit,
+          channel: 'cli',
+        }))
+        : await target.client.search({ query, limit: options.limit });
+      presenter().print(response, summarizeQueryResult);
     });
 
   program
     .command('read-targets')
-    .description('Describe queryable DKB Read API targets from compiled Library artifacts')
-    .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
+    .description('Describe queryable DKB Read API targets from the selected Runtime activation')
     .argument('<query>', 'Natural-language lookup intent for ranking chunk targets')
     .option('-l, --limit <number>', 'Maximum target count', parseLimit, 10)
-    .action(async (target: string, query: string, options: { limit: number }) => {
-      const { describeQueryTargets } = await import('@sjshovan/dkb-runtime/read/runtime.js');
-
-      printJson(await describeQueryTargets(target, query, options.limit, undefined, await defaultRuntimeContext()));
+    .option('--runtime <name>', 'Registered Runtime; defaults to the selected Runtime')
+    .action(async (query: string, options: { limit: number; runtime?: string }) => {
+      const target = await diagnosticRuntime(options.runtime);
+      const runtime = await defaultRuntimeContext();
+      printJson(target.stateRoot
+        ? await import('@sjshovan/dkb-runtime/runtime/queryAccess.js').then(({ describeRuntimeTargets }) => describeRuntimeTargets({
+          stateRoot: target.stateRoot,
+          runtime,
+          query,
+          limit: options.limit,
+          channel: 'cli',
+        }))
+        : await target.client.readTargets({ query, limit: options.limit }));
     });
 
   program
     .command('read')
-    .description('Execute a DKB Read API request JSON file against compiled Library artifacts')
-    .argument('<library-path>', 'Directory containing compiled Library, Collection, or DKB artifacts')
+    .description('Execute a DKB Read API request against the selected Runtime activation')
     .argument('<request-path>', 'Path to a DKB Read API request JSON file')
-    .action(async (target: string, requestPath: string) => {
+    .option('--runtime <name>', 'Registered Runtime; defaults to the selected Runtime')
+    .action(async (requestPath: string, options: { runtime?: string }) => {
       const fs = await import('node:fs/promises');
-      const { readDkb } = await import('@sjshovan/dkb-runtime/read/runtime.js');
-
-      printJson(await readDkb(target, JSON.parse(await fs.readFile(requestPath, 'utf8')), undefined, await defaultRuntimeContext()));
+      const { validateDkbReadRequest } = await import('@sjshovan/dkb-protocol/validation.js');
+      const request = validateDkbReadRequest(JSON.parse(await fs.readFile(requestPath, 'utf8')), 'DKB read request');
+      const target = await diagnosticRuntime(options.runtime);
+      const runtime = await defaultRuntimeContext();
+      printJson(target.stateRoot
+        ? await import('@sjshovan/dkb-runtime/runtime/queryAccess.js').then(({ readRuntime }) => readRuntime({
+          stateRoot: target.stateRoot,
+          runtime,
+          request,
+          channel: 'cli',
+        }))
+        : await target.client.read(request));
     });
 
   program
@@ -192,4 +217,23 @@ export function registerDiagnosticCommands(program: Command, context: Diagnostic
 
       await serveDkbMcpHttp(options);
     });
+}
+
+async function diagnosticRuntime(name?: string): Promise<{
+  stateRoot?: string;
+  client: import('@sjshovan/dkb-runtime/runtime/client.js').DkbRuntimeClient;
+}> {
+  const [{ registeredHostRuntime, selectedHostRuntime }, { DkbRuntimeClient }] = await Promise.all([
+    import('../host/inventory.js'),
+    import('@sjshovan/dkb-runtime/runtime/client.js'),
+  ]);
+  const selected = name ? await registeredHostRuntime(name) : await selectedHostRuntime();
+  if (!selected) {
+    const detail = name ? `Unknown host Runtime: ${name}.` : 'This host has no selected Runtime.';
+    throw new (await import('@sjshovan/dkb-protocol/errors.js')).DkbError(`${detail} Run: dkb runtime list`);
+  }
+  return {
+    ...(selected.runtime.stateRoot ? { stateRoot: selected.runtime.stateRoot } : {}),
+    client: new DkbRuntimeClient({ baseUrl: selected.runtime.url }),
+  };
 }

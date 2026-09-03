@@ -16,7 +16,9 @@ import {
   pathExists,
   prepareDkbStack,
   readDkbStack,
+  readDkbStackControl,
   runtimeAdminTokenForUrl,
+  writeStackProviderIdentityConfig,
 } from './context.js';
 import {
   assertDockerAvailable,
@@ -28,8 +30,10 @@ import {
   migrateLegacyRegistryVolume,
   probeStack,
   runCompose,
+  runComposeControl,
 } from './docker.js';
 import { upgradeDkbStackRelease } from './release.js';
+import { withStackStartup } from './startup.js';
 import type { DkbStackListing, DkbStackStatus, DkbStackTarget, DkbStackUpgrade } from './types.js';
 
 export type {
@@ -110,99 +114,104 @@ export async function upDkbStack(
   libraryName: string;
   legacyRegistryVolume?: { status: 'copied'; volume: string; preserved: true };
 }> {
-  const context = await prepareDkbStack(distribution, name, options);
-  assertDockerAvailable();
-  assertRequiredImages(context);
-  const legacyRegistryVolume = await migrateLegacyRegistryVolume(context);
+  return withStackStartup(distribution, name, async (startup) => {
+    const context = await startup.configure(() => prepareDkbStack(distribution, name, options));
+    assertDockerAvailable();
+    const imageDigests = assertRequiredImages(context);
+    await startup.configure(() => writeStackProviderIdentityConfig(context, imageDigests, distribution));
+    const legacyRegistryVolume = await migrateLegacyRegistryVolume(context);
 
-  if ((await composeContainerIds(context)).length === 0) {
-    await assertPortAvailable(context.registryPort, 'Registry');
-    await assertPortAvailable(context.runtimePort, 'Runtime');
-    for (const service of context.requiredServices) {
-      const port = context.servicePorts[service.id];
-      if (port !== undefined && port !== context.registryPort && port !== context.runtimePort) {
-        await assertPortAvailable(port, service.stack?.health?.component ?? service.id);
+    if ((await composeContainerIds(context)).length === 0) {
+      await assertPortAvailable(context.registryPort, 'Registry');
+      await assertPortAvailable(context.runtimePort, 'Runtime');
+      for (const service of context.requiredServices) {
+        const port = context.servicePorts[service.id];
+        if (port !== undefined && port !== context.registryPort && port !== context.runtimePort) {
+          await assertPortAvailable(port, service.stack?.health?.component ?? service.id);
+        }
       }
     }
-  }
 
-  if (context.inactiveComposeServices.length > 0) {
-    runCompose(
-      context,
-      ['rm', '--force', '--stop', ...context.inactiveComposeServices],
-      false,
-      false,
-      'all',
-    );
-  }
-  runCompose(context, ['up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240']);
-  const checks = await probeStack(context);
-  const failed = checks.filter((check) => check.status === 'failed');
-  if (failed.length > 0) {
-    throw new DkbError(
-      `DKB stack ${context.name} started but is not healthy: ${failed.map((check) => `${check.component}: ${check.message}`).join('; ')}. `
-      + `Run: dkb stack logs ${context.name} ${failed[0]!.component}`,
-    );
-  }
+    await startup.changeServices(context, () => {
+      if (context.inactiveComposeServices.length > 0) {
+        runCompose(
+          context,
+          ['rm', '--force', '--stop', ...context.inactiveComposeServices],
+          false,
+          false,
+          'all',
+        );
+      }
+      runCompose(context, ['up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '240']);
+    });
+    const checks = await probeStack(context);
+    const failed = checks.filter((check) => check.status === 'failed');
+    if (failed.length > 0) {
+      throw new DkbError(
+        `DKB stack ${context.name} started but is not healthy: ${failed.map((check) => `${check.component}: ${check.message}`).join('; ')}. `
+        + `Run: dkb stack logs ${context.name} ${failed[0]!.component}`,
+      );
+    }
 
-  const runtimeAdminToken = await runtimeAdminTokenForUrl(context.runtimeUrl);
-  if (!runtimeAdminToken) {
-    throw new DkbError(`DKB stack ${context.name} started without a readable Runtime admin credential. Run: dkb stack doctor ${context.name}`);
-  }
-  await new DkbRuntimeClient({ baseUrl: context.runtimeUrl, adminToken: runtimeAdminToken, timeoutMs: 5 * 60_000 }).switchPipeline({
-    target: context.runtimeTarget,
-  });
+    const runtimeAdminToken = await runtimeAdminTokenForUrl(context.runtimeUrl);
+    if (!runtimeAdminToken) {
+      throw new DkbError(`DKB stack ${context.name} started without a readable Runtime admin credential. Run: dkb stack doctor ${context.name}`);
+    }
+    await startup.activate(context, () => new DkbRuntimeClient({ baseUrl: context.runtimeUrl, adminToken: runtimeAdminToken, timeoutMs: 5 * 60_000 }).switchPipeline({
+      target: context.runtimeTarget,
+    }));
 
-  const inventory = await readHostInventory();
-  const runtimeStateRoot = context.runtimeStateRoot;
-  const existingLibrary = Object.entries(inventory.libraries).find(([, item]) => samePath(item.path, context.libraryRoot));
-  const existingRegistry = Object.entries(inventory.registries).find(([, item]) => item.url === context.registryUrl);
-  const existingRuntime = Object.entries(inventory.runtimes).find(([, item]) => item.url === context.runtimeUrl);
-  await writeConfiguredRegistryUrl(context.registryUrl, { root: context.libraryRoot });
-  const registry = await registerHostRegistry(existingRegistry?.[0] ?? `${context.name}-registry`, context.registryUrl, { select: 'if-empty' });
-  const stackLibraryName = inventory.stacks[context.name]?.library;
-  if (!existingLibrary && stackLibraryName && inventory.libraries[stackLibraryName]
-    && samePath(inventory.libraries[stackLibraryName].path, path.join(context.root, 'runtime'))
-    && samePath(context.libraryRoot, path.join(context.root, 'library'))) {
-    await rebindMigratedStackLibrary(context.name, stackLibraryName, context.libraryRoot);
-  }
-  const library = await registerHostLibrary(context.libraryRoot, {
-    name: existingLibrary?.[0] ?? stackLibraryName ?? `${context.name}-library`,
-    registryName: registry.name,
-    registryUrl: context.registryUrl,
-    select: 'if-empty',
-  });
-  const runtime = await registerHostRuntime(existingRuntime?.[0] ?? `${context.name}-runtime`, context.runtimeUrl, {
-    kind: 'docker',
-    library: library.name,
-    stateRoot: runtimeStateRoot,
-    composeFile: context.composeFile,
-    select: 'if-empty',
-  });
-  await registerHostStack(context.name, context.root, {
-    library: library.name,
-    registry: registry.name,
-    runtime: runtime.name,
-    select: 'if-empty',
-  });
+    const inventory = await readHostInventory();
+    const runtimeStateRoot = context.runtimeStateRoot;
+    const existingLibrary = Object.entries(inventory.libraries).find(([, item]) => samePath(item.path, context.libraryRoot));
+    const existingRegistry = Object.entries(inventory.registries).find(([, item]) => item.url === context.registryUrl);
+    const existingRuntime = Object.entries(inventory.runtimes).find(([, item]) => item.url === context.runtimeUrl);
+    await writeConfiguredRegistryUrl(context.registryUrl, { root: context.libraryRoot });
+    const registry = await registerHostRegistry(existingRegistry?.[0] ?? `${context.name}-registry`, context.registryUrl, { select: 'if-empty' });
+    const stackLibraryName = inventory.stacks[context.name]?.library;
+    if (!existingLibrary && stackLibraryName && inventory.libraries[stackLibraryName]
+      && samePath(inventory.libraries[stackLibraryName].path, path.join(context.root, 'runtime'))
+      && samePath(context.libraryRoot, path.join(context.root, 'library'))) {
+      await rebindMigratedStackLibrary(context.name, stackLibraryName, context.libraryRoot);
+    }
+    const library = await registerHostLibrary(context.libraryRoot, {
+      name: existingLibrary?.[0] ?? stackLibraryName ?? `${context.name}-library`,
+      registryName: registry.name,
+      registryUrl: context.registryUrl,
+      select: 'if-empty',
+    });
+    const runtime = await registerHostRuntime(existingRuntime?.[0] ?? `${context.name}-runtime`, context.runtimeUrl, {
+      kind: 'docker',
+      library: library.name,
+      stateRoot: runtimeStateRoot,
+      composeFile: context.composeFile,
+      select: 'if-empty',
+    });
+    await registerHostStack(context.name, context.root, {
+      library: library.name,
+      registry: registry.name,
+      runtime: runtime.name,
+      select: 'if-empty',
+    });
 
-  return {
-    ...await statusDkbStack(distribution, context.name, true),
-    status: 'ready',
-    registryName: registry.name,
-    runtimeName: runtime.name,
-    libraryName: library.name,
-    ...(legacyRegistryVolume ? { legacyRegistryVolume } : {}),
-  };
+    return {
+      ...await statusDkbStack(distribution, context.name, true),
+      status: 'ready',
+      registryName: registry.name,
+      runtimeName: runtime.name,
+      libraryName: library.name,
+      ...(legacyRegistryVolume ? { legacyRegistryVolume } : {}),
+    };
+  });
 }
 
 export async function downDkbStack(
   distribution: DkbDistribution,
   name = 'local',
 ): Promise<{ status: 'stopped'; name: string; stateRoot: string; preserved: string[] }> {
-  const context = await readDkbStack(distribution, name);
+  const context = await readDkbStackControl(distribution, name);
   assertDockerAvailable();
-  runCompose(context, ['down', '--remove-orphans']);
+  runComposeControl(context, ['down', '--remove-orphans']);
   return {
     status: 'stopped',
     name: context.name,
@@ -271,9 +280,9 @@ export async function logsDkbStack(
   service?: string,
   follow = false,
 ): Promise<void> {
-  const context = await readDkbStack(distribution, name);
+  const context = await readDkbStackControl(distribution, name);
   assertDockerAvailable();
-  runCompose(context, ['logs', ...(follow ? ['--follow'] : []), '--tail', follow ? '100' : '200', ...(service ? [service] : [])], true);
+  runComposeControl(context, ['logs', ...(follow ? ['--follow'] : []), '--tail', follow ? '100' : '200', ...(service ? [service] : [])], true);
 }
 
 export async function upgradeDkbStack(

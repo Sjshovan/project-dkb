@@ -31,6 +31,12 @@ export interface CompilerArtifactState {
 export interface RegistryCompileState {
   sourceUnits: IndexedSourceUnit[];
   packages: DkbLockManifest['packages'];
+  /**
+   * Exact immutable source-release digest supplied by a trusted Registry job.
+   * Editable local compilation omits this and derives a canonical source
+   * digest from the manifest and source inventory instead.
+   */
+  packageSourceDigest?: string;
   compilerArtifacts: CompilerArtifactState[];
   retrievalProfileLock?: DkbRetrievalProfileLock;
   resolvedProfile?: DkbResolvedRetrievalProfile;

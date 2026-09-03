@@ -2,6 +2,12 @@ import { countLabel, formatBytes, humanSummary, milliseconds } from '../presenta
 
 export function summarizeCompileResult(value: unknown): string[] {
   const result = value as {
+    type?: unknown;
+    libraryId?: unknown;
+    packageCount?: unknown;
+    registryPackageCount?: unknown;
+    packages?: Array<Record<string, unknown>>;
+    registryPackages?: Array<Record<string, unknown>>;
     registryId?: unknown;
     recordCount?: unknown;
     cacheHit?: unknown;
@@ -16,6 +22,33 @@ export function summarizeCompileResult(value: unknown): string[] {
       };
     };
   };
+  if (result.type === 'library') {
+    const compiled = Array.isArray(result.packages) ? result.packages : [];
+    const retained = Array.isArray(result.registryPackages) ? result.registryPackages : [];
+    return [
+      `library: ${String(result.libraryId ?? 'unknown')}`,
+      countLabel(result.packageCount, 'editable package') ?? '',
+      countLabel(result.registryPackageCount, 'Registry package retained') ?? '',
+      countLabel(result.recordCount, 'record') ?? '',
+      `cache: ${result.cacheHit ? 'all hits' : 'updated'}`,
+      ...humanSummary({
+        packages: compiled.map((entry) => ({
+          package: entry.id ?? '-',
+          version: entry.version ?? '-',
+          records: entry.recordCount ?? 0,
+          cache: entry.cacheHit ? 'hit' : 'updated',
+        })),
+      }),
+      ...humanSummary({
+        retained: retained.map((entry) => ({
+          package: entry.id ?? '-',
+          version: entry.version ?? '-',
+          source: 'Registry',
+          status: entry.status ?? 'retained',
+        })),
+      }),
+    ];
+  }
   const total = milliseconds(result.profile?.timingsMs?.total);
   const aggregate = milliseconds(result.profile?.aggregateTimingsMs?.total);
   const corpus = result.profile?.statistics?.corpus;
@@ -63,6 +96,37 @@ export function summarizePluginMutation(value: unknown): string[] {
     `scope: ${String(result.scope ?? 'local')}`,
     typeof result.removed === 'boolean' ? `removed: ${result.removed ? 'yes' : 'not installed'}` : '',
     typeof result.path === 'string' ? `path: ${result.path}` : '',
+  ];
+}
+
+export function summarizePluginScaffold(value: unknown): string[] {
+  const result = value as { id?: unknown; version?: unknown; kind?: unknown; path?: unknown; files?: unknown };
+  return [
+    `plugin: ${String(result.id ?? '-')}`,
+    `version: ${String(result.version ?? '-')}`,
+    `kind: ${String(result.kind ?? '-')}`,
+    typeof result.path === 'string' ? `path: ${result.path}` : '',
+    Array.isArray(result.files) ? `files: ${result.files.join(', ')}` : '',
+    `next: dkb plugin verify ${String(result.path ?? '.')}`,
+  ];
+}
+
+export function summarizePluginConformance(value: unknown): string[] {
+  const result = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const plugin = result.plugin && typeof result.plugin === 'object' ? result.plugin as Record<string, unknown> : {};
+  const registrations = result.registrations && typeof result.registrations === 'object' ? result.registrations as Record<string, unknown> : {};
+  const checks = Array.isArray(result.checks) ? result.checks : [];
+  return [
+    `plugin: ${String(plugin.id ?? '-')}`,
+    `API: v${String(plugin.apiVersion ?? '-')}`,
+    `version: ${String(plugin.version ?? '-')}`,
+    ...humanSummary({
+      registrations: Object.entries(registrations).flatMap(([kind, entries]) => Array.isArray(entries) ? entries.map((entry) => ({ kind, registration: entry })) : []),
+      checks: checks.map((entry) => {
+        const check = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+        return { check: check.name ?? '-', status: check.status ?? '-', detail: check.detail ?? '' };
+      }),
+    }),
   ];
 }
 

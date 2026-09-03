@@ -15,6 +15,7 @@
     "./embeddingCache.js": { "types": "./dist/embeddingCache.d.ts", "import": "./dist/embeddingCache.js" },
     "./pipelineRunner.js": { "types": "./dist/pipelineRunner.d.ts", "import": "./dist/pipelineRunner.js" },
     "./records.js": { "types": "./dist/records.d.ts", "import": "./dist/records.js" },
+    "./registryTargets.js": { "types": "./dist/registryTargets.d.ts", "import": "./dist/registryTargets.js" },
     "./server.js": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
     "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" },
     "./workRoot.js": { "types": "./dist/workRoot.d.ts", "import": "./dist/workRoot.js" }
@@ -27,7 +28,7 @@
     "!dist/.tsbuildinfo"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs",
     "check": "tsc -b --pretty false"
   },
   "dependencies": {

@@ -1,24 +1,12 @@
 import type { DkbLockManifest } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbEvidenceBuildLock } from '@sjshovan/dkb-protocol/builds.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbBuildStorageStatistics, DkbCorpusStatistics } from './buildStatistics.js';
 import type { DkbDiskCapacityCheck } from './diskCapacity.js';
 import type { AtomicCompileArtifactTimings } from './compilerState.js';
 
-export interface CompiledCollection {
-  id: string;
-  name: string;
-  version: string;
-  dkbs: Array<{
-    id: string;
-    name: string;
-    version: string;
-    adapter: string;
-    records: number;
-  }>;
-  recordCount: number;
-}
-
 export interface CompiledComposeProject {
+  type: 'package';
   registryId: string;
   recordCount: number;
   evidenceCatalogPath: string;
@@ -29,6 +17,33 @@ export interface CompiledComposeProject {
   cacheHit: boolean;
   profile?: CompileComposeProfile;
 }
+
+export interface CompiledLibraryProject {
+  type: 'library';
+  libraryId: string;
+  root: string;
+  packageCount: number;
+  registryPackageCount: number;
+  recordCount: number;
+  cacheHit: boolean;
+  packages: Array<{
+    id: string;
+    version: string;
+    root: string;
+    recordCount: number;
+    cacheHit: boolean;
+    retrievalBuildPath: string;
+    lockPath: string;
+  }>;
+  registryPackages: Array<{
+    id: string;
+    version: string;
+    root: string;
+    status: 'retained';
+  }>;
+}
+
+export type CompiledKnowledgeTarget = CompiledComposeProject | CompiledLibraryProject;
 
 export interface CompileComposeProfile {
   timingsMs: {
@@ -65,17 +80,26 @@ export interface PreparedPackageBuildTarget {
 
 export interface CompileComposeProjectOptions {
   distribution: DkbDistribution;
+  signal?: AbortSignal;
   force?: boolean;
-  mode?: 'library' | 'package';
   target?: string;
   contextRoot?: string;
+  targetOptions?: Record<string, Record<string, unknown>>;
+  /** Trusted immutable source-release digest for Registry compilation. */
+  sourceDigest?: string;
 }
 
 export interface CompileRetrievalFromEvidenceOptions {
   distribution: DkbDistribution;
+  signal?: AbortSignal;
   target: string;
   contextRoot?: string;
   libraryRoot?: string;
+  targetOptions?: Record<string, Record<string, unknown>>;
+  /** Trusted immutable source-release digest for Registry compilation. */
+  sourceDigest?: string;
+  /** Exact validated parent receipt when Evidence is provided outside this package root. */
+  evidenceLock?: DkbEvidenceBuildLock;
 }
 
 export interface VerifyComposeProjectResult {

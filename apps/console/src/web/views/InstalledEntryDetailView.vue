@@ -1,35 +1,43 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import type { DkbCommandEvent } from '@sjshovan/dkb-protocol/command-events.js';
 import type { DkbInstalledEntryDetail, DkbPackageVerification, DkbReceiptSignerSummary } from '@sjshovan/dkb-protocol/packageInspection.js';
 import { ArrowLeft, Boxes, CalendarDays, Database, FileStack, PackageOpen, RefreshCw, ShieldCheck, Trash2, UserRound } from '@lucide/vue';
-import { RouterLink, useRouter } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { toast } from 'vue-sonner';
 import { cancelOperation, followOperation, getJson, startOperation } from '../api.js';
 import AppButton from '../components/interface/AppButton.vue';
 import ConfirmDialog from '../components/interface/ConfirmDialog.vue';
 import EmptyState from '../components/interface/EmptyState.vue';
 import PageHeader from '../components/interface/PageHeader.vue';
+import ResourceLink from '../components/interface/ResourceLink.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
 import BuildChain from '../components/resource/BuildChain.vue';
+import CollectionMemberDataTable from '../components/resource/CollectionMemberDataTable.vue';
 import InspectionChecks from '../components/resource/InspectionChecks.vue';
 import OperationTimeline from '../components/resource/OperationTimeline.vue';
 import PackageContentsBrowser from '../components/resource/PackageContentsBrowser.vue';
+import PublishKnowledgeDrawer from '../components/resource/PublishKnowledgeDrawer.vue';
+import { parseInstalledBuildSelection } from '../resourceRoutes.js';
 
 const props = defineProps<{ library: string; namespace: string; name: string }>();
 const router = useRouter();
+const route = useRoute();
 const queryClient = useQueryClient();
 const identity = computed(() => `@${props.namespace.replace(/^@/u, '')}/${props.name}`.toLowerCase());
 const apiPath = computed(() => `/api/v1/libraries/${encodeURIComponent(props.library)}/entries/${encodeURIComponent(props.namespace)}/${encodeURIComponent(props.name)}`);
 const query = useQuery({ queryKey: computed(() => ['installed-entry', props.library, identity.value]), queryFn: () => getJson<DkbInstalledEntryDetail>(apiPath.value) });
 const detail = computed(() => query.data.value);
 const section = ref('overview');
+const buildSelection = computed(() => parseInstalledBuildSelection(route.query));
+watch(() => route.query, () => { if (route.query.view === 'builds' || buildSelection.value.selection || buildSelection.value.error) section.value = 'builds'; }, { immediate: true });
 const busy = ref(false);
 const pendingAction = ref<'upgrade' | 'uninstall'>();
 const events = ref<DkbCommandEvent[]>([]);
 const operationId = ref<string>();
 const verification = ref<DkbPackageVerification>();
+const publishOpen = ref(false);
 const sections = computed(() => detail.value?.kind === 'collection'
   ? [{ id: 'overview', label: 'Overview' }, { id: 'members', label: 'Members' }, { id: 'provenance', label: 'Provenance' }, { id: 'integrity', label: 'Integrity' }]
   : [{ id: 'overview', label: 'Overview' }, { id: 'contents', label: 'Contents' }, { id: 'builds', label: 'Builds' }, { id: 'provenance', label: 'Provenance' }, { id: 'integrity', label: 'Integrity' }]);
@@ -104,7 +112,7 @@ function signerLabel(value?: DkbReceiptSignerSummary): string { return value ? `
     <section v-else-if="query.isError.value" class="recovery-panel"><div><h2>Installed knowledge unavailable</h2><p>{{ query.error.value?.message }}</p><button type="button" @click="query.refetch()">Try again</button></div></section>
     <template v-else-if="detail">
       <PageHeader :title="detail.manifest?.displayName ?? detail.identity" :description="detail.manifest?.description ?? (detail.kind === 'collection' ? 'A pinned bundle of installed knowledge.' : 'Installed, provenance-preserving knowledge for this Library.')">
-        <template #actions><AppButton :loading="busy && !pendingAction" @click="run('package.verify')"><ShieldCheck :size="16" />Verify</AppButton><AppButton :disabled="busy" @click="pendingAction = 'upgrade'"><RefreshCw :size="16" />Upgrade</AppButton><AppButton variant="danger" :disabled="busy" @click="pendingAction = 'uninstall'"><Trash2 :size="16" />Uninstall</AppButton></template>
+        <template #actions><AppButton v-if="detail.kind === 'dkb' && detail.source === 'local' && detail.status === 'installed'" :disabled="busy" @click="publishOpen = true">Publish</AppButton><AppButton :loading="busy && !pendingAction" @click="run('package.verify')"><ShieldCheck :size="16" />Verify</AppButton><AppButton :disabled="busy" @click="pendingAction = 'upgrade'"><RefreshCw :size="16" />Upgrade</AppButton><AppButton variant="danger" :disabled="busy" @click="pendingAction = 'uninstall'"><Trash2 :size="16" />Uninstall</AppButton></template>
       </PageHeader>
 
       <div class="entry-identity-strip"><StatusBadge :status="detail.status" /><StatusBadge :status="detail.kind" /><span>{{ detail.identity }}<template v-if="detail.version">@{{ detail.version }}</template><template v-else-if="detail.revision"> · revision {{ detail.revision }}</template></span><span>{{ detail.source === 'registry' ? 'Registry-managed' : 'Editable local source' }}</span></div>
@@ -121,18 +129,18 @@ function signerLabel(value?: DkbReceiptSignerSummary): string { return value ? `
           <article><ShieldCheck :size="20" /><span><small>Integrity</small><strong>{{ integrityStatus.replaceAll('_', ' ') }}</strong><em>Last verified {{ verification ? formatDate(verification.checkedAt) : 'when opened' }}</em></span></article>
         </div>
         <div class="overview-grid">
-          <article class="detail-card"><header><PackageOpen :size="19" /><div><h2>Package information</h2><p>Identity and declared package metadata.</p></div></header><dl class="detail-list"><div><dt>Identity</dt><dd><code>{{ detail.identity }}</code></dd></div><div><dt>Version</dt><dd>{{ detail.version ?? `revision ${detail.revision ?? 'unknown'}` }}</dd></div><div><dt>Publisher</dt><dd>{{ detail.manifest?.publisher ?? 'Not declared' }}</dd></div><div><dt>License</dt><dd>{{ detail.manifest?.license ?? 'Not declared' }}</dd></div><div><dt>Installed</dt><dd>{{ formatDate(detail.installedAt) }}</dd></div><div><dt>Required by</dt><dd>{{ detail.requiredBy.length ? detail.requiredBy.join(', ') : 'Direct install' }}</dd></div></dl></article>
+          <article class="detail-card"><header><PackageOpen :size="19" /><div><h2>Package information</h2><p>Identity and declared package metadata.</p></div></header><dl class="detail-list"><div><dt>Identity</dt><dd><code>{{ detail.identity }}</code></dd></div><div><dt>Version</dt><dd>{{ detail.version ?? `revision ${detail.revision ?? 'unknown'}` }}</dd></div><div><dt>Publisher</dt><dd>{{ detail.manifest?.publisher ?? 'Not declared' }}</dd></div><div><dt>License</dt><dd>{{ detail.manifest?.license ?? 'Not declared' }}</dd></div><div><dt>Installed</dt><dd>{{ formatDate(detail.installedAt) }}</dd></div><div><dt>Required by</dt><dd><span v-if="!detail.requiredBy.length">Direct install</span><span v-else class="resource-reference-list"><ResourceLink v-for="requirement in detail.requiredBy" :key="requirement" kind="installed-entry" :name="requirement" :library="props.library" /></span></dd></div></dl></article>
           <article class="detail-card"><header><ShieldCheck :size="19" /><div><h2>Trust summary</h2><p>Receipt presence and immutable Library build coverage.</p></div></header><dl class="detail-list"><div><dt>Source receipt</dt><dd><StatusBadge :status="detail.provenance.receiptStatus" /></dd></div><div><dt>Install chain</dt><dd><StatusBadge :status="detail.provenance.installChainStatus" /></dd></div><div><dt>Package tree</dt><dd><code>{{ shortDigest(detail.provenance.packageTreeHash) }}</code></dd></div><div><dt>Stored builds</dt><dd>{{ detail.builds.length }}</dd></div><div><dt>Permissions</dt><dd>Read {{ detail.manifest?.permissions?.read === false ? 'denied' : 'allowed' }} · Write {{ detail.manifest?.permissions?.write === true ? 'allowed' : 'denied' }}</dd></div></dl></article>
         </div>
       </section>
 
       <section v-else-if="section === 'contents' && detail.kind === 'dkb'" class="detail-section detail-section--flush"><PackageContentsBrowser :library="props.library" :namespace="props.namespace" :name="props.name" /></section>
-      <section v-else-if="section === 'builds' && detail.kind === 'dkb'" class="detail-section"><BuildChain :detail="detail" /></section>
+      <section v-else-if="section === 'builds' && detail.kind === 'dkb'" class="detail-section"><p v-if="buildSelection.error" class="form-notice" role="status">{{ buildSelection.error }}</p><BuildChain :detail="detail" :library="props.library" :initial-build="buildSelection.selection" /></section>
 
       <section v-else-if="section === 'members' && detail.kind === 'collection'" class="detail-section">
         <header class="section-heading"><div><h2>Collection members</h2><p>Exact versions resolved by this Collection in the current Library.</p></div><span class="count">{{ detail.members.length }}</span></header>
         <EmptyState v-if="!detail.members.length" title="No members" message="This Collection does not declare any package dependencies." />
-        <ul v-else class="member-list"><li v-for="member in detail.members" :key="`${member.identity}:${member.requested}`"><PackageOpen :size="18" /><span><strong>{{ member.identity }}</strong><small>Requested {{ member.requested }}<template v-if="member.resolved"> · resolved {{ member.resolved }}</template></small></span><StatusBadge :status="member.status" /><small>{{ member.direct ? 'Direct' : 'Transitive' }}</small></li></ul>
+        <CollectionMemberDataTable v-else :rows="detail.members" :library="props.library" />
       </section>
 
       <section v-else-if="section === 'provenance'" class="detail-section provenance-layout">
@@ -144,6 +152,7 @@ function signerLabel(value?: DkbReceiptSignerSummary): string { return value ? `
         <header class="section-heading"><div><h2>{{ verification ? 'Verification results' : 'Current integrity' }}</h2><p>{{ verification ? `Checked ${formatDate(verification.checkedAt)}. This was a one-time check.` : 'These checks were derived while loading the installed entry. Run Verify for a fresh, explicit check.' }}</p></div><StatusBadge :status="integrityStatus" /></header>
         <InspectionChecks :checks="visibleChecks" :recovery="visibleRecovery" />
       </section>
+      <PublishKnowledgeDrawer v-if="detail.kind === 'dkb' && detail.source === 'local' && detail.version" v-model:open="publishOpen" :library="props.library" :identity="detail.identity" :version="detail.version" />
     </template>
 
     <ConfirmDialog :open="pendingAction === 'upgrade'" :title="`Upgrade ${identity}?`" description="DKB resolves the latest signed release, validates its exact build chain, and atomically replaces the installed version." confirm-label="Upgrade" :busy="busy" @update:open="!$event && (pendingAction = undefined)" @confirm="run('package.upgrade')" />

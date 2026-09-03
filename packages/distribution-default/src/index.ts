@@ -1,11 +1,5 @@
 import { DKB_CONFIG_FORMAT, type DkbContextConfig } from '@sjshovan/dkb-pipeline/config.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
-import { EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN } from '@sjshovan/dkb-evidence-docling-llamaindex/plugin.js';
-import { FASTEMBED_PLUGIN } from '@sjshovan/dkb-embedding-fastembed/plugin.js';
-import { TEI_PLUGIN } from '@sjshovan/dkb-embedding-tei/plugin.js';
-import { FAISS_PLUGIN } from '@sjshovan/dkb-index-faiss/plugin.js';
-import { MEILISEARCH_PLUGIN } from '@sjshovan/dkb-index-meilisearch/plugin.js';
-import { HYBRID_RETRIEVAL_PLUGIN } from '@sjshovan/dkb-retrieval-hybrid/plugin.js';
 
 const SMALL_MODEL = 'BAAI/bge-small-en-v1.5';
 const BASE_MODEL = 'BAAI/bge-base-en-v1.5';
@@ -34,7 +28,7 @@ export const DEFAULT_TARGETS: DkbContextConfig = {
     }),
     'tei-meilisearch': target('@dkb/embedding-tei', '@dkb/index-meilisearch', {
       '@dkb/embedding-tei': { model: SMALL_MODEL, modelRevision: SMALL_MODEL_REVISION, dimensions: 384 },
-      '@dkb/index-meilisearch': { urlEnv: 'MEILI_URL', keyEnv: 'MEILI_MASTER_KEY' },
+      '@dkb/index-meilisearch': { urlEnv: 'MEILI_URL', apiKeyEnv: 'MEILI_MASTER_KEY' },
     }),
   },
 };
@@ -43,7 +37,14 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
   id: '@dkb/distribution-default',
   version: '0.2.0',
   defaults: DEFAULT_TARGETS,
-  plugins: [EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN, FASTEMBED_PLUGIN, TEI_PLUGIN, FAISS_PLUGIN, MEILISEARCH_PLUGIN, HYBRID_RETRIEVAL_PLUGIN],
+  plugins: [
+    { id: '@dkb/evidence-docling-llamaindex', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-evidence-docling-llamaindex/plugin.js'), exportName: 'EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN' },
+    { id: '@dkb/embedding-fastembed', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-embedding-fastembed/plugin.js'), exportName: 'FASTEMBED_PLUGIN' },
+    { id: '@dkb/embedding-tei', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-embedding-tei/plugin.js'), exportName: 'TEI_PLUGIN' },
+    { id: '@dkb/index-faiss', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-index-faiss/plugin.js'), exportName: 'FAISS_PLUGIN' },
+    { id: '@dkb/index-meilisearch', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-index-meilisearch/plugin.js'), exportName: 'MEILISEARCH_PLUGIN' },
+    { id: '@dkb/retrieval-hybrid', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-retrieval-hybrid/plugin.js'), exportName: 'HYBRID_RETRIEVAL_PLUGIN' },
+  ],
   services: [
     {
       id: 'registry',
@@ -98,6 +99,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       id: 'evidence-docling-llamaindex',
       kind: 'docker',
       providerId: '@dkb/evidence-docling-llamaindex',
+      providerExternalIdentities: [{ kind: 'image', name: 'evidence-worker', option: 'imageDigest' }],
       image: 'dkb-evidence-docling-llamaindex:0.1.0',
       version: '0.1.0',
       requiredBy: ALL_TARGETS,
@@ -114,6 +116,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       id: 'embedding-fastembed',
       kind: 'docker',
       providerId: '@dkb/embedding-fastembed',
+      providerExternalIdentities: [{ kind: 'image', name: 'embedding-worker', option: 'imageDigest' }],
       image: 'dkb-embedding-fastembed:0.1.0',
       version: '0.1.0',
       requiredBy: ['fastembed-faiss', 'fastembed-faiss-768'],
@@ -121,7 +124,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
         composeProfile: 'fastembed',
         composeService: 'dkb-embedder',
         imageEnvironment: 'DKB_FASTEMBED_IMAGE',
-        optionEnvironment: { model: 'DKB_FASTEMBED_MODEL' },
+        optionEnvironment: { model: 'DKB_FASTEMBED_MODEL', modelRepository: 'DKB_FASTEMBED_MODEL_REPOSITORY', modelRevision: 'DKB_FASTEMBED_MODEL_REVISION' },
         build: {
           context: 'providers/embedding-fastembed/python',
           dockerfile: 'providers/embedding-fastembed/python/Dockerfile',
@@ -132,6 +135,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       id: 'embedding-tei',
       kind: 'docker',
       providerId: '@dkb/embedding-tei',
+      providerExternalIdentities: [{ kind: 'image', name: 'embedding-service', option: 'imageDigest' }],
       image: 'ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07',
       version: '1.9.3',
       requiredBy: ['default', 'tei-faiss', 'tei-faiss-768', 'tei-meilisearch'],
@@ -157,6 +161,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       id: 'index-faiss',
       kind: 'docker',
       providerId: '@dkb/index-faiss',
+      providerExternalIdentities: [{ kind: 'image', name: 'index-helper', option: 'imageDigest' }],
       image: 'dkb-index-faiss:0.1.0',
       version: '0.1.0',
       requiredBy: ['default', 'fastembed-faiss', 'fastembed-faiss-768', 'tei-faiss', 'tei-faiss-768'],
@@ -174,6 +179,7 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
       id: 'index-meilisearch',
       kind: 'docker',
       providerId: '@dkb/index-meilisearch',
+      providerExternalIdentities: [{ kind: 'image', name: 'index-service', option: 'imageDigest' }],
       image: 'getmeili/meilisearch:v1.29',
       version: '1.29',
       requiredBy: ['tei-meilisearch'],

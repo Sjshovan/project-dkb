@@ -8,10 +8,18 @@ import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbRuntimeActivation } from '@sjshovan/dkb-protocol/runtimeActivation.js';
+import { runtimeActivationDigest } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import type { DkbRetrievalProfileLock } from '@sjshovan/dkb-protocol/retrievalProfile.js';
 import { DKB_RUNTIME_VERSION } from '../version.js';
 import { maybeReadJsonObject, pathExists } from './paths.js';
 import { ensureRuntimeState, type DkbRuntimeInstance } from './activation.js';
+import { listQueryObserverHealth, type DkbQueryObserverHealth } from './queryAudit.js';
+
+export interface DkbRuntimeObserverHealthSummary {
+  status: 'available' | 'unavailable';
+  entries: DkbQueryObserverHealth[];
+  detail?: string;
+}
 
 export interface DkbRuntimeStatus {
   ok: true;
@@ -30,13 +38,17 @@ export interface DkbRuntimeStatus {
   }>;
   retrievalProfile: DkbRetrievalProfileLock | null;
   activation: DkbRuntimeActivation | null;
+  observerHealth: DkbRuntimeObserverHealthSummary;
 }
 
-export type DkbRuntimePublicStatus = Omit<DkbRuntimeStatus, 'stateRoot' | 'libraryPath'> & {
+export type DkbRuntimePublicStatus = Omit<DkbRuntimeStatus, 'stateRoot' | 'libraryPath' | 'observerHealth'> & {
   library: {
     id: string;
     generation: number;
     stateDigest: string;
+  };
+  observerHealth: Omit<DkbRuntimeObserverHealthSummary, 'entries'> & {
+    entries: Array<Omit<DkbQueryObserverHealth, 'detail'>>;
   };
 };
 
@@ -90,6 +102,7 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
   const retrievalProfile = paths.activation
     ? await activeRetrievalProfile(dkbs, paths.activation).catch(() => null)
     : null;
+  const observerHealth = await readRuntimeObserverHealth(paths.stateRoot, paths.activation);
 
   return {
     ok: true,
@@ -104,14 +117,23 @@ export async function runtimeStatus(stateRoot?: string): Promise<DkbRuntimeStatu
     packages,
     retrievalProfile,
     activation: paths.activation,
+    observerHealth,
   };
 }
 
 export async function runtimePublicStatus(stateRoot?: string): Promise<DkbRuntimePublicStatus> {
   const status = await runtimeStatus(stateRoot);
-  const { stateRoot: _stateRoot, libraryPath: _libraryPath, ...publicStatus } = status;
+  const { stateRoot: _stateRoot, libraryPath: _libraryPath, observerHealth, ...publicStatus } = status;
   const library = await libraryStateIdentity(status.libraryPath);
-  return { ...publicStatus, library };
+  return {
+    ...publicStatus,
+    library,
+    observerHealth: {
+      status: observerHealth.status,
+      ...(observerHealth.detail ? { detail: observerHealth.detail } : {}),
+      entries: observerHealth.entries.map(({ detail: _detail, ...entry }) => entry),
+    },
+  };
 }
 
 async function activeRetrievalProfile(dkbs: LoadedDkb[], activation: DkbRuntimeActivation): Promise<DkbRetrievalProfileLock> {
@@ -122,6 +144,29 @@ async function activeRetrievalProfile(dkbs: LoadedDkb[], activation: DkbRuntimeA
   const entry = activation.packages[dkb.manifest.id]!;
   const graph = await validateStoredPackageBuild(dkb.root, entry);
   return graph.profile;
+}
+
+async function readRuntimeObserverHealth(
+  stateRoot: string,
+  activation: DkbRuntimeActivation | null,
+): Promise<DkbRuntimeObserverHealthSummary> {
+  if (!activation) return { status: 'available', entries: [] };
+  try {
+    return {
+      status: 'available',
+      entries: await listQueryObserverHealth(stateRoot, runtimeActivationDigest(activation)),
+    };
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'dkb.query_observer.health_read_failed',
+      message: error instanceof Error ? error.message : String(error),
+    }));
+    return {
+      status: 'unavailable',
+      entries: [],
+      detail: 'Observer health could not be read from Runtime audit state.',
+    };
+  }
 }
 
 export async function listRuntimePackages(stateRoot?: string): Promise<DkbRuntimePackageListing> {

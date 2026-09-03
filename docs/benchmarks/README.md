@@ -1,4 +1,11 @@
-# Corpus Scale Benchmarks
+# Bounded Benchmarks
+
+These are dated measurements, not certification of the current working tree.
+The Plugin API v3 milestone still requires fresh full-compilation and warm
+audited Runtime-query comparisons against a compatible baseline, with no more
+than a 10% regression. See the [current system map](../architecture/system-map.md).
+
+## Corpus scale
 
 These reports exercise the real default `tei-faiss` ingestion, embedding, and
 index path with deterministic mixed prose, Markdown tables, and code. Generated
@@ -41,7 +48,7 @@ source bytes, 682 Evidence records, and `tei-faiss` target.
 | Total derived bytes | 32,682,857 | 6,602,142 | 79.8% smaller |
 | Retrieval artifact files | 10 | 3 | 70.0% fewer |
 
-The current result passes the cleanup gates: compile time did not regress and
+That dated comparison passed the storage-cutover gates: compile time did not regress and
 removing the duplicate active artifact architecture reduced derived storage by
 more than the required 35%. The current total was recalculated from the stored
 Evidence and Retrieval Build byte counts after correcting an artifact-subset
@@ -67,25 +74,37 @@ The next 8 MiB tier was skipped before materialization because its
 1,205,317 ms linear projection exceeded the 15-minute guardrail. The generated
 corpus and its services were removed after the run.
 
-## Embedding provider result
+## Historical embedding component comparison
 
-The fresh 2026-08-30 provider gate reused one byte-identical 176-record Evidence
+The recorded 2026-08-30 component run reused one byte-identical 176-record Evidence
 Build from 32 sanitized files (232,937 source bytes) and compared only
-Retrieval compilation and query embedding. TEI passed every default-promotion
-gate:
+Retrieval compilation and query embedding. It did **not** measure complete
+source ingestion/compilation, an audited Runtime query, or the combined memory
+of every compiler/provider service. The earlier claim that this passed every
+default-promotion gate was not supported by that measurement scope.
 
 | Measurement | FastEmbed + FAISS | TEI + FAISS | TEI change |
 |---|---:|---:|---:|
-| Fresh single-job median | 168.01 s | 67.77 s | 59.7% lower |
+| Fresh Retrieval-build median | 168.01 s | 67.77 s | 59.7% lower |
 | Two-job median throughput | 1.626 records/s | 3.001 records/s | 84.6% higher |
-| Query latency p50 | 789.00 ms | 546.99 ms | 30.7% lower |
-| Peak combined memory | 2.495 GiB | 0.776 GiB | 68.9% lower |
+| Query-embedding latency p50 | 789.00 ms | 546.99 ms | 30.7% lower |
+| Sampled Node + embedder memory | 2.495 GiB | 0.776 GiB | 68.9% lower |
 
 The benchmark used three cold, fresh, cached, and concurrent samples for each
-provider plus 20 query samples. TEI remains the default for new Libraries;
-FastEmbed remains bundled as a separate selectable embedding space. The
+provider plus 20 query-embedding samples. TEI remains the configured distribution
+default; that setting is not proof that the complete performance, resource,
+correctness, or security acceptance gates passed. FastEmbed remains bundled as
+a separate selectable embedding space. The
 checked-in
 [`embedding-providers-2026-08-29.json`](embedding-providers-2026-08-29.json)
-retains the preceding full raw report; the 2026-08-30 run was a fresh
-acceptance confirmation and did not retain a second private-corpus-derived raw
-report.
+retains the preceding raw component report, unchanged. Its historical
+`eligibleForDefaultPromotion` field must not be used as current or whole-system
+approval. No second raw report was retained for the recorded 2026-08-30 numbers,
+so that table is historical context, not independently reproducible acceptance
+evidence. Current component reports explicitly withhold whole-system promotion.
+
+The remaining integrated performance proof must include the Evidence stage,
+full activation-validated and audited Runtime queries, all relevant service
+memory, exact corpus/model/image identities, and at least three valid timing
+runs. Component results cannot satisfy those missing measurements or the
+separate correctness and security gates.

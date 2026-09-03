@@ -19,7 +19,7 @@ retrieval reads compiled chunks, not raw files.
 - Agent navigation is reference-first: semantic and exact search discover
   stable compiled chunk IDs, and an explicit read returns stored evidence with
   provenance. DKB does not choose an agent's investigation workflow.
-- One Library activates one retrieval compatibility space. Packages with a
+- Each Runtime activates one retrieval compatibility space for its Library. Packages with a
   different embedding space, dimension count, metric, normalization, index
   format, Evidence Profile, or evidence protocol are rejected before they can
   enter the live query snapshot.
@@ -59,7 +59,29 @@ second ingestion stack.
 4. The selected embedder and index provider write one Retrieval Build.
 5. The Registry signs source, Evidence, and Retrieval receipts as a parent chain.
 6. A Runtime stages exact build chains for every installed package and replaces
-   the active Library snapshot only after complete validation.
+   its active snapshot only after complete validation.
+
+### Provider execution receipts
+
+`evidence.lock.json` (`dkb.evidence-build.v2`) retains the ordered Evidence and
+processor execution receipts. `retrieval.lock.json` (`dkb.retrieval-build.v2`)
+retains the embedding, index, and retrieval execution receipts. DKB supplies
+each receipt's provider kind, ID, version, and integrity digest and verifies
+them against the resolved profile. Providers supply only plain, finite JSON
+`build` data and optional semantic `compatibility` data.
+
+The Evidence digest still identifies canonical Evidence IR bytes. A separate
+`evidenceReceiptDigest` binds the package/source identity, Evidence Profile,
+Evidence digest, record/chunk counts, and semantic execution receipts. Every
+Retrieval Build binds that exact parent receipt plus its own semantic execution
+receipts into the Retrieval Build digest. Editing either layer's semantic
+receipt therefore invalidates the chain even if the index or Evidence text is
+unchanged.
+
+Generation timestamps and provider `diagnostics` such as elapsed time or cache
+hits do not enter these identities. Local compilation reports retain those
+diagnostics separately. Reusing Evidence for another retrieval recipe preserves
+the original Evidence receipt without parsing or chunking again.
 
 This keeps commodity infrastructure replaceable:
 

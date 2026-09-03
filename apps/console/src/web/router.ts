@@ -8,6 +8,7 @@ import RegistryEntryDetailView from './views/RegistryEntryDetailView.vue';
 import ResourceView from './views/ResourceView.vue';
 import RuntimeDetailView from './views/RuntimeDetailView.vue';
 import PipelinesView from './views/PipelinesView.vue';
+import StackDetailView from './views/StackDetailView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -19,11 +20,13 @@ export const router = createRouter({
     { path: '/runtimes', name: 'runtimes', component: ResourceView, props: { kind: 'runtimes' } },
     { path: '/runtimes/:name', name: 'runtime', component: RuntimeDetailView, props: true },
     { path: '/pipelines', name: 'pipelines', component: PipelinesView },
+    { path: '/pipelines/:pipeline', name: 'pipeline', component: PipelinesView },
     { path: '/registries', name: 'registries', component: ResourceView, props: { kind: 'registries' } },
     { path: '/registries/:registry', name: 'registry', component: RegistryDetailView, props: true },
     { path: '/registries/:registry/dkbs/:namespace/:name', name: 'registry-dkb', component: RegistryEntryDetailView, props: (route) => ({ ...route.params, kind: 'dkb' }) },
     { path: '/registries/:registry/collections/:namespace/:name', name: 'registry-collection', component: RegistryEntryDetailView, props: (route) => ({ ...route.params, kind: 'collection' }) },
     { path: '/stacks', name: 'stacks', component: ResourceView, props: { kind: 'stacks' } },
+    { path: '/stacks/:name', name: 'stack', component: StackDetailView, props: true },
     { path: '/activity', name: 'activity', component: () => import('./views/ActivityView.vue') },
     { path: '/more', name: 'more', component: MoreView },
   ],

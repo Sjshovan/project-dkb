@@ -9,8 +9,9 @@
     "./plugin.js": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" },
     "./service.js": { "types": "./dist/service.d.ts", "import": "./dist/service.js" }
   },
-  "files": ["dist/", "!dist/.tsbuildinfo", "python/embedder.py", "python/requirements.txt", "python/Dockerfile"],
-  "scripts": { "build": "tsc -b", "check": "tsc -b --pretty false" },
+  "files": ["dist/", "!dist/.tsbuildinfo", "python/embedder.py", "python/model-pins.json", "python/requirements.txt", "python/Dockerfile"],
+  "scripts": { "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs .", "check": "tsc -b --pretty false", "prepack": "node ../../scripts/generate-provider-integrity.mjs --verify --quiet ." },
+  "bundleDependencies": ["@sjshovan/dkb-pipeline", "@sjshovan/dkb-protocol"],
   "dependencies": {
     "@sjshovan/dkb-pipeline": "0.2.0",
     "@sjshovan/dkb-protocol": "2.0.0"

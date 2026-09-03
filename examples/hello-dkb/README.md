@@ -6,7 +6,7 @@ knowledge:
 ```powershell
 dkb validate .\examples\hello-dkb
 dkb build .\examples\hello-dkb --pipeline fastembed-faiss
-dkb query .\examples\hello-dkb "What is the recovery marker?"
+dkb query "What is the recovery marker?"
 ```
 
 Expected evidence contains `EXAMPLE-RECOVERY-42` and cites

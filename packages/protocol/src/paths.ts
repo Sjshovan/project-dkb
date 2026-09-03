@@ -10,8 +10,6 @@ export const DKB_RUNTIME_ACTIVATION_PATH = '.dkb/runtime-activation.lock.json';
 export const DKB_CACHE_DIR = '.dkb/cache';
 export const DKB_COMPILE_RECEIPT_PATH = `${DKB_CACHE_DIR}/compiler/compile.receipt.json`;
 export const DKB_LOCKS_DIR = '.dkb/locks';
-export const DKB_RUNS_DIR = '.dkb/runs';
-export const DKB_WRITE_QUEUE_DIR = '.dkb/runs/write-queue';
 
 export function resolveFrom(base: string, target: string): string {
   return path.resolve(base, target);

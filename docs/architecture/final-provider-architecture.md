@@ -1,5 +1,8 @@
 # Final Provider Architecture
 
+For the complete product topology and current implementation status, start with
+the [DKB system map](system-map.md).
+
 The provider cut is defined by [ADR 0006](../decisions/0006-final-provider-architecture-and-storage-cutover.md),
 with Runtime ownership superseded by [ADR 0008](../decisions/0008-runtime-bound-pipelines-and-shared-libraries.md).
 This document is the canonical navigation map for the provider architecture.
@@ -51,20 +54,46 @@ Runtime activation -> Library immutable build roots -> query embedding -> index 
 
 Index providers return Evidence IDs and scores. Library resolves canonical
 text, source anchors, locators, and provenance from the Evidence catalog.
+The Runtime package does not export its raw query-context, navigation, or
+retrieval modules. Public local queries use `runtime/queryAccess`, HTTP uses the
+Runtime server, and MCP uses the read-only MCP surface; each enters the same
+activation-verifying, audit-persisting operation gate. The only separately
+exported query-context control is cache invalidation/closure for lifecycle
+orchestration, which cannot open or execute a query.
+
+Cold query contexts validate the exact build graph and compare the derived
+Evidence catalog with canonical Evidence IR. Cached contexts retain observations
+of their selected plugin/dependency files, configuration, manifests, and exact
+build trees; changed inputs fail closed instead of reusing loaded state under a
+new identity. These observations supplement initial cryptographic validation;
+they do not replace it. They rely on the host filesystem and operator trust,
+not a sandbox against an administrator who can replace DKB itself.
+
+Queries read binding/activation only after queued Runtime mutations complete.
+They do not initialize or recover Runtime state. Recovery takes the same
+mutation gate as promotion, so status checks cannot roll back a live promotion.
+Library generation and selected inputs are checked again before releasing a
+response, including after awaited observer delivery. A late invalidation adds
+a failed audit event for the same request and withholds the result.
 
 ## Storage
 
 ```text
-<library>/.dkb/builds/evidence/<profile>/<digest>/
-<library>/.dkb/builds/retrieval/<profile>/<digest>/
+<package>/.dkb/builds/evidence/<profile>/<digest>/
+<package>/.dkb/builds/retrieval/<profile>/<digest>/
 <runtime-state>/.dkb/runtime-binding.json
 <runtime-state>/.dkb/runtime-activation.lock.json
+<runtime-state>/.dkb/runtime-selection.transaction.json
+<runtime-state>/.dkb/locks/runtime-mutation.lock
 <runtime-state>/.dkb/cache/runtime/<snapshot-digest>/
 ```
 
 There is no durable active `.dkb/artifacts` mirror. Libraries contain immutable
 builds but no active Pipeline. Each Runtime owns its binding, activation, and
 disposable cache, so multiple Runtimes may reuse one Library without copying it.
+Binding and activation promotion is journaled and protected by an in-process
+reader/writer gate plus a cross-process mutation lock. Startup recovers an
+interrupted promotion to one consistent previous or promoted pair.
 
 ## Composition roots
 
@@ -74,8 +103,9 @@ target catalog. `services/compiler/src/server.ts`, Runtime bootstrap, and
 executable application. Their domain modules receive a distribution or
 context-local `DkbProviderHost`; they do not select concrete providers.
 
-Filesystem plugins are discovered by `packages/pipeline` from the active
-Library context, then the user-global context, then the supplied distribution.
+Filesystem plugins are discovered by `packages/pipeline` from Runtime-local,
+Library-local, user-global, then the supplied distribution. Compiler contexts
+use their trusted local context in place of the Runtime-local scope.
 A broken higher-precedence implementation fails closed. Knowledge packages are
 data and cannot provide plugin code or configuration.
 

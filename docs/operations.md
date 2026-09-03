@@ -38,7 +38,56 @@ Credentials are keyed by normalized Registry URL in `~/.dkb/credentials.json`
 atomically with owner-only permissions where the operating system supports
 them. Run `dkb registry logout --revoke` on a lost or retired host.
 
+## Registry compilation and cancellation
+
+Registry operators choose trusted recipes; uploads cannot supply plugin code or
+compiler configuration. Queue requests pin both the resolved recipe digests and
+the installed compiler build identity. A different compiler installation must
+not finish a request queued against older bytes.
+
+```powershell
+dkb registry pipeline list
+dkb registry build @team/handbook --version 1.0.0 --pipeline tei-faiss
+dkb registry cancel-build @team/handbook --version 1.0.0 --job 42
+```
+
+Build requests and cancellation require a namespace-team administrator with
+`registry:build`. Canceling never-started queued work prevents it from starting.
+Previously started retries also contact the compiler because their last outcome
+may be unknown. Running work receives an abort signal; `cancelling` means the compiler has not yet confirmed
+that it stopped. Retry the displayed cancellation command if the control
+connection was unavailable. Canceled output cannot be published. Previously
+published variants and immutable source remain unchanged; cancellation of an
+already published job reports `published` without undoing publication.
+
+Each queue execution has a unique ID and a 24-hour deadline. Delayed retries of
+a canceled execution are rejected even after a compiler restart. Cancellation
+markers live in the trusted compiler context under `.dkb/compiler-cancellations/`
+and expire with their request deadline; they are never packaged as knowledge.
+After cancellation or deadline expiry, request a fresh alternate build. An
+initial unpublished source version stays retained and cannot be overwritten.
+
 ## Storage ownership
+
+### Inspect retained historical evidence
+
+The Runtime audit view links only exact retained package versions and builds.
+The corresponding CLI inspection is:
+
+```powershell
+dkb show @team/handbook --library personal --version 1.0.0 --evidence-build <evidence-digest> --evidence <evidence-id>
+```
+
+Both digest arguments are complete `sha256:` identities. This reads one inert
+record from the installed package's exact Evidence catalog; it does not query a
+Runtime, load a plugin, compile source, or substitute the newest build. Missing,
+mismatched, removed, or corrupt objects fail with recovery guidance. Text is
+limited to 64 KiB, individual metadata fields to 16 KiB, and the response to
+256 KiB; truncation is explicit and UTF-8 safe. Content identity inspection is
+not Registry signature certification. Use the Build inspector's verification
+action to check its exact trust chain.
+
+### What to retain
 
 | Location | Owner | Back up? |
 | --- | --- | --- |
@@ -60,6 +109,20 @@ one package with `dkb build list <package>`. Explicitly prune inactive package
 builds with `dkb build prune <package>`.
 
 ## Backup and restore
+
+Changing an existing Stack with `dkb stack up` may restart its services. Until
+the Runtime commits a validated activation, failure restores the previous
+Stack configuration and Library mount, then restarts the prior services if
+they were running. Runtime activation files and immutable Library builds are
+never copied back. A lost admin response is checked against the actual
+committed activation before rollback is considered.
+
+If restoration fails or another operator has changed the Runtime selection,
+DKB retains `startup-recovery.json` in the Stack state directory and reports
+the conflicting resource. This file contains the previous configuration,
+including secrets: keep it private. Resolve the reported issue, then run
+`dkb stack up <name>` to retry recovery. DKB does not overwrite a concurrent
+activation or externally edited configuration to force recovery.
 
 For the complete local stack, stop writers and create a checksummed archive:
 

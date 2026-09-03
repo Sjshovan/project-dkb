@@ -1,9 +1,10 @@
 import { stableHash } from './contracts/hash.js';
 import { DkbError } from './errors.js';
 import type { DkbPublisherReleaseSignature, DkbRegistryReleaseSignature } from './types.js';
+import { validateProviderExecutionReceipts, type DkbProviderExecutionReceipt } from './providerReceipts.js';
 
-export const DKB_EVIDENCE_BUILD_LOCK_FORMAT = 'dkb.evidence-build.v1';
-export const DKB_RETRIEVAL_BUILD_LOCK_FORMAT = 'dkb.retrieval-build.v1';
+export const DKB_EVIDENCE_BUILD_LOCK_FORMAT = 'dkb.evidence-build.v2';
+export const DKB_RETRIEVAL_BUILD_LOCK_FORMAT = 'dkb.retrieval-build.v2';
 export const DKB_INSTALL_PLAN_FORMAT = 'dkb.install-plan.v1';
 export const DKB_RETRIEVAL_BUILD_GRANT_FORMAT = 'dkb.retrieval-build-grant.v1';
 
@@ -14,6 +15,7 @@ export interface DkbEvidenceBuildLock {
   evidenceDigest: string;
   recordCount: number;
   chunkCount: number;
+  providerReceipts: DkbProviderExecutionReceipt[];
   generatedAt: string;
 }
 
@@ -22,9 +24,11 @@ export interface DkbRetrievalBuildLock {
   package: { id: string; version: string };
   evidenceProfileDigest: string;
   evidenceDigest: string;
+  evidenceReceiptDigest: string;
   retrievalProfileDigest: string;
   compatibilityDigest: string;
   artifactTreeDigest: string;
+  providerReceipts: DkbProviderExecutionReceipt[];
   retrievalBuildDigest: string;
   generatedAt: string;
 }
@@ -82,6 +86,11 @@ export function evidenceBuildLock(input: Omit<DkbEvidenceBuildLock, 'format'>): 
   return validateEvidenceBuildLock(lock);
 }
 
+export function evidenceBuildReceiptDigest(lock: DkbEvidenceBuildLock): string {
+  const { format: _format, generatedAt: _generatedAt, ...receipt } = validateEvidenceBuildLock(lock);
+  return stableHash(receipt);
+}
+
 export function retrievalBuildLock(
   input: Omit<DkbRetrievalBuildLock, 'format' | 'retrievalBuildDigest'>,
 ): DkbRetrievalBuildLock {
@@ -89,9 +98,11 @@ export function retrievalBuildLock(
     package: input.package,
     evidenceProfileDigest: input.evidenceProfileDigest,
     evidenceDigest: input.evidenceDigest,
+    evidenceReceiptDigest: input.evidenceReceiptDigest,
     retrievalProfileDigest: input.retrievalProfileDigest,
     compatibilityDigest: input.compatibilityDigest,
     artifactTreeDigest: input.artifactTreeDigest,
+    providerReceipts: input.providerReceipts,
   };
   return validateRetrievalBuildLock({
     format: DKB_RETRIEVAL_BUILD_LOCK_FORMAT,
@@ -110,6 +121,7 @@ export function validateEvidenceBuildLock(value: unknown, source = 'Evidence Bui
   assertDigest(candidate.evidenceDigest, `${source} evidenceDigest`);
   assertNonNegativeInteger(candidate.recordCount, `${source} recordCount`);
   assertNonNegativeInteger(candidate.chunkCount, `${source} chunkCount`);
+  candidate.providerReceipts = validateProviderExecutionReceipts(candidate.providerReceipts, `${source} providerReceipts`);
   return candidate;
 }
 
@@ -118,10 +130,12 @@ export function validateRetrievalBuildLock(value: unknown, source = 'Retrieval B
     throw new DkbError(`Invalid ${source}: expected ${DKB_RETRIEVAL_BUILD_LOCK_FORMAT}`);
   }
   const candidate = value as unknown as DkbRetrievalBuildLock;
+  candidate.providerReceipts = validateProviderExecutionReceipts(candidate.providerReceipts, `${source} providerReceipts`);
   assertPackage(candidate.package, source, false);
   for (const [label, digest] of Object.entries({
     evidenceProfileDigest: candidate.evidenceProfileDigest,
     evidenceDigest: candidate.evidenceDigest,
+    evidenceReceiptDigest: candidate.evidenceReceiptDigest,
     retrievalProfileDigest: candidate.retrievalProfileDigest,
     compatibilityDigest: candidate.compatibilityDigest,
     artifactTreeDigest: candidate.artifactTreeDigest,
@@ -133,9 +147,11 @@ export function validateRetrievalBuildLock(value: unknown, source = 'Retrieval B
     package: candidate.package,
     evidenceProfileDigest: candidate.evidenceProfileDigest,
     evidenceDigest: candidate.evidenceDigest,
+    evidenceReceiptDigest: candidate.evidenceReceiptDigest,
     retrievalProfileDigest: candidate.retrievalProfileDigest,
     compatibilityDigest: candidate.compatibilityDigest,
     artifactTreeDigest: candidate.artifactTreeDigest,
+    providerReceipts: candidate.providerReceipts,
   });
   if (candidate.retrievalBuildDigest !== expected) {
     throw new DkbError(`Invalid ${source}: expected Retrieval Build digest ${expected}, got ${candidate.retrievalBuildDigest}`);
@@ -166,7 +182,11 @@ export function validateInstallPlan(value: unknown, source = 'Install plan'): Dk
     assertDigest(artifact.digest, `${source} ${artifact.kind} digest`);
     assertDigest(artifact.receiptHash, `${source} ${artifact.kind} receiptHash`);
     assertNonNegativeInteger(artifact.bytes, `${source} ${artifact.kind} bytes`);
-    if (typeof artifact.mediaType !== 'string' || typeof artifact.url !== 'string' || !artifact.url.startsWith('/')) {
+    if (typeof artifact.mediaType !== 'string'
+      || typeof artifact.url !== 'string'
+      || !artifact.url.startsWith('/')
+      || artifact.url.startsWith('//')
+      || artifact.url.includes('\\')) {
       throw new DkbError(`Invalid ${source}: layer URLs must be Registry-relative and media types are required`);
     }
   }
@@ -194,7 +214,11 @@ export function validateRetrievalBuildGrant(value: unknown, source = 'Retrieval 
   assertDigest(candidate.artifact.digest, `${source} retrieval digest`);
   assertDigest(candidate.artifact.receiptHash, `${source} retrieval receiptHash`);
   assertNonNegativeInteger(candidate.artifact.bytes, `${source} retrieval bytes`);
-  if (typeof candidate.artifact.mediaType !== 'string' || typeof candidate.artifact.url !== 'string' || !candidate.artifact.url.startsWith('/')) {
+  if (typeof candidate.artifact.mediaType !== 'string'
+    || typeof candidate.artifact.url !== 'string'
+    || !candidate.artifact.url.startsWith('/')
+    || candidate.artifact.url.startsWith('//')
+    || candidate.artifact.url.includes('\\')) {
     throw new DkbError(`Invalid ${source}: Retrieval layer URL must be Registry-relative and its media type is required`);
   }
   candidate.artifact.receipt = validateLayerReceipt(candidate.artifact.receipt, `${source} receipt`);

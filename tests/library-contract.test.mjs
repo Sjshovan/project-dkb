@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   discoverLibraryEntries,
   loadLibrary,
+  loadLibraryManifest,
   loadManifest,
   uniqueLoadedDkbs,
 } from '@sjshovan/dkb-protocol/manifest.js';
@@ -21,7 +22,9 @@ import { refreshRuntimeCatalogFromInstalledArtifacts } from '../services/runtime
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { validatePackageBuildGraph, verifyKnowledgeBuilds } from '@sjshovan/dkb-library/builds.js';
 import { libraryStateIdentity } from '@sjshovan/dkb-library/state.js';
-import { createRuntimeActivation } from '../services/runtime/dist/runtime/activation.js';
+import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import { createRuntimeActivation } from '../services/runtime/dist/runtime/state.js';
+import { removeDkbFromLibrary } from '../services/runtime/dist/runtime/packageLifecycle.js';
 import { preflightDkbInstall } from '../services/runtime/dist/runtime/registryInstall.js';
 import {
   inspectInstalledPackage,
@@ -29,6 +32,56 @@ import {
   previewInstalledPackageFile,
   verifyInstalledPackage,
 } from '@sjshovan/dkb-library/packageInfo.js';
+
+test('Library manifest identity reads do not traverse packages or create applied state', async (t) => {
+  const root = await tempDirectory(t, 'dkb-library-identity-read-');
+  const manifestPath = path.join(root, 'dkb.json');
+  const source = JSON.stringify({ type: 'library', name: 'Canonical Library', displayName: 'Different display name', roots: {} });
+  await fs.writeFile(manifestPath, source);
+  const identity = (await loadLibrary(root)).manifest.id;
+  await fs.mkdir(path.join(root, 'broken-package'));
+  await fs.writeFile(path.join(root, 'broken-package', 'dkb.json'), '{invalid child');
+  assert.equal((await loadLibraryManifest(root)).id, identity);
+  assert.equal((await loadLibraryManifest(root)).name, 'Different display name');
+  await assert.rejects(() => loadLibrary(root), /JSON|invalid|parse|Unexpected/i);
+  assert.equal(await fs.readFile(manifestPath, 'utf8'), source);
+  assert.deepEqual((await fs.readdir(root)).sort(), ['broken-package', 'dkb.json']);
+  await fs.writeFile(manifestPath, JSON.stringify({ type: 'dkb', name: '@test/source', version: '1.0.0' }));
+  await assert.rejects(() => loadLibraryManifest(root), /Expected a Library manifest/);
+});
+
+test('active Library mutation leases heartbeat so contenders cannot reap a long-running owner', async (t) => {
+  const root = await tempDirectory(t, 'dkb-library-lock-heartbeat-');
+  let entered;
+  let release;
+  const enteredPromise = new Promise((resolve) => { entered = resolve; });
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const owner = withDkbFileLock(root, 'library-mutation', async () => {
+    entered();
+    await releasePromise;
+  }, { staleMs: 45, timeoutMs: 500 });
+  await enteredPromise;
+  await new Promise((resolve) => setTimeout(resolve, 90));
+
+  await assert.rejects(
+    withDkbFileLock(root, 'library-mutation', async () => undefined, { staleMs: 45, timeoutMs: 75 }),
+    /Timed out waiting for DKB library mutation lock/u,
+  );
+  release();
+  await owner;
+});
+
+test('Library mutation locks do not retry an operation that reports EEXIST', async (t) => {
+  const root = await tempDirectory(t, 'dkb-library-lock-operation-error-');
+  let attempts = 0;
+  await assert.rejects(withDkbFileLock(root, 'library-mutation', async () => {
+    attempts += 1;
+    const error = new Error('operation collision');
+    error.code = 'EEXIST';
+    throw error;
+  }), /operation collision/u);
+  assert.equal(attempts, 1);
+});
 
 test('hard-cutover manifests reject legacy types and unscoped DKB identities', async (t) => {
   const root = await tempDirectory(t, 'dkb-manifest-cutover-');
@@ -264,7 +317,7 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
   await writeLibrary(root, { '@test/core': { path: 'core' } });
   await writeDkb(dkbRoot, '@test/core', '1.0.0');
   await writeTestPipeline(dkbRoot);
-  await compileComposeProject(dkbRoot, { force: true, mode: 'package' });
+  await compileComposeProject(dkbRoot, { force: true });
   await fs.mkdir(path.join(dkbRoot, 'guides'), { recursive: true });
   await fs.writeFile(path.join(dkbRoot, 'guides', 'usage.md'), '# Safe preview\n\n<script>alert(1)</script>\n', 'utf8');
   await fs.writeFile(path.join(dkbRoot, 'diagram.svg'), '<svg onload="alert(1)"></svg>\n', 'utf8');
@@ -357,13 +410,19 @@ test('activating precompiled knowledge refreshes Library integrity metadata with
 
 });
 
-test('Registry origin changes require the same signed release digest', async (t) => {
+test('multiple Registries coexist while identity collisions remain digest-bound and origin-stable', async (t) => {
   const root = await tempDirectory(t, 'dkb-registry-origin-');
   const packageRoot = path.join(root, 'vendor', '@proof', 'origin');
+  const neighborRoot = path.join(root, 'vendor', '@other', 'neighbor');
   const originalDigest = `sha256:${'a'.repeat(64)}`;
+  const neighborDigest = `sha256:${'c'.repeat(64)}`;
   const differentDigest = `sha256:${'b'.repeat(64)}`;
-  await writeLibrary(root, { '@proof/origin': { version: '1.0.0' } });
+  await writeLibrary(root, {
+    '@proof/origin': { version: '1.0.0' },
+    '@other/neighbor': { version: '2.0.0' },
+  });
   await writeDkb(packageRoot, '@proof/origin', '1.0.0');
+  await writeDkb(neighborRoot, '@other/neighbor', '2.0.0');
   await applyLibraryLock(root, {
     library: { name: 'Test Library' },
     generation: 1,
@@ -373,9 +432,18 @@ test('Registry origin changes require the same signed release digest', async (t)
         digest: originalDigest, registryUrl: 'https://registry-a.example', path: 'vendor/@proof/origin',
         requiredBy: ['root:@proof/origin'], installedAt: '2026-08-31T00:00:00.000Z',
       },
+      '@other/neighbor': {
+        identity: '@other/neighbor', kind: 'dkb', source: 'registry', version: '2.0.0',
+        digest: neighborDigest, registryUrl: 'https://registry-b.example', path: 'vendor/@other/neighbor',
+        requiredBy: ['root:@other/neighbor'], installedAt: '2026-08-31T00:00:00.000Z',
+      },
     },
     resolvedAt: '2026-08-31T00:00:00.000Z',
   });
+
+  const coexisting = await readLibraryState(root);
+  assert.equal(coexisting.entries['@proof/origin'].registryUrl, 'https://registry-a.example');
+  assert.equal(coexisting.entries['@other/neighbor'].registryUrl, 'https://registry-b.example');
 
   const same = await preflightDkbInstall({
     libraryRoot: root,
@@ -383,11 +451,25 @@ test('Registry origin changes require the same signed release digest', async (t)
     candidate: { packageId: '@proof/origin', version: '1.0.0', packageTreeHash: originalDigest },
   });
   assert.equal(same.status, 'already_installed');
+  assert.equal((await readLibraryState(root)).entries['@proof/origin'].registryUrl, 'https://registry-a.example');
   await assert.rejects(preflightDkbInstall({
     libraryRoot: root,
     registryUrl: 'https://registry-b.example',
     candidate: { packageId: '@proof/origin', version: '1.0.0', packageTreeHash: differentDigest },
   }), /Registry origin conflict.*Uninstall @proof\/origin/u);
+
+  await removeDkbFromLibrary('@other/neighbor', root);
+  const afterNeighborRemoval = await readLibraryState(root);
+  assert.equal(afterNeighborRemoval.entries['@other/neighbor'], undefined);
+  assert.equal(afterNeighborRemoval.entries['@proof/origin'].registryUrl, 'https://registry-a.example');
+  assert.equal(await fs.stat(packageRoot).then(() => true, () => false), true);
+
+  await removeDkbFromLibrary('@proof/origin', root);
+  assert.equal(await preflightDkbInstall({
+    libraryRoot: root,
+    registryUrl: 'https://registry-b.example',
+    candidate: { packageId: '@proof/origin', version: '1.0.0', packageTreeHash: differentDigest },
+  }), null);
 });
 
 async function tempDirectory(t, prefix) {
@@ -431,9 +513,10 @@ async function writeTestPipeline(root) {
   await fs.writeFile(path.join(pluginRoot, 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/pipeline';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({
     kind: 'evidence',
@@ -442,15 +525,15 @@ export function setup(context) {
       return {
         records: [{
           id: 'test-record', chunkId: 'test-record', text,
-          metadata: {
-            assetId: 'knowledge.md', storeId: 'filesystem', type: 'filesystem',
+          provenance: {
+            assetId: 'knowledge.md', storeId: 'filesystem', sourceType: 'filesystem',
             locator: { path: 'knowledge.md', chunk: 0 }, assetLocator: { path: 'knowledge.md' },
-            title: 'knowledge.md', hash: 'sha256:test-record', updatedAt: '2026-08-27T00:00:00.000Z',
+            title: 'knowledge.md', sourceHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', updatedAt: '2026-08-27T00:00:00.000Z',
             chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length,
-            sourceMetadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:test-source' },
           },
+          metadata: { dkb_path: 'knowledge.md', dkb_source_hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
         }],
-        receipt: { providerId: id, providerVersion: version, build: {} },
+        receipt: { build: {} },
       };
     },
   });
@@ -462,16 +545,18 @@ export function setup(context) {
   });
   context.registerProvider({
     kind: 'index', mode: 'packaged', format: 'test.index.v1',
+    capabilities: { vectors: 'required' },
     async compilePackage({ artifactsRoot, compiled }) {
       const target = path.join(artifactsRoot, 'test-index.json');
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records));
-      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
+      return { build: { recordCount: compiled.records.length } };
     },
     async validatePackage() { return { documentCount: 1 }; },
+    async verifyRuntime() { return { indexId: 'test', documentCount: 1, status: 'ready' }; },
     async openRuntime() { return null; },
   });
-  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'optional' }, openRuntime() { return { providerId: '@test/retrieval', protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; } });
 }
 `, 'utf8');
 }

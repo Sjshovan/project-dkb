@@ -3,8 +3,9 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { isSha256Digest } from '@sjshovan/dkb-pipeline/validation.js';
 import { readEnvironmentFileSync } from './context.js';
-import type { DkbStackContext, DkbStackStatus } from './types.js';
+import type { DkbStackContext, DkbStackControlContext, DkbStackStatus } from './types.js';
 
 export function assertDockerAvailable(): void {
   const engine = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
@@ -37,8 +38,9 @@ export async function assertPortAvailable(port: number, label: string): Promise<
   });
 }
 
-export function assertRequiredImages(context: DkbStackContext): void {
+export function assertRequiredImages(context: DkbStackContext): Record<string, string> {
   const values = readEnvironmentFileSync(context.envFile);
+  const digests: Record<string, string> = {};
   for (const service of context.requiredServices) {
     if (!service.stack) continue;
     const image = values[service.stack.imageEnvironment] ?? service.image;
@@ -55,16 +57,39 @@ export function assertRequiredImages(context: DkbStackContext): void {
       );
     }
 
-    if (!service.stack.build) continue;
-    const labels = parseImageLabels(String(result.stdout ?? ''));
-    const issue = localImageMetadataIssue(labels, service.version, values.DKB_BUILD_COMMIT);
-    if (issue) {
-      throw new DkbError(
-        `Required stack image ${image} for ${service.id} is stale: ${issue}. `
-        + `${imageRecovery(service, image, values.DKB_BUILD_COMMIT)} Then retry: dkb stack up ${context.name}`,
-      );
+    if (service.stack.build) {
+      const labels = parseImageLabels(String(result.stdout ?? ''));
+      const issue = localImageMetadataIssue(labels, service.version, values.DKB_BUILD_COMMIT);
+      if (issue) {
+        throw new DkbError(
+          `Required stack image ${image} for ${service.id} is stale: ${issue}. `
+          + `${imageRecovery(service, image, values.DKB_BUILD_COMMIT)} Then retry: dkb stack up ${context.name}`,
+        );
+      }
+    }
+    if (service.providerExternalIdentities?.some((identity) => identity.kind === 'image')) {
+      const digest = resolveImmutableImageDigest(image);
+      if (!digest) {
+        throw new DkbError(
+          `Required stack image ${image} for ${service.id} is present but its immutable OCI digest could not be resolved. `
+          + `Pin the image as ${image.split('@')[0]}@sha256:<digest> or rebuild it, then retry: dkb stack up ${context.name}`,
+        );
+      }
+      digests[service.id] = digest;
     }
   }
+  return digests;
+}
+
+export function immutableDigestFromImageReference(image: string): string | null {
+  const separator = image.lastIndexOf('@');
+  if (separator < 0) return null;
+  const digest = image.slice(separator + 1);
+  return isSha256Digest(digest) ? digest : null;
+}
+
+export function resolveImmutableImageDigest(image: string): string | null {
+  return immutableDigestFromImageReference(image) ?? inspectedImageId(image);
 }
 
 export function localImageMetadataIssue(
@@ -152,6 +177,20 @@ export function runCompose(
   allowFailure = false,
   profileScope: 'active' | 'all' = 'active',
 ): { stdout: string; stderr: string } {
+  return executeCompose(context, args, inherit, allowFailure, profileScope);
+}
+
+export function runComposeControl(context: DkbStackControlContext, args: ['down' | 'logs', ...string[]], inherit = false): { stdout: string; stderr: string } {
+  return executeCompose(context, args, inherit, false, 'all');
+}
+
+function executeCompose(
+  context: DkbStackContext | DkbStackControlContext,
+  args: string[],
+  inherit: boolean,
+  allowFailure: boolean,
+  profileScope: 'active' | 'all',
+): { stdout: string; stderr: string } {
   const result = spawnSync('docker', composeArguments(context, args, profileScope), {
     cwd: path.dirname(context.composeFile),
     encoding: 'utf8',
@@ -166,11 +205,14 @@ export function runCompose(
 }
 
 export function composeArguments(
-  context: DkbStackContext,
+  context: DkbStackContext | DkbStackControlContext,
   args: string[],
   profileScope: 'active' | 'all' = 'active',
 ): string[] {
-  const profiles = args.includes('down') || profileScope === 'all' ? context.allProfiles : context.profiles;
+  if (!('profiles' in context) && !['down', 'logs'].includes(args[0] ?? '')) {
+    throw new DkbError('Stack control topology is only valid for stopping services or reading logs; startup requires validated recipe resolution.');
+  }
+  const profiles = args.includes('down') || profileScope === 'all' || !('profiles' in context) ? context.allProfiles : context.profiles;
   return [
     'compose',
     '--env-file', context.envFile,
@@ -234,6 +276,16 @@ function errorMessage(error: unknown): string {
 
 function inspectImage(image: string): ReturnType<typeof spawnSync> {
   return spawnSync('docker', ['image', 'inspect', image, '--format', '{{json .Config.Labels}}'], { encoding: 'utf8' });
+}
+
+function inspectedImageId(image: string): string | null {
+  const result = spawnSync('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  const digest = String(result.stdout ?? '').trim();
+  return result.status === 0 && isSha256Digest(digest) ? digest : null;
 }
 
 function parseImageLabels(value: string): Record<string, string> {

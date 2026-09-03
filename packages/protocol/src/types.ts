@@ -1,3 +1,5 @@
+import type { DkbJsonValue } from './json.js';
+
 export type DkbAdapter = 'folder' | 'sqlite' | 'postgres' | 'compose';
 export type DkbStoreType = 'filesystem' | 'sqlite' | 'postgres' | 'database';
 export type DkbStoreMode = 'read' | 'write' | 'readwrite';
@@ -217,6 +219,13 @@ export interface DkbLockManifest {
   compiled?: {
     recordCount: number;
     compiledAt: string;
+    providerDiagnostics?: Array<{
+      packageId: string;
+      kind: string;
+      providerId: string;
+      providerIntegrityDigest: string;
+      diagnostics: Record<string, DkbJsonValue>;
+    }>;
   };
 }
 

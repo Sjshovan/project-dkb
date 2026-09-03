@@ -6,9 +6,12 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import type { CliPresenter } from './presentation.js';
 import {
+  summarizeRegistryBuildRequest,
   summarizePackageListing,
   summarizeRegistryContents,
   summarizeRegistryEntry,
+  summarizeRegistryPipeline,
+  summarizeRegistryPipelines,
 } from './packagePresentation.js';
 import {
   summarizeArtifactTransport,
@@ -100,6 +103,100 @@ export function registerRegistryCommands(program: Command, context: RegistryComm
       if (!verification.ok) {
         process.exitCode = 1;
       }
+    });
+
+  const registryPipeline = registry
+    .command('pipeline')
+    .description('Inspect trusted compiler Pipelines advertised by a Registry');
+
+  registryPipeline
+    .command('list')
+    .description('List trusted Registry compiler Pipelines')
+    .option('--url <url>', 'Registry API URL')
+    .action(async (options: { url?: string }) => {
+      const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+      const { configuredRegistry } = await import('./registryConfig.js');
+      const configured = await configuredRegistry({ url: options.url });
+      presenter().print(await new DkbRegistryClient({ baseUrl: configured.url }).pipelines(), summarizeRegistryPipelines);
+    });
+
+  registryPipeline
+    .command('show')
+    .description('Inspect one trusted Registry compiler Pipeline')
+    .argument('<name>', 'Registry Pipeline name')
+    .option('--url <url>', 'Registry API URL')
+    .action(async (name: string, options: { url?: string }) => {
+      const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+      const { configuredRegistry } = await import('./registryConfig.js');
+      const configured = await configuredRegistry({ url: options.url });
+      const catalog = await new DkbRegistryClient({ baseUrl: configured.url }).pipelines();
+      const pipeline = catalog.pipelines.find((candidate) => candidate.name === name);
+      if (!pipeline) {
+        throw new DkbError(`Registry ${configured.url} does not advertise Pipeline ${name}. Run: dkb registry pipeline list --url ${configured.url}`);
+      }
+      presenter().print(pipeline, summarizeRegistryPipeline);
+    });
+
+  registry
+    .command('build')
+    .description('Request another trusted Registry build for an immutable DKB release')
+    .argument('<package-id>', 'Scoped Registry package identity')
+    .requiredOption('--version <version>', 'Exact immutable package version')
+    .requiredOption('--pipeline <name>', 'Advertised Registry Pipeline')
+    .option('--url <url>', 'Registry API URL')
+    .action(async (identity: string, options: { version: string; pipeline: string; url?: string }) => {
+      const packageId = parseDkbIdentity(identity, 'Registry package identity').identity;
+      const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+      const { configuredRegistry } = await import('./registryConfig.js');
+      const configured = await configuredRegistry({ url: options.url });
+      const client = new DkbRegistryClient({ baseUrl: configured.url });
+      const catalog = await client.pipelines();
+      const pipeline = catalog.pipelines.find((candidate) => candidate.name === options.pipeline);
+      if (!pipeline) {
+        throw new DkbError(`Registry ${configured.url} does not advertise Pipeline ${options.pipeline}. Run: dkb registry pipeline list --url ${configured.url}`);
+      }
+      if (!pipeline.available) {
+        throw new DkbError(`Registry Pipeline ${options.pipeline} is unavailable. Run: dkb registry pipeline show ${options.pipeline} --url ${configured.url}`);
+      }
+      await presenter().run('Requesting Registry build', async () => ({
+        packageId,
+        version: options.version,
+        ...await client.requestBuild(
+          packageId,
+          options.version,
+          pipeline.name,
+          {
+            retrievalProfileDigest: pipeline.retrievalProfileDigest,
+            compatibilityDigest: pipeline.compatibilityDigest,
+          },
+        ),
+      }), summarizeRegistryBuildRequest);
+    });
+
+  registry
+    .command('cancel-build')
+    .description('Cancel a queued or running Registry compilation without changing published builds')
+    .argument('<package-id>', 'Scoped Registry package identity')
+    .requiredOption('--version <version>', 'Exact immutable package version')
+    .requiredOption('--job <id>', 'Compilation job ID', parsePositiveInteger)
+    .option('--url <url>', 'Registry API URL')
+    .action(async (identity: string, options: { version: string; job: number; url?: string }) => {
+      const packageId = parseDkbIdentity(identity, 'Registry package identity').identity;
+      const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
+      const { configuredRegistry } = await import('./registryConfig.js');
+      const configured = await configuredRegistry({ url: options.url });
+      await presenter().run('Requesting build cancellation', async () => {
+        const result = await new DkbRegistryClient({ baseUrl: configured.url }).cancelBuild(packageId, options.version, options.job);
+        return {
+          packageId,
+          version: options.version,
+          ...result,
+          ...(result.status === 'cancelling' ? {
+            warning: 'Cancellation is pending. The compiler has not yet confirmed it stopped; publication is blocked.',
+            retryCommand: `dkb registry cancel-build ${packageId} --version ${options.version} --job ${options.job} --url ${configured.url}`,
+          } : {}),
+        };
+      }, summarizeRegistryBuildRequest);
     });
 
   registry

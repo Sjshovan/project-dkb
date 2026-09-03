@@ -32,6 +32,18 @@ import type { DkbSourceInventoryBinding } from '@sjshovan/dkb-protocol/registryC
 export const DKB_RELEASE_PATH = 'dkb-release.json';
 export const DKB_PACKAGE_RECEIPT_PATH = '.dkb-package.json';
 export const DKB_INSTALL_PLAN_RECEIPT_PATH = '.dkb/receipts/install-plan.json';
+export const DKB_INSTALL_PLAN_RECEIPTS_DIR = '.dkb/receipts/install-plans';
+
+export function installPlanReceiptPath(root: string, installPlanHash: string): string {
+  if (!/^sha256:[a-f0-9]{64}$/iu.test(installPlanHash)) {
+    throw new DkbError(`Invalid install-plan hash for stored receipt: ${installPlanHash}`);
+  }
+  return path.resolve(
+    root,
+    DKB_INSTALL_PLAN_RECEIPTS_DIR,
+    `${installPlanHash.slice('sha256:'.length).toLowerCase()}.json`,
+  );
+}
 
 export interface DkbSigningKeyPair {
   privateKeyPem: string;

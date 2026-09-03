@@ -6,6 +6,7 @@ import { RouterLink } from 'vue-router';
 import { getJson } from '../api.js';
 import PageHeader from '../components/interface/PageHeader.vue';
 import StatusBadge from '../components/interface/StatusBadge.vue';
+import AttentionDataTable from '../components/resource/AttentionDataTable.vue';
 import type { ResourceListing, ResourceRow } from '../types.js';
 
 interface Overview { libraries: ResourceListing; runtimes: ResourceListing; registries: ResourceListing; stacks: ResourceListing }
@@ -16,7 +17,9 @@ const groups = computed(() => [
   { name: 'Registries', route: '/registries', icon: Database, rows: query.data.value?.registries.registries ?? [], default: query.data.value?.registries.selected },
   { name: 'Stacks', route: '/stacks', icon: Boxes, rows: query.data.value?.stacks.stacks ?? [], default: query.data.value?.stacks.default },
 ]);
-const attention = computed(() => groups.value.flatMap((group) => group.rows.filter((row: ResourceRow) => ['missing', 'invalid', 'offline', 'unavailable', 'degraded'].includes(row.status ?? '')).map((row: ResourceRow) => ({ ...row, group: group.name }))));
+const attention = computed(() => groups.value.flatMap((group) => group.rows
+  .filter((row: ResourceRow) => ['missing', 'invalid', 'offline', 'unavailable', 'degraded'].includes(row.status ?? ''))
+  .map((row: ResourceRow) => ({ ...row, group: group.name as 'Libraries' | 'Runtimes' | 'Registries' | 'Stacks' }))));
 </script>
 
 <template>
@@ -32,7 +35,7 @@ const attention = computed(() => groups.value.flatMap((group) => group.rows.filt
       </section>
       <section class="page-section">
         <header><div><h2>Needs attention</h2><p>Checked failures and missing local resources stay visible until you resolve or forget them.</p></div><span class="count">{{ attention.length }}</span></header>
-        <div v-if="attention.length" class="attention-list"><RouterLink v-for="item in attention" :key="`${item.group}-${item.name}`" :to="`/${item.group.toLowerCase()}`"><span><b>{{ item.name }}</b><small>{{ item.group }} · {{ item.message ?? 'Run a health check for details.' }}</small></span><StatusBadge :status="item.status" /></RouterLink></div>
+        <AttentionDataTable v-if="attention.length" :rows="attention" />
         <div v-else class="quiet-state">No checked resource currently needs attention.</div>
       </section>
     </template>

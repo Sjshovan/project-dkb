@@ -1,31 +1,22 @@
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { installDkbArchiveIntoRuntime } from '@sjshovan/dkb-runtime/runtime/registryInstall.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
 import { resolveRegistryContext } from '@sjshovan/dkb-registry-client/config.js';
 import { defaultRuntimeStateRoot } from '@sjshovan/dkb-runtime/runtime/state.js';
 import { discoverRemoteDkb } from '@sjshovan/dkb-runtime/remote/discovery.js';
 import {
   loadRemoteCatalog,
-  markRemoteOfferPresented,
   packageFromDiscovery,
   registerRemoteInCatalog,
   removeRemoteFromCatalog,
-  updateRemoteOfferState,
   type DkbPersistentRemote,
 } from './catalog.js';
-import { retrieveFromRemoteEndpoint } from '@sjshovan/dkb-runtime/remote/sessions.js';
 import { assertVerifiedDiscovery, verifyRegistryEndpointAttestation } from '@sjshovan/dkb-runtime/remote/verification.js';
 import type {
   DkbDiscoveryDocument,
   DkbDiscoveryEndpoint,
   DkbRemoteEndpointAttestation,
 } from '@sjshovan/dkb-runtime/remote/types.js';
-import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '@sjshovan/dkb-runtime/read/runtime.js';
 import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
-import { DEFAULT_DKB_RUNTIME_CONTEXT } from '@sjshovan/dkb-runtime/defaultComposition.js';
 
 export async function addDirectRemote(input: {
   url: string;
@@ -111,158 +102,13 @@ export async function addRegisteredRemote(input: {
 
 export async function listRegisteredRemotes(input: {
   stateRoot?: string;
-  presentOffers?: boolean;
-} = {}): Promise<{ remotes: DkbPersistentRemote[]; offers: DkbPersistentRemote[] }> {
+} = {}): Promise<{ remotes: DkbPersistentRemote[] }> {
   const stateRoot = input.stateRoot ?? defaultRuntimeStateRoot();
-  const remotes = await loadRemoteCatalog(stateRoot);
-  const offers: DkbPersistentRemote[] = [];
-
-  if (!input.presentOffers) {
-    return { remotes, offers };
-  }
-
-  for (const remote of remotes) {
-    if (!remote.offerId || remote.offerState) {
-      continue;
-    }
-
-    offers.push(await markRemoteOfferPresented(stateRoot, remote.id));
-  }
-
-  return {
-    remotes: await loadRemoteCatalog(stateRoot),
-    offers,
-  };
+  return { remotes: await loadRemoteCatalog(stateRoot) };
 }
 
 export async function removeRegisteredRemote(id: string, stateRoot = defaultRuntimeStateRoot()): Promise<void> {
   await removeRemoteFromCatalog(stateRoot, id);
-}
-
-export async function queryRegisteredRemote(input: {
-  id: string;
-  request: DkbRetrieveKnowledgeRequest;
-  stateRoot?: string;
-}): Promise<{ remote: DkbPersistentRemote; response: DkbRetrieveKnowledgeResponse }> {
-  const stateRoot = input.stateRoot ?? defaultRuntimeStateRoot();
-  const current = (await loadRemoteCatalog(stateRoot)).find((remote) => remote.id === input.id);
-
-  if (!current) {
-    throw new DkbError('Unknown remote DKB: ' + input.id);
-  }
-
-  if (current.trust !== 'registry-verified') {
-    throw new DkbError('Only registry-verified remotes can be queried through the persistent remote gateway. Use a temporary direct session for unverified development remotes.');
-  }
-
-  const remote = await refreshExpiredRemote(current, stateRoot);
-  const response = await retrieveFromRemoteEndpoint({
-    type: remote.endpointType,
-    url: remote.endpointUrl,
-    access: 'public-read',
-  }, input.request);
-
-  assertRemoteResponseProvenance(remote, response);
-
-  return { remote, response };
-}
-
-export async function installRegisteredRemote(input: {
-  id: string;
-  confirm: true;
-  runtimeRoot?: string;
-  stateRoot?: string;
-}) {
-  const stateRoot = input.stateRoot ?? defaultRuntimeStateRoot();
-  const current = (await loadRemoteCatalog(stateRoot)).find((remote) => remote.id === input.id);
-
-  if (!current) {
-    throw new DkbError('Unknown remote DKB: ' + input.id);
-  }
-
-  if (current.trust !== 'registry-verified' || !current.registryUrl || !current.packageId || !current.version || !current.packageTreeHash) {
-    throw new DkbError('Only registry-verified remotes can offer package installation.');
-  }
-
-  const remote = await refreshExpiredRemote(current, stateRoot);
-  const packageId = remote.packageId;
-  const version = remote.version;
-  const registryUrl = remote.registryUrl;
-
-  if (!packageId || !version || !registryUrl) {
-    throw new DkbError('Verified remote lost its package or registry identity during lease refresh.');
-  }
-
-  const client = new DkbRegistryClient({ baseUrl: registryUrl });
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-remote-install-'));
-  const archivePath = path.join(tempRoot, packageId.replace(/[^a-zA-Z0-9._-]+/g, '-') + '.dkbpkg');
-
-  try {
-    const release = await client.packageRelease(packageId, version);
-    await client.writePackageArchive(packageId, archivePath, release.version);
-    const publicKeys = signingKeys(await client.publicKeys());
-    const result = await installDkbArchiveIntoRuntime({
-      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-      archivePath,
-      runtimeRoot: input.runtimeRoot,
-      trustedKeys: publicKeys,
-      registryUrl,
-      expectedArchiveHash: release.archiveHash,
-      force: true,
-    });
-
-    await updateRemoteOfferState(stateRoot, remote.id, 'installed');
-
-    return {
-      status: 'installed',
-      remote,
-      package: result,
-    };
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
-}
-
-async function refreshExpiredRemote(remote: DkbPersistentRemote, stateRoot: string): Promise<DkbPersistentRemote> {
-  if (remote.trust !== 'registry-verified' || !remote.registryUrl || !remote.packageId || !remote.version) {
-    return remote;
-  }
-
-  if (remote.verificationLeaseExpiresAt && Date.parse(remote.verificationLeaseExpiresAt) > Date.now()) {
-    return remote;
-  }
-
-  return (await addRegisteredRemote({
-    packageId: remote.packageId,
-    version: remote.version,
-    endpointUrl: remote.endpointUrl,
-    registryUrl: remote.registryUrl,
-    stateRoot,
-  })).remote;
-}
-
-function assertRemoteResponseProvenance(remote: DkbPersistentRemote, response: DkbRetrieveKnowledgeResponse): void {
-  if (!remote.packageId) {
-    return;
-  }
-
-  for (const match of response.metadata.sourceUnitMatches) {
-    if (match.dkbId !== remote.packageId) {
-      throw new DkbError('Remote response provenance mismatch: expected package ' + remote.packageId + ', got ' + match.dkbId + '.');
-    }
-
-    const packageVersion = (match as { packageVersion?: unknown }).packageVersion;
-
-    if (typeof packageVersion === 'string' && remote.version && packageVersion !== remote.version) {
-      throw new DkbError('Remote response version mismatch: expected ' + remote.version + ', got ' + packageVersion + '.');
-    }
-
-    const packageTreeHash = (match as { packageTreeHash?: unknown }).packageTreeHash;
-
-    if (typeof packageTreeHash === 'string' && remote.packageTreeHash && packageTreeHash !== remote.packageTreeHash) {
-      throw new DkbError('Remote response package tree hash mismatch.');
-    }
-  }
 }
 
 function publicReadEndpoint(discovery: DkbDiscoveryDocument): DkbDiscoveryEndpoint {

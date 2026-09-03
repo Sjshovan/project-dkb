@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveDockerImageIdentity } from '@sjshovan/dkb-pipeline/serviceIdentity.js';
+import type { DkbJsonValue } from '@sjshovan/dkb-pipeline/types.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -19,6 +21,7 @@ export interface TeiOptions {
   url?: string;
   urlEnv?: string;
   image?: string;
+  imageDigest?: string;
   model?: string;
   modelRevision?: string;
   dimensions?: number;
@@ -36,6 +39,7 @@ export interface TeiOptions {
 export interface TeiServiceStatus {
   docker: boolean;
   image: string;
+  imageId?: string;
   model: string;
   modelRevision: string;
   container: string;
@@ -46,7 +50,7 @@ export interface TeiServiceStatus {
   info?: Record<string, unknown>;
 }
 
-export function teiCompatibility(options: Readonly<Record<string, unknown>>): Record<string, unknown> {
+export function teiCompatibility(options: Readonly<Record<string, unknown>>): Record<string, DkbJsonValue> {
   const parsed = parseOptions(options);
   return {
     embeddingSpace: parsed.model,
@@ -69,6 +73,7 @@ export async function embedWithTei(
   signal?: AbortSignal,
 ): Promise<number[][]> {
   if (texts.length === 0) return [];
+  signal?.throwIfAborted();
   const parsed = parseOptions(options);
   const url = await resolvedTeiUrl(parsed, true);
   if (!url) throw new DkbError(`${parsed.urlEnv} is required by ${DKB_TEI_PLUGIN_ID}`);
@@ -76,6 +81,7 @@ export async function embedWithTei(
 
   for (let offset = 0; offset < texts.length; offset += parsed.batchSize) {
     if (signal?.aborted) throw signal.reason ?? new DkbError('TEI embedding was cancelled');
+    await assertTeiModelIdentity(url, parsed, signal);
     const batch = texts.slice(offset, offset + parsed.batchSize);
     const prefix = mode === 'query' ? parsed.queryPrefix : parsed.documentPrefix;
     const promptName = mode === 'query' ? parsed.queryPromptName : parsed.documentPromptName;
@@ -105,6 +111,9 @@ export async function embedWithTei(
       }
       vectors.push(vector as number[]);
     }
+    // Stock TEI does not echo its model identity with vectors. Recheck before
+    // releasing this batch so a replaced configured service cannot cross spaces.
+    await assertTeiModelIdentity(url, parsed, signal);
   }
 
   return vectors;
@@ -112,7 +121,7 @@ export async function embedWithTei(
 
 export async function ensureTeiService(options: Readonly<Record<string, unknown>> = {}, restart = false): Promise<TeiServiceStatus> {
   const parsed = parseOptions(options);
-  const key = `${parsed.image}\0${parsed.model}\0${parsed.modelRevision}`;
+  const key = teiContainerName(parsed);
   const existing = starts.get(key);
   if (existing && !restart) return existing;
   const start = startTeiService(parsed, restart);
@@ -135,7 +144,11 @@ export async function teiServiceStatus(options: Readonly<Record<string, unknown>
   const inspected = await inspectContainer(container).catch(() => null);
   const running = inspected?.State?.Running === true;
   const drift: string[] = [];
-  if (inspected?.Config?.Image !== parsed.image) drift.push('image_mismatch');
+  const imageId = await resolveDockerImageIdentity(parsed.image, parsed.imageDigest || undefined).catch(() => {
+    drift.push('image_identity_unverified');
+    return undefined;
+  });
+  if (inspected && (!imageId || inspected.Image !== imageId)) drift.push('image_mismatch');
   if (inspected?.Config?.Labels?.['org.dkb.tei.model'] !== parsed.model) drift.push('model_mismatch');
   if (inspected?.Config?.Labels?.['org.dkb.tei.revision'] !== parsed.modelRevision) drift.push('model_revision_mismatch');
   const port = running ? await hostPort(container).catch(() => undefined) : undefined;
@@ -146,6 +159,7 @@ export async function teiServiceStatus(options: Readonly<Record<string, unknown>
   return {
     docker: true,
     image: parsed.image,
+    ...(imageId ? { imageId } : {}),
     model: parsed.model,
     modelRevision: parsed.modelRevision,
     container,
@@ -176,7 +190,7 @@ export async function doctorTeiService(options: Readonly<Record<string, unknown>
     return status.ready ? { ok: true, status } : { ok: false, status, recovery: `Verify ${configured}/health and ${configured}/info.` };
   }
   const status = await teiServiceStatus(options);
-  return status.ready
+  return status.ready && status.drift.length === 0
     ? { ok: true, status }
     : { ok: false, status, recovery: status.docker ? 'Run dkb compiler start for the selected TEI target.' : 'Start Docker Desktop, then retry.' };
 }
@@ -185,10 +199,16 @@ async function resolvedTeiUrl(options: Required<TeiOptions>, start: boolean): Pr
   const configured = configuredTeiUrl(options);
   if (configured) return configured.replace(/\/+$/, '');
   const status = start ? await ensureTeiService(options) : await teiServiceStatus(options);
-  return status.ready ? status.url : undefined;
+  return status.ready && status.drift.length === 0 ? status.url : undefined;
 }
 
 async function startTeiService(options: Required<TeiOptions>, restart: boolean): Promise<TeiServiceStatus> {
+  try {
+    await execFile('docker', ['image', 'inspect', options.image], { timeout: 30_000, windowsHide: true });
+  } catch {
+    await execFile('docker', ['pull', options.image], { timeout: 10 * 60_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+  }
+  const imageId = await resolveDockerImageIdentity(options.image, options.imageDigest || undefined);
   const current = await teiServiceStatus(options);
   if (current.ready && current.drift.length === 0 && !restart) return current;
   // Docker retains stopped containers and their names. Always remove a
@@ -205,7 +225,7 @@ async function startTeiService(options: Required<TeiOptions>, restart: boolean):
       '--label', 'org.dkb.component=tei-provider-service',
       '-p', `127.0.0.1::${TEI_PORT}`,
       '--mount', 'type=volume,src=dkb-tei-model-cache,dst=/data',
-      options.image,
+      imageId,
       '--model-id', options.model,
       '--revision', options.modelRevision,
       '--dtype', 'float32',
@@ -238,6 +258,16 @@ async function readTeiInfo(url: string): Promise<Record<string, unknown>> {
   return body as Record<string, unknown>;
 }
 
+async function assertTeiModelIdentity(url: string, options: Required<TeiOptions>, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const timeout = AbortSignal.timeout(options.timeoutMs);
+  const response = await fetch(`${url.replace(/\/+$/, '')}/info`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+  const body = await response.json().catch(() => null) as unknown;
+  if (!response.ok || !body || typeof body !== 'object' || Array.isArray(body) || !modelMatches(body as Record<string, unknown>, options)) {
+    throw new DkbError(`TEI model identity mismatch: expected ${options.model}@${options.modelRevision} on TEI ${TEI_VERSION}. Restore the pinned configured service before retrying.`);
+  }
+}
+
 function modelMatches(info: Record<string, unknown>, options: Required<TeiOptions>): boolean {
   return info.model_id === options.model && info.model_sha === options.modelRevision && info.version === TEI_VERSION;
 }
@@ -258,12 +288,14 @@ async function teiStatusForConfigured(url: string, options: Required<TeiOptions>
 }
 
 function parseOptions(options: Readonly<Record<string, unknown>>): Required<TeiOptions> {
+  const model = optionalString(options.model) ?? TEI_DEFAULT_MODEL;
   return {
     url: optionalString(options.url) ?? '',
     urlEnv: optionalString(options.urlEnv) ?? 'DKB_TEI_URL',
     image: optionalString(options.image) ?? TEI_CPU_IMAGE,
-    model: optionalString(options.model) ?? TEI_DEFAULT_MODEL,
-    modelRevision: optionalString(options.modelRevision) ?? TEI_DEFAULT_MODEL_REVISION,
+    imageDigest: optionalString(options.imageDigest) ?? '',
+    model,
+    modelRevision: resolveTeiModelRevision(model, options.modelRevision),
     dimensions: positiveInteger(options.dimensions) ?? TEI_DEFAULT_DIMENSIONS,
     normalized: options.normalized === undefined ? true : Boolean(options.normalized),
     metric: optionalString(options.metric) ?? 'cosine',
@@ -277,20 +309,26 @@ function parseOptions(options: Readonly<Record<string, unknown>>): Required<TeiO
   };
 }
 
+export function resolveTeiModelRevision(model: string, revision?: unknown): string {
+  const resolved = revision ?? (model === TEI_DEFAULT_MODEL ? TEI_DEFAULT_MODEL_REVISION : undefined);
+  if (typeof resolved !== 'string' || !/^[a-f0-9]{40}$/u.test(resolved)) throw new DkbError(`TEI ${model} requires modelRevision as an exact 40-character model commit, not a mutable branch or model label.`);
+  return resolved;
+}
+
 function configuredTeiUrl(options: Required<TeiOptions>): string | undefined {
   return options.url || optionalString(process.env[options.urlEnv]);
 }
 
-function teiContainerName(options: Pick<Required<TeiOptions>, 'model' | 'modelRevision'>): string {
-  const key = createHash('sha256').update(`${options.model}\0${options.modelRevision}`).digest('hex').slice(0, 12);
+function teiContainerName(options: Pick<Required<TeiOptions>, 'image' | 'imageDigest' | 'model' | 'modelRevision'>): string {
+  const key = createHash('sha256').update(`${options.imageDigest || options.image}\0${options.model}\0${options.modelRevision}`).digest('hex').slice(0, 12);
   return `dkb-tei-${key}`;
 }
 
-async function inspectContainer(container: string): Promise<{ State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> } }> {
+async function inspectContainer(container: string): Promise<{ Image?: string; State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> } }> {
   const { stdout } = await execFile('docker', ['inspect', container], { timeout: 30_000, maxBuffer: 2 * 1024 * 1024 });
   const parsed = JSON.parse(stdout) as unknown;
   if (!Array.isArray(parsed) || !parsed[0] || typeof parsed[0] !== 'object') throw new DkbError(`Invalid Docker inspection for ${container}`);
-  return parsed[0] as { State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> } };
+  return parsed[0] as { Image?: string; State?: { Running?: boolean }; Config?: { Image?: string; Labels?: Record<string, string> } };
 }
 
 async function hostPort(container: string): Promise<number | undefined> {

@@ -2,18 +2,18 @@
 import { computed } from 'vue';
 import { Database, FileJson2, Fingerprint, Layers3, X } from '@lucide/vue';
 import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui';
-import type { DkbInstalledBuildFile, DkbInstalledBuildSummary } from '@sjshovan/dkb-protocol/packageInspection.js';
+import type { DkbBuildTrustVerification, DkbInstalledBuildFile, DkbInstalledBuildSummary } from '@sjshovan/dkb-protocol/packageInspection.js';
 import AppButton from '../interface/AppButton.vue';
 import StatusBadge from '../interface/StatusBadge.vue';
 
-const props = defineProps<{ open: boolean; build?: DkbInstalledBuildSummary }>();
-const emit = defineEmits<{ 'update:open': [value: boolean] }>();
+const props = defineProps<{ open: boolean; build?: DkbInstalledBuildSummary; trust: string; verification?: DkbBuildTrustVerification; verifying?: boolean; error?: string }>();
+const emit = defineEmits<{ 'update:open': [value: boolean]; verify: [] }>();
 const title = computed(() => props.build?.kind === 'evidence'
   ? 'Evidence Build contents'
   : `${props.build?.target ?? 'Retrieval'} Build contents`);
 const description = computed(() => props.build?.kind === 'evidence'
   ? 'The embedding-free interpretation of this package’s source, reusable by compatible retrieval pipelines.'
-  : 'Runtime-ready search artifacts derived from one exact Evidence Build.');
+  : 'Search artifacts derived from one exact Evidence Build. Runtime activation separately verifies compatibility and trust.');
 
 function formatBytes(value: number): string {
   const units = ['B', 'KiB', 'MiB', 'GiB'];
@@ -52,7 +52,7 @@ function filePurpose(file: DkbInstalledBuildFile): string {
   if (file.role === 'build_lock' && props.build?.kind === 'evidence') return 'Package identity, profile digest, build digest, record counts, and creation time.';
   if (file.role === 'build_lock') return 'Parent Evidence digest, compatibility, artifact tree, and exact Retrieval Build identity.';
   if (file.role === 'profile_lock') return 'The exact embedding, index, retrieval, and compatibility recipe used for this build.';
-  if (file.role === 'artifact_manifest') return 'The validated list of provider artifacts with their byte sizes and hashes.';
+  if (file.role === 'artifact_manifest') return 'The recorded list of provider artifacts with their byte sizes and hashes.';
   if (file.path.endsWith('.faiss')) return 'Dense vectors arranged for nearest-neighbor search.';
   if (file.path.endsWith('.sqlite')) return 'Provider-owned lexical data, search metadata, and mappings back to stable Evidence IDs.';
   if (file.path.endsWith('manifest.json')) return 'Provider-specific metadata required to validate and open the search index.';
@@ -76,8 +76,9 @@ function providerKind(kind: DkbInstalledBuildSummary['providers'][number]['kind'
         </header>
 
         <div v-if="build" class="drawer-body">
+          <section aria-label="Build verification"><p v-if="verification">{{ verification.message }}</p><p v-else>Not verified in this view. A receipt being present does not establish its signature or this build’s trust.</p><small v-if="verification">One-time check: {{ formatDate(verification.checkedAt) }}. Runtime activation always revalidates independently.</small><div v-if="error" class="recovery-panel" role="alert"><div><p>{{ error }}</p></div></div></section>
           <section class="build-drawer-summary" aria-label="Build summary">
-            <div><span class="build-type-icon"><Database v-if="build.kind === 'evidence'" :size="19" /><Layers3 v-else :size="19" /></span><span><strong>{{ build.kind === 'evidence' ? 'Evidence Build' : 'Retrieval Build' }}</strong><small>{{ build.target ?? (build.kind === 'evidence' ? 'Embedding-free and portable' : 'Custom Pipeline') }}</small></span><StatusBadge status="stored" /></div>
+            <div><span class="build-type-icon"><Database v-if="build.kind === 'evidence'" :size="19" /><Layers3 v-else :size="19" /></span><span><strong>{{ build.kind === 'evidence' ? 'Evidence Build' : 'Retrieval Build' }}</strong><small>{{ build.target ?? (build.kind === 'evidence' ? 'Embedding-free and portable' : 'Custom Pipeline') }}</small></span><StatusBadge :status="trust" /></div>
             <dl>
               <div><dt>Stored size</dt><dd>{{ formatBytes(build.bytes) }}</dd></div>
               <div><dt>Created</dt><dd>{{ formatDate(build.generatedAt) }}</dd></div>
@@ -123,7 +124,7 @@ function providerKind(kind: DkbInstalledBuildSummary['providers'][number]['kind'
           </section>
         </div>
 
-        <footer class="status-details-footer"><AppButton @click="emit('update:open', false)">Done</AppButton></footer>
+        <footer class="status-details-footer"><AppButton :loading="verifying" :disabled="!build || verifying" @click="emit('verify')">Verify build chain</AppButton><AppButton @click="emit('update:open', false)">Done</AppButton></footer>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>

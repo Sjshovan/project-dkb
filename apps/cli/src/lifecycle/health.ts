@@ -1,14 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { COMPILE_CACHE_PATH, compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { COMPILE_CACHE_PATH } from '@sjshovan/dkb-compiler/compile.js';
 import { validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
-import { invalidateQueryContext } from '@sjshovan/dkb-runtime/indexes/queryContext.js';
+import { invalidateQueryContext } from '@sjshovan/dkb-runtime/runtime/queryCache.js';
 import { loadCollection, loadDkb, loadLibrary, loadManifest, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import { DKB_BUILDS_DIR, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
 import { deriveKnowledgeSpace } from '@sjshovan/dkb-protocol/space.js';
 import type { DkbManifest, DkbSourceManifest, DkbStore, DkcManifest, DkrManifest, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
-import { defaultWriteQueueRoot, listQueuedWrites } from '../writes/queue.js';
+import { compileLocalKnowledgeTarget } from '../providers/localCompilation.js';
 
 export interface DkbHealthReport {
   status: 'ready' | 'degraded' | 'unavailable';
@@ -27,23 +27,17 @@ export interface DkbHealthReport {
     type: 'file' | 'directory' | null;
     size: number | null;
   }>;
-  queue: {
-    root: string;
-    pending: number;
-    blocked: number;
-    failed: number;
-    committed: number;
-  };
 }
 
 export interface RestoreIndexesResult {
   status: 'restored';
   root: string;
   registryId: string;
+  packageCount: number;
   recordCount: number;
   cacheInvalidated: number;
   durationMs: number;
-  lockPath: string;
+  lockPaths: string[];
 }
 
 const ARTIFACTS = [
@@ -51,7 +45,7 @@ const ARTIFACTS = [
   COMPILE_CACHE_PATH,
 ];
 
-export async function healthReport(root: string, queueRoot?: string): Promise<DkbHealthReport> {
+export async function healthReport(root: string): Promise<DkbHealthReport> {
   const resolvedRoot = path.resolve(root);
   const checks: DkbHealthReport['checks'] = [];
   const sourceManifest = await loadManifest(resolvedRoot);
@@ -117,8 +111,6 @@ export async function healthReport(root: string, queueRoot?: string): Promise<Dk
     });
   }
 
-  const queue = await queueSummary(resolvedRoot, queueRoot);
-
   return {
     status: summarizeStatus(checks),
     root: resolvedRoot,
@@ -126,24 +118,25 @@ export async function healthReport(root: string, queueRoot?: string): Promise<Dk
     space,
     checks,
     artifacts,
-    queue,
   };
 }
 
 export async function restoreIndexes(root: string): Promise<RestoreIndexesResult> {
   const resolvedRoot = path.resolve(root);
   const started = performance.now();
-  const compiled = await compileComposeProject(resolvedRoot, { force: true });
+  const compiled = await compileLocalKnowledgeTarget(resolvedRoot, { force: true });
   const cacheInvalidated = invalidateQueryContext(resolvedRoot);
+  const libraryResult = compiled.type === 'library';
 
   return {
     status: 'restored',
     root: resolvedRoot,
-    registryId: compiled.registryId,
+    registryId: libraryResult ? compiled.libraryId : compiled.registryId,
+    packageCount: libraryResult ? compiled.packageCount : 1,
     recordCount: compiled.recordCount,
     cacheInvalidated,
     durationMs: Math.round((performance.now() - started) * 1000) / 1000,
-    lockPath: compiled.lockPath,
+    lockPaths: libraryResult ? compiled.packages.map((entry) => entry.lockPath) : [compiled.lockPath],
   };
 }
 
@@ -218,19 +211,6 @@ async function artifactStatus(root: string, artifact: string): Promise<DkbHealth
       size: null,
     };
   }
-}
-
-async function queueSummary(registryRoot: string, queueRoot?: string): Promise<DkbHealthReport['queue']> {
-  const root = path.resolve(queueRoot ?? defaultWriteQueueRoot(registryRoot));
-  const writes = await listQueuedWrites(root);
-
-  return {
-    root,
-    pending: writes.filter((write) => write.status === 'pending').length,
-    blocked: writes.filter((write) => write.status === 'blocked').length,
-    failed: writes.filter((write) => write.status === 'failed').length,
-    committed: writes.filter((write) => write.status === 'committed').length,
-  };
 }
 
 function summarizeStatus(checks: DkbHealthReport['checks']): DkbHealthReport['status'] {

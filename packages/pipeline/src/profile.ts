@@ -34,7 +34,7 @@ export interface DkbResolvedRetrievalProfile {
   providers: DkbProviderHostDescription['providers'];
   processors: DkbProviderHostDescription['processors'];
   indexMode: DkbIndexProvider['mode'];
-  embedding: {
+  embedding?: {
     provider: string;
     space: string;
     dimensions: number;
@@ -45,12 +45,18 @@ export interface DkbResolvedRetrievalProfile {
 }
 
 export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Promise<DkbResolvedRetrievalProfile> {
+  host.assertRequiredExternalIdentities();
   const description = host.describe();
   const target = host.config.target;
   const index = host.provider<DkbIndexProvider>('index');
   const builds = await resolveBuildProfiles(host);
-  const model = builds.retrieval.embedding.space;
-  const dimensions = builds.retrieval.embedding.dimensions;
+  const embedding = target.embedding && builds.retrieval.embedding ? {
+    provider: target.embedding,
+    space: builds.retrieval.embedding.space,
+    dimensions: builds.retrieval.embedding.dimensions,
+    queryMode: builds.retrieval.embedding.queryMode,
+    documentMode: builds.retrieval.embedding.documentMode,
+  } : undefined;
 
   return {
     target: description.target,
@@ -61,13 +67,7 @@ export async function resolveProviderRetrievalProfile(host: DkbProviderHost): Pr
     providers: description.providers,
     processors: description.processors,
     indexMode: index.mode,
-    embedding: {
-      provider: target.embedding,
-      space: model,
-      dimensions,
-      queryMode: builds.retrieval.embedding.queryMode,
-      documentMode: builds.retrieval.embedding.documentMode,
-    },
+    ...(embedding ? { embedding } : {}),
     compatibility: builds.retrieval.compatibility,
   };
 }
@@ -84,6 +84,10 @@ export function retrievalProfileLockForRetrievalPipelines(
   }
 
   for (const result of results) {
+    if (!desired.embedding) {
+      if (result.vectors.length !== 0) throw new DkbError(`Lexical-only target ${desired.target} must not emit vectors`);
+      continue;
+    }
     if (result.vectors.length !== result.records.length) {
       throw new DkbError(`Retrieval pipeline vector count mismatch: expected ${result.records.length}, got ${result.vectors.length}`);
     }
@@ -118,18 +122,18 @@ export function retrievalProfileLockForRetrievalPipelines(
     || provider.kind === 'retrieval');
 
   const profile: DkbRetrievalProfileLock['profile'] = {
-    embedding: {
+    ...(desired.embedding ? { embedding: {
       provider: desired.embedding.provider,
       space: desired.embedding.space,
       ...(desired.compatibility.modelRevision ? { modelRevision: desired.compatibility.modelRevision } : {}),
       dimensions: desired.embedding.dimensions,
-      metric: desired.compatibility.metric,
-      normalized: desired.compatibility.normalized,
+      metric: requiredCompatibilityString(desired.compatibility.metric, 'metric'),
+      normalized: requiredCompatibilityBoolean(desired.compatibility.normalized, 'normalized'),
       queryMode: desired.embedding.queryMode,
       documentMode: desired.embedding.documentMode,
-      queryTransformDigest: desired.compatibility.queryTransformDigest,
-      documentTransformDigest: desired.compatibility.documentTransformDigest,
-    },
+      queryTransformDigest: requiredCompatibilityString(desired.compatibility.queryTransformDigest, 'queryTransformDigest'),
+      documentTransformDigest: requiredCompatibilityString(desired.compatibility.documentTransformDigest, 'documentTransformDigest'),
+    } } : {}),
     evidence: {
       profileDigest: desired.evidenceProfileDigest,
       providers: evidenceProviders,
@@ -164,6 +168,16 @@ export function retrievalProfileLockForRetrievalPipelines(
     profileDigest: desired.retrievalProfileDigest,
     generatedAt: options.generatedAt ?? new Date().toISOString(),
   });
+}
+
+function requiredCompatibilityString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new DkbError(`Retrieval compatibility ${label} must be a non-empty string`);
+  return value;
+}
+
+function requiredCompatibilityBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') throw new DkbError(`Retrieval compatibility ${label} must be a boolean`);
+  return value;
 }
 
 export async function readRetrievalProfileLock(root: string): Promise<DkbRetrievalProfileLock> {

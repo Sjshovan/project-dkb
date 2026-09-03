@@ -102,7 +102,7 @@ export async function loadCollection(root: string, collectionId?: string): Promi
   throw new DkbError('A Collection identity is required when the Library has more than one active root');
 }
 
-export async function loadLibrary(root: string): Promise<LoadedLibrary> {
+async function readLibraryManifest(root: string): Promise<{ sourceManifest: DkbSourceManifest; manifest: DkrManifest }> {
   const resolvedRoot = path.resolve(root);
   const source = manifestPath(resolvedRoot, DKB_MANIFEST_FILENAME);
 
@@ -115,10 +115,20 @@ export async function loadLibrary(root: string): Promise<LoadedLibrary> {
   if (sourceManifest.type !== 'library') {
     throw new DkbError(`Expected a Library manifest at ${source}; found ${sourceManifest.type}`);
   }
+  return { sourceManifest, manifest: normalizeLibraryManifest(resolvedRoot, sourceManifest) };
+}
+
+/** Read canonical Library identity and configuration without traversing installed packages. */
+export async function loadLibraryManifest(root: string): Promise<DkrManifest> {
+  return (await readLibraryManifest(root)).manifest;
+}
+
+export async function loadLibrary(root: string): Promise<LoadedLibrary> {
+  const resolvedRoot = path.resolve(root);
+  const { sourceManifest, manifest: libraryManifest } = await readLibraryManifest(resolvedRoot);
 
   const directEntries = await discoverLibraryEntries(resolvedRoot);
   const entriesByIdentity = new Map(directEntries.map((entry) => [entry.manifest.name, entry]));
-  const libraryManifest = normalizeLibraryManifest(resolvedRoot, sourceManifest);
   const activeCollections: LoadedCollection[] = [];
   const standaloneDkbs: LoadedDkb[] = [];
   const collectionMemberIds = new Set<string>();

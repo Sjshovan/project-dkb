@@ -3,6 +3,7 @@ import { DKB_EVIDENCE_IR_FORMAT } from '@sjshovan/dkb-protocol/evidence/ir.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbProviderHost, DkbProviderHostDescription } from './host.js';
 import type { DkbEmbeddingProvider, DkbIndexProvider, DkbRetrievalProvider } from './types.js';
+import { validateEmbeddingCompatibility } from './validation.js';
 
 export const DKB_EVIDENCE_PROFILE_FORMAT = 'dkb.evidence-profile.v1';
 export const DKB_RETRIEVAL_BUILD_PROFILE_FORMAT = 'dkb.retrieval-build-profile.v1';
@@ -27,7 +28,7 @@ export interface DkbResolvedRetrievalBuildProfile {
   evidenceProfileDigest: string;
   providers: ProviderDescription[];
   options: Record<string, Record<string, unknown>>;
-  embedding: {
+  embedding?: {
     provider: string;
     space: string;
     dimensions: number;
@@ -51,14 +52,14 @@ export interface DkbResolvedRetrievalBuildProfile {
   profileDigest: string;
   compatibility: {
     evidenceProfileDigest: string;
-    embeddingProvider: string;
-    embeddingSpace: string;
-    dimensions: number;
-    metric: string;
-    normalized: boolean;
+    embeddingProvider?: string;
+    embeddingSpace?: string;
+    dimensions?: number;
+    metric?: string;
+    normalized?: boolean;
     modelRevision?: string;
-    queryTransformDigest: string;
-    documentTransformDigest: string;
+    queryTransformDigest?: string;
+    documentTransformDigest?: string;
     indexFormat: string;
     protocol: string;
   };
@@ -72,6 +73,86 @@ export interface DkbResolvedBuildProfiles {
 }
 
 export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbResolvedBuildProfiles> {
+  const description = host.describe();
+  const target = host.config.target;
+  const resolvedEvidence = resolveEvidenceProfile(host);
+  const evidenceProfileDigest = resolvedEvidence.profileDigest;
+  const embeddingId = target.embedding;
+  const index = host.provider<DkbIndexProvider>('index');
+  const retrieval = host.provider<DkbRetrievalProvider>('retrieval');
+  const embedding = embeddingId ? host.provider<DkbEmbeddingProvider>('embedding') : undefined;
+  const raw = embedding && embeddingId ? validateEmbeddingCompatibility(await embedding.compatibility(host.optionsFor(embeddingId)), embeddingId) : undefined;
+  const embeddingSpace = embeddingId && raw ? requiredString(raw.embeddingSpace, `${embeddingId} compatibility embeddingSpace`) : undefined;
+  const dimensions = embeddingId && raw ? requiredPositiveInteger(raw.dimensions, `${embeddingId} compatibility dimensions`) : undefined;
+  const metric = embeddingId && raw ? requiredString(raw.metric, `${embeddingId} compatibility metric`) : undefined;
+  const normalized = embeddingId && raw ? requiredBoolean(raw.normalized, `${embeddingId} compatibility normalized`) : undefined;
+  const queryMode = raw ? optionalString(raw.queryMode) ?? 'query' : undefined;
+  const documentMode = raw ? optionalString(raw.documentMode) ?? 'passage' : undefined;
+  const modelRevision = raw ? optionalString(raw.modelRevision) : undefined;
+  const queryTransformDigest = queryMode ? optionalString(raw?.queryTransformDigest) ?? stableHash({ mode: queryMode }) : undefined;
+  const documentTransformDigest = documentMode ? optionalString(raw?.documentTransformDigest) ?? stableHash({ mode: documentMode }) : undefined;
+  const retrievalProviders = description.providers
+    .filter((provider) => ['embedding', 'index', 'retrieval'].includes(provider.kind));
+  const retrievalProfile = {
+    format: DKB_RETRIEVAL_BUILD_PROFILE_FORMAT as typeof DKB_RETRIEVAL_BUILD_PROFILE_FORMAT,
+    evidenceProfileDigest,
+    providers: retrievalProviders,
+    options: selectedOptions(host, retrievalProviders.map((provider) => provider.id)),
+    ...(embeddingId && embeddingSpace && dimensions && metric && normalized !== undefined && queryMode && documentMode && queryTransformDigest && documentTransformDigest ? { embedding: {
+      provider: embeddingId,
+      space: embeddingSpace,
+      dimensions,
+      metric,
+      normalized,
+      queryMode,
+      documentMode,
+      ...(modelRevision ? { modelRevision } : {}),
+      queryTransformDigest,
+      documentTransformDigest,
+    } } : {}),
+    index: {
+      provider: target.index,
+      mode: index.mode,
+      format: index.format,
+    },
+    retrieval: {
+      provider: target.retrieval,
+      protocol: retrieval.protocol,
+    },
+  };
+  const retrievalProfileDigest = stableHash({
+    ...retrievalProfile,
+    providers: retrievalProviders.map(profileIdentity),
+  });
+  const compatibility = {
+    evidenceProfileDigest,
+    ...(embeddingId && embeddingSpace && dimensions && metric && normalized !== undefined && queryTransformDigest && documentTransformDigest ? {
+      embeddingProvider: embeddingId,
+      embeddingSpace,
+      dimensions,
+      metric,
+      normalized,
+      ...(modelRevision ? { modelRevision } : {}),
+      queryTransformDigest,
+      documentTransformDigest,
+    } : {}),
+    indexFormat: index.format,
+    protocol: retrieval.protocol,
+  };
+
+  return {
+    target: description.target,
+    evidence: resolvedEvidence,
+    retrieval: {
+      ...retrievalProfile,
+      profileDigest: retrievalProfileDigest,
+      compatibility,
+      compatibilityDigest: stableHash(compatibility),
+    },
+  };
+}
+
+export function resolveEvidenceProfile(host: DkbProviderHost): DkbResolvedEvidenceProfile {
   const description = host.describe();
   const target = host.config.target;
   const evidenceProviderKinds = target.evidence
@@ -93,81 +174,22 @@ export async function resolveBuildProfiles(host: DkbProviderHost): Promise<DkbRe
       ...processors.map((processor) => processor.id),
     ]),
   };
-  const evidenceProfileDigest = stableHash(evidenceProfile);
-  const embedding = host.provider<DkbEmbeddingProvider>('embedding');
-  const index = host.provider<DkbIndexProvider>('index');
-  const retrieval = host.provider<DkbRetrievalProvider>('retrieval');
-  const raw = await embedding.compatibility(host.optionsFor(target.embedding));
-  const embeddingSpace = requiredString(raw.embeddingSpace, `${target.embedding} compatibility embeddingSpace`);
-  const dimensions = requiredPositiveInteger(raw.dimensions, `${target.embedding} compatibility dimensions`);
-  const metric = requiredString(raw.metric, `${target.embedding} compatibility metric`);
-  const normalized = requiredBoolean(raw.normalized, `${target.embedding} compatibility normalized`);
-  const queryMode = optionalString(raw.queryMode) ?? 'query';
-  const documentMode = optionalString(raw.documentMode) ?? 'passage';
-  const modelRevision = optionalString(raw.modelRevision);
-  const queryTransformDigest = optionalString(raw.queryTransformDigest) ?? stableHash({ mode: queryMode });
-  const documentTransformDigest = optionalString(raw.documentTransformDigest) ?? stableHash({ mode: documentMode });
-  const retrievalProviders = description.providers
-    .filter((provider) => ['embedding', 'index', 'retrieval'].includes(provider.kind));
-  const retrievalProfile = {
-    format: DKB_RETRIEVAL_BUILD_PROFILE_FORMAT as typeof DKB_RETRIEVAL_BUILD_PROFILE_FORMAT,
-    evidenceProfileDigest,
-    providers: retrievalProviders,
-    options: selectedOptions(host, retrievalProviders.map((provider) => provider.id)),
-    embedding: {
-      provider: target.embedding,
-      space: embeddingSpace,
-      dimensions,
-      metric,
-      normalized,
-      queryMode,
-      documentMode,
-      ...(modelRevision ? { modelRevision } : {}),
-      queryTransformDigest,
-      documentTransformDigest,
-    },
-    index: {
-      provider: target.index,
-      mode: index.mode,
-      format: index.format,
-    },
-    retrieval: {
-      provider: target.retrieval,
-      protocol: retrieval.protocol,
-    },
-  };
-  const retrievalProfileDigest = stableHash(retrievalProfile);
-  const compatibility = {
-    evidenceProfileDigest,
-    embeddingProvider: target.embedding,
-    embeddingSpace,
-    dimensions,
-    metric,
-    normalized,
-    ...(modelRevision ? { modelRevision } : {}),
-    queryTransformDigest,
-    documentTransformDigest,
-    indexFormat: index.format,
-    protocol: retrieval.protocol,
-  };
-
-  return {
-    target: description.target,
+  const evidenceProfileDigest = stableHash({
+    ...evidenceProfile,
     evidence: {
-      ...evidenceProfile,
-      profileDigest: evidenceProfileDigest,
+      ...evidenceProfile.evidence,
+      providers: evidenceProviders.map(profileIdentity),
     },
-    retrieval: {
-      ...retrievalProfile,
-      profileDigest: retrievalProfileDigest,
-      compatibility,
-      compatibilityDigest: stableHash(compatibility),
-    },
+    processors: processors.map(profileIdentity),
+  });
+  return {
+    ...evidenceProfile,
+    profileDigest: evidenceProfileDigest,
   };
 }
 
 function selectedOptions(host: DkbProviderHost, ids: readonly string[]): Record<string, Record<string, unknown>> {
-  return Object.fromEntries([...new Set(ids)].sort().map((id) => [id, { ...host.optionsFor(id) }]));
+  return Object.fromEntries([...new Set(ids)].sort().map((id) => [id, { ...host.profileOptionsFor(id) }]));
 }
 
 function requiredString(value: unknown, label: string): string {
@@ -193,4 +215,9 @@ function requiredBoolean(value: unknown, label: string): boolean {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function profileIdentity<T extends { source: unknown; sourcePath: unknown }>(description: T): Omit<T, 'source' | 'sourcePath'> {
+  const { source: _source, sourcePath: _sourcePath, ...identity } = description;
+  return identity;
 }

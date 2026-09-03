@@ -12,8 +12,9 @@ import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type {
   DkbIndexMutationResult,
   DkbIndexRuntime,
+  DkbJsonValue,
   DkbPipelineRecord,
-  DkbProviderBuildReceipt,
+  DkbProviderOutputReceipt,
   DkbRetrievalPipeline,
   DkbRuntimePackageBuild,
 } from '@sjshovan/dkb-pipeline/types.js';
@@ -44,7 +45,7 @@ export interface MeilisearchImportManifest {
   packageVersion: string;
   recordCount: number;
   dimensions: number;
-  compatibility: Record<string, unknown>;
+  compatibility: Record<string, DkbJsonValue>;
   compatibilityDigest: string;
   releaseDigest: string;
   files: {
@@ -98,9 +99,10 @@ export async function writeMeilisearchPackageArtifacts(input: {
   artifactsRoot: string;
   dkb: LoadedDkb;
   compiled: DkbRetrievalPipeline;
-  compatibility: Record<string, unknown>;
-  providerVersion: string;
-}): Promise<DkbProviderBuildReceipt | null> {
+  compatibility: Record<string, DkbJsonValue>;
+  signal?: AbortSignal;
+}): Promise<DkbProviderOutputReceipt | null> {
+  throwIfAborted(input.signal);
   const records = compiledRecords(input.dkb, input.compiled);
 
   if (records.length === 0) {
@@ -115,8 +117,11 @@ export async function writeMeilisearchPackageArtifacts(input: {
   await pipeline(
     Readable.from(records.map((record) => `${JSON.stringify(record)}\n`)),
     createWriteStream(recordsPath, { encoding: 'utf8' }),
+    { signal: input.signal },
   );
+  throwIfAborted(input.signal);
   const recordsFile = await fileDigest(recordsPath);
+  throwIfAborted(input.signal);
   const manifest: MeilisearchImportManifest = {
     format: MEILISEARCH_IMPORT_FORMAT,
     packageId: input.dkb.manifest.id,
@@ -139,8 +144,6 @@ export async function writeMeilisearchPackageArtifacts(input: {
   await writeJsonAtomic(resolveFrom(input.artifactsRoot, MEILISEARCH_MANIFEST_PATH), manifest);
 
   return {
-    providerId: MEILISEARCH_PROVIDER_ID,
-    providerVersion: input.providerVersion,
     build: {
       format: manifest.format,
       recordCount: manifest.recordCount,
@@ -251,8 +254,30 @@ export async function installMeilisearchPackage(input: {
 
     return { indexId, documentCount: verification.count, status: 'ready', created: true };
   } catch (error) {
-    await deleteIndex(client, indexId, input.options).catch(() => undefined);
+    try { await deleteIndex(client, indexId, input.options); } catch (cleanupError) {
+      throw new DkbError(
+        `${errorMessage(error)} Prepared Meilisearch index ${indexId} could not be removed: ${errorMessage(cleanupError)}. Restore the service and remove only this orphan; previous indexes were not selected for cleanup.`,
+        error instanceof DkbError ? error.code : 'managed_index_install_failed',
+      );
+    }
     throw error;
+  }
+}
+
+/** Transaction rollback is exact-index only; package uninstall is a separate operation. */
+export async function discardMeilisearchPackage(input: Parameters<typeof installMeilisearchPackage>[0] & { indexId: string }): Promise<DkbIndexMutationResult> {
+  throwIfAborted(input.signal);
+  const { manifest } = await validateMeilisearchPackageArtifact(input.dkb, input.compatibility, input.artifactsRoot);
+  const expected = meilisearchIndexId(input.libraryRoot, input.libraryId, input.dkb.manifest.id, input.dkb.manifest.version, manifest.compatibilityDigest);
+  if (input.indexId !== expected) {
+    throw new DkbError(`Refusing Meilisearch rollback for ${input.indexId}: the prepared build owns only ${expected}.`, 'index_rollback_mismatch');
+  }
+  try {
+    throwIfAborted(input.signal);
+    await deleteIndex(await createClient(input.options), expected, input.options);
+    return { indexId: expected, documentCount: 0, status: 'removed' };
+  } catch (error) {
+    return { indexId: expected, documentCount: 0, status: 'orphaned', warning: `Prepared Meilisearch index ${expected} could not be removed. Previous indexes were left untouched. Restore the service and remove only this orphan: ${errorMessage(error)}` };
   }
 }
 
@@ -288,7 +313,7 @@ export async function openMeilisearchRuntime(input: {
   libraryId: string;
   packages: readonly DkbRuntimePackageBuild[];
   compatibility: Record<string, unknown>;
-  embedQuery(text: string, signal?: AbortSignal): Promise<number[]>;
+  embedQuery?: (text: string, signal?: AbortSignal) => Promise<number[]>;
   options: Readonly<Record<string, unknown>>;
   signal?: AbortSignal;
 }): Promise<DkbIndexRuntime | null> {
@@ -315,6 +340,10 @@ export async function openMeilisearchRuntime(input: {
   const units = loaded.flatMap((item) => item.records.map((record) => record.unit))
     .sort((left, right) => left.id.localeCompare(right.id));
   const dimensions = positiveInteger(input.compatibility.dimensions, 'embedding compatibility dimensions');
+  if (!input.embedQuery) {
+    throw new DkbError('Meilisearch requires a query embedding provider');
+  }
+  const embedQuery = input.embedQuery;
 
   return {
     providerId: MEILISEARCH_PROVIDER_ID,
@@ -323,7 +352,7 @@ export async function openMeilisearchRuntime(input: {
     packages,
     async search(query, limit, signal) {
       throwIfAborted(signal ?? input.signal);
-      const vector = await input.embedQuery(query, signal ?? input.signal);
+      const vector = await embedQuery(query, signal ?? input.signal);
 
       if (vector.length !== dimensions) {
         throw new DkbError(`Query embedding dimension mismatch: expected ${dimensions}, got ${vector.length}`);
@@ -466,24 +495,19 @@ function compiledRecords(dkb: LoadedDkb, compiled: DkbRetrievalPipeline): Meilis
 }
 
 function unitFromRecord(dkb: LoadedDkb, record: DkbPipelineRecord): MeilisearchUnit {
-  const metadata = record.metadata;
+  const provenance = record.provenance;
   return {
     id: record.id,
     dkbId: dkb.manifest.id,
-    assetId: requiredString(metadata.assetId, `${record.id}.assetId`),
-    storeId: requiredString(metadata.storeId, `${record.id}.storeId`),
-    type: requiredString(metadata.type, `${record.id}.type`),
-    title: requiredString(metadata.title, `${record.id}.title`),
+    assetId: provenance.assetId,
+    storeId: provenance.storeId,
+    type: provenance.sourceType,
+    title: provenance.title,
     text: record.text,
-    keywords: tokenize(`${String(metadata.title ?? '')} ${record.text}`).slice(0, 24),
-    updatedAt: requiredString(metadata.updatedAt, `${record.id}.updatedAt`),
-    hash: requiredString(metadata.hash, `${record.id}.hash`),
+    keywords: tokenize(`${provenance.title} ${record.text}`).slice(0, 24),
+    updatedAt: provenance.updatedAt,
+    hash: provenance.sourceHash,
   };
-}
-
-function requiredString(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0) throw new DkbError(`${label} must be a non-empty string`);
-  return value;
 }
 
 function tokenize(value: string): string[] {

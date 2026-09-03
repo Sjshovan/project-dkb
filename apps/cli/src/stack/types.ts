@@ -2,23 +2,27 @@ import type { DkbDistributionService } from '@sjshovan/dkb-pipeline/host.js';
 
 export type DkbStackTarget = string;
 
-export interface DkbStackContext {
+export interface DkbStackControlContext {
   name: string;
   projectName: string;
-  target: DkbStackTarget;
-  runtimeTarget: DkbStackTarget;
   root: string;
-  libraryRoot: string;
-  runtimeStateRoot: string;
   composeFile: string;
   envFile: string;
+  allProfiles: string[];
+}
+
+export interface DkbStackContext extends DkbStackControlContext {
+  target: DkbStackTarget;
+  runtimeTarget: DkbStackTarget;
+  compilerTargets: string[];
+  libraryRoot: string;
+  runtimeStateRoot: string;
   registryUrl: string;
   runtimeUrl: string;
   registryPort: number;
   runtimePort: number;
   requiredServices: DkbDistributionService[];
   profiles: string[];
-  allProfiles: string[];
   inactiveComposeServices: string[];
   servicePorts: Record<string, number>;
   version?: string;

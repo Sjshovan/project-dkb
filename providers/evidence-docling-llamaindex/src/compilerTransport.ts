@@ -9,6 +9,9 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { resolveDockerImageIdentity } from '@sjshovan/dkb-pipeline/serviceIdentity.js';
+import { isSha256Digest } from '@sjshovan/dkb-pipeline/validation.js';
+import { resolveEvidenceOptions, type EvidenceOptions } from './evidenceOptions.js';
 import {
   LLAMAINDEX_DOCUMENT_BATCH_SIZE,
 } from './compilerConstants.js';
@@ -95,18 +98,21 @@ export async function runCompiler(
   inputRoot: string,
   requestDir: string,
   outputDir: string,
-  options: { model?: string; timeoutMs?: number; workers?: number },
+  options: { imageDigest?: string; model?: string; modelRevision?: string; evidenceOptions?: EvidenceOptions; timeoutMs?: number; workers?: number },
 ): Promise<void> {
+  const imageId = await resolveDockerImageIdentity(image, options.imageDigest);
   const args = [
     'run', '--rm',
     ...(environmentFlag(process.env.DKB_LLAMA_GPU) ? ['--gpus', 'all'] : []),
     '--mount', `type=bind,src=${path.resolve(inputRoot)},dst=/input,readonly`,
     '--mount', `type=bind,src=${path.resolve(requestDir)},dst=/request,readonly`,
     '--mount', `type=bind,src=${path.resolve(outputDir)},dst=/output`,
-    image,
+    imageId,
   ];
   const env = [
     options.model ? `DKB_COMPILER_MODEL=${options.model}` : null,
+    options.modelRevision ? `DKB_COMPILER_MODEL_REVISION=${options.modelRevision}` : null,
+    `DKB_EVIDENCE_OPTIONS=${JSON.stringify(options.evidenceOptions ?? resolveEvidenceOptions())}`,
     `DKB_LLAMA_ASYNC_WORKERS=${boundedWorkerCount(options.workers ?? Number(process.env.DKB_LLAMA_ASYNC_WORKERS ?? 1))}`,
     `DKB_LLAMA_DOCUMENT_BATCH_SIZE=${process.env.DKB_LLAMA_DOCUMENT_BATCH_SIZE ?? String(LLAMAINDEX_DOCUMENT_BATCH_SIZE)}`,
   ].filter((value): value is string => Boolean(value));
@@ -128,7 +134,7 @@ export async function runCompiler(
 export async function runCompilerService(
   serviceUrl: string,
   request: LlamaIndexCompilerRequest,
-  options: { jobId: string; model?: string; timeoutMs?: number; workers?: number },
+  options: { jobId: string; model?: string; modelRevision?: string; evidenceOptions?: EvidenceOptions; timeoutMs?: number; workers?: number },
 ): Promise<LlamaIndexCompilerOutput> {
   const endpoint = compilerServiceEndpoint(serviceUrl);
   const timeoutMs = boundedCompilerTimeout(options.timeoutMs);
@@ -139,6 +145,8 @@ export async function runCompilerService(
         jobId: options.jobId,
         request,
         model: options.model,
+        modelRevision: options.modelRevision,
+        evidenceOptions: options.evidenceOptions ?? resolveEvidenceOptions(),
         workers: boundedWorkerCount(options.workers ?? Number(process.env.DKB_LLAMA_ASYNC_WORKERS ?? 1)),
       }), timeoutMs);
   } catch (error) {
@@ -267,6 +275,9 @@ function parseOutput(value: unknown, source: string): LlamaIndexCompilerOutput {
   for (const record of output.records) {
     if (!record || typeof record.id !== 'string' || typeof record.assetId !== 'string' || 'embedding' in record) {
       throw new DkbError(`Invalid LlamaIndex compiler record at ${source}`);
+    }
+    if (!isSha256Digest(record.sourceHash)) {
+      throw new DkbError('Evidence worker record requires the original source SHA-256 hash. Rebuild and restart the selected Evidence worker; chunk text hashes cannot replace source provenance.');
     }
   }
   return output as LlamaIndexCompilerOutput;

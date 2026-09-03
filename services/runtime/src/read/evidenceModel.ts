@@ -45,6 +45,7 @@ export type SourceUnitQueryEvidence = { tokens: string[]; phrases: string[]; ide
 
 export type SourceUnitMatch = {
   unit: RuntimeEvidenceUnit;
+  retrieval: { score: number; channels: string[] };
   evidence: { phrases: string[]; identifiers: string[]; keywords: string[]; tokens: string[] };
 };
 
@@ -100,11 +101,16 @@ export function queryEvidenceForRequest(query: DkbReadQuery): SourceUnitQueryEvi
   return { phrases, tokens, identifiers };
 }
 
-export function matchForUnit(unit: RuntimeEvidenceUnit, query: SourceUnitQueryEvidence, matchedTokens: string[]): SourceUnitMatch {
+export function matchForUnit(
+  unit: RuntimeEvidenceUnit,
+  query: SourceUnitQueryEvidence,
+  retrieval: { score: number; channels: string[]; matchedTokens?: string[] },
+): SourceUnitMatch {
   const normalized = `${unit.title}\n${unit.text}\n${unit.keywords.join(' ')}`.toLowerCase();
-  const tokens = [...new Set(matchedTokens.filter(Boolean).map((token) => token.toLowerCase()))];
+  const tokens = [...new Set((retrieval.matchedTokens ?? []).filter(Boolean).map((token) => token.toLowerCase()))];
   return {
     unit,
+    retrieval: { score: retrieval.score, channels: [...retrieval.channels] },
     evidence: {
       phrases: query.phrases.filter((phrase) => normalized.includes(phrase)),
       identifiers: query.identifiers.filter((identifier) => normalized.includes(identifier)),

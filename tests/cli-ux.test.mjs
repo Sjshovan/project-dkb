@@ -31,6 +31,31 @@ test('spawned CLI inventories are removed after each invocation', async () => {
   await assert.rejects(fs.access(result.inventoryPath));
 });
 
+test('Registry cancel-build presents confirmed and pending cancellation without claiming published builds were cancelled', async () => {
+  let status = 'cancelling';
+  const server = http.createServer((request, response) => {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.url, '/api/registry/packages/test/package/versions/1.0.0/build-jobs/7/cancel');
+    request.resume();
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ jobId: 7, stage: 'retrieval', target: 'tei-faiss', status, attempts: 1 }));
+  });
+  await listen(server);
+  try {
+    const args = ['registry', 'cancel-build', '@test/package', '--version', '1.0.0', '--job', '7', '--url', `http://127.0.0.1:${server.address().port}`];
+    const pending = await runCli(['--no-progress', ...args], { DKB_REGISTRY_TOKEN: 'synthetic-test' });
+    assert.equal(pending.code, 0, pending.stderr);
+    assert.match(pending.stdout, /Cancellation is pending/u);
+    assert.match(pending.stdout, /Retry: dkb registry cancel-build/u);
+    for (const terminal of ['cancelled', 'published']) {
+      status = terminal;
+      const result = await runCli(['--json', ...args], { DKB_REGISTRY_TOKEN: 'synthetic-test' });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).status, terminal);
+    }
+  } finally { await close(server); }
+});
+
 test('human summaries render collections as aligned tables', () => {
   assert.deepEqual(humanSummary({
     packages: [
@@ -462,6 +487,11 @@ test('install detects an identical package before requesting its archive', async
       return;
     }
 
+    if (request.url === '/api/registry/packages/acct-test/already-here/versions/1.0.0/install-plan?target=alternate') {
+      response.end(JSON.stringify({}));
+      return;
+    }
+
     response.statusCode = 500;
     response.end(JSON.stringify({ message: `Unexpected request: ${request.url}` }));
   });
@@ -518,6 +548,25 @@ test('install detects an identical package before requesting its archive', async
     assert.deepEqual(requests, [
       '/api/registry/packages/acct-test/already-here',
       '/api/registry/packages/acct-test/already-here/versions/1.0.0',
+    ]);
+
+    requests.length = 0;
+    const targeted = await runCli([
+      '--no-progress',
+      'install',
+      '@acct-test/already-here',
+      '--version',
+      '1.0.0',
+      '--target',
+      'alternate',
+      '--library',
+      tempRoot,
+    ], { DKB_REGISTRY_URL: '' });
+    assert.equal(targeted.code, 1);
+    assert.deepEqual(requests, [
+      '/api/registry/packages/acct-test/already-here',
+      '/api/registry/packages/acct-test/already-here/versions/1.0.0',
+      '/api/registry/packages/acct-test/already-here/versions/1.0.0/install-plan?target=alternate',
     ]);
 
     const listed = await runCli(['list', '--library', tempRoot]);
@@ -1251,6 +1300,83 @@ test('publish survives a transient connection failure while polling compilation 
   }
 });
 
+test('publish honors Retry-After and resumes status polling after Registry rate limiting', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-publish-poll-rate-limit-'));
+  const packageRoot = path.join(tempRoot, 'poll-rate-limit-demo');
+  const previousPollInterval = process.env.DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS;
+  const previousTimeout = process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS;
+  let statusPolls = 0;
+  let rateLimitedAt = 0;
+  let resumedAt = 0;
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.setHeader('content-type', 'application/json');
+
+    if (request.method === 'POST' && request.url === '/api/registry/packages') {
+      response.statusCode = 201;
+      response.end(JSON.stringify({ data: { id: '@test/poll-rate-limit-demo' } }));
+      return;
+    }
+
+    if (request.method === 'POST' && request.url === '/api/registry/packages/test/poll-rate-limit-demo/versions') {
+      response.statusCode = 202;
+      response.end(JSON.stringify({
+        data: {
+          packageId: '@test/poll-rate-limit-demo',
+          version: '0.1.0',
+          status: 'compiling',
+        },
+      }));
+      return;
+    }
+
+    if (request.method === 'GET' && request.url === '/api/registry/packages/test/poll-rate-limit-demo/versions/0.1.0') {
+      statusPolls += 1;
+      if (statusPolls === 1) {
+        rateLimitedAt = Date.now();
+        response.statusCode = 429;
+        response.setHeader('retry-after', '1');
+        response.end(JSON.stringify({ message: 'Too Many Attempts.' }));
+        return;
+      }
+
+      resumedAt = Date.now();
+      response.end(JSON.stringify({
+        data: {
+          packageId: '@test/poll-rate-limit-demo',
+          version: '0.1.0',
+          status: 'published',
+          recordCount: 1,
+        },
+      }));
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end(JSON.stringify({ message: 'Not found' }));
+  });
+
+  try {
+    process.env.DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS = '10';
+    process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS = '3000';
+    await writePackageManifest(packageRoot, 'Poll Rate Limit Demo', '0.1.0');
+    await listen(server);
+    const address = server.address();
+    assert.notEqual(typeof address, 'string');
+    const client = new DkbRegistryClient({ baseUrl: `http://127.0.0.1:${address.port}` });
+    const result = await client.publish({ sourcePath: packageRoot });
+
+    assert.equal(result.status, 'published');
+    assert.equal(statusPolls, 2);
+    assert.ok(resumedAt - rateLimitedAt >= 900, `Retry-After was not honored (${resumedAt - rateLimitedAt} ms)`);
+  } finally {
+    restoreEnvironment('DKB_REGISTRY_PUBLISH_POLL_INTERVAL_MS', previousPollInterval);
+    restoreEnvironment('DKB_REGISTRY_PUBLISH_TIMEOUT_MS', previousTimeout);
+    await close(server);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('runtime import removes its staged copy after a successful activation', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-add-staging-'));
   const packageRoot = path.join(tempRoot, 'source');
@@ -1262,38 +1388,6 @@ test('runtime import removes its staged copy after a successful activation', asy
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
       response.setHeader('content-type', 'application/json');
-      if (request.url === '/embed') {
-        const embeddingRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        response.end(JSON.stringify({
-          model: 'BAAI/bge-small-en-v1.5',
-          vectors: embeddingRequest.texts.map(() => Array.from({ length: 384 }, (_, index) => index === 0 ? 1 : 0)),
-        }));
-        return;
-      }
-      if (request.url === '/compile') {
-        const compileRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        response.end(JSON.stringify({
-          format: 'dkb.llamaindex.compile.v2',
-          compiler: { id: 'test-ingestion', model: 'BAAI/bge-small-en-v1.5' },
-          records: [{
-            id: 'test-record',
-            assetId: 'notes.md',
-            storeId: compileRequest.request.stores[0].id,
-            type: 'filesystem',
-            locator: { path: 'notes.md', chunk: 0 },
-            assetLocator: { path: 'notes.md' },
-            title: 'notes.md',
-            text: 'Staged source.',
-            hash: 'sha256:test-record',
-            updatedAt: '2026-08-27T00:00:00.000Z',
-            chunkOrdinal: 0,
-            chunkStart: 0,
-            chunkEnd: 14,
-            metadata: {},
-          }],
-        }));
-        return;
-      }
       requestPath = request.url;
       requestBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       response.end(JSON.stringify({ status: 'installed', id: 'staged-demo' }));
@@ -1304,17 +1398,41 @@ test('runtime import removes its staged copy after a successful activation', asy
     await writePackageManifest(packageRoot, 'Staged Demo', '0.1.0');
     await fs.writeFile(path.join(packageRoot, 'notes.md'), 'Staged source.\n');
     await Promise.all([
+      fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'evidence'), { recursive: true }),
       fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'embedding'), { recursive: true }),
       fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index'), { recursive: true }),
+      fs.mkdir(path.join(packageRoot, '.dkb', 'plugins', '@test', 'retrieval'), { recursive: true }),
     ]);
     await fs.writeFile(path.join(packageRoot, '.dkb', 'config.json'), JSON.stringify({
       format: 'dkb.config.v2',
-      targets: { default: { embedding: '@test/embedding', index: '@test/index' } },
+      targets: { default: { evidence: '@test/evidence', embedding: '@test/embedding', index: '@test/index', retrieval: '@test/retrieval' } },
     }));
+    await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'evidence', 'plugin.mjs'), `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+export const apiVersion = 3;
+export const id = '@test/evidence';
+export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
+export function setup(context) {
+  context.registerProvider({ kind: 'evidence', async compile({ dkb }) {
+    const bytes = await fs.readFile(path.join(dkb.root, 'notes.md'));
+    const text = bytes.toString('utf8').trimEnd();
+    return { records: [{ id: 'test-record', chunkId: 'test-chunk', text, metadata: {}, provenance: {
+      assetId: 'notes.md', storeId: 'files', sourceType: 'filesystem',
+      locator: { path: 'notes.md', chunk: 0 }, assetLocator: { path: 'notes.md' }, title: 'notes.md',
+      sourceHash: 'sha256:' + createHash('sha256').update(bytes).digest('hex'),
+      updatedAt: '2026-08-27T00:00:00.000Z', chunkOrdinal: 0, chunkStart: 0, chunkEnd: text.length,
+    } }], receipt: { build: { records: 1 } } };
+  } });
+}
+`);
     await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'embedding', 'plugin.mjs'), `
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/embedding';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({
     kind: 'embedding',
@@ -1324,24 +1442,38 @@ export function setup(context) {
   });
 }
 `);
+    await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'retrieval', 'plugin.mjs'), `
+export const apiVersion = 3;
+export const id = '@test/retrieval';
+export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
+export function setup(context) {
+  context.registerProvider({ kind: 'retrieval', protocol: 'dkb.evidence.v1', capabilities: { vectors: 'required' },
+    openRuntime() { return { providerId: id, protocol: 'dkb.evidence.v1', async search() { return { hits: [], trace: {} }; }, close() {} }; },
+  });
+}
+`);
     await fs.writeFile(path.join(packageRoot, '.dkb', 'plugins', '@test', 'index', 'plugin.mjs'), `
 import fs from 'node:fs/promises';
 import path from 'node:path';
-export const apiVersion = 2;
+export const apiVersion = 3;
 export const id = '@test/index';
 export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 export function setup(context) {
   context.registerProvider({
     kind: 'index',
     mode: 'packaged',
     format: 'test.index.v1',
+    capabilities: { vectors: 'required' },
     async compilePackage({ artifactsRoot, compiled }) {
       const target = path.join(artifactsRoot, 'test-index.json');
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, JSON.stringify(compiled.records));
-      return { providerId: id, providerVersion: version, build: { recordCount: compiled.records.length } };
+      return { build: { recordCount: compiled.records.length } };
     },
     async validatePackage() { return { documentCount: 1 }; },
+    async verifyRuntime() { return { indexId: 'test', documentCount: 1, status: 'ready' }; },
     async openRuntime() { return null; },
   });
 }
@@ -1360,10 +1492,7 @@ export function setup(context) {
       importRoot,
       '--container-import-root',
       '/imports',
-    ], {
-      DKB_LLAMA_COMPILER_SERVICE_URL: `http://127.0.0.1:${address.port}`,
-      DKB_LLAMA_COMPILER_SERVICE_ROOT: path.join(tempRoot, 'compiler-service'),
-    });
+    ]);
 
     assert.equal(result.code, 0, `${result.stderr}\n${result.stdout}`);
     assert.equal(requestPath, '/api/dkbs/import-artifact');
@@ -1371,6 +1500,72 @@ export function setup(context) {
     assert.deepEqual(await fs.readdir(importRoot), []);
   } finally {
     await close(server);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('pipeline set accepts lexical-only targets in human and JSON modes', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-lexical-pipeline-'));
+  const environment = { DKB_GLOBAL_ROOT: path.join(tempRoot, 'global') };
+
+  try {
+    await writePipelineFixturePlugin(tempRoot, '@test/lexical', 'none');
+
+    const argumentsFor = () => [
+      'pipeline', 'set', 'default',
+      '--root', tempRoot,
+      '--evidence', '@test/lexical',
+      '--index', '@test/lexical',
+      '--retrieval', '@test/lexical',
+    ];
+    const human = await runCli(argumentsFor(), environment);
+    assert.equal(human.code, 0, `${human.stderr}\n${human.stdout}`);
+    assert.match(stripAnsi(human.stderr), /Updating pipeline complete/u);
+    assert.match(human.stdout, /Target: default/u);
+    assert.doesNotMatch(human.stdout, /embedding/u);
+
+    const jsonResult = await runCli(['--json', ...argumentsFor()], environment);
+    assert.equal(jsonResult.code, 0, `${jsonResult.stderr}\n${jsonResult.stdout}`);
+    assert.equal(jsonResult.stderr, '');
+    const json = JSON.parse(jsonResult.stdout);
+    assert.equal(json.target, 'default');
+    assert.deepEqual(json.providers.map((provider) => provider.kind), ['evidence', 'index', 'retrieval']);
+
+    const saved = JSON.parse(await fs.readFile(path.join(tempRoot, '.dkb', 'config.json'), 'utf8'));
+    assert.equal(saved.targets.default.embedding, null);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('pipeline set rejects vector-required targets without an embedder in human and JSON modes', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-vector-pipeline-'));
+  const environment = { DKB_GLOBAL_ROOT: path.join(tempRoot, 'global') };
+
+  try {
+    await writePipelineFixturePlugin(tempRoot, '@test/vector', 'required');
+    const argumentsFor = () => [
+      'pipeline', 'set', 'default',
+      '--root', tempRoot,
+      '--evidence', '@test/vector',
+      '--index', '@test/vector',
+      '--retrieval', '@test/vector',
+    ];
+    const humanFailure = await runCli(argumentsFor(), environment);
+    assert.equal(humanFailure.code, 1);
+    assert.equal(humanFailure.stdout, '');
+    assert.match(stripAnsi(humanFailure.stderr), /requires an embedding provider because its index or retrieval provider requires vectors/u);
+
+    const jsonFailure = await runCli(['--json', ...argumentsFor()], environment);
+    assert.equal(jsonFailure.code, 1);
+    assert.equal(jsonFailure.stderr, '');
+    assert.match(
+      JSON.parse(jsonFailure.stdout).error.message,
+      /requires an embedding provider because its index or retrieval provider requires vectors/u,
+    );
+
+    await assert.rejects(fs.access(path.join(tempRoot, '.dkb', 'config.json')));
+  } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
@@ -1445,7 +1640,7 @@ test('root help separates common, management, and advanced commands', async () =
   for (const signature of [
     'init [options] [identity]',
     'list [options]',
-    'query [options] <library-path> <query>',
+    'query [options] <query>',
   ]) {
     assert.ok(
       result.stdout.includes(`\u001b[36m${signature}\u001b[39m`),
@@ -1472,6 +1667,19 @@ test('registry help exposes the implemented credential lifecycle', async () => {
   assert.match(login.stdout, /--device/);
   assert.match(login.stdout, /--scope <scope\.\.\.>/);
   assert.match(logout.stdout, /--revoke/);
+});
+
+test('remote help exposes discovery only and no retired query gateway', async () => {
+  const result = await runCli(['remote', '--help']);
+
+  assert.equal(result.code, 0);
+  for (const command of ['search', 'add', 'list', 'status', 'remove']) {
+    assert.match(result.stdout, new RegExp(`\\b${command}\\b`, 'u'));
+  }
+  for (const retired of ['discover', 'attach', 'sessions', 'detach', 'query']) {
+    assert.doesNotMatch(result.stdout, new RegExp(`^\\s+${retired}(?:\\s|$)`, 'mu'));
+  }
+  assert.match(result.stdout, /Registry-verified remote DKB Runtime endpoints/u);
 });
 
 test('retained add and compile command surfaces expose their supported options', async () => {
@@ -1544,6 +1752,37 @@ async function writePackageManifest(root, name, version) {
     version,
     description: '',
   }, null, 2)}\n`);
+}
+
+async function writePipelineFixturePlugin(root, id, vectors) {
+  const [namespace, name] = id.split('/');
+  const pluginRoot = path.join(root, '.dkb', 'plugins', namespace, name);
+  await fs.mkdir(pluginRoot, { recursive: true });
+  await fs.writeFile(path.join(pluginRoot, 'plugin.mjs'), `
+export const apiVersion = 3;
+export const id = ${JSON.stringify(id)};
+export const version = '1.0.0';
+export const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
+export function setup(context) {
+  context.registerProvider({ kind: 'evidence', async compile() { throw new Error('compile is not used by pipeline set'); } });
+  context.registerProvider({
+    kind: 'index',
+    mode: 'packaged',
+    format: 'test.index.v1',
+    capabilities: { vectors: ${JSON.stringify(vectors)} },
+    async compilePackage() { return null; },
+    async validatePackage() { return { documentCount: 0 }; },
+    async verifyRuntime() { return { indexId: 'test', documentCount: 0, status: 'ready' }; },
+    async openRuntime() { return null; },
+  });
+  context.registerProvider({
+    kind: 'retrieval',
+    protocol: 'dkb.evidence.v1',
+    capabilities: { vectors: 'none' },
+    async openRuntime() { return null; },
+  });
+}
+`, 'utf8');
 }
 
 function restoreEnvironment(name, value) {

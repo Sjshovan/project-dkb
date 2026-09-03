@@ -207,6 +207,29 @@ test('Library listing preserves missing entries and unregister never deletes sou
   });
 });
 
+test('Library inventory exposes canonical manifest identities without reading packages or mutating files', async () => {
+  await withInventory(async ({ root, inventoryPath }) => {
+    const libraryRoot = await writeLibrary(path.join(root, 'alias'), 'Canonical Library');
+    await registerHostLibrary(libraryRoot, { name: 'host-alias' });
+    const inventoryBefore = await fs.readFile(inventoryPath);
+    const manifestPath = path.join(libraryRoot, 'dkb.json');
+    const manifestBefore = await fs.readFile(manifestPath);
+    await fs.mkdir(path.join(libraryRoot, 'broken-child'));
+    await fs.writeFile(path.join(libraryRoot, 'broken-child', 'dkb.json'), '{invalid child');
+    const listing = await inspectHostLibraries();
+    assert.equal(listing.libraries[0].name, 'host-alias');
+    assert.equal(listing.libraries[0].libraryId, 'canonical-library');
+    assert.equal(listing.libraries[0].status, 'ready');
+    assert.deepEqual(await fs.readFile(inventoryPath), inventoryBefore);
+    assert.deepEqual(await fs.readFile(manifestPath), manifestBefore);
+    assert.equal(await exists(path.join(libraryRoot, '.dkb')), false);
+    await fs.writeFile(manifestPath, '{invalid');
+    const invalid = (await inspectHostLibraries()).libraries[0];
+    assert.equal(invalid.status, 'invalid');
+    assert.equal(invalid.libraryId, undefined);
+  });
+});
+
 test('Library resolution honors explicit, environment, nearest, then selected precedence', async () => {
   await withInventory(async ({ root }) => {
     const selectedRoot = await writeLibrary(path.join(root, 'selected'), 'Selected');

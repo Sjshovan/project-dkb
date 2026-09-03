@@ -1,82 +1,71 @@
 # Verified Remote DKB Hosting
 
-DKB runtimes are portable and may run without a registry. A registry is
-required only when a runtime should be publicly discoverable and trusted by
-other DKB clients.
+A DKB Runtime can be hosted anywhere that exposes its HTTP and MCP endpoints.
+The Registry is optional for serving knowledge, but it is required when a
+publisher wants the endpoint associated with a signed package release and
+discoverable as a verified remote.
 
-## Runtime discovery
+## Runtime discovery and verification
 
-A hosted runtime exposes:
+A hosted Runtime exposes:
 
     /.well-known/dkb.json
 
-Protocol 0.2 advertises the public-read runtime endpoint and each installed
-package release. A package entry includes its package id, version, package tree
-hash, and a registry install descriptor. The runtime document is an assertion;
-it is not trusted by itself.
+The discovery document advertises its public-read endpoint and installed
+package releases. It is an assertion, not a trust root. After publishing a
+release, a namespace administrator may ask the Registry to verify the endpoint:
 
-## Registry verification
-
-After a published release is available, the publisher can register a runtime:
-
-    dkb registry remote claim publisher/docs@1.4.0
+    dkb registry remote claim publisher/docs@1.4.0 \
       --url https://docs.example.com
 
-The registry fetches discovery and health, checks the endpoint origin, package
-identity, version, and package tree hash, and returns a short-lived signed
-endpoint attestation. Only verified and behind endpoints are eligible for
-trusted remote queries. A valid older release is behind, not invalid.
+The Registry fetches discovery and health, checks the endpoint origin, package
+identity, version, and signed source-tree hash, and issues a short-lived signed
+endpoint attestation. A valid Runtime serving an older release is reported as
+`behind`, not as invalid.
 
-The registry derives two catalog indicators:
+Registry catalog indicators distinguish a downloadable release from a verified
+hosted Runtime. They describe availability; they do not prove that an endpoint
+is online now or that its knowledge is installed in any local Library.
 
-    [local]  downloadable published release
-    [remote] verified hosted runtime
+## Local endpoint catalog
 
-The indicators describe availability, not installation state or current online
-health.
-
-## Local remote catalog
-
-Persistent remote state belongs to the runtime at:
-
-    .dkb/runtime/remotes.json
-
-Examples:
+`dkb remote` manages discovery and attestation metadata only:
 
     dkb remote search docs
     dkb remote add publisher/docs --version 1.4.0
     dkb remote list
     dkb remote status <remote-id>
-    dkb remote query <remote-id> "How are retries configured?"
     dkb remote remove <remote-id>
 
-A direct URL can still be added for development:
+A direct development URL may be cataloged, but remains explicitly unverified:
 
     dkb remote add https://docs.example.com
 
-Direct URLs are stored as unverified and cannot offer package installation.
-Registry-backed remotes receive a five-minute verification lease. A query
-refreshes the lease through the registry only when it has expired, then checks
-that returned provenance belongs to the expected package.
+The catalog is stored in the local DKB state root as `remotes.json`. It does not
+create a proxy session, install knowledge, or authorize retrieval.
 
-## Explicit installation
+## Querying a hosted Runtime
 
-Discovery can show a one-time installation offer for the exact
-registry/package/version/tree-hash tuple. An agent must ask the user before
-calling dkb.install_package.
+A Runtime serves only its own validated activation. DKB never routes a query
+through another Runtime process. Register the destination endpoint in the host
+Runtime inventory and address it through the ordinary query surface:
 
-Installation resolves the package through the configured registry, verifies
-publisher and registry signatures and the package tree hash, then uses the
-existing compiled-artifact install path. It never downloads package contents
-from the remote runtime, recompiles, rechunks, or re-embeds.
+    dkb runtime register docs https://docs.example.com --kind remote
+    dkb query "How are retries configured?" --runtime docs
+    dkb read-targets "retry configuration" --runtime docs
 
-Installed packages enter the local vendor/catalog/index only after explicit
-installation. Remote packages remain remote until then.
+Agents connect directly to that destination Runtime's MCP endpoint and use only
+`search` and `fetch`. This keeps activation checks, provenance resolution, and
+the authoritative audit event at the Runtime that actually served the evidence.
+
+Installing a Registry package is a separate, explicit operation. It downloads
+the exact signed source, Evidence, and Retrieval chain from the selected
+Registry into a chosen Library; it never copies knowledge out of a hosted
+Runtime.
 
 ## Trust limits
 
-This verifies an HTTPS endpoint against a registry-signed package release. It
-does not provide hardware-backed host attestation. Registry availability is
-not required for runtime startup or ordinary queries while a verification lease
-is valid. The registry does not proxy remote queries or re-sign package
-artifacts.
+A Registry attestation binds an HTTPS endpoint to one signed release for a
+limited time. It is not hardware-backed host attestation and does not make a
+directly added URL trusted. The Registry does not proxy queries, re-sign Runtime
+responses, or grant a Runtime authority to browse or publish packages.

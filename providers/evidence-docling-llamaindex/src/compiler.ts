@@ -32,6 +32,9 @@ import {
   runCompilerService,
 } from './compilerTransport.js';
 import { maybePrepareCompilerServiceJob } from './compilerService.js';
+import { tokenizerRevision } from './model.js';
+import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
+import { evidenceModelAssetsDigest, resolveEvidenceOptions, type EvidenceOptions } from './evidenceOptions.js';
 
 export {
   LLAMAINDEX_COMPILER_ID,
@@ -40,6 +43,7 @@ export {
   LLAMAINDEX_DOCUMENT_BATCH_SIZE,
 } from './compilerConstants.js';
 export {
+  compilerProviderHealth,
   compilerServiceStatus,
   doctorLlamaIndexCompilerService,
   inspectLlamaIndexCompiler,
@@ -61,6 +65,7 @@ export interface LlamaIndexCompilerRecord {
   title: string;
   text: string;
   hash: string;
+  sourceHash: string;
   updatedAt: string;
   chunkOrdinal: number;
   chunkStart: number;
@@ -72,6 +77,9 @@ export interface LlamaIndexCompilerResult {
   compiler: {
     id: string;
     model: string;
+    modelRevision: string;
+    modelAssetsDigest: string;
+    evidenceOptions: EvidenceOptions;
     image: string;
   };
   execution?: {
@@ -107,7 +115,7 @@ export interface LlamaIndexCompilerCacheStats {
 
 export interface LlamaIndexCompilerOutput {
   format: 'dkb.llamaindex.compile.v2';
-  compiler: { id: string; model: string };
+  compiler: { id: string; model: string; modelRevision: string; modelAssetsDigest: string; evidenceOptions: EvidenceOptions };
   execution?: LlamaIndexCompilerResult['execution'];
   records: LlamaIndexCompilerRecord[];
 }
@@ -122,15 +130,6 @@ export interface LlamaIndexCompilerRequest {
     includePaths?: string[];
     excludePaths?: string[];
   }>;
-  externalSources: LlamaIndexDatabaseSourceRequest[];
-}
-
-export interface LlamaIndexDatabaseSourceRequest {
-  id: string;
-  kind: 'database';
-  connection: string;
-  query?: string;
-  includeTables?: string[];
 }
 
 export interface SourceCandidate {
@@ -142,7 +141,7 @@ export interface SourceCandidate {
 }
 
 export interface LlamaIndexRecordCache {
-  version: 1;
+  version: 2;
   compilerId: typeof LLAMAINDEX_COMPILER_ID;
   model: string;
   dkbId: string;
@@ -170,30 +169,40 @@ export interface LlamaIndexCompileCheckpoint {
 export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
   image?: string;
   model?: string;
+  modelRevision?: string;
+  imageDigest?: string;
+  evidenceOptions?: EvidenceOptions;
   timeoutMs?: number;
   workers?: number;
 } = {}): Promise<LlamaIndexCompilerResult> {
   const image = options.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
   const model = options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5';
+  const modelRevision = tokenizerRevision(model, options.modelRevision ?? process.env.DKB_COMPILER_MODEL_REVISION);
+  const evidenceOptions = resolveEvidenceOptions(options.evidenceOptions ? { ...options.evidenceOptions } : {});
+  const modelAssetsDigest = evidenceModelAssetsDigest(evidenceOptions);
+  const cacheIdentity = stableHash({ model, modelRevision, imageDigest: options.imageDigest ?? null, evidenceOptions, modelAssetsDigest });
   const request = requestFor(dkb);
   const cachePath = llamaIndexCachePath(dkb.root);
   const checkpointPath = llamaIndexCheckpointPath(dkb.root);
-  const cacheEnabled = process.env.DKB_LLAMA_RECORD_CACHE === undefined
-    || environmentFlag(process.env.DKB_LLAMA_RECORD_CACHE);
+  const cacheEnabled = /^sha256:[a-f0-9]{64}$/u.test(options.imageDigest ?? '') && (process.env.DKB_LLAMA_RECORD_CACHE === undefined
+    || environmentFlag(process.env.DKB_LLAMA_RECORD_CACHE));
   const previousCheckpoint = cacheEnabled ? await readCheckpoint(checkpointPath) : null;
-  const cache = cacheEnabled ? await readRecordCache(cachePath, dkb, model) : null;
-  const plan = !cacheEnabled || request.externalSources.length > 0
+  const cache = cacheEnabled ? await readRecordCache(cachePath, dkb, cacheIdentity) : null;
+  const plan = !cacheEnabled
     ? null
     : await cachePlanFor(dkb, request, cache);
   const resumed = previousCheckpoint?.status === 'running';
 
   if (plan && plan.changed.length === 0 && plan.reusedRecords.length > 0) {
-    await writeCheckpoint(checkpointPath, checkpointFor(dkb, model, [], plan.reused.map((item) => item.key), 'completed'));
+    await writeCheckpoint(checkpointPath, checkpointFor(dkb, cacheIdentity, [], plan.reused.map((item) => item.key), 'completed'));
 
     return {
       compiler: {
         id: LLAMAINDEX_COMPILER_ID,
         model,
+        modelRevision,
+        modelAssetsDigest,
+        evidenceOptions,
         image,
       },
       execution: {
@@ -222,7 +231,7 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
 
   const requestToCompile = plan ? requestForChangedSources(request, plan.changed) : request;
 
-  await writeCheckpoint(checkpointPath, checkpointFor(dkb, model, plan?.changed ?? [], plan?.reused.map((item) => item.key) ?? [], 'running'));
+  await writeCheckpoint(checkpointPath, checkpointFor(dkb, cacheIdentity, plan?.changed ?? [], plan?.reused.map((item) => item.key) ?? [], 'running'));
 
   if (process.env.DKB_TEST_ABORT_LLAMA_AFTER_CHECKPOINT === '1') {
     throw new DkbError(`Aborted LlamaIndex compile after checkpoint at ${checkpointPath}`);
@@ -230,7 +239,9 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
 
   const serviceJob = await maybePrepareCompilerServiceJob(dkb.root, requestToCompile, {
     image,
+    imageDigest: options.imageDigest,
     model,
+    modelRevision,
     timeoutMs: options.timeoutMs,
     workers: options.workers,
   });
@@ -241,25 +252,31 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
       parsed = await runCompilerService(serviceJob.serviceUrl, requestToCompile, {
         jobId: serviceJob.jobId,
         model,
+        modelRevision,
+        evidenceOptions,
         timeoutMs: options.timeoutMs,
         workers: options.workers,
       });
     } finally {
       await fs.rm(serviceJob.jobRoot, { recursive: true, force: true });
     }
+    verifyCompilerModel(parsed, model, modelRevision, evidenceOptions);
     const records = plan
       ? [...plan.reusedRecords, ...parsed.records].sort(compareRecords)
       : parsed.records.sort(compareRecords);
 
     if (plan) {
-      await writeRecordCache(cachePath, dkb, model, plan.candidates, records);
+      await writeRecordCache(cachePath, dkb, cacheIdentity, plan.candidates, records);
     }
-    await writeCheckpoint(checkpointPath, checkpointFor(dkb, model, plan?.changed ?? [], plan?.reused.map((item) => item.key) ?? [], 'completed'));
+    await writeCheckpoint(checkpointPath, checkpointFor(dkb, cacheIdentity, plan?.changed ?? [], plan?.reused.map((item) => item.key) ?? [], 'completed'));
 
     return {
       compiler: {
         id: LLAMAINDEX_COMPILER_ID,
         model: parsed.compiler.model,
+        modelRevision: parsed.compiler.modelRevision,
+        modelAssetsDigest,
+        evidenceOptions,
         image,
       },
       execution: {
@@ -306,27 +323,34 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
     imageMs = elapsedMs(imageStart);
     const containerStart = performance.now();
     await runCompiler(image, dkb.root, requestDir, outputDir, {
+      imageDigest: options.imageDigest,
       model,
+      modelRevision,
+      evidenceOptions,
       timeoutMs: options.timeoutMs,
       workers: options.workers,
     });
     containerMs = elapsedMs(containerStart);
     const outputReadStart = performance.now();
     const parsed = await readCompilerOutput(outputDir);
+    verifyCompilerModel(parsed, model, modelRevision, evidenceOptions);
     outputReadMs = elapsedMs(outputReadStart);
     const records = plan
       ? [...plan.reusedRecords, ...parsed.records].sort(compareRecords)
       : parsed.records.sort(compareRecords);
 
     if (plan) {
-      await writeRecordCache(cachePath, dkb, model, plan.candidates, records);
+      await writeRecordCache(cachePath, dkb, cacheIdentity, plan.candidates, records);
     }
-    await writeCheckpoint(checkpointPath, checkpointFor(dkb, model, plan?.changed ?? [], plan?.reused.map((item) => item.key) ?? [], 'completed'));
+    await writeCheckpoint(checkpointPath, checkpointFor(dkb, cacheIdentity, plan?.changed ?? [], plan?.reused.map((item) => item.key) ?? [], 'completed'));
 
     return {
       compiler: {
         id: LLAMAINDEX_COMPILER_ID,
         model: parsed.compiler.model,
+        modelRevision: parsed.compiler.modelRevision,
+        modelAssetsDigest,
+        evidenceOptions,
         image,
       },
       execution: {
@@ -361,4 +385,14 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
 
 function environmentFlag(value: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
+}
+
+function verifyCompilerModel(result: LlamaIndexCompilerOutput, model: string, revision: string, options: EvidenceOptions): void {
+  if (result.compiler.model !== model || result.compiler.modelRevision !== revision) {
+    throw new DkbError(`Evidence worker tokenizer identity mismatch: expected ${model}@${revision}. Rebuild and restart the Evidence worker before compilation.`);
+  }
+  if (result.compiler.modelAssetsDigest !== evidenceModelAssetsDigest(options)
+    || stableHash(result.compiler.evidenceOptions ?? null) !== stableHash(options)) {
+    throw new DkbError('Evidence worker model assets or resolved extraction options do not match the selected recipe. Rebuild and restart the selected Evidence worker before compilation.');
+  }
 }

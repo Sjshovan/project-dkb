@@ -7,6 +7,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { containsSensitiveCorpusContent, isSensitiveCorpusPath } from './lib/corpus-sanitizer.mjs';
+import { prepareHostProofContext } from './lib/host-proof-composition.mjs';
 import { compileComposeProject, compileRetrievalFromEvidence } from '@sjshovan/dkb-compiler/compile.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { readEvidenceBuild, validatePackageBuildGraph } from '@sjshovan/dkb-library/builds.js';
@@ -29,6 +30,7 @@ import {
 const executeFile = promisify(execFile);
 const sourceRoot = path.resolve(required(process.env.DKB_BENCHMARK_CORPUS_ROOT, 'DKB_BENCHMARK_CORPUS_ROOT'));
 const runs = positiveInteger(process.env.DKB_BENCHMARK_RUNS ?? '3', 'DKB_BENCHMARK_RUNS');
+if (runs < 3) throw new Error('DKB_BENCHMARK_RUNS must be at least 3 valid runs');
 const benchmarkFileLimit = positiveInteger(process.env.DKB_BENCHMARK_MAX_FILES ?? '32', 'DKB_BENCHMARK_MAX_FILES');
 const benchmarkRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-embedding-benchmark-'));
 const templateRoot = path.join(benchmarkRoot, 'template');
@@ -36,6 +38,7 @@ const contextRoots = {
   'fastembed-faiss': path.join(benchmarkRoot, 'contexts', 'fastembed'),
   'tei-faiss': path.join(benchmarkRoot, 'contexts', 'tei'),
 };
+const compositions = {};
 const initialFast = await fastEmbedServiceStatus();
 const initialTei = await teiServiceStatus();
 const initialEvidence = await compilerServiceStatus();
@@ -54,6 +57,9 @@ try {
     version: '1.0.0',
     permissions: { read: true, write: false },
   });
+  for (const [target, root] of Object.entries(contextRoots)) {
+    compositions[target] = await prepareHostProofContext({ root, target });
+  }
 
   // Materialize the canonical Evidence Build once. This setup is deliberately
   // excluded from provider timings because both spaces consume identical
@@ -62,9 +68,7 @@ try {
   await ensureTeiService({}, false);
   await compileComposeProject(templateRoot, {
     force: true,
-    mode: 'package',
-    target: 'tei-faiss',
-    contextRoot: contextRoots['tei-faiss'],
+    ...compositions['tei-faiss'],
   });
   const evidenceGraph = await validatePackageBuildGraph(templateRoot);
   const evidence = await readEvidenceBuild(evidenceGraph.evidencePath);
@@ -86,8 +90,13 @@ try {
   const queryGate = tei.query.p50Ms <= fast.query.p50Ms * 1.10;
   const memoryGate = tei.peakCombinedGiB <= 3.5;
   const report = {
-    format: 'dkb.embedding-benchmark.v1',
+    format: 'dkb.embedding-benchmark.v2',
     generatedAt: new Date().toISOString(),
+    measurementScope: {
+      compile: 'Retrieval Build only; Evidence parsing, chunking, and processors are excluded',
+      query: 'Direct embedding call only; Runtime activation, index search, ranking, and audit are excluded',
+      memory: 'Node process RSS plus one sampled embedding container; not whole-stack peak memory',
+    },
     corpus: {
       scope: 'architecture',
       availableFiles: corpus.availableFiles,
@@ -107,10 +116,12 @@ try {
       queryLatencyRatio: tei.query.p50Ms / fast.query.p50Ms,
     },
     gates: {
-      performance: performanceGate,
-      queryLatency: queryGate,
-      memory: memoryGate,
-      eligibleForDefaultPromotion: performanceGate && queryGate && memoryGate,
+      retrievalPerformance: performanceGate,
+      embeddingQueryLatency: queryGate,
+      sampledMemory: memoryGate,
+      eligibleForDefaultPromotion: false,
+      promotion: 'not-evaluated: requires full compilation, audited Runtime queries, all relevant service memory, correctness, and security proofs',
+      endToEndRegression: 'not-evaluated: no same-corpus historical full-compilation or warm Runtime baseline comparison',
     },
   };
   const output = process.env.DKB_BENCHMARK_OUTPUT?.trim();
@@ -138,7 +149,7 @@ async function benchmarkTarget(target, evidence) {
     cold.push(await measured(async () => {
       if (target === 'fastembed-faiss') await ensureFastEmbedService({ restart: true });
       else await ensureTeiService({}, true);
-      return compileOne(target, evidence, contextRoot);
+      return compileOne(target, evidence);
     }, container));
   }
 
@@ -146,21 +157,21 @@ async function benchmarkTarget(target, evidence) {
   else await ensureTeiService({}, false);
   const fresh = [];
   process.env.DKB_EMBEDDING_CACHE = '0';
-  for (let index = 0; index < runs; index += 1) fresh.push(await measured(() => compileOne(target, evidence, contextRoot), container));
+  for (let index = 0; index < runs; index += 1) fresh.push(await measured(() => compileOne(target, evidence), container));
 
   process.env.DKB_EMBEDDING_CACHE = '1';
   await fs.rm(path.join(contextRoot, '.dkb', 'cache', 'embeddings.sqlite'), { force: true });
-  await compileOne(target, evidence, contextRoot);
+  await compileOne(target, evidence);
   const cached = [];
-  for (let index = 0; index < runs; index += 1) cached.push(await measured(() => compileOne(target, evidence, contextRoot), container));
+  for (let index = 0; index < runs; index += 1) cached.push(await measured(() => compileOne(target, evidence), container));
 
   process.env.DKB_EMBEDDING_CACHE = '0';
   const twoJob = [];
   for (let index = 0; index < runs; index += 1) {
     twoJob.push(await measured(async () => {
       const [left, right] = await Promise.all([
-        compileOne(target, evidence, contextRoot),
-        compileOne(target, evidence, contextRoot),
+        compileOne(target, evidence),
+        compileOne(target, evidence),
       ]);
       return { recordCount: left.recordCount + right.recordCount };
     }, container));
@@ -181,11 +192,11 @@ async function benchmarkTarget(target, evidence) {
   };
 }
 
-async function compileOne(target, evidence, contextRoot) {
+async function compileOne(target, evidence) {
   const root = path.join(benchmarkRoot, 'runs', `${target}-${sequence += 1}`);
   await copyPortableSource(templateRoot, root);
   try {
-    return await compileRetrievalFromEvidence(root, evidence, { target, contextRoot });
+    return await compileRetrievalFromEvidence(root, evidence, compositions[target]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -334,8 +345,8 @@ function percentile(values, fraction) {
 }
 
 function positiveInteger(value, label) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
   return parsed;
 }
 

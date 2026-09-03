@@ -3,13 +3,16 @@ import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import type { DkbEvidenceCatalogAsset, DkbEvidenceCatalogRecord } from '@sjshovan/dkb-protocol/evidence/catalog.js';
 import type { DkbRuntimeActivation } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime, DkbRetrievalProvider, DkbRetrievalRuntime } from '@sjshovan/dkb-pipeline/types.js';
+import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime, DkbJsonValue, DkbRetrievalProvider, DkbRetrievalRuntime } from '@sjshovan/dkb-pipeline/types.js';
+import { evidenceIdsForRetrievalScope, validateIndexRuntime, validateRetrievalHits, validateRetrievalRuntime, validateVector } from '@sjshovan/dkb-pipeline/validation.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
-import { resolveLibraryActivationBuilds, selectStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
+import { resolveLibraryActivationBuilds } from '@sjshovan/dkb-library/builds.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import type { DkbRuntimeContext } from '../runtime/context.js';
+import { assertFileSnapshotCurrent, type FileSnapshot } from '@sjshovan/dkb-protocol/fileSnapshot.js';
+import { captureQueryInputs } from './queryInputs.js';
+import { verifyRuntimeRegistryBuilds } from '../runtime/registryInstall.js';
 
 export interface QueryContext {
   root: string;
@@ -25,11 +28,20 @@ export interface QueryContext {
   index?: DkbIndexRuntime;
   retrieval: DkbRetrievalRuntime;
   providerHost: DkbProviderHost;
+  validatedInputs: FileSnapshot;
   createdAt: string;
   lastUsedAt: string;
 }
 
 const residentContexts = new Map<string, QueryContext>();
+interface OpeningContext {
+  root: string;
+  ownerRoot: string;
+  invalidated: boolean;
+  promise: Promise<QueryContext>;
+}
+
+const openingContexts = new Map<string, OpeningContext>();
 
 export interface QueryContextActivation {
   runtimeStateRoot?: string;
@@ -42,34 +54,33 @@ export async function createQueryContext(
   runtime: DkbRuntimeContext,
   active: QueryContextActivation = {},
 ): Promise<QueryContext> {
+  if (!active.activation || !active.runtimeStateRoot) {
+    throw new DkbError('A validated Runtime activation is required to open a query context. Run dkb runtime refresh, then query through that Runtime.', 'runtime_activation_required');
+  }
   const resolvedRoot = path.resolve(root);
   const providerRoot = path.resolve(active.runtimeStateRoot ?? resolvedRoot);
   const providerHost = await DkbProviderHost.create({
     root: providerRoot,
     ...(providerRoot !== resolvedRoot ? { libraryRoot: resolvedRoot } : {}),
-    ...(active.activation ? { target: active.activation.target } : {}),
+    target: active.activation.target,
     distribution: runtime.distribution,
   });
   let indexRuntime: DkbIndexRuntime | null = null;
   let retrievalRuntime: DkbRetrievalRuntime | null = null;
 
   try {
-    const embeddingProvider = providerHost.provider<DkbEmbeddingProvider>('embedding');
-    const embeddingOptions = providerHost.optionsFor(providerHost.config.target.embedding);
+    const embeddingId = providerHost.config.target.embedding;
+    const embeddingProvider = embeddingId ? providerHost.provider<DkbEmbeddingProvider>('embedding') : null;
+    const embeddingOptions = embeddingId ? providerHost.optionsFor(embeddingId) : undefined;
     const indexProvider = providerHost.provider<DkbIndexProvider>('index');
     const indexOptions = providerHost.optionsFor(providerHost.config.target.index);
     const resolvedProfile = await resolveProviderRetrievalProfile(providerHost);
     const compatibility = resolvedProfile.compatibility;
-    const activation = active.activation ?? await deriveLocalActivation(
-      resolvedRoot,
-      collectionId,
-      providerHost.config.activeTarget,
-      resolvedProfile.evidenceProfileDigest,
-      resolvedProfile.retrievalProfileDigest,
-      stableHash(compatibility),
-    );
+    const activation = active.activation;
     const artifactHash = queryArtifactHash(activation);
+    const validatedInputs = await captureQueryInputs(resolvedRoot, activation);
     const packages = await resolveLibraryActivationBuilds(resolvedRoot, activation);
+    await verifyRuntimeRegistryBuilds(resolvedRoot, activation);
     const catalogs = packages.map((item) => readEvidenceCatalog(item.evidenceRoot));
     const evidenceAssets = catalogs.flatMap((catalog) => catalog.assets)
       .sort((left, right) => `${left.packageId}/${left.id}`.localeCompare(`${right.packageId}/${right.id}`));
@@ -84,26 +95,52 @@ export async function createQueryContext(
         `Runtime activation ${activation.retrievalProfileDigest} does not match selected pipeline ${resolvedProfile.retrievalProfileDigest}`,
       );
     }
-    indexRuntime = await indexProvider.openRuntime({
+    const expectedDimensions = resolvedProfile.embedding?.dimensions;
+    indexRuntime = validateIndexRuntime(await indexProvider.openRuntime({
       libraryRoot: resolvedRoot,
       libraryId: collectionId,
       packages,
-      compatibility,
-      embedQuery: (text, signal) => embeddingProvider.embedQuery({ text, options: embeddingOptions, ...(signal ? { signal } : {}) }),
+      compatibility: compatibility as unknown as Record<string, DkbJsonValue>,
+      ...(embeddingProvider && embeddingOptions ? {
+        embedQuery: async (text: string, signal?: AbortSignal) => validateVector(
+          await embeddingProvider.embedQuery({ text, options: embeddingOptions, ...(signal ? { signal } : {}) }),
+          expectedDimensions,
+          `${embeddingId} query embedding`,
+        ),
+      } : {}),
       options: indexOptions,
-    });
+    }), providerHost.describe().providers.find((item) => item.kind === 'index')?.id ?? providerHost.config.target.index);
     const retrievalProvider = providerHost.provider<DkbRetrievalProvider>('retrieval');
-    retrievalRuntime = await retrievalProvider.openRuntime({
+    const rawRetrieval = validateRetrievalRuntime(await retrievalProvider.openRuntime({
       index: indexRuntime,
       evidence: { assets: evidenceAssets, records: evidenceRecords },
       options: providerHost.optionsFor(providerHost.config.target.retrieval),
-    });
+    }), providerHost.describe().providers.find((item) => item.kind === 'retrieval')?.id ?? providerHost.config.target.retrieval, retrievalProvider.protocol);
+    const knownEvidenceIds = new Set(evidenceRecords.map((record) => record.evidenceId));
+    retrievalRuntime = {
+      providerId: rawRetrieval.providerId,
+      protocol: rawRetrieval.protocol,
+      async search(input) {
+        if (!input.query.trim()) throw new DkbError('Retrieval query must not be empty');
+        if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 1_000) throw new DkbError('Retrieval limit must be between 1 and 1000');
+        const result = await rawRetrieval.search(input);
+        const allowedEvidenceIds = input.scope
+          ? evidenceIdsForRetrievalScope(evidenceRecords, input.scope)
+          : knownEvidenceIds;
+        return {
+          hits: validateRetrievalHits(result.hits, knownEvidenceIds, input.limit, rawRetrieval.providerId, allowedEvidenceIds),
+          trace: result.trace as Record<string, DkbJsonValue>,
+        };
+      },
+      close: () => rawRetrieval.close(),
+    };
 
+    await Promise.all([assertFileSnapshotCurrent(validatedInputs), providerHost.assertCurrent()]);
     return {
       root: resolvedRoot,
       ownerRoot: providerRoot,
       collectionId,
-      cacheKey: queryContextCacheKey(providerRoot, collectionId, artifactHash, runtime),
+      cacheKey: queryContextCacheKey(providerRoot, resolvedRoot, collectionId, artifactHash, runtime),
       artifactHash,
       evidenceAssets,
       evidenceRecords,
@@ -111,6 +148,7 @@ export async function createQueryContext(
       evidenceAssetsByKey: new Map(evidenceAssets.map((asset) => [`${asset.packageId}/${asset.id}`, asset])),
       evidenceByIdentifier: evidenceIdentifierIndex(evidenceRecords),
       providerHost,
+      validatedInputs,
       retrieval: retrievalRuntime,
       ...(indexRuntime ? { index: indexRuntime } : {}),
       createdAt: new Date().toISOString(),
@@ -148,38 +186,61 @@ function identifiersForEvidence(record: DkbEvidenceCatalogRecord): string[] {
     .filter(Boolean) ?? [])];
 }
 
-export async function getQueryContext(root: string, collectionId: string, runtime: DkbRuntimeContext, active: QueryContextActivation = {}): Promise<QueryContext> {
+export async function getQueryContext(root: string, collectionId: string, runtime: DkbRuntimeContext, active: QueryContextActivation): Promise<QueryContext> {
   const resolvedRoot = path.resolve(root);
   const providerRoot = path.resolve(active.runtimeStateRoot ?? resolvedRoot);
   const artifactHash = active.activation ? queryArtifactHash(active.activation) : 'resolve';
-  const cacheKey = queryContextCacheKey(providerRoot, collectionId, artifactHash, runtime);
+  const cacheKey = queryContextCacheKey(providerRoot, resolvedRoot, collectionId, artifactHash, runtime);
   const cached = residentContexts.get(cacheKey);
 
   if (cached) {
+    await assertQueryContextCurrent(cached);
     cached.lastUsedAt = new Date().toISOString();
 
     return cached;
   }
 
-  const context = await createQueryContext(resolvedRoot, collectionId, runtime, active);
+  let opening = openingContexts.get(cacheKey);
+  if (!opening) {
+    const entry: OpeningContext = {
+      root: resolvedRoot,
+      ownerRoot: providerRoot,
+      invalidated: false,
+      promise: createQueryContext(resolvedRoot, collectionId, runtime, active).then(async (context) => {
+        if (entry.invalidated) {
+          await disposeContext(context);
+          throw new DkbError('Runtime query context was invalidated while opening. Retry after Runtime refresh.', 'runtime_context_invalidated');
+        }
+        residentContexts.set(context.cacheKey, context);
+        return context;
+      }).finally(() => {
+        if (openingContexts.get(cacheKey) === entry) openingContexts.delete(cacheKey);
+      }),
+    };
+    opening = entry;
+    openingContexts.set(cacheKey, opening);
+  }
+  return opening.promise;
+}
 
-  residentContexts.set(context.cacheKey, context);
-
-  return context;
+export async function assertQueryContextCurrent(context: QueryContext): Promise<void> {
+  await Promise.all([
+    assertFileSnapshotCurrent(context.validatedInputs),
+    context.providerHost.assertCurrent(),
+  ]);
 }
 
 export function invalidateQueryContext(root?: string): number {
+  const pending = invalidateOpeningContexts(root).length;
   if (!root) {
     const count = residentContexts.size;
 
     for (const context of residentContexts.values()) {
-      void context.index?.close();
-      void context.retrieval.close();
-      void context.providerHost.dispose();
+      void disposeContext(context).catch(reportContextDisposalFailure);
     }
     residentContexts.clear();
 
-    return count;
+    return count + pending;
   }
 
   const resolvedRoot = path.resolve(root);
@@ -187,18 +248,17 @@ export function invalidateQueryContext(root?: string): number {
 
   for (const [key, context] of residentContexts.entries()) {
     if (context.ownerRoot === resolvedRoot || context.root === resolvedRoot) {
-      void context.index?.close();
-      void context.retrieval.close();
-      void context.providerHost.dispose();
+      void disposeContext(context).catch(reportContextDisposalFailure);
       residentContexts.delete(key);
       removed += 1;
     }
   }
 
-  return removed;
+  return removed + pending;
 }
 
 export async function closeQueryContext(root?: string): Promise<number> {
+  const pending = invalidateOpeningContexts(root);
   const resolvedRoot = root ? path.resolve(root) : undefined;
   const contexts = [...residentContexts.entries()]
     .filter(([, context]) => !resolvedRoot || context.ownerRoot === resolvedRoot || context.root === resolvedRoot);
@@ -207,55 +267,49 @@ export async function closeQueryContext(root?: string): Promise<number> {
     residentContexts.delete(key);
   }
 
-  await Promise.all(contexts.map(async ([, context]) => {
-    await context.retrieval.close();
-    await context.index?.close();
-    await context.providerHost.dispose();
-  }));
+  await Promise.all([
+    ...contexts.map(([, context]) => disposeContext(context)),
+    ...pending.map((entry) => entry.promise.then(() => undefined, () => undefined)),
+  ]);
 
-  return contexts.length;
+  return contexts.length + pending.length;
+}
+
+function invalidateOpeningContexts(root?: string): OpeningContext[] {
+  const resolvedRoot = root ? path.resolve(root) : undefined;
+  const selected = [...openingContexts.entries()].filter(([, entry]) =>
+    !resolvedRoot || entry.ownerRoot === resolvedRoot || entry.root === resolvedRoot);
+  for (const [key, entry] of selected) {
+    entry.invalidated = true;
+    openingContexts.delete(key);
+  }
+  return selected.map(([, entry]) => entry);
+}
+
+async function disposeContext(context: QueryContext): Promise<void> {
+  const results = await Promise.allSettled([
+    Promise.resolve().then(() => context.retrieval.close()),
+    Promise.resolve().then(() => context.index?.close()),
+    Promise.resolve().then(() => context.providerHost.dispose()),
+  ]);
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Runtime query context disposal failed');
+}
+
+function reportContextDisposalFailure(error: unknown): void {
+  console.error(JSON.stringify({ event: 'dkb.runtime.context_disposal_failed', message: error instanceof Error ? error.message : String(error) }));
 }
 
 export function queryArtifactHash(activation: DkbRuntimeActivation): string {
   return stableHash(activation);
 }
 
-function queryContextCacheKey(root: string, collectionId: string, artifactHash: string, runtime: DkbRuntimeContext): string {
+function queryContextCacheKey(root: string, libraryRoot: string, collectionId: string, artifactHash: string, runtime: DkbRuntimeContext): string {
   return stableHash({
     root,
+    libraryRoot,
     collectionId,
     artifactHash,
     distribution: `${runtime.distribution.id}@${runtime.distribution.version}`,
   });
-}
-
-async function deriveLocalActivation(
-  libraryRoot: string,
-  libraryId: string,
-  target: string,
-  evidenceProfileDigest: string,
-  retrievalProfileDigest: string,
-  compatibilityDigest: string,
-): Promise<DkbRuntimeActivation> {
-  const library = await loadLibrary(libraryRoot);
-  const dkbs = uniqueLoadedDkbs([...library.collections.flatMap((collection) => collection.dkbs), ...library.dkbs]);
-  const selected = await Promise.all(dkbs.map((dkb) => selectStoredPackageBuild({
-    root: dkb.root,
-    target,
-    evidenceProfileDigest,
-    retrievalProfileDigest,
-    compatibilityDigest,
-  })));
-  return {
-    format: 'dkb.runtime-activation.v1',
-    runtimeId: 'local-query',
-    library: { id: libraryId, generation: 0, stateDigest: stableHash({ libraryId, mode: 'local-query' }) },
-    target,
-    evidenceProfileDigest,
-    retrievalProfileDigest,
-    compatibilityDigest,
-    packages: Object.fromEntries(selected.map((graph) => [graph.retrieval.package.id, graph.selection])),
-    generation: 0,
-    generatedAt: new Date(0).toISOString(),
-  };
 }

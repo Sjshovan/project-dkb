@@ -28,6 +28,16 @@ export interface DkbInstalledBuildFile {
   hash?: string;
 }
 
+export interface DkbBuildTrustVerification {
+  format: 'dkb.build-trust.v1';
+  identity: string;
+  buildDigest: string;
+  kind: 'evidence' | 'retrieval';
+  status: 'registry-verified' | 'local-verified' | 'unverified' | 'failed';
+  checkedAt: string;
+  message: string;
+}
+
 export interface DkbInstalledBuildSummary {
   kind: 'evidence' | 'retrieval';
   profileDigest: string;
@@ -168,6 +178,35 @@ export interface DkbPackagePreview {
   sourceId?: string;
   sourceHash?: string;
   evidenceRecords: number;
+}
+
+export interface DkbEvidenceInspectionField {
+  value: string;
+  bytes: number;
+  truncated: boolean;
+}
+
+/** Inert inspection of one exact retained Evidence record, not Runtime retrieval. */
+export interface DkbEvidenceInspection {
+  format: 'dkb.evidence-inspection.v1';
+  identity: string;
+  version: string;
+  evidenceDigest: string;
+  evidenceProfileDigest: string;
+  evidenceId: string;
+  sourceId: string;
+  sourceHash: string;
+  textHash: string;
+  assetId: string;
+  storeId: string;
+  sourceType: string;
+  updatedAt: string;
+  chunk: { ordinal: number; start: number; end: number };
+  title: DkbEvidenceInspectionField;
+  text: DkbEvidenceInspectionField;
+  locator: DkbEvidenceInspectionField;
+  assetLocator: DkbEvidenceInspectionField;
+  provenance: DkbEvidenceInspectionField;
 }
 
 export interface DkbPackageVerification {

@@ -54,7 +54,9 @@ an active `.dkb/artifacts` mirror. Regenerable consolidated state belongs under
 
 This is a development hard cut: Protocol becomes `2.0.0`, implementation
 packages become `0.2.0`, and the formats become `dkb.config.v2`, Evidence IR
-v4, generic artifact manifest v2, Runtime lock v2, and plugin API v2. Source,
+v4, generic artifact manifest v2, and Runtime lock v2. Plugin API v2 was later
+superseded by the trusted API v3 SDK in
+[0009](0009-trusted-plugin-sdk-and-registry-recipes.md). Source,
 manifests, logical locks, credentials, and host inventory are preserved;
 derived state is rebuilt. No legacy readers or compatibility aliases ship.
 

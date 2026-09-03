@@ -45,6 +45,7 @@ import {
 import { readEvidenceCatalog } from './evidenceCatalog.js';
 import {
   DKB_INSTALL_PLAN_RECEIPT_PATH,
+  DKB_INSTALL_PLAN_RECEIPTS_DIR,
   DKB_PACKAGE_RECEIPT_PATH,
   parsePersistedPackageReceipt,
   verifyLayerReceipt,
@@ -57,6 +58,8 @@ import {
   summarizePortablePackageTree,
 } from './packageTree.js';
 import { readLibraryState, type DkbLibraryStateEntry } from './state.js';
+
+export { inspectInstalledEvidence } from './packageEvidence.js';
 
 export async function inspectInstalledPackage(
   libraryRoot: string,
@@ -242,10 +245,14 @@ export async function verifyInstalledPackage(input: {
       const receiptPath = path.join(packageRoot, DKB_PACKAGE_RECEIPT_PATH);
       receipt = parsePersistedPackageReceipt(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
       const tree = await hashPortablePackageTree(packageRoot);
-      const treeMatches = !receipt.payload.packageTreeHash || receipt.payload.packageTreeHash === tree.hash;
+      const treeMatches = Boolean(receipt.payload.packageTreeHash) && receipt.payload.packageTreeHash === tree.hash;
       checks.push(check(
         'package.tree', 'Portable package tree', treeMatches ? 'passed' : 'failed',
-        treeMatches ? `${tree.files.length} files match ${tree.hash}.` : `Expected ${receipt.payload.packageTreeHash}, got ${tree.hash}.`,
+        treeMatches
+          ? `${tree.files.length} files match ${tree.hash}.`
+          : receipt.payload.packageTreeHash
+            ? `Expected ${receipt.payload.packageTreeHash}, got ${tree.hash}.`
+            : 'Signed Registry source receipt does not bind an immutable package tree.',
         treeMatches ? undefined : reinstallCommand(root, entry),
       ));
     } catch (error) {
@@ -335,7 +342,7 @@ async function inspectDkbBuilds(
         target: profile.profile.target,
         providers: profile.profile.retrieval.providers.map(({ id, version, kind }) => ({ id, version, kind })),
         processors: [],
-        embedding: {
+        ...(profile.profile.embedding ? { embedding: {
           provider: profile.profile.embedding.provider,
           space: profile.profile.embedding.space,
           ...(profile.profile.embedding.modelRevision ? { modelRevision: profile.profile.embedding.modelRevision } : {}),
@@ -344,7 +351,7 @@ async function inspectDkbBuilds(
           normalized: profile.profile.embedding.normalized,
           queryMode: profile.profile.embedding.queryMode,
           documentMode: profile.profile.embedding.documentMode,
-        },
+        } } : {}),
         index: { ...profile.profile.index },
         retrieval: {
           provider: profile.profile.retrieval.provider,
@@ -532,12 +539,49 @@ async function verifyStoredInstallChain(
     });
     const identities = [
       stableHash(sourceReceipt) === source.receiptHash,
+      stableHash(source.receipt) === source.receiptHash,
       evidenceResult.receiptHash === evidence.receiptHash,
       retrievalResult.receiptHash === retrieval.receiptHash,
+      evidenceResult.receipt.type === 'dkb.evidence.receipt',
+      retrievalResult.receipt.type === 'dkb.retrieval.receipt',
+      planResult.receipt.type === 'dkb.install-plan.receipt',
       evidenceResult.receipt.parentReceiptHash === source.receiptHash,
       retrievalResult.receipt.parentReceiptHash === evidence.receiptHash,
+      evidenceResult.receipt.payload.sourceReceiptHash === source.receiptHash,
+      retrievalResult.receipt.payload.evidenceReceiptHash === evidence.receiptHash,
       canonicalJson(planResult.receipt.payload) === canonicalJson(planPayload),
       plan.package.id === entry.identity,
+      plan.package.version === entry.version,
+      sourceReceipt.package.id === plan.package.id,
+      sourceReceipt.package.version === plan.package.version,
+      sourceReceipt.package.publisherId === sourceReceipt.publisher.accountId,
+      sourceReceipt.package.registryId === undefined || sourceReceipt.package.registryId === sourceReceipt.registry.registryId,
+      Boolean(sourceReceipt.payload.packageTreeHash),
+      source.digest === plan.package.sourceDigest,
+      evidenceResult.receipt.package.id === plan.package.id,
+      evidenceResult.receipt.package.version === plan.package.version,
+      evidenceResult.receipt.package.sourceHash === plan.package.sourceDigest,
+      retrievalResult.receipt.package.id === plan.package.id,
+      retrievalResult.receipt.package.version === plan.package.version,
+      retrievalResult.receipt.package.sourceHash === plan.package.sourceDigest,
+      planResult.receipt.package.id === plan.package.id,
+      planResult.receipt.package.version === plan.package.version,
+      planResult.receipt.package.sourceHash === plan.package.sourceDigest,
+      evidenceResult.receipt.publisher.accountId === sourceReceipt.publisher.accountId,
+      retrievalResult.receipt.publisher.accountId === sourceReceipt.publisher.accountId,
+      planResult.receipt.publisher.accountId === sourceReceipt.publisher.accountId,
+      evidenceResult.receipt.registry.registryId === sourceReceipt.registry.registryId,
+      retrievalResult.receipt.registry.registryId === sourceReceipt.registry.registryId,
+      planResult.receipt.registry.registryId === sourceReceipt.registry.registryId,
+      evidenceResult.receipt.payload.evidenceProfileDigest === plan.evidenceProfileDigest,
+      evidenceResult.receipt.payload.evidenceDigest === plan.evidenceDigest,
+      retrievalResult.receipt.payload.target === plan.target,
+      retrievalResult.receipt.payload.evidenceProfileDigest === plan.evidenceProfileDigest,
+      retrievalResult.receipt.payload.evidenceDigest === plan.evidenceDigest,
+      retrievalResult.receipt.payload.retrievalProfileDigest === plan.retrievalProfileDigest,
+      retrievalResult.receipt.payload.compatibilityDigest === plan.compatibilityDigest,
+      retrievalResult.receipt.payload.retrievalBuildDigest === plan.retrievalBuildDigest,
+      graph.evidence.package.sourceDigest === plan.package.sourceDigest,
       plan.evidenceDigest === graph.evidence.evidenceDigest,
       plan.retrievalBuildDigest === graph.retrieval.retrievalBuildDigest,
       plan.compatibilityDigest === graph.retrieval.compatibilityDigest,
@@ -548,9 +592,117 @@ async function verifyStoredInstallChain(
       ok ? 'Source, Evidence, Retrieval, and install-plan receipts verify against the exact installed build graph.' : 'The stored install receipt chain does not match the exact installed build graph.',
       ok ? undefined : reinstallCommand(libraryRoot, entry),
     ));
+    await verifyAttachedInstallPlanReceipts(packageRoot, plan, sourceReceipt, resolver, checks, entry, libraryRoot);
     await verifyAttachedRetrievalReceipts(packageRoot, plan, resolver, checks, entry, libraryRoot);
   } catch (error) {
     checks.push(check('install.receipt-chain', 'Installed receipt chain', missingFileError(error) ? 'warning' : 'failed', errorMessage(error), reinstallCommand(libraryRoot, entry)));
+  }
+}
+
+async function verifyAttachedInstallPlanReceipts(
+  packageRoot: string,
+  installedPlan: ReturnType<typeof validateInstallPlan>,
+  sourceReceipt: ReturnType<typeof parsePersistedPackageReceipt>,
+  resolver: Parameters<typeof verifyPackageReceipt>[1],
+  checks: DkbInspectionCheck[],
+  entry: DkbLibraryStateEntry,
+  libraryRoot: string,
+): Promise<void> {
+  const receiptRoot = path.join(packageRoot, ...DKB_INSTALL_PLAN_RECEIPTS_DIR.split('/'));
+  const files = await fs.readdir(receiptRoot).catch((error) => {
+    if (missingFileError(error)) return [] as string[];
+    throw error;
+  });
+  for (const file of files.filter((value) => value.endsWith('.json')).sort()) {
+    try {
+      const receiptPath = path.join(receiptRoot, file);
+      const plan = validateInstallPlan(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
+      if (stableHash(plan) === stableHash(installedPlan)) continue;
+      const [source, evidence, retrieval] = plan.artifacts;
+      const [evidenceResult, retrievalResult, planResult] = await Promise.all([
+        verifyLayerReceipt(evidence.receipt, resolver, `${receiptPath} Evidence receipt`),
+        verifyLayerReceipt(retrieval.receipt, resolver, `${receiptPath} Retrieval receipt`),
+        verifyLayerReceipt(plan.receipt, resolver, receiptPath),
+      ]);
+      const planPayload = { ...plan } as Record<string, unknown>;
+      delete planPayload.receipt;
+      const graph = await validateStoredPackageBuild(packageRoot, {
+        version: plan.package.version,
+        evidenceProfileDigest: plan.evidenceProfileDigest,
+        evidenceDigest: plan.evidenceDigest,
+        retrievalProfileDigest: plan.retrievalProfileDigest,
+        retrievalBuildDigest: plan.retrievalBuildDigest,
+      });
+      const expectedFile = `${stableHash(plan).slice('sha256:'.length)}.json`;
+      const ok = evidenceResult.ok
+        && retrievalResult.ok
+        && planResult.ok
+        && stableHash(sourceReceipt) === source.receiptHash
+        && stableHash(source.receipt) === source.receiptHash
+        && evidenceResult.receiptHash === evidence.receiptHash
+        && retrievalResult.receiptHash === retrieval.receiptHash
+        && evidenceResult.receipt.type === 'dkb.evidence.receipt'
+        && retrievalResult.receipt.type === 'dkb.retrieval.receipt'
+        && planResult.receipt.type === 'dkb.install-plan.receipt'
+        && evidenceResult.receipt.parentReceiptHash === source.receiptHash
+        && retrievalResult.receipt.parentReceiptHash === evidence.receiptHash
+        && evidenceResult.receipt.payload.sourceReceiptHash === source.receiptHash
+        && retrievalResult.receipt.payload.evidenceReceiptHash === evidence.receiptHash
+        && canonicalJson(planResult.receipt.payload) === canonicalJson(planPayload)
+        && plan.package.id === entry.identity
+        && plan.package.version === entry.version
+        && sourceReceipt.package.id === plan.package.id
+        && sourceReceipt.package.version === plan.package.version
+        && sourceReceipt.package.publisherId === sourceReceipt.publisher.accountId
+        && (sourceReceipt.package.registryId === undefined || sourceReceipt.package.registryId === sourceReceipt.registry.registryId)
+        && Boolean(sourceReceipt.payload.packageTreeHash)
+        && source.digest === plan.package.sourceDigest
+        && evidenceResult.receipt.package.id === plan.package.id
+        && evidenceResult.receipt.package.version === plan.package.version
+        && evidenceResult.receipt.package.sourceHash === plan.package.sourceDigest
+        && retrievalResult.receipt.package.id === plan.package.id
+        && retrievalResult.receipt.package.version === plan.package.version
+        && retrievalResult.receipt.package.sourceHash === plan.package.sourceDigest
+        && planResult.receipt.package.id === plan.package.id
+        && planResult.receipt.package.version === plan.package.version
+        && planResult.receipt.package.sourceHash === plan.package.sourceDigest
+        && evidenceResult.receipt.publisher.accountId === sourceReceipt.publisher.accountId
+        && retrievalResult.receipt.publisher.accountId === sourceReceipt.publisher.accountId
+        && planResult.receipt.publisher.accountId === sourceReceipt.publisher.accountId
+        && evidenceResult.receipt.registry.registryId === sourceReceipt.registry.registryId
+        && retrievalResult.receipt.registry.registryId === sourceReceipt.registry.registryId
+        && planResult.receipt.registry.registryId === sourceReceipt.registry.registryId
+        && evidenceResult.receipt.payload.evidenceProfileDigest === plan.evidenceProfileDigest
+        && evidenceResult.receipt.payload.evidenceDigest === plan.evidenceDigest
+        && retrievalResult.receipt.payload.target === plan.target
+        && retrievalResult.receipt.payload.evidenceProfileDigest === plan.evidenceProfileDigest
+        && retrievalResult.receipt.payload.evidenceDigest === plan.evidenceDigest
+        && retrievalResult.receipt.payload.retrievalProfileDigest === plan.retrievalProfileDigest
+        && retrievalResult.receipt.payload.compatibilityDigest === plan.compatibilityDigest
+        && retrievalResult.receipt.payload.retrievalBuildDigest === plan.retrievalBuildDigest
+        && graph.evidence.package.sourceDigest === plan.package.sourceDigest
+        && plan.evidenceDigest === graph.evidence.evidenceDigest
+        && plan.retrievalBuildDigest === graph.retrieval.retrievalBuildDigest
+        && plan.compatibilityDigest === graph.retrieval.compatibilityDigest
+        && file === expectedFile;
+      checks.push(check(
+        `install.receipt-chain.${stableHash(plan).slice(7, 19)}`,
+        'Attached install receipt chain',
+        ok ? 'passed' : 'failed',
+        ok
+          ? `${plan.evidenceDigest} -> ${plan.retrievalBuildDigest} verifies against the installed Registry source.`
+          : `${plan.retrievalBuildDigest} does not match its signed source, Evidence, and Retrieval chain.`,
+        ok ? undefined : reinstallCommand(libraryRoot, entry),
+      ));
+    } catch (error) {
+      checks.push(check(
+        `install.receipt-chain.${path.basename(file, '.json').slice(0, 12)}`,
+        'Attached install receipt chain',
+        'failed',
+        errorMessage(error),
+        reinstallCommand(libraryRoot, entry),
+      ));
+    }
   }
 }
 
@@ -679,8 +831,13 @@ function registrySummary(value: ReturnType<typeof parsePersistedPackageReceipt>[
 
 function trustedKeyResolver(keys: DkbSigningKeyRecord[]) {
   return ({ role, signature }: { role: 'publisher' | 'registry'; signature: { keyId: string } }) => {
-    const key = keys.find((candidate) => candidate.id === signature.keyId && candidate.subjectType === role);
-    return key && key.status !== 'revoked' ? key.publicKeyPem : null;
+    const subjectId = role === 'publisher'
+      ? (signature as { accountId?: string }).accountId
+      : (signature as { registryId?: string }).registryId;
+    const key = keys.find((candidate) => candidate.id === signature.keyId
+      && candidate.subjectType === role
+      && candidate.subjectId === subjectId);
+    return key && (key.status === 'active' || key.status === 'rotated') ? key.publicKeyPem : null;
   };
 }
 

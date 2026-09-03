@@ -1,5 +1,3 @@
-import type { DkbRetrieveKnowledgeRequest, DkbRetrieveKnowledgeResponse } from '../read/runtime.js';
-
 export type DkbRemoteEndpointType = 'dkb-runtime-http' | 'mcp-streamable-http';
 export type DkbRemoteAccess = 'public-read';
 export type DkbRemoteScrapePolicy = 'fallback' | 'disallow' | 'allowed';
@@ -72,31 +70,3 @@ export interface DkbRemoteDiscoveryResult {
   expiresAt: string;
   discovery: DkbDiscoveryDocument;
 }
-
-export interface DkbRemoteSession {
-  id: string;
-  origin: 'remote';
-  trust: 'unverified' | 'registry-verified';
-  status: 'attached';
-  endpoint: DkbDiscoveryEndpoint;
-  discoveryUrl: string;
-  site: string;
-  publisher?: DkbDiscoveryDocument['publisher'];
-  packages: DkbDiscoveryPackage[];
-  scrapePolicy: DkbRemoteScrapePolicy;
-  createdAt: string;
-  expiresAt: string;
-  lastUsedAt: string;
-}
-
-export interface DkbRemoteAttachInput {
-  url: string;
-  ttlSeconds?: number;
-}
-
-export interface DkbRemoteRetrieveResult {
-  session: DkbRemoteSession;
-  remote: DkbRetrieveKnowledgeResponse;
-}
-
-export type { DkbRetrieveKnowledgeRequest };

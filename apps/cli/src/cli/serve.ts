@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface, type Interface } from 'node:readline/promises';
-import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
+import { compileLocalKnowledgeTarget } from '../providers/localCompilation.js';
 import { registerHostLibrary } from '../host/inventory.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
@@ -33,7 +33,7 @@ export interface PreparedServeLibrary {
   verification?: RegistryVerification;
   warning?: string;
   retryCommand?: string;
-  compileResult?: Awaited<ReturnType<typeof compileComposeProject>>;
+  compileResult?: Awaited<ReturnType<typeof compileLocalKnowledgeTarget>>;
 }
 
 export interface ResolvedRegistryInitialization {
@@ -201,13 +201,14 @@ export function libraryManifestForFolder(root: string) {
   };
 }
 
-async function compileLibraryForServe(root: string): Promise<Awaited<ReturnType<typeof compileComposeProject>> | undefined> {
+async function compileLibraryForServe(root: string): Promise<Awaited<ReturnType<typeof compileLocalKnowledgeTarget>> | undefined> {
   try {
     const library = await loadLibrary(root);
     if (library.dkbs.length === 0 && library.collections.every((collection) => collection.dkbs.length === 0)) {
       return undefined;
     }
-    return await compileComposeProject(root);
+    const result = await compileLocalKnowledgeTarget(root);
+    return result.type === 'library' && result.packageCount === 0 ? undefined : result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 

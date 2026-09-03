@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   DKB_CONFIG_FORMAT,
@@ -15,7 +14,7 @@ import {
   type DkbPipelineTargetConfig,
 } from '@sjshovan/dkb-pipeline/config.js';
 import { DkbProviderHost, pluginPath, type DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
-import type { DkbPluginModule } from '@sjshovan/dkb-pipeline/types.js';
+import { importPluginModule } from '@sjshovan/dkb-pipeline/pluginModule.js';
 
 export type DkbPluginScope = 'local' | 'global';
 
@@ -39,7 +38,7 @@ export async function activatePipelineTarget(input: { distribution: DkbDistribut
   ]);
   const candidate: DkbContextConfig = { ...local, format: DKB_CONFIG_FORMAT, activeTarget: input.name };
   const resolved = resolveContextConfigDocuments(root, globalRoot, input.distribution.defaults, global, candidate, input.name);
-  const host = await DkbProviderHost.createFromConfig(resolved, input.distribution);
+  const host = await DkbProviderHost.createFromConfig(resolved, input.distribution, { observedConfig: { global, local, library: { format: DKB_CONFIG_FORMAT } } });
 
   try {
     const description = host.describe();
@@ -171,6 +170,7 @@ export async function setPipelineTarget(input: {
       ...(local.targets ?? {}),
       [input.name]: {
         ...input.patch,
+        embedding: input.patch.embedding ?? null,
         options: {
           ...(local.targets?.[input.name]?.options ?? {}),
           ...(input.patch.options ?? {}),
@@ -178,16 +178,15 @@ export async function setPipelineTarget(input: {
       },
     },
   };
-  const resolved = resolveContextConfigDocuments(root, globalRoot, input.distribution.defaults, global, candidate, input.activate ? input.name : undefined);
-  const host = await DkbProviderHost.createFromConfig(resolved, input.distribution);
+  // Validate the recipe being saved even when the default suggestion is unchanged.
+  const resolved = resolveContextConfigDocuments(root, globalRoot, input.distribution.defaults, global, candidate, input.name);
+  const host = await DkbProviderHost.createFromConfig(resolved, input.distribution, { observedConfig: { global, local, library: { format: DKB_CONFIG_FORMAT } } });
 
   try {
     const unhealthy = (await host.health()).filter((result) => !result.ok && result.kind !== 'embedding' && result.kind !== 'evidence');
 
     if (unhealthy.length > 0) {
       throw new DkbError(`Pipeline validation failed: ${unhealthy.map((result) => `${result.id}: ${result.detail ?? 'unhealthy'}`).join('; ')}`);
-    }
-    if (input.activate) {
     }
     const description = host.describe();
     await writeDkbContextConfig(targetPath, candidate);
@@ -197,7 +196,7 @@ export async function setPipelineTarget(input: {
   }
 }
 
-export async function verifyPipeline(input: { distribution: DkbDistribution; root: string; libraryRoot?: string; globalRoot?: string; target?: string }): Promise<{
+export async function verifyPipeline(input: { distribution: DkbDistribution; root: string; libraryRoot?: string; globalRoot?: string; target?: string; targetOptions?: Record<string, Record<string, unknown>> }): Promise<{
   ok: boolean;
   pipeline: ReturnType<DkbProviderHost['describe']>;
   health: Awaited<ReturnType<DkbProviderHost['health']>>;
@@ -207,6 +206,7 @@ export async function verifyPipeline(input: { distribution: DkbDistribution; roo
     ...(input.libraryRoot ? { libraryRoot: input.libraryRoot } : {}),
     ...(input.globalRoot ? { globalRoot: input.globalRoot } : {}),
     ...(input.target ? { target: input.target } : {}),
+    ...(input.targetOptions ? { targetOptions: input.targetOptions } : {}),
     distribution: input.distribution,
   });
 
@@ -237,13 +237,7 @@ async function pluginSourceDirectory(source: string): Promise<string> {
 
 async function inspectPlugin(target: string): Promise<{ id: string; version: string }> {
   try {
-    const url = pathToFileURL(target);
-    url.searchParams.set('dkb-inspect', `${Date.now()}-${Math.random()}`);
-    const plugin = await import(url.href) as Partial<DkbPluginModule>;
-
-    if (plugin.apiVersion !== 2 || !isPluginId(plugin.id) || typeof plugin.version !== 'string' || plugin.version.trim().length === 0 || typeof plugin.setup !== 'function') {
-      throw new DkbError(`expected exports apiVersion=2, id, version, and setup(context)`);
-    }
+    const plugin = await importPluginModule(target, { contextRoot: path.dirname(target), reload: true });
     return { id: plugin.id, version: plugin.version };
   } catch (error) {
     throw new DkbError(`Invalid DKB plugin at ${target}: ${error instanceof Error ? error.message : String(error)}`);
@@ -293,7 +287,7 @@ async function pathExists(target: string): Promise<boolean> {
 }
 
 function selectedPluginIds(target: DkbPipelineTargetConfig): string[] {
-  return [target.evidence, target.parser, target.chunker, target.embedding, target.index, target.retrieval, ...(target.processors ?? [])]
+  return [target.evidence, target.parser, target.chunker, target.embedding, target.index, target.retrieval, ...(target.processors ?? []), ...(target.observers ?? [])]
     .filter((id): id is string => Boolean(id));
 }
 

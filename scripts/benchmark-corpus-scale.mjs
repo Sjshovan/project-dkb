@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { prepareHostProofContext } from './lib/host-proof-composition.mjs';
 import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
 import { estimateIngestionWorkingBytes } from '@sjshovan/dkb-compiler/diskCapacity.js';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
@@ -63,8 +64,9 @@ try {
 
     const root = path.join(benchmarkRoot, name);
     const generated = await generateCorpus(root, name, tier);
+    const composition = await prepareHostProofContext({ root, target });
     const started = performance.now();
-    const compiled = await compileComposeProject(root, { force: true, mode: 'package', target, contextRoot: root });
+    const compiled = await compileComposeProject(root, { force: true, ...composition });
     const wallMs = performance.now() - started;
     const statistics = compiled.profile?.statistics;
     assert.ok(statistics, `Compiler did not return scale statistics for ${name}`);

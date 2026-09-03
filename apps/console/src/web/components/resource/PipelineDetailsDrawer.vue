@@ -4,6 +4,7 @@ import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRo
 import { CheckCircle2, X } from '@lucide/vue';
 import type { PipelineTarget } from '../../types.js';
 import AppButton from '../interface/AppButton.vue';
+import ResourceLink from '../interface/ResourceLink.vue';
 import StatusBadge from '../interface/StatusBadge.vue';
 
 const props = defineProps<{
@@ -56,7 +57,7 @@ function checkExplanation(check: PipelineTarget['healthDetails'][number]): strin
             </div>
             <p>{{ statusMessage }}</p>
             <dl>
-              <div><dt>Runtime</dt><dd>{{ runtime }}</dd></div>
+              <div><dt>Runtime</dt><dd><ResourceLink kind="runtime" :name="runtime" /></dd></div>
               <div><dt>Definition</dt><dd>{{ target.origin }}</dd></div>
               <div><dt>Package coverage</dt><dd>{{ target.coverage.ready }}/{{ target.coverage.total }} builds ready<span v-if="missingBuilds"> · {{ missingBuilds }} will be prepared</span></dd></div>
             </dl>
@@ -81,9 +82,9 @@ function checkExplanation(check: PipelineTarget['healthDetails'][number]): strin
             <h2 id="pipeline-resolution-title">Resolved Pipeline</h2>
             <dl>
               <div><dt>Provider chain</dt><dd>{{ target.providers.join(' → ') }}</dd></div>
-              <div><dt>Embedding</dt><dd>{{ target.dimensions }} dimensions · {{ target.metric }}</dd></div>
+              <div><dt>Embedding</dt><dd>{{ target.dimensions === null ? 'Unavailable' : `${target.dimensions} dimensions · ${target.metric ?? 'unknown metric'}` }}</dd></div>
               <div><dt>Required services</dt><dd>{{ target.requiredServices.join(', ') || 'None' }}</dd></div>
-              <div><dt>Compatibility</dt><dd><code>{{ target.compatibilityDigest }}</code></dd></div>
+              <div><dt>Compatibility</dt><dd><code>{{ target.compatibilityDigest ?? 'Unavailable until the Pipeline resolves' }}</code></dd></div>
             </dl>
           </section>
 

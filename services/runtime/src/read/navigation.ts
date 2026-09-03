@@ -19,6 +19,7 @@ export interface DkbNavigationReference {
   title: string;
   preview: string;
   score: number;
+  channels: string[];
   matchedTokens?: string[];
   sourceType: string;
   locator: Record<string, unknown>;
@@ -71,11 +72,11 @@ export async function semanticSearch(
   queryContext?: QueryContext,
   runtime?: DkbRuntimeContext,
 ): Promise<DkbSemanticSearchResponse> {
-  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
+  const context = requiredQueryContext(queryContext);
   const result = await context.retrieval.search({ query, limit: clampLimit(limit), ...(scope ? { scope } : {}) });
   const references = result.hits.flatMap((hit) => {
     const record = context.evidenceById.get(hit.evidenceId);
-    return record ? [navigationReference(record, hit.score, hit.matchedTokens ?? [])] : [];
+    return record ? [navigationReference(record, hit.score, hit.channels, hit.matchedTokens ?? [])] : [];
   });
 
   return {
@@ -94,13 +95,13 @@ export async function lexicalSearch(
   queryContext?: QueryContext,
   runtime?: DkbRuntimeContext,
 ): Promise<DkbLexicalSearchResponse> {
-  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
+  const context = requiredQueryContext(queryContext);
   const result = await context.retrieval.search({ query, limit: Math.min(clampLimit(limit) * 5, 500), ...(scope ? { scope } : {}) });
   const references = result.hits
     .filter((hit) => hit.channels.includes('lexical'))
     .flatMap((hit) => {
       const record = context.evidenceById.get(hit.evidenceId);
-      return record ? [navigationReference(record, hit.score, hit.matchedTokens ?? [])] : [];
+      return record ? [navigationReference(record, hit.score, hit.channels, hit.matchedTokens ?? [])] : [];
     })
     .slice(0, clampLimit(limit));
 
@@ -118,7 +119,7 @@ export async function readNavigationChunks(
   queryContext?: QueryContext,
   runtime?: DkbRuntimeContext,
 ): Promise<DkbReadNavigationResponse> {
-  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
+  const context = requiredQueryContext(queryContext);
   const byTarget = new Map<string, DkbEvidenceCatalogRecord>();
   for (const record of context.evidenceRecords) {
     byTarget.set(record.evidenceId, record);
@@ -134,7 +135,7 @@ export async function readNavigationChunks(
       continue;
     }
     chunks.push({
-      reference: navigationReference(record, 1),
+      reference: navigationReference(record, 1, []),
       text: renderUntrustedSourceBlock(record.text),
       sourcePolicy: SOURCE_DATA_POLICY_LINE,
     });
@@ -149,7 +150,7 @@ export async function readNavigationChunks(
 }
 
 export async function describeSources(root: string, queryContext?: QueryContext, runtime?: DkbRuntimeContext): Promise<DkbSourceDescription[]> {
-  const context = queryContext ?? await contextFor(root, requiredRuntime(runtime));
+  const context = requiredQueryContext(queryContext);
   return context.evidenceAssets.map((asset) => ({
     id: asset.id,
     dkbId: asset.packageId,
@@ -163,7 +164,12 @@ export async function describeSources(root: string, queryContext?: QueryContext,
   })).sort((left, right) => `${left.dkbId}/${left.id}`.localeCompare(`${right.dkbId}/${right.id}`));
 }
 
-function navigationReference(record: DkbEvidenceCatalogRecord, score: number, matchedTokens: string[] = []): DkbNavigationReference {
+function navigationReference(
+  record: DkbEvidenceCatalogRecord,
+  score: number,
+  channels: string[],
+  matchedTokens: string[] = [],
+): DkbNavigationReference {
   const preview = record.text.length > 280 ? `${record.text.slice(0, 277)}...` : record.text;
   return {
     id: record.evidenceId,
@@ -176,6 +182,7 @@ function navigationReference(record: DkbEvidenceCatalogRecord, score: number, ma
     title: record.title,
     preview: renderUntrustedSourceInline(preview),
     score,
+    channels: [...channels],
     ...(matchedTokens.length > 0 ? { matchedTokens } : {}),
     sourceType: record.sourceType,
     locator: record.locator,
@@ -187,14 +194,9 @@ function navigationReference(record: DkbEvidenceCatalogRecord, score: number, ma
   };
 }
 
-async function contextFor(root: string, runtime: DkbRuntimeContext): Promise<QueryContext> {
-  const library = await loadLibrary(root);
-  return getQueryContext(library.root, library.manifest.id, runtime);
-}
-
-function requiredRuntime(runtime: DkbRuntimeContext | undefined): DkbRuntimeContext {
-  if (!runtime) throw new DkbError('A DKB Runtime context is required when no query context is supplied.');
-  return runtime;
+function requiredQueryContext(context: QueryContext | undefined): QueryContext {
+  if (!context) throw new DkbError('A validated Runtime activation is required for navigation.', 'runtime_activation_required');
+  return context;
 }
 
 function clampLimit(limit: number): number {

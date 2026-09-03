@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import { watch } from 'chokidar';
 import { loadCompose } from '@sjshovan/dkb-protocol/manifest.js';
 import { resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
-import { compileComposeProject } from '@sjshovan/dkb-compiler/compile.js';
-import { invalidateQueryContext } from '@sjshovan/dkb-runtime/indexes/queryContext.js';
+import { compileLocalKnowledgeTarget } from '../providers/localCompilation.js';
+import { invalidateQueryContext } from '@sjshovan/dkb-runtime/runtime/queryCache.js';
 
 export interface WatchComposeOptions {
   once?: boolean;
@@ -62,7 +62,7 @@ export async function watchComposeProject(root: string, options: WatchComposeOpt
     const startedAt = performance.now();
 
     try {
-      const result = await compileComposeProject(resolvedRoot);
+      const result = await compileLocalKnowledgeTarget(resolvedRoot);
       invalidateQueryContext(resolvedRoot);
 
       options.onEvent?.({

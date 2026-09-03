@@ -1,13 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { adapterFor } from '@sjshovan/dkb-library/adapters/index.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
-import { loadCompose } from '@sjshovan/dkb-protocol/manifest.js';
-import { DKB_COMPILE_RECEIPT_PATH, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
-import type { LoadedCollection } from '@sjshovan/dkb-protocol/types.js';
+import { loadCompose, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
+import { DKB_COMPILE_RECEIPT_PATH, evidenceBuildPath, resolveFrom } from '@sjshovan/dkb-protocol/paths.js';
+import { validateEvidenceBuildLock } from '@sjshovan/dkb-protocol/builds.js';
+import { assertProviderExecutionIdentities } from '@sjshovan/dkb-protocol/providerReceipts.js';
 import {
   DKB_EVIDENCE_BUILD_IR,
+  DKB_EVIDENCE_BUILD_LOCK,
   listPackageBuilds,
   readRetrievalBuildProfile,
   mergeStoredPackageBuilds,
@@ -45,8 +46,9 @@ import {
   writeCompileReceipt,
 } from './compileReceipts.js';
 import type {
-  CompiledCollection,
   CompiledComposeProject,
+  CompiledKnowledgeTarget,
+  CompiledLibraryProject,
   CompileComposeProjectOptions,
   CompileRetrievalFromEvidenceOptions,
   PreparedPackageBuildTarget,
@@ -56,8 +58,9 @@ export { COMPILE_LOCK_PATH } from './compileLock.js';
 export { COMPILE_CACHE_PATH } from './compileCache.js';
 export { verifyComposeProject } from './compileReceipts.js';
 export type {
-  CompiledCollection,
   CompiledComposeProject,
+  CompiledKnowledgeTarget,
+  CompiledLibraryProject,
   CompileComposeProfile,
   CompileComposeProjectOptions,
   CompileRetrievalFromEvidenceOptions,
@@ -66,39 +69,25 @@ export type {
 } from './compilerContracts.js';
 export const COMPILE_RECEIPT_PATH = DKB_COMPILE_RECEIPT_PATH;
 
-export async function compileCollection(collection: LoadedCollection): Promise<CompiledCollection> {
-  const dkbs = await Promise.all(collection.dkbs.map(async (dkb) => {
-    const adapter = await adapterFor(dkb.manifest.adapter);
-    const records = await adapter.readRecords(dkb);
-    return {
-      id: dkb.manifest.id,
-      name: dkb.manifest.name,
-      version: dkb.manifest.version,
-      adapter: dkb.manifest.adapter,
-      records: records.length,
-    };
-  }));
-
-  return {
-    id: collection.manifest.id,
-    name: collection.manifest.name,
-    version: collection.manifest.version,
-    dkbs,
-    recordCount: dkbs.reduce((total, dkb) => total + dkb.records, 0),
-  };
-}
-
 export async function compileComposeProject(
   root: string,
   options: CompileComposeProjectOptions,
 ): Promise<CompiledComposeProject> {
+  options.signal?.throwIfAborted();
   const resolvedRoot = path.resolve(root);
+  const manifest = await loadManifest(resolvedRoot);
+  if (manifest.type !== 'dkb') {
+    throw new DkbError(
+      `PackageVersion compilation requires a DKB manifest at ${resolvedRoot}; found ${manifest.type}. `
+      + 'Use the Library compilation operation to build each editable DKB independently.',
+    );
+  }
 
   return withCompileLock(resolvedRoot, async () => {
     const totalStart = performance.now();
     const registry = await loadCompose(resolvedRoot);
     const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
-    const desiredProfile = await resolvedProviderProfile(contextRoot, options.distribution, options.target);
+    const desiredProfile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, undefined, options.targetOptions);
     const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
     const sourceSnapshotStart = performance.now();
     const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
@@ -115,6 +104,7 @@ export async function compileComposeProject(
       ? null
       : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, lockPath);
     const cacheLookupMs = elapsedMs(cacheLookupStart);
+    options.signal?.throwIfAborted();
 
     if (cached) {
       const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
@@ -146,7 +136,8 @@ export async function compileComposeProject(
       `ingestion of ${registry.manifest.id}`,
     );
     const collectStateStart = performance.now();
-    const state = await collectRegistryState(registry, desiredProfile, options.distribution, contextRoot);
+    const state = await collectRegistryState(registry, desiredProfile, options.distribution, contextRoot, options.targetOptions, options.signal);
+    state.packageSourceDigest = options.sourceDigest;
     const collectStateMs = elapsedMs(collectStateStart);
 
     try {
@@ -155,6 +146,7 @@ export async function compileComposeProject(
         resolvedRoot,
         state,
         async (stageRoot, buildGraph) => lockForState(stageRoot, registry, state, new Date().toISOString(), buildGraph),
+        options.signal,
       );
       const aggregateArtifactsMs = elapsedMs(aggregateStart);
       const cacheWriteStart = performance.now();
@@ -164,6 +156,7 @@ export async function compileComposeProject(
       const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
 
       return {
+        type: 'package',
         registryId: registry.manifest.id,
         recordCount: state.sourceUnits.length,
         evidenceCatalogPath: path.join(written.buildGraph.evidencePath, DKB_EVIDENCE_CATALOG_FILENAME),
@@ -197,7 +190,66 @@ export async function compileComposeProject(
     } finally {
       await state.providerHost?.dispose();
     }
-  });
+  }, options.signal);
+}
+
+export async function compileKnowledgeTarget(
+  root: string,
+  options: CompileComposeProjectOptions,
+): Promise<CompiledKnowledgeTarget> {
+  options.signal?.throwIfAborted();
+  const resolvedRoot = path.resolve(root);
+  const manifest = await loadManifest(resolvedRoot);
+  if (manifest.type === 'dkb') return compileComposeProject(resolvedRoot, options);
+  if (manifest.type === 'collection') {
+    throw new DkbError(
+      `Collection ${manifest.name} does not have Evidence or Retrieval Builds. `
+      + 'Compile its owning Library or one editable member DKB.',
+    );
+  }
+
+  const library = await loadCompose(resolvedRoot);
+  const packages = uniqueDkbs([
+    ...library.collections.flatMap((collection) => collection.dkbs),
+    ...library.dkbs,
+  ]);
+  const vendorRoot = path.join(resolvedRoot, 'vendor');
+  const editable = packages.filter((dkb) => !isInside(vendorRoot, dkb.root));
+  const installed = packages.filter((dkb) => isInside(vendorRoot, dkb.root));
+  const results: CompiledLibraryProject['packages'] = [];
+
+  for (const dkb of editable) {
+    const compiled = await compileComposeProject(dkb.root, {
+      ...options,
+      contextRoot: options.contextRoot ?? resolvedRoot,
+    });
+    results.push({
+      id: dkb.manifest.id,
+      version: dkb.manifest.version,
+      root: dkb.root,
+      recordCount: compiled.recordCount,
+      cacheHit: compiled.cacheHit,
+      retrievalBuildPath: compiled.retrievalBuildPath,
+      lockPath: compiled.lockPath,
+    });
+  }
+
+  return {
+    type: 'library',
+    libraryId: library.manifest.id,
+    root: resolvedRoot,
+    packageCount: results.length,
+    registryPackageCount: installed.length,
+    recordCount: results.reduce((total, result) => total + result.recordCount, 0),
+    cacheHit: results.every((result) => result.cacheHit),
+    packages: results,
+    registryPackages: installed.map((dkb) => ({
+      id: dkb.manifest.id,
+      version: dkb.manifest.version,
+      root: dkb.root,
+      status: 'retained',
+    })),
+  };
 }
 
 export async function compileRetrievalFromEvidence(
@@ -205,6 +257,7 @@ export async function compileRetrievalFromEvidence(
   inputEvidence: DkbEvidenceIr,
   options: CompileRetrievalFromEvidenceOptions,
 ): Promise<CompiledComposeProject> {
+  options.signal?.throwIfAborted();
   const resolvedRoot = path.resolve(root);
   const evidence = validateEvidenceIr(inputEvidence, 'retrieval-only Evidence Build');
 
@@ -220,7 +273,7 @@ export async function compileRetrievalFromEvidence(
     }
     const dkb = allDkbs[0]!;
     const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
-    const desiredProfile = await resolvedProviderProfile(contextRoot, options.distribution, options.target);
+    const desiredProfile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, undefined, options.targetOptions);
     if (desiredProfile.evidenceProfileDigest !== evidence.evidenceProfileDigest) {
       throw new DkbError(
         `Evidence Profile mismatch: target ${options.target} requires ${desiredProfile.evidenceProfileDigest}, Evidence Build uses ${evidence.evidenceProfileDigest}`,
@@ -236,17 +289,29 @@ export async function compileRetrievalFromEvidence(
     const corpus = summarizeEvidenceCorpus(evidence, sourceStatistics);
     const retrievalCapacity = await assertDiskCapacity(
       resolvedRoot,
-      estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding.dimensions),
+      estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding?.dimensions ?? 0),
       `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
     );
     const providerHost = await DkbProviderHost.create({
       root: contextRoot,
       distribution: options.distribution,
       target: desiredProfile.target,
+      ...(options.targetOptions ? { targetOptions: options.targetOptions } : {}),
     });
 
     try {
-      const compiled = await embedDkbEvidenceWithProviderHost(providerHost, pipelineFromEvidenceIr(evidence));
+      const evidenceLockPath = path.join(evidenceBuildPath(resolvedRoot, evidence.evidenceProfileDigest, evidence.evidenceDigest), DKB_EVIDENCE_BUILD_LOCK);
+      const parentLock = validateEvidenceBuildLock(options.evidenceLock
+        ?? JSON.parse(await fs.readFile(evidenceLockPath, 'utf8')), evidenceLockPath);
+      if (parentLock.package.id !== dkb.manifest.id || parentLock.package.version !== dkb.manifest.version
+        || parentLock.evidenceProfileDigest !== evidence.evidenceProfileDigest || parentLock.evidenceDigest !== evidence.evidenceDigest
+        || parentLock.recordCount !== evidence.evidence.length || parentLock.chunkCount !== evidence.chunks.length
+        || (options.sourceDigest !== undefined && parentLock.package.sourceDigest !== options.sourceDigest)) {
+        throw new DkbError('Retrieval compilation requires the exact parent Evidence Build receipt');
+      }
+      const pipeline = pipelineFromEvidenceIr(evidence);
+      pipeline.receipts = parentLock.providerReceipts;
+      const compiled = await embedDkbEvidenceWithProviderHost(providerHost, pipeline, { signal: options.signal });
       const units = compiled.records.map((record) => indexedSourceUnitFromPipelineRecord(dkb, record));
       const artifact: CompilerArtifactState = {
         dkb,
@@ -257,11 +322,13 @@ export async function compileRetrievalFromEvidence(
         diskCapacity: retrievalCapacity,
       };
       const retrievalProfileLock = retrievalProfileLockForRetrievalPipelines(desiredProfile, [compiled]);
+      assertProviderExecutionIdentities(parentLock.providerReceipts, retrievalProfileLock, 'evidence');
       const state: RegistryCompileState = {
         sourceUnits: units,
         packages: {
           [dkb.manifest.id]: await lockPackageForDkb(dkb, units, registry.root),
         },
+        ...(options.sourceDigest ? { packageSourceDigest: options.sourceDigest } : {}),
         compilerArtifacts: [artifact],
         retrievalProfileLock,
         resolvedProfile: desiredProfile,
@@ -271,12 +338,14 @@ export async function compileRetrievalFromEvidence(
         resolvedRoot,
         state,
         async (stageRoot, buildGraph) => lockForState(stageRoot, registry, state, new Date().toISOString(), buildGraph),
+        options.signal,
       );
       const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
       await writeCompileReceipt(lockPath, written.lock);
       const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
 
       return {
+        type: 'package',
         registryId: registry.manifest.id,
         recordCount: state.sourceUnits.length,
         evidenceCatalogPath: path.join(written.buildGraph.evidencePath, DKB_EVIDENCE_CATALOG_FILENAME),
@@ -307,16 +376,17 @@ export async function compileRetrievalFromEvidence(
     } finally {
       await providerHost.dispose();
     }
-  });
+  }, options.signal);
 }
 
 export async function ensurePackageBuildForTarget(
   root: string,
   options: CompileRetrievalFromEvidenceOptions,
 ): Promise<PreparedPackageBuildTarget> {
+  options.signal?.throwIfAborted();
   const resolvedRoot = path.resolve(root);
   const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
-  const profile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, options.libraryRoot);
+  const profile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, options.libraryRoot, options.targetOptions);
   const builds = await listPackageBuilds(resolvedRoot);
   const matchingRetrieval = builds.retrieval.filter((build) => build.profileDigest === profile.retrievalProfileDigest);
   if (matchingRetrieval.length > 1) {
@@ -348,20 +418,27 @@ export async function ensurePackageBuildForTarget(
     if (unambiguousEvidence) {
       const evidencePath = path.join(unambiguousEvidence.path, DKB_EVIDENCE_BUILD_IR);
       const evidence = validateEvidenceIr(JSON.parse(await fs.readFile(evidencePath, 'utf8')), evidencePath);
+      const evidenceLockPath = path.join(unambiguousEvidence.path, DKB_EVIDENCE_BUILD_LOCK);
+      const evidenceLock = validateEvidenceBuildLock(JSON.parse(await fs.readFile(evidenceLockPath, 'utf8')), evidenceLockPath);
       await compileRetrievalFromEvidence(stagingRoot, evidence, {
         distribution: options.distribution,
         target: options.target,
         contextRoot,
+        evidenceLock,
+        signal: options.signal,
+        ...(options.targetOptions ? { targetOptions: options.targetOptions } : {}),
       });
     } else {
       await compileComposeProject(stagingRoot, {
-        mode: 'package',
         distribution: options.distribution,
         force: true,
+        signal: options.signal,
         target: options.target,
         contextRoot,
+        ...(options.targetOptions ? { targetOptions: options.targetOptions } : {}),
       });
     }
+    options.signal?.throwIfAborted();
     await mergeStoredPackageBuilds(stagingRoot, resolvedRoot);
     const prepared = await listPackageBuilds(resolvedRoot);
     if (!prepared.retrieval.some((build) => build.profileDigest === profile.retrievalProfileDigest)) {
@@ -380,4 +457,9 @@ export async function ensurePackageBuildForTarget(
 
 function elapsedMs(start: number): number {
   return Math.round((performance.now() - start) * 1000) / 1000;
+}
+
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }

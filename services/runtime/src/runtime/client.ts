@@ -1,7 +1,7 @@
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
-import type { DkbRemoteAttachInput } from '../remote/types.js';
-import type { DkbInstallPlan, DkbRetrievalBuildGrant } from '@sjshovan/dkb-protocol/builds.js';
+import type { DkbReadRequest } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
 
 export interface DkbRuntimeClientOptions {
   baseUrl?: string;
@@ -32,6 +32,10 @@ export class DkbRuntimeClient {
     return this.get('/api/runtime/pipelines', true);
   }
 
+  audit(limit = 100) {
+    return this.get(`/api/runtime/audit?limit=${encodeURIComponent(String(limit))}`, true);
+  }
+
   reload() {
     return this.post('/api/runtime/reload', {}, true);
   }
@@ -56,7 +60,7 @@ export class DkbRuntimeClient {
   switchPipeline(input: {
     target: string;
     registryUrl?: string;
-    grants?: Record<string, { build: DkbRetrievalBuildGrant; installGrant: string }>;
+    grants?: Record<string, { plan: DkbInstallPlan; installGrant: string }>;
   }) {
     return this.post('/api/runtime/pipeline', input, true);
   }
@@ -69,24 +73,16 @@ export class DkbRuntimeClient {
     return this.post('/api/retrieve', request);
   }
 
-  remoteDiscover(url: string) {
-    return this.post('/api/remote/discover', { url }, true);
+  search(input: { query: string; limit?: number; dkbId?: string }) {
+    return this.post('/api/search', input);
   }
 
-  remoteAttach(input: DkbRemoteAttachInput) {
-    return this.post('/api/remote/session/attach', input, true);
+  readTargets(input: { query: string; limit?: number }) {
+    return this.post('/api/read-targets', input);
   }
 
-  remoteSessions() {
-    return this.get('/api/remote/sessions', true);
-  }
-
-  remoteDetach(sessionId: string) {
-    return this.delete(`/api/remote/session/${encodeURIComponent(sessionId)}`, true);
-  }
-
-  remoteRetrieve(sessionId: string, request: DkbRetrieveKnowledgeRequest) {
-    return this.post(`/api/remote/session/${encodeURIComponent(sessionId)}/retrieve`, request, true);
+  read(request: DkbReadRequest) {
+    return this.post('/api/read', request);
   }
 
   private get(path: string, admin = false) {
