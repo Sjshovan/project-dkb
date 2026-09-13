@@ -16,10 +16,10 @@ RUN apt-get update \
     && python -m pip uninstall -y onnxruntime \
     && python -m pip install "onnxruntime-gpu[cuda,cudnn]==1.29.0"
 
-COPY compile.py service.py model-pins.json model_assets.py assets.json ./
+COPY compile.py service.py worker.py worker_control.py model-pins.json model_assets.py assets.json ./
 RUN python model_assets.py --backend onnxruntime
 
-LABEL org.dkb.compiler.service.version="4"
+LABEL org.dkb.compiler.service.version="5"
 LABEL org.dkb.compiler.accelerator="nvidia-cuda"
 
 ENTRYPOINT ["python", "/compiler/compile.py"]

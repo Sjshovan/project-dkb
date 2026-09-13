@@ -10,6 +10,7 @@ import {
   LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
   compileDkbWithLlamaIndex,
+  cancelLlamaIndexPending,
   compilerProviderHealth,
   compilerServiceStatus,
   doctorLlamaIndexCompilerService,
@@ -85,13 +86,15 @@ export const EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN: DkbBundledPluginModule = {
         stop: () => stopLlamaIndexCompilerService(serviceOptions),
         doctor: () => doctorLlamaIndexCompilerService(serviceOptions),
       },
-      async compile({ dkb, options, signal }) {
+      async compile({ dkb, options, signal, execution }) {
         throwIfAborted(signal);
         const model = stringOption(options.tokenizerModel) ?? DEFAULT_TOKENIZER_MODEL;
         const image = stringOption(options.image);
         const timeoutMs = integerOption(options.timeoutMs);
         const workers = integerOption(options.workers);
         const result = await compileDkbWithLlamaIndex(dkb, {
+          signal,
+          execution,
           model,
           modelRevision: tokenizerRevision(model, options.tokenizerRevision),
           evidenceOptions: resolveEvidenceOptions(options),
@@ -138,6 +141,15 @@ export const EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN: DkbBundledPluginModule = {
           },
         };
       },
+      cancelPending: ({ state, options, signal }) => cancelLlamaIndexPending({
+        state, signal,
+        options: {
+          image: stringOption(options.image),
+          imageDigest: stringOption(options.imageDigest),
+          model: stringOption(options.tokenizerModel) ?? DEFAULT_TOKENIZER_MODEL,
+          modelRevision: stringOption(options.tokenizerRevision),
+        },
+      }),
       health: () => compilerProviderHealth(serviceOptions),
     };
     context.registerProvider(provider);

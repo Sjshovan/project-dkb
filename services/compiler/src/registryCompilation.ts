@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { compileComposeProject, compileRetrievalFromEvidence } from './compilerCore.js';
+import { assertProviderExecutionsSettled, type ProviderExecutionFactory } from './providerExecution.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import {
   DKB_SOURCE_INVENTORY_FORMAT,
@@ -72,6 +73,7 @@ export async function compileRegistryPackage(
     distribution: DkbDistribution;
     contextRoot: string;
     signal?: AbortSignal;
+    execution?: ProviderExecutionFactory;
     deliver?: (compiled: CompiledRegistryPackageDelivery) => Promise<void>;
   },
 ): Promise<Record<string, unknown>> {
@@ -93,14 +95,17 @@ export async function compileRegistryPackage(
   }
 
   const scratch = await createCompilerWorkDirectory(`dkb-registry-compile-${input.jobId}-`);
-  const uploadPath = path.join(scratch, input.sourceArchive.fileName ?? 'source.dkbpkg');
-  const evidenceUploadPath = path.join(scratch, input.evidenceArchive?.fileName ?? 'evidence.dkbevidence');
+  // Uploaded display names never select a filesystem destination.
+  const uploadPath = path.join(scratch, 'source.dkbpkg');
+  const evidenceUploadPath = path.join(scratch, 'evidence.dkbevidence');
   const evidenceExtractedRoot = path.join(scratch, 'evidence');
   const extractedRoot = path.join(scratch, 'source');
   const requestedPackageId = input.request.package?.id;
   const buildRoot = path.join(scratch, safeId(requestedPackageId ?? 'build'));
   const archivePath = path.join(scratch, 'compiled.dkbpkg');
+  let retainScratch = false;
   try {
+    await options.execution?.registerWorkspace(scratch);
     const selectedTarget = await resolveRegistryCompilerTarget({
       distribution: options.distribution,
       contextRoot: options.contextRoot,
@@ -151,8 +156,10 @@ export async function compileRegistryPackage(
           contextRoot: options.contextRoot,
           sourceDigest: actualHash,
           signal: options.signal,
+          execution: options.execution,
         });
     options.signal?.throwIfAborted();
+    await assertProviderExecutionsSettled(options.execution);
     const graph = await validatePackageBuildGraph(buildRoot);
     await fs.rm(manifestPath(buildRoot, 'dkb-release.json'), { force: true });
     const packageTreeHash = (await inspectPackageTree(buildRoot)).hash;
@@ -223,6 +230,7 @@ export async function compileRegistryPackage(
 
     await assertCompilerBuildCurrent();
     options.signal?.throwIfAborted();
+    await assertProviderExecutionsSettled(options.execution);
     if (options.deliver) {
       await options.deliver({ payload, archivePath, archiveSize });
       return payload;
@@ -237,8 +245,13 @@ export async function compileRegistryPackage(
         contents: archive.toString('base64'),
       },
     };
+  } catch (error) {
+    retainScratch = error instanceof DkbError && error.code === 'compile_termination_unconfirmed';
+    throw error;
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    // Recovery state remains authoritative even if another cleanup error masked the worker error.
+    const pending = options.execution ? await options.execution.hasPending().catch(() => true) : false;
+    if (!retainScratch && !pending) await fs.rm(scratch, { recursive: true, force: true });
   }
 }
 

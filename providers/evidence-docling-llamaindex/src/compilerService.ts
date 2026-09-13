@@ -247,21 +247,25 @@ export async function doctorLlamaIndexCompilerService(options: CompilerServiceOp
 export async function maybePrepareCompilerServiceJob(
   sourceRoot: string,
   request: CompilerServiceRequest,
-  options: { image: string; imageDigest?: string; model: string; modelRevision?: string; timeoutMs?: number; workers?: number },
+  options: { image: string; imageDigest?: string; model: string; modelRevision?: string; timeoutMs?: number; workers?: number; signal?: AbortSignal },
 ): Promise<{ serviceUrl: string; jobId: string; jobRoot: string } | null> {
+  options.signal?.throwIfAborted();
   if (process.env.DKB_LLAMA_COMPILER_SERVICE === '0' || process.env.DKB_LLAMA_COMPILER_SERVICE === 'false') return null;
   const serviceUrl = process.env.DKB_LLAMA_COMPILER_SERVICE_URL
     ? process.env.DKB_LLAMA_COMPILER_SERVICE_URL.trim().replace(/\/+$/u, '')
     : (await startLlamaIndexCompilerService(options)).url;
   if (!serviceUrl) throw new DkbError('LlamaIndex compiler service did not provide a local URL');
+  options.signal?.throwIfAborted();
 
-  const jobId = `job-${process.pid}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+  const jobId = `job-${randomUUID()}`;
   const jobRoot = path.join(compilerServiceJobsRoot(), jobId);
   const inputRoot = path.join(jobRoot, 'input');
-  await fs.rm(jobRoot, { recursive: true, force: true });
-  await fs.mkdir(inputRoot, { recursive: true });
+  await fs.mkdir(compilerServiceJobsRoot(), { recursive: true });
+  await fs.mkdir(jobRoot);
   try {
+    await fs.mkdir(inputRoot);
     await stageCompilerServiceInput(sourceRoot, inputRoot, request);
+    options.signal?.throwIfAborted();
   } catch (error) {
     await fs.rm(jobRoot, { recursive: true, force: true });
     throw error;
@@ -273,8 +277,14 @@ function compilerServiceRoot(): string {
   return path.resolve(process.env.DKB_LLAMA_COMPILER_SERVICE_ROOT ?? path.join(os.homedir(), '.dkb', 'compiler-service'));
 }
 
-function compilerServiceJobsRoot(): string {
+export function compilerServiceJobsRoot(): string {
   return path.join(compilerServiceRoot(), 'jobs');
+}
+
+/** Recovery never starts or replaces a shared service to recover an old job. */
+export async function trustedCompilerServiceUrl(options: CompilerServiceOptions): Promise<string | undefined> {
+  const configured = process.env.DKB_LLAMA_COMPILER_SERVICE_URL?.trim().replace(/\/+$/u, '');
+  return configured ?? (await compilerServiceStatus(options)).url;
 }
 
 async function stageCompilerServiceInput(sourceRoot: string, inputRoot: string, request: CompilerServiceRequest): Promise<void> {

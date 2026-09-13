@@ -16,7 +16,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('local, one-shot, Python, and Compose compiler defaults stay aligned', async () => {
   assert.equal(LLAMAINDEX_COMPILER_IMAGE, 'dkb-evidence-docling-llamaindex:0.1.0');
-  assert.equal(LLAMAINDEX_COMPILER_SERVICE_VERSION, '4');
+  assert.equal(LLAMAINDEX_COMPILER_SERVICE_VERSION, '5');
   assert.equal(LLAMAINDEX_DOCUMENT_BATCH_SIZE, 32);
 
   const python = await readFile(path.join(root, 'providers/evidence-docling-llamaindex/python/compile.py'), 'utf8');
@@ -26,10 +26,10 @@ test('local, one-shot, Python, and Compose compiler defaults stay aligned', asyn
   assert.doesNotMatch(python, /FASTEMBED|EMBED_BATCH|INFERENCE_BATCH/);
 
   const service = await readFile(path.join(root, 'providers/evidence-docling-llamaindex/python/service.py'), 'utf8');
-  assert.match(service, /SERVICE_VERSION = "4"/);
+  assert.match(service, /SERVICE_VERSION = "5"/);
 
   const dockerfile = await readFile(path.join(root, 'providers/evidence-docling-llamaindex/python/Dockerfile'), 'utf8');
-  assert.match(dockerfile, /org\.dkb\.compiler\.service\.version="4"/);
+  assert.match(dockerfile, /org\.dkb\.compiler\.service\.version="5"/);
 
   const compose = YAML.parse(await readFile(path.join(root, 'deploy/compose.yaml'), 'utf8'));
   const environment = compose.services['dkb-compiler-worker'].environment;

@@ -11,6 +11,7 @@ import type {
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { DkbJsonValue } from '@sjshovan/dkb-protocol/json.js';
 import type { DkbProviderExecutionReceipt } from '@sjshovan/dkb-protocol/providerReceipts.js';
+import type { DkbExecutionContext, DkbPendingExecutionInput, DkbPendingExecutionResult } from './execution.js';
 export type { DkbJsonValue } from '@sjshovan/dkb-protocol/json.js';
 
 export type DkbProviderKind = 'evidence' | 'parser' | 'chunker' | 'embedding' | 'index' | 'retrieval';
@@ -177,12 +178,15 @@ export interface DkbEvidenceProvider {
     dkb: LoadedDkb;
     options: DkbProviderOptions;
     signal?: AbortSignal;
+    execution?: DkbExecutionContext;
   }): Promise<{
     documents?: DkbPipelineDocument[];
     chunks?: DkbPipelineChunk[];
     records: DkbPipelineRecord[];
     receipt: DkbProviderOutputReceipt;
   }>;
+  /** Reconcile only a previously registered execution owned by this exact provider. */
+  cancelPending?(input: DkbPendingExecutionInput): Promise<DkbPendingExecutionResult>;
   health?(): Promise<DkbProviderHealth>;
   dispose?(): Promise<void> | void;
 }

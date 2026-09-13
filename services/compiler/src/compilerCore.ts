@@ -136,7 +136,7 @@ export async function compileComposeProject(
       `ingestion of ${registry.manifest.id}`,
     );
     const collectStateStart = performance.now();
-    const state = await collectRegistryState(registry, desiredProfile, options.distribution, contextRoot, options.targetOptions, options.signal);
+    const state = await collectRegistryState(registry, desiredProfile, options.distribution, contextRoot, options.targetOptions, options.signal, options.execution);
     state.packageSourceDigest = options.sourceDigest;
     const collectStateMs = elapsedMs(collectStateStart);
 
@@ -407,6 +407,7 @@ export async function ensurePackageBuildForTarget(
   const unambiguousEvidence = profileEvidence.length === 1 ? profileEvidence[0] : undefined;
   const stagingParent = await createCompilerWorkDirectory('dkb-package-build-');
   const stagingRoot = path.join(stagingParent, 'package');
+  let retainStaging = false;
 
   try {
     await fs.cp(resolvedRoot, stagingRoot, {
@@ -450,8 +451,11 @@ export async function ensurePackageBuildForTarget(
       evidenceProfileDigest: profile.evidenceProfileDigest,
       retrievalProfileDigest: profile.retrievalProfileDigest,
     };
+  } catch (error) {
+    retainStaging = error instanceof DkbError && error.code === 'compile_termination_unconfirmed';
+    throw error;
   } finally {
-    await fs.rm(stagingParent, { recursive: true, force: true });
+    if (!retainStaging) await fs.rm(stagingParent, { recursive: true, force: true });
   }
 }
 

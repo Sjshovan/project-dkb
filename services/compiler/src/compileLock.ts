@@ -14,12 +14,18 @@ const COMPILE_LOCK_RETRY_MS = 100;
 
 export async function withCompileLock<T>(root: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const lock = await acquireCompileLock(root, signal);
+  let failed = false;
 
   try {
     signal?.throwIfAborted();
     return await operation();
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    await releaseCompileLock(lock);
+    // Keep worker-stop uncertainty visible to every enclosing staging cleanup.
+    if (failed) await releaseCompileLock(lock).catch(() => undefined);
+    else await releaseCompileLock(lock);
   }
 }
 

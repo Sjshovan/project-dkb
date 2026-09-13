@@ -13,25 +13,20 @@ remain recorded under [architecture decisions](../decisions/).
 
 ## Snapshot
 
-- **Map revision:** 34
+- **Map revision:** 35
 - **Checked against:** both `development` branches on 2026-09-13
-- **Committed DKB baseline:** `58567ff`
-- **Committed Registry baseline:** `1ad5974`
+- **Committed HTTP-security checkpoint:** DKB `59b2cdc`, Registry `18123c9`
 - **Active milestone:** Plugin API v3, trusted Registry recipes, multi-build
   hardening, one Runtime activation gate, and complete query audit chains
 - **Release state:** private developer preview; not published or merged to
   `main`
-- **Checkpoint state:** the previous SDK work is committed at the baselines
-  above. Runtime/compiler HTTP hardening is subsequent, uncommitted work.
-  Historical green runs below do not certify later edits.
-- **Fresh baseline:** all TypeScript/Vue checks and the production build pass;
-  Node reports 500 passed and two Docker-dependent skips. Registry reports
-  266 passed with PHPStan passing under a process-only 1 GiB memory allowance.
-  This rerun includes the formerly unverified SDK/conformance edits.
+- **Checkpoint state:** HTTP authentication is committed. Worker-confirmed
+  compilation cancellation is the current verification boundary. The broader
+  milestone remains incomplete; historical green runs do not certify later edits.
 
 ### Safety hardening continuation
 
-The next boundary is authenticated ordinary Runtime HTTP and the
+The committed boundary covers authenticated ordinary Runtime HTTP and the
 Registry-to-compiler channel, using the existing service and host-credential
 ownership. Runtime reads now default private; admin and read credentials remain
 separate from MCP. CLI process launches generate endpoint-scoped host secrets,
@@ -66,11 +61,72 @@ policy; the final Temp cleanup gate is still open. No user Stack or knowledge
 was changed, and no image was published or existing tag overwritten.
 
 This proves authentication integration, not a fresh signed compilation or
-knowledge lifecycle. Later work remains ordered:
-worker-acknowledged cancellation; durable Library crash recovery; historical
+knowledge lifecycle. Worker-acknowledged cancellation is the current checkpoint.
+Following work remains ordered: durable Library crash recovery; historical
 signing keys and signed Collection receipts; bounded Console retention; then
 the signed multi-recipe, two-Runtime lifecycle and comparable performance proof.
 These are extensions of existing components, not a new architecture.
+
+### Worker-confirmed cancellation checkpoint
+
+The [cancellation decision](../decisions/0011-worker-confirmed-compilation-cancellation.md)
+keeps one warm, supervised parser child in the existing Linux Evidence service.
+Service version 5 binds requests and terminal acknowledgments to an exact job
+and token hash. Cancelling the HTTP request alone never permits scratch cleanup.
+The supervisor kills and reaps owned workers and descendants, then starts a new
+child with new IPC. The service must run as container PID 1.
+
+The compiler journals pending provider work before dispatch and holds a private
+SQLite owner lease. After a Node crash, recovery re-resolves the exact recorded
+provider, recipe, and options before asking that provider to stop its worker.
+Missing acknowledgments, changed providers, and unresolved cleanup retain the
+workspace and execution record. The Registry keeps that original execution in
+`cancelling`; it neither publishes a partial result nor automatically retries it.
+An explicit unconfirmed result without recoverable provider metadata also stays
+pending rather than being treated as proof of stopped work.
+Both result formats reject unsettled workers before delivery. A flushed finish
+marker is required for cleanup, including after errors persisting recovery state.
+Archive upload names cannot redirect writes outside the owned workspace.
+
+Fresh Registry verification passes **308 tests / 23,570 assertions**, Pint, and
+PHPStan with a process-only 1 GiB allowance. The final Node suite passes **553
+tests, no failures or skips**, including the opt-in Docker worker proofs.
+TypeScript/Vue checks, the production build, workspace and documentation gates,
+and isolated provider-image checks pass. All fifteen exact archives pass
+inspection and fresh-directory global CLI installation on Windows and Linux;
+all six installed provider receipts verify, and user CLI launchers are unchanged.
+Eighteen Linux worker-control tests
+cover child reuse, hard termination, descendants, deadlines, caller disconnect,
+and executor draining. A real Node-to-container proof passes uncached Markdown
+compilation, warm-worker reuse, running cancellation, lost control responses,
+retained work, and exact pending-worker recovery. A separate rich PDF proof
+confirms active parser CPU work stops before acknowledgement, no subsequent
+writes, and successful replacement-worker compilation. A ten-check real PID-1
+crash/restart proof verifies the old process identity has ended, exact-job
+`worker_restarted` acknowledgement, and no later writes. Recovery keeps its
+original trusted endpoint; changing a randomized Docker host port does not
+authorize forwarding the private job token to another URL.
+
+The initial deployed-image comparison was not a valid matched baseline: the old
+image also predates existing parser provenance and pinned-asset changes. Its
+records lacked current source hashes and compiler metadata. Extraction text and
+chunk locations matched, but its recipe and identities were not current.
+
+A controlled comparison uses the same new immutable image, parser, models, and
+dependencies on both sides, with only the previous committed service module
+mounted into the baseline. All twelve normal outputs are identical. Five warm
+runs per side give medians of **4.702 seconds before / 4.147 seconds after**,
+within the 10% regression gate. Samples varied considerably; this is bounded
+worker verification, not a general speedup claim or the missing whole-system
+signed lifecycle benchmark. The single cold sample was 19.408 seconds before /
+23.710 seconds after; repeated cold measurements and full-system resource gates
+remain unproven. No existing Library, Stack, package, or image tag was changed.
+
+Disposable worker containers were removed. Command policy blocked cleanup of
+three owned diagnostic roots from the comparison/restart proofs; they remain
+outside Git, alongside the two earlier cache/inspection leftovers. Combined
+owned leftovers are approximately 5.2 GiB. No retry through another deletion
+mechanism was attempted, and the final Temp cleanup gate remains open.
 
 ### Stopping point and resume order
 

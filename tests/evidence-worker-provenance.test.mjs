@@ -38,11 +38,16 @@ test('real Python adapters and public Evidence plugin retain source identity acr
     stores: [{ id: 'files', type: 'filesystem', path: '.', meta: { includePaths: ['facts.html'] } }] } };
   let selectedRecords = worker.rich;
   let requests = 0;
+  const fixtureErrors = [];
   const server = http.createServer(async (request, response) => {
     try {
+      assert.equal(request.method, 'POST');
+      assert.equal(request.url, '/compile', 'The provenance fixture only implements completed compile jobs');
       const buffers = [];
       for await (const chunk of request) buffers.push(chunk);
       const input = JSON.parse(Buffer.concat(buffers).toString('utf8'));
+      assert.equal(typeof input.jobId, 'string');
+      assert.equal(typeof input.jobToken, 'string');
       const options = await resolveOptions(input.evidenceOptions);
       const identity = plugin.identity({ options });
       requests++;
@@ -51,8 +56,12 @@ test('real Python adapters and public Evidence plugin retain source identity acr
         id: 'llamaindex.docling.evidence', model: input.model, modelRevision: input.modelRevision,
         evidenceOptions: input.evidenceOptions,
         modelAssetsDigest: identity.external.find((entry) => entry.name === 'docling-assets').digest,
-      }, records: selectedRecords }));
-    } catch (error) { response.statusCode = 500; response.end(String(error)); }
+      }, records: selectedRecords, job: {
+        format: 'dkb.evidence.worker-job.v1', jobId: input.jobId,
+        jobTokenHash: `sha256:${createHash('sha256').update(input.jobToken).digest('hex')}`,
+        status: 'completed', safeToCleanup: true, terminated: true,
+      } }));
+    } catch (error) { fixtureErrors.push(error); response.statusCode = 500; response.end('{}'); }
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
@@ -123,6 +132,7 @@ test('real Python adapters and public Evidence plugin retain source identity acr
     assert.equal(requests, beforeReuse + 2, 'record/source mismatches cause recompilation, not provenance reuse');
   });
   assert.deepEqual(await fs.readdir(path.join(root, 'service/jobs')), []);
+  assert.deepEqual(fixtureErrors, []);
 });
 
 async function resolveOptions(input) {

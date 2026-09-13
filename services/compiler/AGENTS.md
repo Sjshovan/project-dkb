@@ -22,6 +22,8 @@ are authoritative.
 - Preserve stable source anchors and enforce exact Evidence/Retrieval parent digests.
 - Validate all artifacts before atomic promotion; rollback leaves the previous complete build intact.
 - Enforce cancellation, timeouts, target compatibility, and trusted context-root containment.
+- Pending worker records survive aborts, expiry, and restart. Confirm the exact
+  worker stopped before cleanup; never mask uncertainty with a disposal error.
 - Stage service-visible jobs beneath the absolute `DKB_COMPILER_WORK_ROOT`; every selected provider must see that same root.
 
 ## Prohibited coupling

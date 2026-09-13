@@ -4,6 +4,7 @@ import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbBuildStorageStatistics, DkbCorpusStatistics } from './buildStatistics.js';
 import type { DkbDiskCapacityCheck } from './diskCapacity.js';
 import type { AtomicCompileArtifactTimings } from './compilerState.js';
+import type { ProviderExecutionFactory } from './providerExecution.js';
 
 export interface CompiledComposeProject {
   type: 'package';
@@ -81,6 +82,7 @@ export interface PreparedPackageBuildTarget {
 export interface CompileComposeProjectOptions {
   distribution: DkbDistribution;
   signal?: AbortSignal;
+  execution?: ProviderExecutionFactory;
   force?: boolean;
   target?: string;
   contextRoot?: string;

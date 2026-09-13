@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import type { DkbExecutionContext } from '@sjshovan/dkb-pipeline/execution.js';
+import { bindProviderExecution, type PendingProviderExecution, type ProviderExecutionFactory } from './providerExecution.js';
+import { RegistryExecutionJournal, terminationUnconfirmed } from './registryExecutionJournal.js';
 
 export const REGISTRY_COMPILE_DEADLINE_MS = 24 * 60 * 60 * 1_000;
 
@@ -22,11 +25,11 @@ export class RegistryJobControl {
   private readonly root: string;
   private lastPrune = 0;
 
-  constructor(contextRoot: string) {
+  constructor(contextRoot: string, private readonly reconcile?: (pending: PendingProviderExecution) => Promise<boolean>) {
     this.root = path.join(path.resolve(contextRoot), '.dkb', 'compiler-cancellations');
   }
 
-  async run<T>(input: RegistryCompileControl, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  async run<T>(input: RegistryCompileControl, operation: (signal: AbortSignal, execution: ProviderExecutionFactory) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const control = validateControl(input);
     const key = controlKey(control);
     if (this.active.has(key)) throw new DkbError('This compile execution is already running.', 'compile_already_running');
@@ -36,21 +39,77 @@ export class RegistryJobControl {
     const deadline = setTimeout(() => controller.abort(expired()), Math.max(0, expiresIn));
     deadline.unref();
     const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+    const journal = this.journal(key);
+    let owned = false;
+    let unconfirmedWork = false;
+    let poll: NodeJS.Timeout | undefined;
+    const execution: ProviderExecutionFactory = Object.assign((host: Parameters<ProviderExecutionFactory>[0], kind: 'evidence'): DkbExecutionContext => {
+      const identity = bindProviderExecution(host, kind);
+      const ids = new Set<string>();
+      return {
+        registerPending: async (state) => {
+          combined.throwIfAborted();
+          if (await this.cancelled(key)) throw cancelled();
+          const id = await journal.register({ ...identity, state });
+          ids.add(id);
+          return id;
+        },
+        settlePending: async (id) => {
+          if (!ids.has(id)) throw new DkbError('Pending execution belongs to another provider invocation.', 'invalid_compile_execution');
+          await journal.settle(id);
+          ids.delete(id);
+        },
+      };
+    }, {
+      hasPending: async () => (await journal.entries()).length > 0,
+      registerWorkspace: (root: string) => journal.registerWorkspace(root),
+    });
     try {
       if (expiresIn <= 0) throw expired();
       await this.prune();
       if (await this.cancelled(key)) throw cancelled();
+      await journal.begin();
+      owned = true;
+      if (await this.cancelled(key)) throw cancelled();
+      poll = setInterval(() => {
+        void this.cancelled(key).then((requested) => {
+          if (requested) controller.abort(cancelled());
+        }).catch(() => controller.abort(terminationUnconfirmed()));
+      }, 100);
+      poll.unref();
       combined.throwIfAborted();
-      const result = await operation(combined);
+      const result = await operation(combined, execution);
+      if ((await journal.entries()).length) throw terminationUnconfirmed();
+      if (await this.cancelled(key)) throw cancelled();
       combined.throwIfAborted();
       return result;
     } catch (error) {
       // Provider transports often throw their own AbortError; retain the job control outcome on the wire.
+      if (error instanceof DkbError && error.code === 'compile_termination_unconfirmed') {
+        unconfirmedWork = true;
+        throw error;
+      }
+      if (owned && (await journal.entries()).length) {
+        unconfirmedWork = true;
+        throw terminationUnconfirmed();
+      }
       if (combined.aborted) throw combined.reason;
       throw error;
     } finally {
       clearTimeout(deadline);
-      this.active.delete(key);
+      if (poll) clearInterval(poll);
+      try {
+        if (owned) {
+          if (unconfirmedWork && !(await journal.entries()).length) await journal.retainUntrackedWork();
+          await journal.finish();
+          await journal.removeIfSettled();
+        }
+      } catch {
+        throw terminationUnconfirmed();
+      } finally {
+        journal.releaseOwner();
+        this.active.delete(key);
+      }
     }
   }
 
@@ -67,13 +126,37 @@ export class RegistryJobControl {
     }
     const active = this.active.get(key);
     active?.abort(cancelled());
-    return { jobId: control.jobId, executionId: control.execution.id, status: active ? 'cancelling' : 'cancelled' };
+    let status: 'cancelling' | 'cancelled' = active ? 'cancelling' : 'cancelled';
+    const journal = this.journal(key);
+    if (!active && await journal.exists()) {
+      if (!await journal.ownerHasStopped()) status = 'cancelling';
+      else {
+        try {
+          const entries = await journal.entries();
+          for (const entry of entries) {
+            if (!this.reconcile || !await this.reconcile(entry.pending)) throw terminationUnconfirmed();
+          }
+          // Persist recovery authority before deleting its last pending handle.
+          // An empty, unfinished journal never proves that unknown work stopped.
+          if (entries.length) await journal.finish();
+          for (const entry of entries) {
+            await journal.settle(entry.id);
+          }
+          if (!await journal.removeIfSettled()) throw terminationUnconfirmed();
+        } catch { throw terminationUnconfirmed(); }
+      }
+    }
+    return { jobId: control.jobId, executionId: control.execution.id, status };
   }
 
   close(): void {
     for (const controller of this.active.values()) {
       controller.abort(new DkbError('Compiler is shutting down; retry this compile request.', 'compiler_stopping'));
     }
+  }
+
+  private journal(key: string): RegistryExecutionJournal {
+    return new RegistryExecutionJournal(path.join(this.root, `${key}.execution`));
   }
 
   private async cancelled(key: string): Promise<boolean> {

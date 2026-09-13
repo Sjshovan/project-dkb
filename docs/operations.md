@@ -70,8 +70,24 @@ already published job reports `published` without undoing publication.
 Each queue execution has a unique ID and a 24-hour deadline. Delayed retries of
 a canceled execution are rejected even after a compiler restart. Cancellation
 markers live in the trusted compiler context under `.dkb/compiler-cancellations/`
-and expire with their request deadline; they are never packaged as knowledge.
-After cancellation or deadline expiry, request a fresh alternate build. An
+and expire with their request deadline. Pending execution directories there do
+**not** expire: they contain private recovery handles and remain until the
+original worker acknowledges that it stopped and cleanup succeeds. Never package
+or share this directory as knowledge.
+
+`compile_termination_unconfirmed` leaves the Registry job `cancelling`, retains
+its execution identity, and suppresses automatic compilation retries. Restore
+the original worker connection and exact compiler/provider configuration, then
+repeat `dkb registry cancel-build` for that same job. Do not remove working files
+or start a duplicate build while termination is uncertain. A worker restart,
+timeout, or missing response alone does not confirm cleanup is safe.
+
+The warm Python Evidence supervisor uses service protocol 5 and must run as PID 1
+in its Linux Docker container. Do not add an init wrapper or launch it as a bare
+native Python service. Upgrade the compiler and Evidence image together; older
+service versions are rejected. See the [cancellation decision](decisions/0011-worker-confirmed-compilation-cancellation.md).
+
+After **confirmed** cancellation, request a fresh alternate build. An
 initial unpublished source version stays retained and cannot be overwritten.
 
 ## Runtime HTTP access

@@ -26,6 +26,7 @@ import { hashStoreForDkb, uniqueDkbs } from './sourceHashing.js';
 import { quickStoreSnapshotsForDkb, sourceStatisticsForStores, storesForDkb } from './compileCache.js';
 import type { CompileComposeProfile } from './compilerContracts.js';
 import type { CompilerArtifactState, RegistryCompileState } from './compilerState.js';
+import type { ProviderExecutionFactory } from './providerExecution.js';
 
 export function pipelineFromEvidenceIr(evidence: DkbEvidenceIr): DkbEvidencePipeline {
   const chunkByEvidence = new Map<string, DkbEvidenceIr['chunks'][number]>();
@@ -107,6 +108,7 @@ export async function collectRegistryState(
   contextRoot = registry.root,
   targetOptions?: Record<string, Record<string, unknown>>,
   signal?: AbortSignal,
+  execution?: ProviderExecutionFactory,
 ): Promise<RegistryCompileState> {
   signal?.throwIfAborted();
   const allDkbs = uniqueDkbs([
@@ -122,9 +124,17 @@ export async function collectRegistryState(
   let packageEntries: Awaited<ReturnType<typeof collectDkbState>>[];
 
   try {
-    packageEntries = await Promise.all(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost, signal)));
+    // Await every owner before disposing the shared host or permitting scratch cleanup.
+    const settled = await Promise.allSettled(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost, signal, execution)));
+    const failures = settled.filter((entry) => entry.status === 'rejected');
+    if (failures.length) {
+      const uncertain = failures.find((entry) => entry.reason instanceof DkbError && entry.reason.code === 'compile_termination_unconfirmed');
+      throw (uncertain ?? failures[0]!).reason;
+    }
+    packageEntries = settled.map((entry) => (entry as PromiseFulfilledResult<Awaited<ReturnType<typeof collectDkbState>>>).value);
   } catch (error) {
-    await providerHost.dispose();
+    // Disposal must not replace the compilation outcome (particularly an unconfirmed worker stop).
+    await providerHost.dispose().catch(() => undefined);
     throw error;
   }
   const sourceUnits = packageEntries.flatMap((entry) => entry.sourceUnits);
@@ -230,12 +240,13 @@ async function collectDkbState(
   artifactRoot: string,
   providerHost: DkbProviderHost,
   signal?: AbortSignal,
+  execution?: ProviderExecutionFactory,
 ): Promise<{
   package: DkbLockManifest['packages'][string];
   sourceUnits: IndexedSourceUnit[];
   compilerArtifact?: CompilerArtifactState;
 }> {
-  const built = await buildSourceUnitsForDkb(dkb, desiredProfile, providerHost, signal);
+  const built = await buildSourceUnitsForDkb(dkb, desiredProfile, providerHost, signal, execution);
 
   return {
     package: await lockPackageForDkb(dkb, built.units, artifactRoot),
@@ -256,8 +267,9 @@ async function buildSourceUnitsForDkb(
   desiredProfile: DkbResolvedRetrievalProfile,
   providerHost: DkbProviderHost,
   signal?: AbortSignal,
+  execution?: ProviderExecutionFactory,
 ) {
-  const ingested = await ingestDkbWithProviderHost(providerHost, dkb, { signal });
+  const ingested = await ingestDkbWithProviderHost(providerHost, dkb, { signal, execution });
   signal?.throwIfAborted();
   const evidenceRecords = ingested.records.map((record) => evidenceSourceRecordFromPipelineRecord(dkb, record));
   const evidence = buildEvidenceIr([{ records: evidenceRecords }], {

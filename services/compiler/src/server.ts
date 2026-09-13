@@ -17,6 +17,7 @@ import {
 } from './compilerResultEnvelope.js';
 import { registryCompilerCapabilities as resolveCompilerCapabilities } from './compilerCapabilities.js';
 import { RegistryJobControl, type RegistryCompileControl } from './registryJobControl.js';
+import { pendingExecutionReconciler } from './providerExecution.js';
 
 export interface ServeDkbRegistryCompilerOptions {
   host?: string;
@@ -28,7 +29,7 @@ export async function serveDkbRegistryCompiler(options: ServeDkbRegistryCompiler
   const host = options.host ?? process.env.DKB_REGISTRY_COMPILER_HOST ?? '127.0.0.1';
   const port = options.port ?? Number.parseInt(process.env.DKB_REGISTRY_COMPILER_PORT ?? '7333', 10);
   const contextRoot = registryCompilerContextRoot();
-  const jobs = new RegistryJobControl(contextRoot);
+  const jobs = new RegistryJobControl(contextRoot, pendingExecutionReconciler(DEFAULT_DKB_DISTRIBUTION, contextRoot));
   const server = http.createServer(async (request, response) => {
     await routeRequest(request, response, jobs, contextRoot, serviceTokenDigest);
   });
@@ -73,23 +74,23 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
       };
       response.once('close', onClose);
       try {
-        await jobs.run({
+        const binary = (request.headers.accept ?? '').includes(DKB_COMPILER_RESULT_MEDIA_TYPE);
+        const result = await jobs.run({
           registryId: body.request?.package?.registryId ?? '',
           jobId: body.jobId,
           execution: body.request?.execution!,
-        }, async (signal) => {
-          const compileOptions = { distribution: DEFAULT_DKB_DISTRIBUTION, contextRoot, signal };
-          if ((request.headers.accept ?? '').includes(DKB_COMPILER_RESULT_MEDIA_TYPE)) {
-            await compileRegistryPackage(body, {
+        }, async (signal, execution) => {
+          const compileOptions = { distribution: DEFAULT_DKB_DISTRIBUTION, contextRoot, signal, execution };
+          if (binary) {
+            return compileRegistryPackage(body, {
               ...compileOptions,
               deliver: async (compiled) => sendCompiledArchive(response, compiled, signal),
             });
           } else {
-            const result = await compileRegistryPackage(body, compileOptions);
-            signal.throwIfAborted();
-            sendJson(response, 200, result);
+            return compileRegistryPackage(body, compileOptions);
           }
         }, disconnected.signal);
+        if (!binary) sendJson(response, 200, result);
       } finally {
         response.off('close', onClose);
       }
@@ -98,7 +99,7 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
     return sendJson(response, 404, { error: 'not_found', message: `Unknown compiler route: ${request.method} ${url.pathname}` });
   } catch (error) {
     const code = error instanceof DkbError ? error.code : 'compiler_error';
-    const status = ['compile_cancelled', 'compile_expired', 'compile_already_running'].includes(code) ? 409 : error instanceof DkbError ? 400 : 500;
+    const status = ['compile_cancelled', 'compile_expired', 'compile_already_running', 'compile_termination_unconfirmed'].includes(code) ? 409 : error instanceof DkbError ? 400 : 500;
     const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ event: 'dkb.registry.compiler.failed', status, message }));
     if (response.headersSent || response.destroyed) {

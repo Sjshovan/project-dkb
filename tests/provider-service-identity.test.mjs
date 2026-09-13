@@ -36,7 +36,7 @@ async function isolated(body) {
     cp.execFile=mockExecFile; syncBuiltinESMExports();
     globalThis.fetch=async(url)=>new Response(JSON.stringify(String(url).endsWith('/info')
       ?{model_id:pin.model,model_sha:pin.modelRevision,version:'1.9.3'}
-      :{ok:true,serviceVersion:'4',...pin}),{headers:{'content-type':'application/json'}});
+      :{ok:true,serviceVersion:'5',...pin}),{headers:{'content-type':'application/json'}});
     ${body}
   `;
   await run(process.execPath, ['--input-type=module', '-e', script], { cwd: process.cwd(), timeout: 15_000, windowsHide: true });
@@ -140,7 +140,7 @@ for (const provider of ['FastEmbed', 'TEI', 'Evidence']) {
       mockExecFile[promisify.custom]=async(command,args)=>{
         assert.equal(command,'docker');commands.push(args);
         if(args[0]==='image') {
-          if(args.includes('--format'))return {stdout:'4',stderr:''};
+          if(args.includes('--format'))return {stdout:'5',stderr:''};
           return {stdout:JSON.stringify([{Id:args[2]==='image-b'?B:A,RepoDigests:[]}]),stderr:''};
         }
         if(args[0]==='inspect') {
@@ -182,12 +182,35 @@ for (const provider of ['FastEmbed', 'TEI', 'Evidence']) {
 
 test('Evidence one-shot compilation checks and runs the exact recorded image', async () => {
   await isolated(`
+    const fs=await import('node:fs/promises');const os=await import('node:os');const path=await import('node:path');
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),'dkb-llamaindex-'));
+    await fs.mkdir(path.join(root,'request'));await fs.mkdir(path.join(root,'output'));
+    let owned;
+    mockExecFile[promisify.custom]=async(command,args)=>{
+      assert.equal(command,'docker');commands.push(args);
+      if(args[0]==='image')return {stdout:JSON.stringify([{Id:actual,RepoDigests:[]}]),stderr:''};
+      if(args[0]==='create') {
+        const labels={};const mounts=[];
+        for(let i=0;i<args.length;i++) {
+          if(args[i]==='--label'){const [key,...value]=args[i+1].split('=');labels[key]=value.join('=');}
+          if(args[i]==='--mount'){const fields=Object.fromEntries(args[i+1].split(',').map(x=>x.split('=')));mounts.push({Source:fields.src,Destination:fields.dst,RW:!Object.hasOwn(fields,'readonly')});}
+        }
+        owned={Id:'d'.repeat(64),Image:A,State:{Running:false,Status:'created'},Config:{Labels:labels},Mounts:mounts};
+      }
+      if(args[0]==='inspect') {if(!owned)throw new Error('No such container');return {stdout:JSON.stringify([owned]),stderr:''};}
+      if(args[0]==='start')owned.State={Running:false,Status:'exited'};
+      if(args[0]==='rm')owned=undefined;
+      return {stdout:'0',stderr:''};
+    };
     const {runCompiler}=await import('./providers/evidence-docling-llamaindex/dist/compilerTransport.js');
-    await runCompiler('mutable:tag','/input','/request','/output',{imageDigest:A,model:pin.model,modelRevision:revision});
-    const started=commands.find(args=>args[0]==='run');assert.ok(started.includes(A));assert.ok(!started.includes('mutable:tag'));
-    assert.ok(started.includes('DKB_COMPILER_MODEL_REVISION='+revision));
-    actual=B;commands.length=0;
-    await assert.rejects(runCompiler('mutable:tag','/input','/request','/output',{imageDigest:A}),/identity mismatch/);
-    assert.ok(!commands.some(args=>args[0]==='run'));
+    try {
+      await runCompiler('mutable:tag',path.resolve('/input'),path.join(root,'request'),path.join(root,'output'),{imageDigest:A,model:pin.model,modelRevision:revision});
+      const started=commands.find(args=>args[0]==='create');assert.ok(started.includes(A));assert.ok(!started.includes('mutable:tag'));
+      assert.ok(started.includes('DKB_COMPILER_MODEL_REVISION='+revision));
+      assert.ok(commands.some(args=>args[0]==='wait'));assert.ok(commands.some(args=>args[0]==='rm'));assert.equal(owned,undefined);
+      actual=B;commands.length=0;
+      await assert.rejects(runCompiler('mutable:tag','/input','/request','/output',{imageDigest:A}),/identity mismatch/);
+      assert.ok(!commands.some(args=>args[0]==='create'));
+    } finally {await fs.rm(root,{recursive:true,force:true});}
   `);
 });

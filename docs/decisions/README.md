@@ -24,3 +24,4 @@ Statuses:
 - [0008 - Runtime-bound Pipelines and shared Libraries](0008-runtime-bound-pipelines-and-shared-libraries.md) — Implemented for the developer preview.
 - [0009 - Trusted Plugin SDK and Registry recipes](0009-trusted-plugin-sdk-and-registry-recipes.md) — Accepted; current hardening milestone.
 - [0010 - Retire the remote query gateway and dormant write queue](0010-retire-remote-query-gateway-and-write-queue.md) — Accepted; implementation in the current hardening milestone.
+- [0011 - Worker-confirmed compilation cancellation](0011-worker-confirmed-compilation-cancellation.md) — Accepted; real worker and recovery verification required.

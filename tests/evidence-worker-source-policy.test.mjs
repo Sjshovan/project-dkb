@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -51,11 +52,16 @@ test('worker rejects direct live requests while package-owned SQLite retains act
   assert.match(worker.after[0].text, /SQLITE-UPDATED-53/u);
 
   let received;
+  const fixtureErrors = [];
   const server = http.createServer(async (request, response) => {
     try {
+      assert.equal(request.method, 'POST');
+      assert.equal(request.url, '/compile', 'The source-policy fixture only implements completed compile jobs');
       const buffers = [];
       for await (const chunk of request) buffers.push(chunk);
       received = JSON.parse(Buffer.concat(buffers).toString('utf8'));
+      assert.equal(typeof received.jobId, 'string');
+      assert.equal(typeof received.jobToken, 'string');
       const { options } = await evidenceProvider();
       const identity = plugin.identity({ options });
       response.setHeader('content-type', 'application/json');
@@ -63,8 +69,12 @@ test('worker rejects direct live requests while package-owned SQLite retains act
         id: 'llamaindex.docling.evidence', model: received.model, modelRevision: received.modelRevision,
         evidenceOptions: received.evidenceOptions,
         modelAssetsDigest: identity.external.find((entry) => entry.name === 'docling-assets').digest,
-      }, records: worker.after }));
-    } catch (error) { response.statusCode = 500; response.end(String(error)); }
+      }, records: worker.after, job: {
+        format: 'dkb.evidence.worker-job.v1', jobId: received.jobId,
+        jobTokenHash: `sha256:${createHash('sha256').update(received.jobToken).digest('hex')}`,
+        status: 'completed', safeToCleanup: true, terminated: true,
+      } }));
+    } catch (error) { fixtureErrors.push(error); response.statusCode = 500; response.end('{}'); }
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
@@ -93,6 +103,7 @@ test('worker rejects direct live requests while package-owned SQLite retains act
   assert.doesNotThrow(() => validatePipelineRecords(records.map((record) => ({ ...record,
     provenance: { ...record.provenance, sourceType: 'database' } })), '@fixture/trusted-database-provider'));
   assert.deepEqual(await fs.readdir(path.join(root, 'service/jobs')), []);
+  assert.deepEqual(fixtureErrors, []);
 });
 
 async function evidenceProvider() {

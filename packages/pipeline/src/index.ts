@@ -1,4 +1,5 @@
 export * from './config.js';
+export * from './execution.js';
 export * from './capabilities.js';
 export * from './packageIntegrity.js';
 export * from './bundledIntegrity.js';

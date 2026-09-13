@@ -317,6 +317,74 @@ test('Registry compiler response binds the exact resolved compiler identity', as
   assert.equal(retrievalGraph.evidence.package.sourceDigest, sourceDigest);
 });
 
+test('Registry source and Evidence upload names cannot escape owned staging or alter valid compilation', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-upload-names-'));
+  const workRoot = path.join(directory, 'work');
+  const sourceRoot = path.join(directory, 'source');
+  const contextRoot = path.join(directory, 'context');
+  const previous = new Map(['DKB_COMPILER_WORK_ROOT', 'DKB_COMPILER_ALLOWED_TARGETS', 'DKB_COMPILER_DEFAULT_TARGET']
+    .map((name) => [name, process.env[name]]));
+  t.after(async () => {
+    for (const [name, value] of previous) setEnvironment(name, value);
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  process.env.DKB_COMPILER_WORK_ROOT = workRoot;
+  process.env.DKB_COMPILER_ALLOWED_TARGETS = 'trusted';
+  process.env.DKB_COMPILER_DEFAULT_TARGET = 'trusted';
+  await fs.mkdir(sourceRoot);
+  const manifest = JSON.stringify({ manifestVersion: 1, type: 'dkb', name: '@test/upload-names', version: '1.0.0', permissions: { read: true, write: false } });
+  await fs.writeFile(path.join(sourceRoot, 'dkb.json'), manifest);
+  const sourceSentinel = path.join(directory, 'source-sentinel.dkbpkg');
+  const evidenceSentinel = path.join(directory, 'evidence-sentinel.dkbevidence');
+  await fs.writeFile(sourceSentinel, 'Original outside source file');
+  await fs.writeFile(evidenceSentinel, 'Original outside Evidence file');
+  const archivePath = path.join(directory, 'source.dkbpkg');
+  await createDkbPackageArchive(sourceRoot, archivePath);
+  const sourceBytes = await fs.readFile(archivePath);
+  const sourceDigest = `sha256:${createHash('sha256').update(sourceBytes).digest('hex')}`;
+  const fixture = await distribution(t);
+  const request = {
+    expectedCompilerBuildDigest: (await readCompilerBuildIdentity()).buildDigest,
+    package: { id: '@test/upload-names', version: '1.0.0', publisherId: 'test' },
+    target: 'trusted',
+  };
+  const sourceArchive = { fileName: 'source.dkbpkg', hash: sourceDigest, contents: sourceBytes.toString('base64') };
+  const options = { distribution: fixture, contextRoot };
+  const baseline = await compileRegistryPackage({ jobId: 'benign-upload-name', request, sourceArchive }, options);
+  const baselineArchive = path.join(directory, 'baseline.dkbpkg');
+  const baselineRoot = path.join(directory, 'baseline');
+  await fs.writeFile(baselineArchive, Buffer.from(baseline.archive.contents, 'base64'));
+  await extractDkbPackageArchive(baselineArchive, baselineRoot);
+  const graph = await validatePackageBuildGraph(baselineRoot);
+  const evidencePath = path.join(directory, 'evidence.dkbevidence');
+  await createDkbPackageArchive(graph.evidencePath, evidencePath);
+  const evidenceBytes = await fs.readFile(evidencePath);
+  const evidenceArchive = {
+    hash: `sha256:${createHash('sha256').update(evidenceBytes).digest('hex')}`,
+    contents: evidenceBytes.toString('base64'),
+  };
+  const cases = [
+    { name: 'benign', source: 'source.dkbpkg', evidence: 'evidence.dkbevidence' },
+    { name: 'traversal', source: '../../source-sentinel.dkbpkg', evidence: '../../evidence-sentinel.dkbevidence' },
+    { name: 'windows-traversal', source: '..\\..\\source-sentinel.dkbpkg', evidence: '..\\..\\evidence-sentinel.dkbevidence' },
+    { name: 'malformed', source: '\0source.dkbpkg', evidence: '\0evidence.dkbevidence' },
+  ];
+  for (const item of cases) {
+    const response = await compileRegistryPackage({
+      jobId: `upload-name-${item.name}`, request: { ...request, stage: 'retrieval' },
+      sourceArchive: { ...sourceArchive, fileName: item.source },
+      evidenceArchive: { ...evidenceArchive, fileName: item.evidence },
+    }, options);
+    assert.equal(response.build.evidenceDigest, graph.evidence.evidenceDigest);
+    assert.equal(typeof response.archive.contents, 'string');
+    assert.ok(response.archive.contents.length > 0, `${item.name} must still produce a valid compiled response`);
+    assert.equal(await fs.readFile(sourceSentinel, 'utf8'), 'Original outside source file');
+    assert.equal(await fs.readFile(evidenceSentinel, 'utf8'), 'Original outside Evidence file');
+    assert.equal(await fs.readFile(path.join(sourceRoot, 'dkb.json'), 'utf8'), manifest);
+    assert.deepEqual(await fs.readdir(workRoot), [], 'Only owned scratch is created, then removed');
+  }
+});
+
 test('Registry compiler liveness does not wait for provider capability probes', async (t) => {
   const previousToken = process.env.DKB_COMPILER_SERVICE_TOKEN;
   process.env.DKB_COMPILER_SERVICE_TOKEN = randomUUID();

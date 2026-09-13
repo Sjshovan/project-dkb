@@ -4,6 +4,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
+import type { DkbExecutionContext } from '@sjshovan/dkb-pipeline/execution.js';
 import {
   LLAMAINDEX_COMPILER_ID,
   LLAMAINDEX_COMPILER_IMAGE,
@@ -31,6 +32,7 @@ import {
   runCompiler,
   runCompilerService,
 } from './compilerTransport.js';
+export { cancelLlamaIndexPending, recoverLlamaIndexCompiler } from './compilerTransport.js';
 import { maybePrepareCompilerServiceJob } from './compilerService.js';
 import { tokenizerRevision } from './model.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
@@ -174,7 +176,10 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
   evidenceOptions?: EvidenceOptions;
   timeoutMs?: number;
   workers?: number;
+  signal?: AbortSignal;
+  execution?: DkbExecutionContext;
 } = {}): Promise<LlamaIndexCompilerResult> {
+  options.signal?.throwIfAborted();
   const image = options.image ?? process.env.DKB_LLAMA_COMPILER_IMAGE ?? LLAMAINDEX_COMPILER_IMAGE;
   const model = options.model ?? process.env.DKB_COMPILER_MODEL ?? 'BAAI/bge-small-en-v1.5';
   const modelRevision = tokenizerRevision(model, options.modelRevision ?? process.env.DKB_COMPILER_MODEL_REVISION);
@@ -244,21 +249,29 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
     modelRevision,
     timeoutMs: options.timeoutMs,
     workers: options.workers,
+    signal: options.signal,
   });
   if (serviceJob) {
     const serviceStart = performance.now();
     let parsed: LlamaIndexCompilerOutput;
+    let safeToCleanup = true;
     try {
       parsed = await runCompilerService(serviceJob.serviceUrl, requestToCompile, {
         jobId: serviceJob.jobId,
+        jobRoot: serviceJob.jobRoot,
         model,
         modelRevision,
         evidenceOptions,
         timeoutMs: options.timeoutMs,
         workers: options.workers,
+        signal: options.signal,
+        execution: options.execution,
       });
+    } catch (error) {
+      safeToCleanup = !(error instanceof DkbError && error.code === 'compile_termination_unconfirmed');
+      throw error;
     } finally {
-      await fs.rm(serviceJob.jobRoot, { recursive: true, force: true });
+      if (safeToCleanup) await fs.rm(serviceJob.jobRoot, { recursive: true, force: true });
     }
     verifyCompilerModel(parsed, model, modelRevision, evidenceOptions);
     const records = plan
@@ -311,6 +324,8 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
   let imageMs = 0;
   let containerMs = 0;
   let outputReadMs = 0;
+  let safeToCleanup = true;
+  let finishWorker: (() => Promise<void>) | undefined;
 
   try {
     const requestStart = performance.now();
@@ -320,15 +335,18 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
     requestWriteMs = elapsedMs(requestStart);
     const imageStart = performance.now();
     await ensureImage(image);
+    options.signal?.throwIfAborted();
     imageMs = elapsedMs(imageStart);
     const containerStart = performance.now();
-    await runCompiler(image, dkb.root, requestDir, outputDir, {
+    finishWorker = await runCompiler(image, dkb.root, requestDir, outputDir, {
       imageDigest: options.imageDigest,
       model,
       modelRevision,
       evidenceOptions,
       timeoutMs: options.timeoutMs,
       workers: options.workers,
+      signal: options.signal,
+      execution: options.execution,
     });
     containerMs = elapsedMs(containerStart);
     const outputReadStart = performance.now();
@@ -378,8 +396,14 @@ export async function compileDkbWithLlamaIndex(dkb: LoadedDkb, options: {
         reusedRecords: plan?.reusedRecords.length ?? 0,
       },
     };
+  } catch (error) {
+    safeToCleanup = !(error instanceof DkbError && error.code === 'compile_termination_unconfirmed');
+    throw error;
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    if (safeToCleanup) {
+      if (finishWorker) await finishWorker();
+      else await fs.rm(scratch, { recursive: true, force: true });
+    }
   }
 }
 

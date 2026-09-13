@@ -691,6 +691,9 @@ function validateProvider(provider: DkbProvider, pluginId: string): void {
   if (provider.kind === 'evidence' && typeof provider.compile !== 'function') {
     throw new DkbError(`Plugin ${pluginId} Evidence provider must implement compile()`);
   }
+  if (provider.kind === 'evidence' && provider.cancelPending !== undefined && typeof provider.cancelPending !== 'function') {
+    throw new DkbError(`Plugin ${pluginId} Evidence provider cancelPending must be a function when supplied`);
+  }
   if (provider.kind === 'parser' && typeof provider.parse !== 'function') {
     throw new DkbError(`Plugin ${pluginId} parser provider must implement parse()`);
   }

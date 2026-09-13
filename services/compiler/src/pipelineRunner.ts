@@ -22,11 +22,12 @@ import type {
 } from '@sjshovan/dkb-pipeline/types.js';
 import { embeddingCacheEnabled, openEmbeddingCache } from './embeddingCache.js';
 import { providerReceipt } from './providerReceipts.js';
+import type { ProviderExecutionFactory } from './providerExecution.js';
 
 export async function compileDkbWithProviderHost(
   host: DkbProviderHost,
   dkb: LoadedDkb,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; execution?: ProviderExecutionFactory } = {},
 ): Promise<DkbRetrievalPipeline> {
   return embedDkbEvidenceWithProviderHost(host, await ingestDkbWithProviderHost(host, dkb, options), options);
 }
@@ -34,7 +35,7 @@ export async function compileDkbWithProviderHost(
 export async function ingestDkbWithProviderHost(
   host: DkbProviderHost,
   dkb: LoadedDkb,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; execution?: ProviderExecutionFactory } = {},
 ): Promise<DkbEvidencePipeline> {
   const target = host.config.target;
   let result: DkbEvidencePipeline;
@@ -45,6 +46,7 @@ export async function ingestDkbWithProviderHost(
       dkb,
       options: host.optionsFor(target.evidence),
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.execution ? { execution: options.execution(host, 'evidence') } : {}),
     });
     const receipt = providerReceipt(host, 'evidence', compiled?.receipt);
     const documents = validatePipelineDocuments(compiled.documents ?? [], target.evidence);

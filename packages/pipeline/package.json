@@ -10,6 +10,7 @@
       "import": "./dist/index.js"
     },
     "./capabilities.js": { "types": "./dist/capabilities.d.ts", "import": "./dist/capabilities.js" },
+    "./execution.js": { "types": "./dist/execution.d.ts", "import": "./dist/execution.js" },
     "./packageIntegrity.js": { "types": "./dist/packageIntegrity.d.ts", "import": "./dist/packageIntegrity.js" },
     "./buildProfiles.js": {
       "types": "./dist/buildProfiles.d.ts",

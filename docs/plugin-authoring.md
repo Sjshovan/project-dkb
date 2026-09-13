@@ -7,6 +7,35 @@ are not downloaded from a plugin registry. The public SDK is
 
 ## Start a plugin
 
+### Worker lifetime and cancellation
+
+In-process providers must finish their owned work before `compile()` settles.
+An Evidence provider that dispatches child or remote work also implements
+`cancelPending({ state, options, signal })`. Its `compile` input may supply an
+execution context from `@sjshovan/dkb-pipeline/execution.js`:
+
+1. Persist a private, bounded JSON worker handle with `registerPending(state)`
+   **before** dispatch. DKB binds it to the actual selected provider and recipe.
+2. On success, failure, or abort, confirm that this exact worker has stopped
+   writing. A timeout or closed HTTP connection is not confirmation.
+3. Clean only its verified owned scratch, then `settlePending(id)`.
+4. If confirmation or cleanup fails, retain the worker handle and scratch and
+   throw `DkbError` with code `compile_termination_unconfirmed`.
+
+`cancelPending` must be idempotent across compiler restarts and return
+`{ safeToCleanup: true }` only after affirmative exact-worker confirmation and
+owned cleanup. A missing local control file is not confirmation. DKB supplies
+the original opaque handle only to the same resolved provider/configuration;
+it does not let a replacement plugin interpret it. Standalone local providers
+retain their own private handle and expose provider-specific recovery without
+requiring a Registry. Never put these operational handles in build receipts,
+logs, archive contents, or the browser. They may contain private job tokens.
+
+This is an operator-code contract, not a sandbox: a plugin that starts hidden
+background work outside the contract cannot claim DKB's termination guarantees.
+
+### Scaffold
+
 ```text
 dkb plugin init @acme/my-provider --kind embedding ./my-provider
 cd ./my-provider
