@@ -121,7 +121,7 @@ test('local lexical process records exact admitted and rejected audit chains thr
     locator: record.locator, hash: record.sourceHash }).slice(7, 23) };
   assert.equal(graph.profile.profile.embedding, undefined);
 
-  // One real Node Runtime serves both public HTTP and authenticated MCP.
+  // One real Node Runtime serves authenticated HTTP and authenticated MCP.
   server = await serveDkbRuntime({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot, host: '127.0.0.1', port: 0, adminToken });
   const origin = `http://127.0.0.1:${server.address().port}`;
   const observedRequests = [];
@@ -130,6 +130,7 @@ test('local lexical process records exact admitted and rejected audit chains thr
   const post = async (route, body, headers = {}) => {
     const response = await fetch(`${origin}${route}`, { method: 'POST',
       headers: { 'content-type': 'application/json', 'x-dkb-client-id': 'synthetic-http-client',
+        ...(route === '/mcp' ? {} : { authorization: `Bearer ${adminToken}` }),
         'x-dkb-session-id': 'synthetic-http-session', ...headers },
       body: JSON.stringify(body), signal: AbortSignal.any([t.signal, AbortSignal.timeout(15_000)]) });
     return { status: response.status, data: await response.json() };

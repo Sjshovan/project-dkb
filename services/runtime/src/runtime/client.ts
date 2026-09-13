@@ -7,21 +7,28 @@ export interface DkbRuntimeClientOptions {
   baseUrl?: string;
   timeoutMs?: number;
   adminToken?: string;
+  readToken?: string;
 }
 
 export class DkbRuntimeClient {
   readonly baseUrl: string;
   readonly timeoutMs: number;
   readonly adminToken?: string;
+  readonly readToken?: string;
 
   constructor(options: DkbRuntimeClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? process.env.DKB_RUNTIME_URL ?? 'http://127.0.0.1:7331');
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.adminToken = options.adminToken ?? process.env.DKB_RUNTIME_ADMIN_TOKEN;
+    this.readToken = options.readToken ?? process.env.DKB_RUNTIME_READ_TOKEN;
   }
 
   status() {
     return this.get('/api/runtime');
+  }
+
+  health() {
+    return this.request('GET', '/health', undefined, false, true);
   }
 
   library() {
@@ -97,18 +104,20 @@ export class DkbRuntimeClient {
     return this.request('DELETE', path, undefined, admin);
   }
 
-  private async request(method: string, path: string, body?: unknown, admin = false): Promise<unknown> {
+  private async request(method: string, path: string, body?: unknown, admin = false, anonymous = false): Promise<unknown> {
     let response: Response;
+    const token = anonymous ? undefined : admin ? this.adminToken : this.readToken ?? this.adminToken;
 
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-          ...(admin && this.adminToken ? { authorization: `Bearer ${this.adminToken}` } : {}),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
+        redirect: 'error',
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -123,7 +132,9 @@ export class DkbRuntimeClient {
         ? String((parsed as { message: unknown }).message)
         : `${method} ${path} failed with HTTP ${response.status}`;
 
-      throw new DkbError(message);
+      throw new DkbError(response.status === 401 || response.status === 403
+        ? 'Runtime authentication is required. Use the credential for this endpoint through DKB_RUNTIME_READ_TOKEN (knowledge) or DKB_RUNTIME_ADMIN_TOKEN (management).'
+        : redactCredentials(message, [this.adminToken, this.readToken]), response.status === 401 || response.status === 403 ? 'runtime_unauthorized' : 'DKB_ERROR');
     }
 
     if (text && parsed === null) {
@@ -139,7 +150,7 @@ function normalizeBaseUrl(value: string): string {
   const markdownLink = raw.match(/^\[([^\]]+)]\([^)]+\)$/);
 
   if (markdownLink) {
-    throw new DkbError(`Runtime URL was pasted as a Markdown link. Use the plain URL instead: ${markdownLink[1]}`);
+    throw new DkbError('Runtime URL was pasted as a Markdown link. Use a plain http(s) URL without credentials instead.');
   }
 
   let parsed: URL;
@@ -147,11 +158,15 @@ function normalizeBaseUrl(value: string): string {
   try {
     parsed = new URL(raw);
   } catch {
-    throw new DkbError(`Invalid DKB Runtime URL: ${value}`);
+    throw new DkbError('Invalid DKB Runtime URL. Use a plain http(s) URL without credentials.');
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new DkbError(`DKB Runtime URL must use http or https: ${value}`);
+    throw new DkbError('DKB Runtime URL must use http or https.');
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new DkbError('Runtime URLs must not contain credentials. Use the Runtime credential environment variables.');
   }
 
   parsed.pathname = parsed.pathname.replace(/\/+$/g, '');
@@ -159,6 +174,11 @@ function normalizeBaseUrl(value: string): string {
   parsed.hash = '';
 
   return parsed.toString().replace(/\/+$/g, '');
+}
+
+function redactCredentials(message: string, secrets: Array<string | undefined>): string {
+  for (const secret of secrets) if (secret) message = message.split(secret).join('[redacted]');
+  return message;
 }
 
 function parseJson(text: string): unknown {

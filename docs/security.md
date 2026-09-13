@@ -32,11 +32,39 @@ HTTP MCP requires a bearer token and validates Host and Origin. Bind to
 loopback unless a deliberate authenticated deployment sits in front of it.
 Public document routes are opt-in and must contain only material safe to expose.
 
-## Secrets and local state
+## Runtime and compiler HTTP
+
+Ordinary Runtime HTTP is authenticated by default, including on loopback.
+`DKB_RUNTIME_ADMIN_TOKEN` authorizes management; the distinct
+`DKB_RUNTIME_READ_TOKEN` authorizes knowledge reads and Runtime status only.
+Neither substitutes for the separate MCP bearer credential. Anonymous health
+returns only `{ "ok": true }`; Library inventory, audit, traces, and mutations
+remain admin-only. Unknown routes fail closed before dispatch.
+
+Only an explicit `DKB_RUNTIME_READ_ACCESS=public-read` (or the CLI serve
+`--public-read` flag) permits anonymous knowledge reads and discovery. This does
+not publish citation documents: those independently require
+`DKB_MCP_PUBLIC_DOCUMENTS=true` and must contain only material safe to expose.
+The developer Stack defaults both permissions to private.
+
+Runtime requests must have an approved Host. `DKB_RUNTIME_ALLOWED_HOSTS` lists
+exact additional authorities including nondefault ports; `DKB_PUBLIC_URL`
+declares a trusted HTTP(S) origin for a proxy. Browser requests must be
+same-origin or explicitly listed in `DKB_RUNTIME_ALLOWED_ORIGINS`; wildcard,
+opaque/null, and unapproved origins are rejected. Configure the externally
+visible authority when deliberately placing a proxy in front of the Runtime.
+
+The Node compiler requires `DKB_COMPILER_SERVICE_TOKEN` before starting.
+Capabilities, compilation, and cancellation share that internal credential;
+health is minimal and anonymous. Laravel sends it server-to-server, never to
+the browser. Authenticated Runtime and compiler clients refuse redirects.
+
+## Credential storage
 
 Never commit or package:
 
 - `DKB_REGISTRY_TOKEN` or MCP bearer tokens;
+- Runtime read/admin credentials or the compiler service token;
 - Registry, signing, database, or managed-index credentials;
 - `~/.dkb/host.json`;
 - `.dkb/config.json`, caches, locks, runs, traces, temporary staging, or plugins;
@@ -45,6 +73,15 @@ Never commit or package:
 Use environment or secret-manager references for managed services. Receipts and
 locks may record provider identities and non-secret configuration, but never
 credential values.
+
+CLI-launched process Runtimes keep generated credentials in host-owned
+`~/.dkb/runtime-credentials/`, not portable Runtime state or a Library. CLI and
+Console resolve them only for an exact registered process endpoint on a local
+address. Stack credentials remain in its private host-local `stack.env` and
+are generated once. Use separate credentials for separate services; rotate
+them deliberately and restart the affected service and its clients together.
+Filesystem modes restrict access where supported; Windows operators must also
+protect the containing user profile with appropriate ACLs.
 
 ## Reporting issues
 

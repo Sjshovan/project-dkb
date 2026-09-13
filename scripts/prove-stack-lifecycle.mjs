@@ -18,6 +18,8 @@ const stackName = process.env.DKB_STACK_NAME ?? process.argv[2] ?? 'local';
 const stackStateRoot = path.resolve(process.env.DKB_STACK_STATE_ROOT ?? path.join(os.homedir(), '.dkb', 'stacks'));
 const stackRoot = path.join(stackStateRoot, stackName);
 const stackEnvironment = parseEnvironment(await fs.readFile(path.join(stackRoot, 'stack.env'), 'utf8'));
+assert.equal(stackEnvironment.DKB_MCP_PUBLIC_DOCUMENTS, 'true',
+  'The sanitized public-citation proof requires an explicitly opted-in Stack. Use npm run proof:stack or npm run proof:multispace to create its disposable Stack.');
 const registryUrl = `http://127.0.0.1:${stackEnvironment.DKB_REGISTRY_PORT}`;
 const runtimeUrl = `http://127.0.0.1:${stackEnvironment.DKB_RUNTIME_PORT}`;
 const libraryRoot = proofStackLibraryRoot(stackRoot, stackEnvironment);
@@ -25,6 +27,7 @@ const namespace = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_NAMESPACE, 'R
 const registryToken = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_TOKEN, 'Registry bootstrap token');
 const mcpToken = required(stackEnvironment.DKB_MCP_BEARER_TOKEN, 'MCP bearer token');
 const runtimeAdminToken = required(stackEnvironment.DKB_RUNTIME_ADMIN_TOKEN, 'Runtime admin token');
+const runtimeReadToken = required(stackEnvironment.DKB_RUNTIME_READ_TOKEN, 'Runtime read token');
 const proofVersion = process.env.DKB_PROOF_VERSION ?? `0.0.${Math.floor(Date.now() / 1000)}`;
 const updateVersion = nextPatch(proofVersion, 1);
 const retryVersion = nextPatch(proofVersion, 2);
@@ -133,7 +136,7 @@ try {
   let multiSpace = null;
   if (alternateTarget) {
     multiSpace = await proveSignedMultispace({
-      client, runCli, step, stackName, stackRoot, libraryRoot, runtimeUrl, registryUrl, registryToken,
+      client, runCli, step, stackName, stackRoot, libraryRoot, runtimeUrl, runtimeReadToken, registryUrl, registryToken,
       initialTarget, alternateTarget, changedTarget, repositoryRoot,
       secondaryUrl: process.env.DKB_PROOF_RUNTIME_B_URL,
       packages: [{ id: marineId, version: proofVersion }, { id: systemsId, version: updateVersion }],
@@ -246,6 +249,8 @@ async function runCli(args) {
       ...process.env,
       DKB_REGISTRY_TOKEN: registryToken,
       DKB_RUNTIME_ADMIN_TOKEN: runtimeAdminToken,
+      DKB_RUNTIME_READ_TOKEN: runtimeReadToken,
+      DKB_RUNTIME_CREDENTIALS_ROOT: path.join(proofRoot, 'runtime-credentials'),
       DKB_REGISTRY_PUBLISH_TIMEOUT_MS: process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS ?? String(35 * 60_000),
     },
     maxBuffer: 16 * 1024 * 1024,
@@ -259,7 +264,8 @@ async function runCli(args) {
 async function runtimeRetrieve(need) {
   const response = await fetch(`${runtimeUrl}/api/retrieve`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${runtimeReadToken}` },
+    redirect: 'error',
     body: JSON.stringify({ need, phrases: [need], intent: 'evidence', limit: 5 }),
     signal: AbortSignal.timeout(120_000),
   });
@@ -269,7 +275,9 @@ async function runtimeRetrieve(need) {
 }
 
 async function runtimeStatus() {
-  const response = await fetch(`${runtimeUrl}/api/runtime`, { signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(`${runtimeUrl}/api/runtime`, {
+    headers: { authorization: `Bearer ${runtimeReadToken}` }, redirect: 'error', signal: AbortSignal.timeout(30_000),
+  });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
   return body;

@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -23,12 +24,13 @@ export interface ServeDkbRegistryCompilerOptions {
 }
 
 export async function serveDkbRegistryCompiler(options: ServeDkbRegistryCompilerOptions = {}): Promise<http.Server> {
+  const serviceTokenDigest = compilerServiceTokenDigest();
   const host = options.host ?? process.env.DKB_REGISTRY_COMPILER_HOST ?? '127.0.0.1';
   const port = options.port ?? Number.parseInt(process.env.DKB_REGISTRY_COMPILER_PORT ?? '7333', 10);
   const contextRoot = registryCompilerContextRoot();
   const jobs = new RegistryJobControl(contextRoot);
   const server = http.createServer(async (request, response) => {
-    await routeRequest(request, response, jobs, contextRoot);
+    await routeRequest(request, response, jobs, contextRoot, serviceTokenDigest);
   });
   server.on('close', () => jobs.close());
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
@@ -36,14 +38,8 @@ export async function serveDkbRegistryCompiler(options: ServeDkbRegistryCompiler
   return server;
 }
 
-async function routeRequest(request: IncomingMessage, response: ServerResponse, jobs: RegistryJobControl, contextRoot: string): Promise<void> {
-  setCommonHeaders(response);
-  if (request.method === 'OPTIONS') {
-    response.writeHead(204);
-    response.end();
-    return;
-  }
-
+async function routeRequest(request: IncomingMessage, response: ServerResponse, jobs: RegistryJobControl, contextRoot: string, serviceTokenDigest: Buffer): Promise<void> {
+  response.setHeader('cache-control', 'no-store');
   try {
     const url = new URL(request.url ?? '/', 'http://dkb-registry-compiler.local');
     if (request.method === 'GET' && url.pathname === '/health') {
@@ -51,6 +47,14 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse, 
         ok: true,
         service: 'dkb.registry.compiler',
         version: DKB_COMPILER_VERSION,
+      });
+    }
+    if (!validCompilerAuthorization(request, serviceTokenDigest)) {
+      response.setHeader('www-authenticate', 'Bearer realm="DKB Compiler"');
+      response.setHeader('connection', 'close');
+      return sendJson(response, 401, {
+        error: 'compiler_unauthorized',
+        message: 'Compiler service authentication is required.',
       });
     }
     if (request.method === 'GET' && url.pathname === '/capabilities') {
@@ -127,10 +131,23 @@ async function sendCompiledArchive(response: ServerResponse, compiled: CompiledR
   await pipeline(createReadStream(compiled.archivePath), response, { signal });
 }
 
-function setCommonHeaders(response: ServerResponse): void {
-  response.setHeader('access-control-allow-origin', '*');
-  response.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
-  response.setHeader('access-control-allow-headers', 'content-type,authorization');
+function compilerServiceTokenDigest(): Buffer {
+  const token = process.env.DKB_COMPILER_SERVICE_TOKEN?.trim();
+  if (!token || !/^[A-Za-z0-9._~+\/-]+=*$/u.test(token)) {
+    throw new DkbError(
+      'Set DKB_COMPILER_SERVICE_TOKEN to a nonempty Bearer token shared by the Registry and compiler service.',
+      'compiler_auth_required',
+    );
+  }
+  return createHash('sha256').update(token).digest();
+}
+
+function validCompilerAuthorization(request: IncomingMessage, expectedDigest: Buffer): boolean {
+  const headerCount = request.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === 'authorization').length;
+  if (headerCount !== 1) return false;
+  const match = /^Bearer ([A-Za-z0-9._~+\/-]+=*)$/iu.exec(request.headers.authorization ?? '');
+  if (!match) return false;
+  return timingSafeEqual(createHash('sha256').update(match[1]!).digest(), expectedDigest);
 }
 
 async function readJsonBody<T>(request: IncomingMessage): Promise<T> {

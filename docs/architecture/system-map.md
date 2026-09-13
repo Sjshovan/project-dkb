@@ -13,24 +13,71 @@ remain recorded under [architecture decisions](../decisions/).
 
 ## Snapshot
 
-- **Map revision:** 33
-- **Checked against:** both `development` branches on 2026-09-03
-- **Committed DKB baseline:** `17900eb`
-- **Committed Registry baseline:** `b5db707`
+- **Map revision:** 34
+- **Checked against:** both `development` branches on 2026-09-13
+- **Committed DKB baseline:** `58567ff`
+- **Committed Registry baseline:** `1ad5974`
 - **Active milestone:** Plugin API v3, trusted Registry recipes, multi-build
   hardening, one Runtime activation gate, and complete query audit chains
 - **Release state:** private developer preview; not published or merged to
   `main`
-- **Checkpoint state:** the active milestone remains uncommitted in both
-  working trees. Historical green runs below do not certify later edits.
-- **Session state:** stopped at the operator's request. The final scaffold and
-  conformance edits below are unverified; the last full green run predates them.
+- **Checkpoint state:** the previous SDK work is committed at the baselines
+  above. Runtime/compiler HTTP hardening is subsequent, uncommitted work.
+  Historical green runs below do not certify later edits.
+- **Fresh baseline:** all TypeScript/Vue checks and the production build pass;
+  Node reports 500 passed and two Docker-dependent skips. Registry reports
+  266 passed with PHPStan passing under a process-only 1 GiB memory allowance.
+  This rerun includes the formerly unverified SDK/conformance edits.
+
+### Safety hardening continuation
+
+The next boundary is authenticated ordinary Runtime HTTP and the
+Registry-to-compiler channel, using the existing service and host-credential
+ownership. Runtime reads now default private; admin and read credentials remain
+separate from MCP. CLI process launches generate endpoint-scoped host secrets,
+and Stack preparation supplies matching internal compiler credentials to both
+services. Public discovery/reads and public citation documents are independent
+operator opt-ins. See [security](../security.md#runtime-and-compiler-http) and
+[operations](../operations.md#runtime-http-access).
+
+The updated production build and full Node suite pass: **518 tests, no failures
+or skips**. Registry passes **304 tests / 23,517 assertions**, Pint, and PHPStan
+with a process-only 1 GiB allowance. Workspace boundaries, dependency graph,
+guidance, documentation, provider integrity, and all 15 package inspections pass.
+All 15 exact tarballs also passed isolated global installation on Windows and
+Linux, including fresh-directory initialization and all six provider integrity
+checks. Existing user CLI launchers were unchanged.
+Focused real-HTTP authentication tests and the existing local lexical
+CLI/HTTP/MCP audit paths pass. Fresh Runtime, compiler, and Registry images built
+under separate local tags. The first disposable Stack checks correctly rejected
+an outdated FastEmbed image: its actual health implementation omitted the
+required model repository and revision. Rebuilding that unchanged provider source
+under a separate tag resolved the deployment mismatch without weakening checks.
+
+The fresh disposable Stack then passed **26 HTTP assertions**: 13 Runtime
+authority/Host/Origin checks, seven compiler checks, the authenticated Registry
+catalog with matching compiler build identity, and five MCP checks. MCP accepts
+only its own credential and exposes exactly read-only `search` and `fetch`.
+Typed CLI access resolved saved Stack credentials. Startup/activation took 42.0
+seconds; the smoke including teardown took 108.5 seconds. All owned Stack
+containers, volumes, and the proof root were removed. Two owned temporary
+cache/inspection directories remain because deletion was blocked by command
+policy; the final Temp cleanup gate is still open. No user Stack or knowledge
+was changed, and no image was published or existing tag overwritten.
+
+This proves authentication integration, not a fresh signed compilation or
+knowledge lifecycle. Later work remains ordered:
+worker-acknowledged cancellation; durable Library crash recovery; historical
+signing keys and signed Collection receipts; bounded Console retention; then
+the signed multi-recipe, two-Runtime lifecycle and comparable performance proof.
+These are extensions of existing components, not a new architecture.
 
 ### Stopping point and resume order
 
-This is an incomplete milestone, not a completed release. No more implementation
-or service proof is running at this handoff. Preserve both dirty development
-trees and the Registry's machine-local MCP configuration.
+This remains an incomplete milestone, not a completed release. The following
+table preserves the previous handoff evidence; the September 13 continuation
+above supersedes its stopped-session and unverified-SDK status. Preserve both
+development trees and the Registry's machine-local MCP configuration.
 
 | Work | Handoff state | Next action |
 | --- | --- | --- |
@@ -43,8 +90,8 @@ trees and the Registry's machine-local MCP configuration.
 | Console and ChatGPT proof | Focused Console tests/build passed earlier; current authenticated mobile/desktop visual review and final ChatGPT proof remain unverified | Complete permitted browser QA at 320px and 1440px, then real-corpus and synthetic security/citation checks. Do not bypass the browser URL-policy denial |
 | Final delivery | Documentation map updated; final graph refresh, package/image inspection and green private checkpoints still pending | Run the full final gate and credential-safe audit, then commit/push only to the private `development` branches; no public release or `main` merge |
 
-The last verified build remains on disk. Do not interpret that built output as
-proof of newer source edits. Do not replace the missing performance baseline
+The September 13 production build and distribution proof supersede the historical
+build-only stopping point. Do not replace the missing performance baseline
 with component timings or claim that syntax-checked drafts complete the gate.
 
 ### Read this first
@@ -71,9 +118,9 @@ deduplication and team-scoped publication corrections now pass the complete
 266-test Registry suite against the latest clean build. Syntax-aware import
 inspection now passes 52 tests, including the two original bundled-provider
 false positives. Strict conformance, host-owned health, managed-index cleanup,
-and the real lexical lifecycle pass a separate 59-test set. The full Node
-last full rerun passed: 498 tests passed, none failed or were cancelled, and two
-Docker-dependent tests were skipped. The native-install timeout exposed and
+and the real lexical lifecycle pass a separate 59-test set. That historical Node
+rerun passed 498 tests, with two Docker-dependent skips; the fresh September 13
+suite above passes 518 with no skips. The native-install timeout exposed and
 led to a cancellation/cleanup correction; the earlier loopback download failure
 did not reproduce in isolated, complete CLI, or final full-suite runs. No
 production retry or verification weakening was added. The latest corrections
@@ -82,9 +129,9 @@ database access, contain SQLite snapshot paths, and recover Stack startup withou
 bypassing the Runtime activation owner. A real local lexical Runtime now records
 12 exact terminal audit chains through CLI, HTTP, and authenticated MCP, including
 insufficient evidence and stale-state rejection. Real-service, integrated
-performance, visual, and release-checkpoint gates remain open. The final SDK
-starter/conformance draft described above was edited after that run and remains
-unverified.
+performance, visual, and release-checkpoint gates remain open. The SDK
+starter/conformance changes described in the historical handoff now pass the
+fresh complete build, tests, and Windows/Linux package-distribution checks.
 
 | Area | Current evidence | What remains |
 | --- | --- | --- |
@@ -97,7 +144,7 @@ unverified.
 | Reproducibility | Focused portability and dependency-closure tests cover paths, non-shipped build metadata, changed dependency bytes, and loaded-code drift | Verify exact model-asset consumption and repeat host/container identity proofs |
 | Source snapshots | Real Python adapter and public provider regressions prove original-byte hashes, parser-independent asset anchors, SQLite path containment, and rejection of retired external database requests | Run the real Docling/model-backed image against the same rich-source assertions |
 | Runtime transport audit | Actual CLI, HTTP, and authenticated MCP calls persist equivalent complete local build chains, insufficiency, and stale-state failures | Repeat against signed Registry variants and the real provider service stack |
-| Host services | Console root returned HTTP 200 at the previous checkpoint; the latest Docker probe cannot reach the Linux engine pipe | Restore Docker before final service proofs; no Docker data was deleted or reset |
+| Host services | Docker is available; fresh Runtime/compiler/Registry/FastEmbed images passed the 26-check disposable authentication smoke after the outdated provider image was replaced in the proof only | Continue worker-acknowledged cancellation and later signed lifecycle proofs; no user Stack or knowledge was changed |
 
 No final performance result or current universal security guarantee is implied
 by the earlier passing tests. In particular, hostile-source tests demonstrate
@@ -120,7 +167,7 @@ flowchart LR
     SDK[Plugin API v3 and provider validation\nreal lexical lifecycle and strict provenance regressions green]
     Registry[Trusted recipes and signed alternate builds\n266 tests green, including alias and publication scope]
     Runtime[Audited activation and crash recovery\nterminal audit and exact rollback regressions green]
-    Services[Baseline FastEmbed Docker lifecycle green\nalternate switch proof pending; Docker currently unavailable]
+    Services[Current-image authentication smoke green\nsigned multi-recipe service proof pending]
     UI[Authenticated desktop and mobile Console QA\npending]
     Checkpoint[Credential-safe commit and private development push\npending]
 
@@ -218,7 +265,7 @@ Public interfaces are separated by authority:
 | Console loopback server | Host management through typed CLI operations | Local Console session/control token |
 | Registry catalog API/UI | Browse public and authorized package metadata | Anonymous public access or saved host Registry credential |
 | Registry publish/build API | Publish source and request trusted recipes | Scoped team token plus namespace policy |
-| Runtime read HTTP | `/api/search`, `/api/retrieve`, `/api/read-targets`, `/api/read` | Runtime read credential when configured |
+| Runtime read HTTP | `/api/search`, `/api/retrieve`, `/api/read-targets`, `/api/read` | Read or admin credential by default; anonymous reads require explicit public-read mode |
 | Runtime MCP | Remote-agent `search` and `fetch` | MCP bearer credential plus host/origin checks |
 | Runtime administration | Binding, Pipeline, refresh, and install orchestration | Separate Runtime-admin credential |
 | Exact layer download | One source/Evidence/Retrieval transfer | Short-lived, non-browsing install grant |
@@ -1005,8 +1052,8 @@ coverage from complete service proof.
 | --- | --- |
 | Workspace TypeScript | Exact `npm run check` passes for all 15 workspaces and Console Vue after the current import-checker and conformance corrections |
 | Console production build | Current clean workspace build passes, including publication, build verification, and historical audit/Evidence components |
-| Node integration suite | Latest complete run: 500 tests, 498 pass, zero failures or cancellations, two Docker-dependent skips; 230.584 seconds. Complete TAP is retained outside distributable files. This includes source snapshot/provenance, Stack startup rollback, exact real-transport audit, import parsing, strict conformance, cancellation-safe native installation, and host-proof composition regressions |
-| Laravel Registry | Latest post-build full suite: 266 tests / 23,327 assertions pass with actual Node client and Protocol verification; Pest reports 102.576 seconds. PHPStan and full Pint pass. JUnit output is retained outside distributable files. The earlier frontend production build passes; the tested index-only migration has not run against live data |
+| Node integration suite | September 13 complete run: 518 passed, zero failures, cancellations, or skips; 397.348 seconds. Includes Runtime/compiler HTTP authority, endpoint-scoped credentials, real CLI/Console credential resolution, and the existing provenance, activation, audit, and SDK regressions |
+| Laravel Registry | September 13 full suite: 304 tests / 23,517 assertions passed in 130.122 seconds, including compiler authentication, terminal credential failures, and preserved transient retries/cancellation. Full Pint and PHPStan pass with process-only 1 GiB PHPStan memory. The tested index-only migration still requires live lifecycle proof |
 | Latest bounded corrections | Runtime audit/switching set 41/41 plus two isolated catalog tests; provider/capabilities set 64/64; lexical/SDK/provenance/recipe-saving set 64/64. These suites overlap and must not be summed; they are not Docker proof |
 | Current transport and Console integration | 28/28 tests pass after the full build: real lexical local/HTTP compilation; CLI/HTTP/MCP query/audit equivalence; MCP authentication and read-only tools; hybrid relevance; Console publication and audit presentation. Exact historical Evidence inspection separately passes six tests |
 | Latest real-transport audit | One additional integrated proof passes within the full suite: 12 terminal events from actual CLI, HTTP, and authenticated MCP calls, covering exact local package/build/evidence chains, insufficiency, and rejection after Library removal. Registry signatures and bundled services are not emulated by this proof |
@@ -1015,10 +1062,10 @@ coverage from complete service proof.
 | Provider identity and model fixtures | Focused 40-test set passes; includes renamed targets, fail-closed overrides, shipped files, and dependency integrity |
 | Generated bundled receipts and loading | Nine real ESM loader regressions pass within the complete suite; all six providers pass native offline bundle installation and dependency tampering; trusted-verifier plus private-release set passes 16 tests |
 | Selected CPU Evidence model assets | Nine real downloads, 416,666,485 bytes, pass SHA-256 verification; no model weights enter source or knowledge packages |
-| Package, documentation, architecture checks | All 15 package archives passed the prior Windows-proof inspection; the new post-source-policy Windows proof is tracked separately. Current dependency graph, boundaries, 18 guidance files, and all six provider integrity receipts pass. The preceding Graphify snapshot contains 484 nodes / 1,010 edges / 20 communities; the final Runtime-reader correction still needs its refresh. Exact-archive private-release preflight rejects missing dependencies, tampering, and publication of required private workspaces |
-| Windows CLI distribution | Fresh post-Acorn rerun passes: all 15 archives install together into an isolated global prefix; CLI 0.2.0 runs help/version and initializes an unrelated directory; the installed trusted SDK verifies all six bundled providers; existing global shims unchanged and the proof root removed |
+| Package, documentation, architecture checks | All 15 package inspections passed: 9,485 entries. Dependency graph, boundaries, 18 guidance files, 33 documentation files, and six provider integrity receipts pass. Refreshed Graphify navigation contains 490 nodes / 1,025 edges / 19 communities; it is navigation, not performance evidence |
+| Windows/Linux CLI distribution | September 13 exact-archive proof passes on both platforms: 15 archives installed into isolated global prefixes; CLI 0.2.0 runs help/version and initializes unrelated directories; all six provider receipts verify. User global launchers unchanged. Test installs and Linux container removed; deletion of the outer temporary cache copy was blocked, so the Temp cleanup gate remains open |
 | Console corrections | Seventeen focused UI tests plus Vue types pass: historical package links are withheld during failed/pending checks, full build digests and numeric sizes remain sortable/filterable, and build requests require a fresh healthy selection. The real isolated fixture produced ten audit events and cleaned up completely. Browser URL policy blocked navigation; no visual approval is implied |
-| Live host | Previous Console-root probe returned HTTP 200. Latest Docker probe fails because the Linux engine pipe is absent; the earlier normal hidden launch failed during inference-manager initialization. No factory reset or Docker-file deletion attempted |
+| Live host | Docker 28.3.2 is available. Four distinct local candidate image tags passed disposable startup/activation and all 26 authentication assertions. Own Stack containers/volumes and proof root removed; existing user resources unchanged. Compiler publication, cancellation, and signed lifecycle were not exercised by this smoke |
 | Final performance / image / live Console proof | Not yet passed for the current changes |
 
 The repaired Node fixtures now satisfy the strict provider contract and use
@@ -1056,9 +1103,10 @@ The strengthened run adds verification of the installed provider closure and
 correctly rejected fresh npm dependency drift for `@dkb/embedding-fastembed`.
 The corrected native-bundle path now passes the all-six offline and tamper test
 and the complete Windows CLI distribution proof, including installed-provider
-verification through the trusted host SDK. Earlier Linux global-tarball and
-service-backed provider-conformance proofs predate the latest changes and
-remain historical evidence, not certification of this working tree.
+verification through the trusted host SDK. The September 13 Windows/Linux
+distribution rerun now certifies the current archives. Earlier service-backed
+provider-conformance proofs remain historical evidence, not certification of
+the current images or signed build lifecycle.
 
 ### Remaining implementation and proof before this milestone is complete
 
@@ -1078,7 +1126,7 @@ newly demonstrated bypass.
 | Runtime audit | Focused proofs cover rejected-before-admission records with honest nullable fields, one terminal outcome, mandatory successful persistence, and cross-process IDs. The final validated snapshot and persisted response form the response boundary; observers run afterward and cannot rewrite it. Later drift fails the next request |
 | Console completeness | Typed source publication, Registry Pipeline selector, exact historical build/Evidence drill-through, and per-build signature checks pass focused tests; inspect real rendered desktop/mobile flows |
 | Pipeline catalog | Resolved-origin requirements, trust-aware coverage, strict versioned client transport, full integrity receipts, and boot-bound compiler identity pass focused tests. Alias resolution must keep exact digest checks and immutable signed labels |
-| Registry job cancellation | Authorized cancellation, compiler abort propagation, deadline-bound execution identity, persistent tombstones, token-team scope, and publication race guards pass focused/full Registry tests. Previously started retries require compiler acknowledgment; live container cancellation remains |
+| Registry job cancellation | Laravel authorization, states, and publication guards pass. A bundled-worker gap remains: the Evidence provider does not forward the abort signal; timeout closes only the Node request, then cleanup can race still-running Python writes. Worker termination must be acknowledged before scratch removal or `cancelled`; lost acknowledgment/restart must preserve unresolved state. Current cooperative-provider tests do not prove this |
 | Evidence identity scope | Corrected and tested: Evidence digests are scoped beneath PackageVersion, so identical empty IR can coexist without changing canonical bytes or signed artifacts. Index-only migration preserves rows/files; live deployment proof remains |
 | Runnable alternate example | The checked MiniSearch example uses explicit parser/chunker provenance and no embedding provider. Public conformance, nonempty retrieval, two Runtimes, scope, corruption rollback, stale-state rejection, removal and retained-build reuse pass through real CLI configuration. It is not a Registry or performance parity proof |
 | SDK conformance parity | Corrected and carried through the full Node rerun: complete compatibility/count/readiness checks, overlapping out-of-scope retrieval fixtures, host-owned health identity and strict booleans, and cleanup of only validated newly created managed test indexes after failure |
@@ -1090,15 +1138,15 @@ newly demonstrated bypass.
 | Multi-recipe service harness | Implemented and fixture-tested: three trusted recipes, two Evidence Builds, three Retrieval Builds, exact signed parent chains, changed rich/plain interpretation, concurrent request deduplication, and two independent Runtimes. Actual Docker execution remains pending |
 | Performance evidence | Component reports explicitly withhold whole-system promotion. The audit found no retained comparable baseline with three full compilations and complete audited warm queries. A new integrated harness is being added; neither a component result nor a newly established current baseline can retroactively prove the milestone's 10% regression limit |
 
-1. Repeat the Linux CLI distribution proof and final complete regression suite
-   after the trusted-verifier and private-release checks. All six providers now
-   pass offline installation, competing dependency, and tamper tests; the complete
-   Windows install also passes. The selected-only verified module loader and
-   rebuild-before-selection regression are implemented. Candidate delivery uses
-   the same verified archives and fails before publication when a required
-   workspace is private; no publication is authorized by this milestone.
-2. Restore Docker, rebuild changed provider/compiler/Runtime images, and
-   verify exact model consumption and host/container profile equality. Local
+1. Preserve the September 13 Windows/Linux distribution and complete regression
+   checkpoints; rerun them after the next implementation slice. Complete the
+   remaining owned Temp cleanup. Candidate delivery still uses the same verified
+   archives and fails before publication when a required workspace is private;
+   no publication is authorized by this milestone.
+2. Current-image HTTP authentication proof passes. Implement acknowledged
+   worker cancellation, Library crash recovery, and the signing/retention gates
+   listed at the top of this map. Verify exact model consumption and
+   host/container profile equality before signed lifecycle proof. Local
    dependency, model, receipt, and scope repairs have passed the integrated
    regression suite; the signed service-backed build-selection proof remains
    the acceptance boundary.
@@ -1162,8 +1210,8 @@ These are tracked architectural risks rather than hidden assumptions:
   not one atomic database constraint spanning both object types.
 - Only active signing keys are exposed; historical-key verification and a full
   rotation/retirement workflow remain incomplete.
-- Registry-to-compiler HTTP trust currently relies on network isolation rather
-  than an application-level service credential.
+- Registry-to-compiler HTTP now requires an application-level service credential;
+  final fresh-image verification remains separate from focused transport tests.
 - Remote Runtime verification needs production egress/SSRF policy beyond URL
   validation.
 - Transaction rollback cleans staged files, but a hard crash can leave

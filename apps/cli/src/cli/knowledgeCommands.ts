@@ -357,9 +357,9 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
       need: string,
       options: { intent: 'evidence' | 'records' | 'count' | 'summary' | 'compare'; limit: number; profile?: boolean; url?: string },
     ) => {
-      const { DkbRuntimeClient } = await import('@sjshovan/dkb-runtime/runtime/client.js');
+      const { runtimeClientForUrl } = await import('../host/runtimeClient.js');
 
-      presenter().print(await new DkbRuntimeClient({ baseUrl: await currentRuntimeUrl(options.url) }).retrieve({
+      presenter().print(await (await runtimeClientForUrl(await currentRuntimeUrl(options.url))).retrieve({
         need,
         intent: options.intent,
         limit: options.limit,

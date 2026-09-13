@@ -10,7 +10,7 @@ are authoritative.
   provider implementations supplied at the composition boundary.
 - One Runtime serves one Library and owns one independent Pipeline activation.
   Multiple Runtimes may share the same Library and immutable build bytes.
-- Keep binding, activation, caches, traces, audit data, and credentials under
+- Keep binding, activation, caches, traces, and audit data under
   the Runtime state root. Never write active Pipeline state into the Library.
 - Accept only verified compiled artifacts. Never parse, chunk, embed, or import
   compiler internals here.
@@ -25,6 +25,9 @@ are authoritative.
   over remote MCP.
 - Keep credentials out of Runtime state, discovery documents, traces, and
   package artifacts.
+- Ordinary HTTP requires admin/read authentication independently of MCP; public
+  reads and citation documents are separate opt-ins. Reject unknown routes and
+  unapproved Host/Origin headers before dispatch. See [security](../../docs/security.md).
 
 Verify with `npm run check --workspace @sjshovan/dkb-runtime`, focused Runtime/MCP tests,
 and the install-query-uninstall-reinstall lifecycle proof.

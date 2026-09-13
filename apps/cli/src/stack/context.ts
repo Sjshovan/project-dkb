@@ -71,6 +71,8 @@ export async function prepareDkbStack(
     DKB_REGISTRY_BOOTSTRAP_TOKEN: existing.DKB_REGISTRY_BOOTSTRAP_TOKEN ?? `dkb_${randomBytes(48).toString('base64url')}`,
     DKB_MCP_BEARER_TOKEN: existing.DKB_MCP_BEARER_TOKEN ?? randomBytes(32).toString('base64url'),
     DKB_RUNTIME_ADMIN_TOKEN: existing.DKB_RUNTIME_ADMIN_TOKEN ?? randomBytes(32).toString('base64url'),
+    DKB_RUNTIME_READ_TOKEN: existing.DKB_RUNTIME_READ_TOKEN ?? randomBytes(32).toString('base64url'),
+    DKB_COMPILER_SERVICE_TOKEN: existing.DKB_COMPILER_SERVICE_TOKEN ?? randomBytes(32).toString('base64url'),
   };
   delete values.DKB_PROVIDER_IMAGE;
 
@@ -92,12 +94,19 @@ export async function prepareDkbStack(
   Object.assign(values, serviceEnvironment);
 
   const runtimePort = values.DKB_RUNTIME_PORT ?? '7331';
+  values.DKB_RUNTIME_READ_ACCESS = process.env.DKB_RUNTIME_READ_ACCESS ?? existing.DKB_RUNTIME_READ_ACCESS ?? 'authenticated';
+  values.DKB_RUNTIME_ALLOWED_HOSTS = process.env.DKB_RUNTIME_ALLOWED_HOSTS ?? existing.DKB_RUNTIME_ALLOWED_HOSTS
+    ?? `127.0.0.1:${runtimePort},localhost:${runtimePort},dkb-runtime:7331`;
+  values.DKB_RUNTIME_ALLOWED_ORIGINS = process.env.DKB_RUNTIME_ALLOWED_ORIGINS ?? existing.DKB_RUNTIME_ALLOWED_ORIGINS ?? '';
   values.DKB_PUBLIC_URL = process.env.DKB_PUBLIC_URL
     ?? existing.DKB_PUBLIC_URL
     ?? `http://127.0.0.1:${runtimePort}`;
   values.DKB_MCP_PUBLIC_BASE_URL = process.env.DKB_MCP_PUBLIC_BASE_URL
     ?? existing.DKB_MCP_PUBLIC_BASE_URL
     ?? values.DKB_PUBLIC_URL;
+  values.DKB_MCP_PUBLIC_DOCUMENTS = process.env.DKB_MCP_PUBLIC_DOCUMENTS
+    ?? existing.DKB_MCP_PUBLIC_DOCUMENTS
+    ?? 'false';
   values.DKB_MCP_ALLOW_INSECURE_NO_AUTH = process.env.DKB_MCP_ALLOW_INSECURE_NO_AUTH
     ?? existing.DKB_MCP_ALLOW_INSECURE_NO_AUTH
     ?? 'false';
@@ -175,12 +184,20 @@ export async function readDkbStackControl(distribution: DkbDistribution, name: s
 }
 
 export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<string | undefined> {
-  if (process.env.DKB_RUNTIME_ADMIN_TOKEN) return process.env.DKB_RUNTIME_ADMIN_TOKEN;
+  return (await runtimeTokensForUrl(runtimeUrl)).adminToken;
+}
+
+export async function runtimeTokensForUrl(runtimeUrl: string): Promise<{ adminToken?: string; readToken?: string }> {
+  const overrides = {
+    ...(process.env.DKB_RUNTIME_ADMIN_TOKEN !== undefined ? { adminToken: process.env.DKB_RUNTIME_ADMIN_TOKEN } : {}),
+    ...(process.env.DKB_RUNTIME_READ_TOKEN !== undefined ? { readToken: process.env.DKB_RUNTIME_READ_TOKEN } : {}),
+  };
+  if (new URL(runtimeUrl).pathname.replace(/\/+$/u, '') !== '') return overrides;
   let entries: string[];
   try {
     entries = await fs.readdir(stackStateRoot());
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return overrides;
     throw error;
   }
 
@@ -189,10 +206,10 @@ export async function runtimeAdminTokenForUrl(runtimeUrl: string): Promise<strin
     const values = await readEnvironmentFile(path.join(stackStateRoot(), entry, 'stack.env'));
     if (!values.DKB_RUNTIME_PORT || !values.DKB_RUNTIME_ADMIN_TOKEN) continue;
     if (normalizedOrigin(`http://127.0.0.1:${values.DKB_RUNTIME_PORT}`) === expected) {
-      return values.DKB_RUNTIME_ADMIN_TOKEN;
+      return { adminToken: values.DKB_RUNTIME_ADMIN_TOKEN, readToken: values.DKB_RUNTIME_READ_TOKEN, ...overrides };
     }
   }
-  return undefined;
+  return overrides;
 }
 
 export function stackStateRoot(): string {

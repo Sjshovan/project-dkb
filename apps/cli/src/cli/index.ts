@@ -230,17 +230,9 @@ async function currentRuntimeUrl(explicit?: string): Promise<string> {
 }
 
 async function currentRuntimeAdminClient(explicit?: string, timeoutMs?: number) {
-  const [{ DkbRuntimeClient }, { runtimeAdminTokenForUrl }] = await Promise.all([
-    import('@sjshovan/dkb-runtime/runtime/client.js'),
-    import('../stack/manager.js'),
-  ]);
+  const { runtimeClientForUrl } = await import('../host/runtimeClient.js');
   const baseUrl = await currentRuntimeUrl(explicit);
-
-  return new DkbRuntimeClient({
-    baseUrl,
-    adminToken: await runtimeAdminTokenForUrl(baseUrl),
-    ...(timeoutMs ? { timeoutMs } : {}),
-  });
+  return runtimeClientForUrl(baseUrl, timeoutMs);
 }
 
 function parseRuntimeKind(value: string): 'process' | 'docker' | 'remote' {

@@ -538,6 +538,8 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
   let runtimeServer;
   try {
     runtimeServer = await serveDkbRuntime({
+      adminToken: 'signed-discovery-admin',
+      readAccess: 'public-read',
       runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
       stateRoot: runtimeRoot,
       host: '127.0.0.1',

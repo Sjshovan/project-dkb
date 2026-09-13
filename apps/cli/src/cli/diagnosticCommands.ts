@@ -223,9 +223,9 @@ async function diagnosticRuntime(name?: string): Promise<{
   stateRoot?: string;
   client: import('@sjshovan/dkb-runtime/runtime/client.js').DkbRuntimeClient;
 }> {
-  const [{ registeredHostRuntime, selectedHostRuntime }, { DkbRuntimeClient }] = await Promise.all([
+  const [{ registeredHostRuntime, selectedHostRuntime }, { runtimeClientForUrl }] = await Promise.all([
     import('../host/inventory.js'),
-    import('@sjshovan/dkb-runtime/runtime/client.js'),
+    import('../host/runtimeClient.js'),
   ]);
   const selected = name ? await registeredHostRuntime(name) : await selectedHostRuntime();
   if (!selected) {
@@ -234,6 +234,6 @@ async function diagnosticRuntime(name?: string): Promise<{
   }
   return {
     ...(selected.runtime.stateRoot ? { stateRoot: selected.runtime.stateRoot } : {}),
-    client: new DkbRuntimeClient({ baseUrl: selected.runtime.url }),
+    client: await runtimeClientForUrl(selected.runtime.url),
   };
 }

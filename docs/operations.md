@@ -40,6 +40,13 @@ them. Run `dkb registry logout --revoke` on a lost or retired host.
 
 ## Registry compilation and cancellation
 
+The Registry and its trusted Node compiler must receive the same nonempty
+`DKB_COMPILER_SERVICE_TOKEN` through server-side environment/secret injection.
+`dkb stack up` generates and wires it automatically. A standalone compiler
+refuses startup without it, and a Registry with missing or rejected credentials
+cannot submit work. This token is separate from user Registry login tokens.
+Do not place it in an uploaded package or Pipeline recipe.
+
 Registry operators choose trusted recipes; uploads cannot supply plugin code or
 compiler configuration. Queue requests pin both the resolved recipe digests and
 the installed compiler build identity. A different compiler installation must
@@ -66,6 +73,28 @@ markers live in the trusted compiler context under `.dkb/compiler-cancellations/
 and expire with their request deadline; they are never packaged as knowledge.
 After cancellation or deadline expiry, request a fresh alternate build. An
 initial unpublished source version stays retained and cannot be overwritten.
+
+## Runtime HTTP access
+
+`dkb runtime serve` and `dkb serve` generate separate host-local read/admin
+credentials and register the process endpoint. Ordinary CLI and Console
+operations resolve these credentials automatically; no token argument is
+needed. Existing Stack state acquires the new read/compiler credentials on the
+next successful `dkb stack up <name>`; review the Stack backup before restarting.
+
+When directly launching `dkb-runtime`, provide `DKB_RUNTIME_ADMIN_TOKEN` and,
+for read-only clients, a distinct `DKB_RUNTIME_READ_TOKEN`. Clients can supply
+these through their environment. Credentials are endpoint-specific and must
+not be copied into Library configuration or host inventory. Tests isolate
+generated credentials with `DKB_RUNTIME_CREDENTIALS_ROOT`.
+
+Anonymous health does not imply authorized access: a reachable Runtime can
+still reject a client credential. `runtime show` checks authenticated status.
+For deliberate public knowledge serving, select `--public-read` on a serve
+command or set `DKB_RUNTIME_READ_ACCESS=public-read`. Management remains private.
+Public citation URLs additionally require `DKB_MCP_PUBLIC_DOCUMENTS=true`.
+See [HTTP security boundaries](security.md#runtime-and-compiler-http) for
+proxy Host/Origin configuration and the separate MCP authority.
 
 ## Storage ownership
 

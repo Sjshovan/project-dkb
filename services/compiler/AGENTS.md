@@ -29,6 +29,8 @@ are authoritative.
 - Do not import CLI presentation, Runtime HTTP/MCP, host inventory, or Laravel internals.
 - Do not select providers with model-specific environment branches in the runner.
 - Do not mount or invoke the Docker socket from the HTTP service.
+- Require the Registry service credential before accepting capabilities, work,
+  or cancellation. Keep health minimal; never log or return the credential.
 
 ## Verification
 

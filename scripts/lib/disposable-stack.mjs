@@ -35,6 +35,7 @@ export async function startDisposableStack({
     ...overrides,
     DKB_STACK_STATE_ROOT: stateRoot,
     DKB_HOST_INVENTORY: path.join(stackRoot, 'host-inventory.json'),
+    DKB_RUNTIME_CREDENTIALS_ROOT: path.join(stackRoot, 'runtime-credentials'),
     DKB_STACK_NAME: stackName,
   };
   let owned = false;

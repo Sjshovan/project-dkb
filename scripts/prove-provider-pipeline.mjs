@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,6 +33,12 @@ import {
 } from '@sjshovan/dkb-embedding-tei/tei.js';
 
 const configuredCompilerUrl = process.env.DKB_PROOF_COMPILER_URL?.replace(/\/+$/, '');
+const previousCompilerServiceToken = process.env.DKB_COMPILER_SERVICE_TOKEN;
+const compilerServiceToken = configuredCompilerUrl ? previousCompilerServiceToken?.trim() : randomBytes(32).toString('base64url');
+if (!compilerServiceToken || !/^[A-Za-z0-9._~+\/-]+=*$/u.test(compilerServiceToken)) {
+  throw new Error('Set DKB_COMPILER_SERVICE_TOKEN to the credential configured on the remote proof compiler.');
+}
+const compilerHeaders = { authorization: `Bearer ${compilerServiceToken}` };
 const target = process.env.DKB_PROOF_TARGET ?? 'default';
 const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-proof-'));
 const sourceRoot = path.join(proofRoot, 'source');
@@ -67,6 +73,7 @@ try {
   if (targetRecipe.embedding === '@dkb/embedding-tei') initialEmbeddingService = await teiServiceStatus(embeddingOptions);
   if (!compilerUrl) {
     process.env.DKB_CONTEXT_ROOT = compilerContextRoot;
+    process.env.DKB_COMPILER_SERVICE_TOKEN = compilerServiceToken;
     compilerServer = await serveDkbRegistryCompiler({ host: '127.0.0.1', port: 0 });
     const address = compilerServer.address();
     assert.notEqual(typeof address, 'string');
@@ -82,7 +89,7 @@ try {
   });
   await createDkbPackageArchive(sourceRoot, sourceArchive);
   const sourceContents = await fs.readFile(sourceArchive);
-  const catalogResponse = await fetch(`${compilerUrl}/capabilities`, { signal: AbortSignal.timeout(120_000) });
+  const catalogResponse = await fetch(`${compilerUrl}/capabilities`, { headers: compilerHeaders, redirect: 'error', signal: AbortSignal.timeout(120_000) });
   const catalog = await catalogResponse.json();
   assert.ok(catalogResponse.ok, `Compiler capabilities failed: ${JSON.stringify(catalog)}`);
   assert.equal(catalog.format, DKB_COMPILER_CAPABILITIES_FORMAT);
@@ -91,7 +98,8 @@ try {
   assert.ok(selected?.available, `Compiler target ${target} is absent or unhealthy`);
   const response = await fetch(`${compilerUrl}/compile`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...compilerHeaders },
+    redirect: 'error',
     body: JSON.stringify({
       jobId: `proof-${Date.now()}`,
       request: {
@@ -214,6 +222,8 @@ try {
   }
   if (previousContextRoot === undefined) delete process.env.DKB_CONTEXT_ROOT;
   else process.env.DKB_CONTEXT_ROOT = previousContextRoot;
+  if (previousCompilerServiceToken === undefined) delete process.env.DKB_COMPILER_SERVICE_TOKEN;
+  else process.env.DKB_COMPILER_SERVICE_TOKEN = previousCompilerServiceToken;
   if (initialEvidenceService && !initialEvidenceService.running) {
     await stopLlamaIndexCompilerService().catch(() => undefined);
   }

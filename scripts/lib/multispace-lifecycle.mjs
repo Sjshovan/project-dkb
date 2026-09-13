@@ -16,9 +16,12 @@ import { assertRecipeBuildRelationship, assertRichEvidence } from './multispace-
 const executeFile = promisify(execFile);
 
 export async function proveSignedMultispace(input) {
-  const { client, runCli, step, stackName, stackRoot, libraryRoot, runtimeUrl, secondaryUrl,
+  const { client, runCli, step, stackName, stackRoot, libraryRoot, runtimeUrl, secondaryUrl, runtimeReadToken,
     registryUrl, registryToken, initialTarget, alternateTarget, changedTarget, packages } = input;
   assert.ok(changedTarget && secondaryUrl, 'multispace fixture must include a changed Evidence recipe and Runtime B');
+  assert.ok(runtimeReadToken, 'multispace fixture must supply the Stack Runtime read credential');
+  const runtimeStatus = (url) => readRuntimeStatus(url, runtimeReadToken);
+  const searchMarker = (url) => searchRuntimeMarker(url, runtimeReadToken);
   step('verify both explicitly provisioned recipe service chains while preserving Runtime A');
   await input.assertStackProviderServices([initialTarget, alternateTarget]);
   assert.equal((await runtimeStatus(runtimeUrl)).activation.target, initialTarget);
@@ -215,16 +218,19 @@ export function sourceAnchors(ir) {
   })))].sort();
 }
 
-async function runtimeStatus(url) {
-  const response = await fetch(`${url}/api/runtime`, { signal: AbortSignal.timeout(30_000) });
+async function readRuntimeStatus(url, readToken) {
+  const response = await fetch(`${url}/api/runtime`, {
+    headers: { authorization: `Bearer ${readToken}` }, redirect: 'error', signal: AbortSignal.timeout(30_000),
+  });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
   return body;
 }
 
-async function searchMarker(url) {
+async function searchRuntimeMarker(url, readToken) {
   const response = await fetch(`${url}/api/search`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${readToken}` },
+    redirect: 'error',
     body: JSON.stringify({ query: 'WHALE-BUBBLE-73', limit: 5 }), signal: AbortSignal.timeout(120_000),
   });
   const body = await response.json();

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -318,6 +318,9 @@ test('Registry compiler response binds the exact resolved compiler identity', as
 });
 
 test('Registry compiler liveness does not wait for provider capability probes', async (t) => {
+  const previousToken = process.env.DKB_COMPILER_SERVICE_TOKEN;
+  process.env.DKB_COMPILER_SERVICE_TOKEN = randomUUID();
+  t.after(() => setEnvironment('DKB_COMPILER_SERVICE_TOKEN', previousToken));
   const server = await serveDkbRegistryCompiler({ host: '127.0.0.1', port: 0 });
   t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
   const address = server.address();

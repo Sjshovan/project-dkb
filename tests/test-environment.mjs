@@ -8,6 +8,7 @@ const configPath = path.join(root, 'config.json');
 fs.writeFileSync(configPath, `${JSON.stringify({ format: 'dkb.config.v2' }, null, 2)}\n`, 'utf8');
 process.env.DKB_GLOBAL_ROOT = root;
 process.env.DKB_CLI_CONFIG = configPath;
+process.env.DKB_RUNTIME_CREDENTIALS_ROOT = path.join(root, 'runtime-credentials');
 
 process.once('exit', () => {
   const resolved = path.resolve(root);

@@ -19,6 +19,8 @@ const alternateTarget = Object.hasOwn(process.env, 'DKB_PROOF_ALTERNATE_TARGET')
 const proofEnvironment = {
   DKB_PROOF_ALTERNATE_TARGET: alternateTarget,
   DKB_PROOF_VERSION: process.env.DKB_PROOF_VERSION ?? `0.0.${Math.floor(Date.now() / 1000)}`,
+  // This disposable Stack contains only the synthetic citation/security corpus.
+  DKB_MCP_PUBLIC_DOCUMENTS: 'true',
 };
 const stack = await startDisposableStack({
   repositoryRoot,

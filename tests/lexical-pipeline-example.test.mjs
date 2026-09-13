@@ -188,7 +188,7 @@ async function writeJson(target, value) {
 async function proveAuditedTransports({ stateRoot, root, cli, commandOptions }) {
   const runtime = DEFAULT_DKB_RUNTIME_CONTEXT;
   const bearerToken = 'synthetic-lexical-mcp-token';
-  const http = await serveDkbRuntime({ runtime, stateRoot, host: '127.0.0.1', port: 0 });
+  const http = await serveDkbRuntime({ runtime, stateRoot, host: '127.0.0.1', port: 0, adminToken: 'lexical-http-admin' });
   let mcp;
   try {
     mcp = await serveDkbMcpHttp({ runtime, stateRoot, host: '127.0.0.1', port: 0,
@@ -201,7 +201,7 @@ async function proveAuditedTransports({ stateRoot, root, cli, commandOptions }) 
       '--kind', 'process', '--state-root', stateRoot, '--no-verify']);
     const httpPost = async (route, body) => {
       const response = await fetch(`${httpOrigin}${route}`, { method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-dkb-client-id': 'lexical-http-proof' },
+        headers: { 'content-type': 'application/json', 'x-dkb-client-id': 'lexical-http-proof', authorization: 'Bearer lexical-http-admin' },
         body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
       assert.equal(response.status, 200, await response.clone().text());
       return response.json();

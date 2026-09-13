@@ -171,10 +171,13 @@ test('Runtime serves health and read-only MCP from the same origin', async () =>
     const health = await fetch(`${origin}/health`);
     assert.equal(health.status, 200);
     const healthBody = await health.json();
-    assert.equal(healthBody.runtime.version, '0.2.0');
-    assert.equal(healthBody.runtime.library.id, 'mcp-origin-test-library');
-    assert.equal('stateRoot' in healthBody.runtime, false);
-    assert.equal('libraryPath' in healthBody.runtime, false);
+    assert.deepEqual(healthBody, { ok: true });
+    const status = await fetch(`${origin}/api/runtime`, { headers: { authorization: 'Bearer same-origin-admin-token' } });
+    const statusBody = await status.json();
+    assert.equal(statusBody.version, '0.2.0');
+    assert.equal(statusBody.library.id, 'mcp-origin-test-library');
+    assert.equal('stateRoot' in statusBody, false);
+    assert.equal('libraryPath' in statusBody, false);
     assert.equal(JSON.stringify(healthBody).includes(libraryRoot), false);
 
     const listed = await fetch(`${origin}/mcp`, {

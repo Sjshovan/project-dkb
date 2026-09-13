@@ -159,10 +159,12 @@ export function registerCoreCommands(program: Command, context: CoreCommandConte
     .option('--host <host>', 'Host to bind', process.env.DKB_RUNTIME_HOST || '127.0.0.1')
     .option('--port <number>', 'Port to bind', parsePositiveInteger, Number.parseInt(process.env.DKB_RUNTIME_PORT || '7331', 10))
     .option('--name <name>', 'Host-local Runtime name', 'codename-dkb')
-    .action(async (options: { root?: string; registryUrl?: string; verify?: boolean; yes?: boolean; host: string; port: number; name: string }) => {
+    .option('--public-read', 'Explicitly allow anonymous knowledge HTTP; management still requires authentication')
+    .action(async (options: { root?: string; registryUrl?: string; verify?: boolean; yes?: boolean; host: string; port: number; name: string; publicRead?: boolean }) => {
       const { prepareServeLibrary } = await import('./serve.js');
       const { serveDkbRuntime } = await import('@sjshovan/dkb-runtime/runtime/server.js');
       const { registerHostLibrary, registerHostRuntime } = await import('../host/inventory.js');
+      const { prepareRuntimeHttpCredentials } = await import('../host/runtimeCredentials.js');
       const prepared = await prepareServeLibrary({
         root: options.root,
         registryUrl: options.registryUrl,
@@ -170,27 +172,12 @@ export function registerCoreCommands(program: Command, context: CoreCommandConte
         yes: Boolean(options.yes),
       });
 
-      presenter().print({
-        status: 'serving',
-        root: prepared.root,
-        initialized: prepared.initialized,
-        compiled: prepared.compiled,
-        recordCount: prepared.compileResult?.recordCount,
-        registry: prepared.registry,
-        ...(prepared.verification ? { verification: prepared.verification } : {}),
-        ...(prepared.warning
-          ? {
-              warning: prepared.warning,
-              retryCommand: prepared.retryCommand,
-            }
-          : {}),
-        url: `http://${options.host}:${options.port}`,
-      });
-
       const server = await serveDkbRuntime({
         host: options.host,
         port: options.port,
         stateRoot: prepared.root,
+        ...await prepareRuntimeHttpCredentials(prepared.root),
+        ...(options.publicRead ? { readAccess: 'public-read' as const } : {}),
       });
       try {
         const hostLibrary = await registerHostLibrary(prepared.root);
@@ -204,6 +191,17 @@ export function registerCoreCommands(program: Command, context: CoreCommandConte
         await new Promise<void>((resolve) => server.close(() => resolve()));
         throw error;
       }
+      presenter().print({
+        status: 'serving',
+        root: prepared.root,
+        initialized: prepared.initialized,
+        compiled: prepared.compiled,
+        recordCount: prepared.compileResult?.recordCount,
+        registry: prepared.registry,
+        ...(prepared.verification ? { verification: prepared.verification } : {}),
+        ...(prepared.warning ? { warning: prepared.warning, retryCommand: prepared.retryCommand } : {}),
+        url: `http://${options.host}:${options.port}`,
+      });
     });
 }
 

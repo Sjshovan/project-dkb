@@ -217,6 +217,7 @@ test('two Runtimes share one Library while keeping independent Pipeline activati
   const httpServer = await serveDkbRuntime({
     host: '127.0.0.1',
     port: 0,
+    adminToken: 'pipeline-http-admin',
     stateRoot: fastRuntimeRoot,
     runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
   });
@@ -660,7 +661,7 @@ test('callback cancellation records one terminal event and mandatory audit failu
 
 test('public CLI, HTTP, and MCP search paths each persist one honest pre-admission rejection', async (t) => {
   const fixture = await createWarmRuntimeFixture(t);
-  const httpServer = await serveDkbRuntime({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot, host: '127.0.0.1', port: 0 });
+  const httpServer = await serveDkbRuntime({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot, host: '127.0.0.1', port: 0, adminToken: 'pipeline-http-admin' });
   t.after(() => closeServer(httpServer));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const mcpServer = createDkbReadOnlyMcpServer({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot });
@@ -671,7 +672,7 @@ test('public CLI, HTTP, and MCP search paths each persist one honest pre-admissi
   await fs.rm(path.join(fixture.runtimeRoot, DKB_RUNTIME_ACTIVATION_PATH));
   const query = 'missing activation';
   await assert.rejects(() => searchRuntime({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot, query }), /no validated activation/u);
-  const response = await fetch(`http://127.0.0.1:${httpServer.address().port}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query }) });
+  const response = await fetch(`http://127.0.0.1:${httpServer.address().port}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer pipeline-http-admin' }, body: JSON.stringify({ query }) });
   assert.ok(response.status >= 400);
   await response.text();
   const mcp = await mcpClient.callTool({ name: 'search', arguments: { query } });
@@ -1275,6 +1276,7 @@ async function postRuntimeJson(origin, pathName, body) {
   const response = await fetch(`${origin}${pathName}`, {
     method: 'POST',
     headers: {
+      authorization: 'Bearer pipeline-http-admin',
       'content-type': 'application/json',
       'x-dkb-client-id': 'runtime-audit-http-proof',
     },

@@ -72,7 +72,7 @@ export function registerRuntimeCommands(program: Command, context: RuntimeComman
         if (options.verify !== false) {
           const { DkbRuntimeClient } = await import('@sjshovan/dkb-runtime/runtime/client.js');
           try {
-            await new DkbRuntimeClient({ baseUrl: url, timeoutMs: 5_000 }).status();
+            await new DkbRuntimeClient({ baseUrl: url, timeoutMs: 5_000 }).health();
           } catch {
             warning = `Runtime ${url} was registered, but it could not be reached.`;
           }
@@ -131,10 +131,12 @@ export function registerRuntimeCommands(program: Command, context: RuntimeComman
     .option('--library <path>', 'Library to serve; defaults to the selected Library')
     .option('--pipeline <name>', 'Initial Pipeline target', process.env.DKB_PIPELINE_TARGET)
     .option('--name <name>', 'Host-local Runtime name', 'codename-dkb')
-    .action(async (options: { host: string; port: number; stateRoot?: string; library?: string; pipeline?: string; name: string }) => {
+    .option('--public-read', 'Explicitly allow anonymous knowledge HTTP; management still requires authentication')
+    .action(async (options: { host: string; port: number; stateRoot?: string; library?: string; pipeline?: string; name: string; publicRead?: boolean }) => {
       const { serveDkbRuntime } = await import('@sjshovan/dkb-runtime/runtime/server.js');
       const { defaultRuntimeStateRoot } = await import('@sjshovan/dkb-runtime/runtime/state.js');
       const { registerHostLibrary, registerHostRuntime } = await import('../host/inventory.js');
+      const { prepareRuntimeHttpCredentials } = await import('../host/runtimeCredentials.js');
       const stateRoot = path.resolve(options.stateRoot ?? defaultRuntimeStateRoot());
       const libraryRoot = await context.currentLibraryRoot(options.library);
 
@@ -144,6 +146,8 @@ export function registerRuntimeCommands(program: Command, context: RuntimeComman
         stateRoot,
         libraryPath: libraryRoot,
         runtimeId: options.name,
+        ...await prepareRuntimeHttpCredentials(stateRoot),
+        ...(options.publicRead ? { readAccess: 'public-read' as const } : {}),
         ...(options.pipeline ? { target: options.pipeline } : {}),
       });
       try {

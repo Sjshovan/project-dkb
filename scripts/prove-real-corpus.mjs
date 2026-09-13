@@ -23,6 +23,7 @@ const libraryRoot = proofStackLibraryRoot(stackRoot, stackEnvironment);
 const namespace = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_NAMESPACE, 'Registry bootstrap namespace');
 const registryToken = required(stackEnvironment.DKB_REGISTRY_BOOTSTRAP_TOKEN, 'Registry bootstrap token');
 const runtimeAdminToken = required(stackEnvironment.DKB_RUNTIME_ADMIN_TOKEN, 'Runtime admin token');
+const runtimeReadToken = required(stackEnvironment.DKB_RUNTIME_READ_TOKEN, 'Runtime read token');
 const mcpToken = required(stackEnvironment.DKB_MCP_BEARER_TOKEN, 'MCP bearer token');
 const packageId = `@${namespace}/assembly-toolbox-jd-proof`;
 const resumedVersion = process.env.DKB_REAL_CORPUS_RESUME_VERSION;
@@ -183,6 +184,8 @@ async function runCli(args) {
       ...process.env,
       DKB_REGISTRY_TOKEN: registryToken,
       DKB_RUNTIME_ADMIN_TOKEN: runtimeAdminToken,
+      DKB_RUNTIME_READ_TOKEN: runtimeReadToken,
+      DKB_RUNTIME_CREDENTIALS_ROOT: path.join(proofRoot, 'runtime-credentials'),
       DKB_REGISTRY_PUBLISH_TIMEOUT_MS: process.env.DKB_REGISTRY_PUBLISH_TIMEOUT_MS ?? String(65 * 60_000),
     },
     maxBuffer: 32 * 1024 * 1024,
@@ -195,7 +198,8 @@ async function runCli(args) {
 async function assertRetrieved(query, expected, present) {
   const response = await fetch(`${runtimeUrl}/api/retrieve`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${runtimeReadToken}` },
+    redirect: 'error',
     body: JSON.stringify({ need: query, phrases: [expected], intent: 'evidence', limit: 8 }),
     signal: AbortSignal.timeout(120_000),
   });

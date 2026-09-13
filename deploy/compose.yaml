@@ -17,6 +17,7 @@ x-registry-environment: &registry-environment
   DKB_REGISTRY_ID: ${DKB_STACK_NAME:-local}
   DKB_REGISTRY_STORAGE_DISK: registry
   DKB_COMPILER_URL: http://dkb-compiler:7341
+  DKB_COMPILER_SERVICE_TOKEN: ${DKB_COMPILER_SERVICE_TOKEN:?Run dkb stack up to generate stack secrets}
   DKB_COMPILER_TIMEOUT: "3600"
   DB_QUEUE_RETRY_AFTER: "3720"
   DKB_REGISTRY_BOOTSTRAP_EMAIL: dkb@local.invalid
@@ -87,6 +88,7 @@ services:
     environment:
       DKB_COMPILER_HOST: 0.0.0.0
       DKB_COMPILER_PORT: 7341
+      DKB_COMPILER_SERVICE_TOKEN: ${DKB_COMPILER_SERVICE_TOKEN:?Run dkb stack up to generate stack secrets}
       DKB_COMPILER_ALLOWED_TARGETS: ${DKB_COMPILER_ALLOWED_TARGETS-}
       DKB_COMPILER_DEFAULT_TARGET: ${DKB_COMPILER_DEFAULT_TARGET:-default}
       DKB_CONTEXT_ROOT: /context
@@ -206,7 +208,7 @@ services:
       DKB_RUNTIME_ID: ${DKB_STACK_NAME:-local}-runtime
       DKB_PUBLIC_URL: ${DKB_PUBLIC_URL:-http://127.0.0.1:7331}
       DKB_MCP_PUBLIC_BASE_URL: ${DKB_MCP_PUBLIC_BASE_URL:-http://127.0.0.1:7331}
-      DKB_MCP_PUBLIC_DOCUMENTS: "true"
+      DKB_MCP_PUBLIC_DOCUMENTS: ${DKB_MCP_PUBLIC_DOCUMENTS:-false}
       DKB_REGISTRY_URL: http://registry-web:8000
       DKB_QUERY_EMBEDDER_URL: http://dkb-embedder:8090/embed
       DKB_TEI_URL: http://dkb-tei:80
@@ -215,6 +217,10 @@ services:
       DKB_MCP_BEARER_TOKEN: ${DKB_MCP_BEARER_TOKEN:?Run dkb stack up to generate stack secrets}
       DKB_MCP_ALLOW_INSECURE_NO_AUTH: ${DKB_MCP_ALLOW_INSECURE_NO_AUTH:-false}
       DKB_RUNTIME_ADMIN_TOKEN: ${DKB_RUNTIME_ADMIN_TOKEN:?Run dkb stack up to generate stack secrets}
+      DKB_RUNTIME_READ_TOKEN: ${DKB_RUNTIME_READ_TOKEN:?Run dkb stack up to generate stack secrets}
+      DKB_RUNTIME_READ_ACCESS: ${DKB_RUNTIME_READ_ACCESS:-authenticated}
+      DKB_RUNTIME_ALLOWED_HOSTS: ${DKB_RUNTIME_ALLOWED_HOSTS:-127.0.0.1:7331,localhost:7331,dkb-runtime:7331}
+      DKB_RUNTIME_ALLOWED_ORIGINS: ${DKB_RUNTIME_ALLOWED_ORIGINS-}
       DKB_MCP_ALLOWED_HOSTS: ${DKB_MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
       DKB_MCP_ALLOWED_ORIGINS: ${DKB_MCP_ALLOWED_ORIGINS:-127.0.0.1,localhost}
       MEILI_URL: http://meilisearch:7700
@@ -223,7 +229,7 @@ services:
       - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
       - ${DKB_LIBRARY_HOST_PATH:?Run dkb stack up to select a Library}:/library
     ports:
-      - "${DKB_RUNTIME_PORT:-7331}:7331"
+      - "127.0.0.1:${DKB_RUNTIME_PORT:-7331}:7331"
     depends_on:
       dkb-embedder:
         condition: service_healthy

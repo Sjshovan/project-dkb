@@ -27,6 +27,7 @@ Object.assign(process.env, {
   DKB_HOST_INVENTORY: path.join(root, 'host.json'),
   DKB_CONSOLE_STATE_ROOT: path.join(root, 'console'),
   DKB_RUNTIME_STATE_ROOT: stateRoot,
+  DKB_RUNTIME_CREDENTIALS_ROOT: path.join(root, 'runtime-credentials'),
   DKB_LIBRARY_PATH: libraryRoot,
   DKB_MCP_HTTP_ENABLED: 'false',
 });
@@ -44,6 +45,7 @@ try {
   const { closeQueryContext } = await import('@sjshovan/dkb-runtime/runtime/queryCache.js');
   const { listQueryAudit, closeQueryAuditQueue } = await import('@sjshovan/dkb-runtime/runtime/queryAudit.js');
   const { serveDkbRuntime } = await import('@sjshovan/dkb-runtime/runtime/server.js');
+  const { prepareRuntimeHttpCredentials } = await import('@sjshovan/dkb-cli/dist/host/runtimeCredentials.js');
   const { startDkbConsoleServer } = await import('@sjshovan/dkb-console');
   cleanup.push(() => closeQueryContext(stateRoot), closeQueryAuditQueue);
 
@@ -100,16 +102,17 @@ try {
   await addLibraryRoot(libraryRoot, '@example/marine');
   await activate();
 
-  const runtimeServer = await serveDkbRuntime({ runtime, stateRoot, host: '127.0.0.1', port: 0 });
+  const runtimeCredentials = await prepareRuntimeHttpCredentials(stateRoot);
+  const runtimeServer = await serveDkbRuntime({ runtime, stateRoot, host: '127.0.0.1', port: 0, ...runtimeCredentials });
   cleanup.unshift(() => closeHttp(runtimeServer));
   const runtimeURL = `http://127.0.0.1:${runtimeServer.address().port}`;
   await runCli(['runtime', 'register', 'review-runtime', runtimeURL,
     '--kind', 'process', '--state-root', stateRoot, '--library', 'review-library', '--no-verify']);
   await runCli(['runtime', 'use', 'review-runtime']);
   const response = await fetch(`${runtimeURL}/api/search`, { method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dkb-client-id': 'console-review-browser',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${runtimeCredentials.readToken}`, 'x-dkb-client-id': 'console-review-browser',
       'x-dkb-session-id': 'review-session', 'user-agent': 'DKB local review harness' },
-    body: JSON.stringify({ query: 'WHALE-BUBBLE-73' }), signal: AbortSignal.timeout(15_000) });
+    body: JSON.stringify({ query: 'WHALE-BUBBLE-73' }), redirect: 'error', signal: AbortSignal.timeout(15_000) });
   assert.equal(response.status, 200, await response.clone().text());
   assert.ok((await response.json()).results.length > 0);
 

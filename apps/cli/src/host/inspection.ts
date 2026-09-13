@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadLibraryManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { verifyRegistryEndpoint } from '@sjshovan/dkb-registry-client/config.js';
 import { loadRegistryCredentialSync } from '@sjshovan/dkb-registry-client/credentials.js';
-import { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
+import { runtimeClientForUrl } from './runtimeClient.js';
 import { hostInventoryPath, readHostInventory } from './inventory.js';
 
 export interface DkbHostLibraryListing {
@@ -162,7 +162,7 @@ export async function inspectHostRuntimes(options: { check?: boolean } = {}): Pr
     }
 
     try {
-      const status = await new DkbRuntimeClient({ baseUrl: runtime.url, timeoutMs: 5_000 }).status();
+      const status = await (await runtimeClientForUrl(runtime.url, 5_000)).status();
       const record = isRecord(status) ? status : {};
       if (record.ok !== true) {
         return { ...common, status: 'incompatible' as const, message: 'Runtime status did not report ok=true.' };
@@ -185,7 +185,8 @@ export async function inspectHostRuntimes(options: { check?: boolean } = {}): Pr
     } catch (error) {
       return {
         ...common,
-        status: 'offline' as const,
+        status: error instanceof Error && 'code' in error && error.code === 'runtime_unauthorized'
+          ? 'incompatible' as const : 'offline' as const,
         message: error instanceof Error ? error.message : String(error),
       };
     }

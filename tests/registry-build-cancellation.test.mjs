@@ -88,20 +88,24 @@ test('compiler prunes only expired cancellation markers and still rejects expire
 test('compiler HTTP cancellation rejects a delayed request and survives a restart', async (t) => {
   const directory = await root(t);
   const before = process.env.DKB_CONTEXT_ROOT;
+  const previousToken = process.env.DKB_COMPILER_SERVICE_TOKEN;
+  const serviceToken = randomUUID();
   process.env.DKB_CONTEXT_ROOT = directory;
+  process.env.DKB_COMPILER_SERVICE_TOKEN = serviceToken;
   t.after(() => { if (before === undefined) delete process.env.DKB_CONTEXT_ROOT; else process.env.DKB_CONTEXT_ROOT = before; });
+  t.after(() => { if (previousToken === undefined) delete process.env.DKB_COMPILER_SERVICE_TOKEN; else process.env.DKB_COMPILER_SERVICE_TOKEN = previousToken; });
   const input = control();
   for (let turn = 0; turn < 2; turn++) {
     const server = await serveDkbRegistryCompiler({ host: '127.0.0.1', port: 0 });
     try {
       const url = `http://127.0.0.1:${server.address().port}`;
       if (!turn) {
-        const response = await fetch(`${url}/compile/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+        const response = await fetch(`${url}/compile/cancel`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` }, body: JSON.stringify(input) });
         assert.equal(response.status, 200);
         assert.equal((await response.json()).status, 'cancelled');
       }
       const rejected = await fetch(`${url}/compile`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` },
         body: JSON.stringify({ jobId: input.jobId, request: { package: { registryId: input.registryId }, execution: input.execution } }),
       });
       assert.equal(rejected.status, 409);
@@ -118,8 +122,9 @@ test('compiler HTTP control interrupts its synchronous running request through a
   await fs.mkdir(source, { recursive: true });
   await fs.mkdir(work);
   await fs.mkdir(pluginRoot, { recursive: true });
-  const environment = Object.fromEntries(['DKB_CONTEXT_ROOT', 'DKB_COMPILER_WORK_ROOT', 'DKB_COMPILER_ALLOWED_TARGETS', 'DKB_COMPILER_DEFAULT_TARGET'].map((key) => [key, process.env[key]]));
-  Object.assign(process.env, { DKB_CONTEXT_ROOT: directory, DKB_COMPILER_WORK_ROOT: work, DKB_COMPILER_ALLOWED_TARGETS: 'http-test', DKB_COMPILER_DEFAULT_TARGET: 'http-test' });
+  const serviceToken = randomUUID();
+  const environment = Object.fromEntries(['DKB_CONTEXT_ROOT', 'DKB_COMPILER_WORK_ROOT', 'DKB_COMPILER_ALLOWED_TARGETS', 'DKB_COMPILER_DEFAULT_TARGET', 'DKB_COMPILER_SERVICE_TOKEN'].map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { DKB_CONTEXT_ROOT: directory, DKB_COMPILER_WORK_ROOT: work, DKB_COMPILER_ALLOWED_TARGETS: 'http-test', DKB_COMPILER_DEFAULT_TARGET: 'http-test', DKB_COMPILER_SERVICE_TOKEN: serviceToken });
   t.after(() => { for (const [key, value] of Object.entries(environment)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   await fs.writeFile(path.join(directory, '.dkb', 'config.json'), JSON.stringify({ format: DKB_CONFIG_FORMAT, activeTarget: 'http-test', targets: { 'http-test': { evidence: '@test/http-cancel', index: '@test/http-cancel', retrieval: '@test/http-cancel' } } }));
   const started = path.join(directory, 'started');
@@ -157,7 +162,7 @@ export function setup(context) {
   const input = control();
   try {
     const running = fetch(`${url}/compile`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` },
       body: JSON.stringify({ jobId: input.jobId, request: { package: { registryId: input.registryId }, execution: input.execution, target: 'http-test', expectedCompilerBuildDigest: (await readCompilerBuildIdentity()).buildDigest }, sourceArchive: { fileName: 'source.dkbpkg', contents: (await fs.readFile(archive)).toString('base64') } }),
     });
     for (let attempts = 0; ; attempts++) {
@@ -166,7 +171,7 @@ export function setup(context) {
       await delay(20);
     }
     assert.equal(await fs.readFile(started, 'utf8'), 'true');
-    const response = await fetch(`${url}/compile/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    const response = await fetch(`${url}/compile/cancel`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` }, body: JSON.stringify(input) });
     assert.equal(response.status, 202);
     assert.equal((await response.json()).status, 'cancelling');
     const compiled = await running;

@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { DEFAULT_DKB_DISTRIBUTION } from '@sjshovan/dkb-distribution-default';
 import { backupDkbStack, composeArguments, prepareDkbStack, restoreDkbStack } from '../apps/cli/dist/stack/manager.js';
-import { readDkbStack, readDkbStackControl, writeAtomic, writeStackProviderIdentityConfig } from '../apps/cli/dist/stack/context.js';
+import { readDkbStack, readDkbStackControl, readEnvironmentFile, runtimeTokensForUrl, writeAtomic, writeStackProviderIdentityConfig } from '../apps/cli/dist/stack/context.js';
 import { assertDockerAvailable, immutableDigestFromImageReference, localImageMetadataIssue } from '../apps/cli/dist/stack/docker.js';
 import { resolveHostProviderIdentityOptions } from '../apps/cli/dist/providers/externalIdentities.js';
 
@@ -15,6 +15,38 @@ const dockerAvailable = process.env.DKB_SKIP_DOCKER_TESTS !== '1' && spawnSync('
   timeout: 5_000,
   windowsHide: true,
 }).status === 0;
+
+test('Stack persists independent HTTP credentials with private reads and explicit public citations', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-http-secrets-'));
+  const names = ['DKB_STACK_STATE_ROOT', 'DKB_RUNTIME_READ_ACCESS', 'DKB_RUNTIME_ALLOWED_HOSTS',
+    'DKB_RUNTIME_ALLOWED_ORIGINS', 'DKB_MCP_PUBLIC_DOCUMENTS', 'DKB_RUNTIME_READ_TOKEN', 'DKB_RUNTIME_ADMIN_TOKEN'];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  for (const name of names) delete process.env[name];
+  process.env.DKB_STACK_STATE_ROOT = root;
+  t.after(async () => {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const context = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'private-http');
+  const values = await readEnvironmentFile(context.envFile);
+  const secrets = ['DKB_RUNTIME_ADMIN_TOKEN', 'DKB_RUNTIME_READ_TOKEN', 'DKB_COMPILER_SERVICE_TOKEN', 'DKB_MCP_BEARER_TOKEN'];
+  assert.equal(new Set(secrets.map(name => values[name])).size, 4);
+  assert.ok(secrets.every(name => /^[A-Za-z0-9_-]{43}$/u.test(values[name])));
+  assert.equal(values.DKB_RUNTIME_READ_ACCESS, 'authenticated');
+  assert.equal(values.DKB_MCP_PUBLIC_DOCUMENTS, 'false');
+  assert.ok(values.DKB_RUNTIME_ALLOWED_HOSTS.includes(`127.0.0.1:${values.DKB_RUNTIME_PORT}`));
+  assert.deepEqual(await runtimeTokensForUrl(`http://127.0.0.1:${values.DKB_RUNTIME_PORT}`), {
+    adminToken: values.DKB_RUNTIME_ADMIN_TOKEN, readToken: values.DKB_RUNTIME_READ_TOKEN,
+  });
+  assert.deepEqual(await runtimeTokensForUrl(`http://127.0.0.1:${values.DKB_RUNTIME_PORT}/other-runtime`), {});
+  process.env.DKB_MCP_PUBLIC_DOCUMENTS = 'true';
+  await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'private-http');
+  const updated = await readEnvironmentFile(context.envFile);
+  assert.equal(updated.DKB_MCP_PUBLIC_DOCUMENTS, 'true');
+  for (const name of secrets) assert.equal(updated[name], values[name], name);
+});
 
 test('stack image checks reject stale version and revision labels', () => {
   const current = {

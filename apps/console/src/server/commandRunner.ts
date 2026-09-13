@@ -168,6 +168,7 @@ function commandEnvironment(): NodeJS.ProcessEnv {
   const allowed = [
     'PATH', 'Path', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE',
     'LOCALAPPDATA', 'APPDATA', 'DKB_HOST_INVENTORY', 'DKB_CLI_CONFIG', 'DKB_STACK_STATE_ROOT',
+    'DKB_RUNTIME_CREDENTIALS_ROOT', 'DKB_RUNTIME_ADMIN_TOKEN', 'DKB_RUNTIME_READ_TOKEN',
     'NO_COLOR', 'NODE_DISABLE_COLORS',
   ];
   return Object.fromEntries(allowed.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));

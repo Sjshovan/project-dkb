@@ -1,5 +1,4 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import {
   defaultRuntimeStateRoot,
@@ -27,6 +26,7 @@ import type { DkbRuntimeContext } from './context.js';
 import { runtimeClientForRequest, withRuntimeClient } from './clientContext.js';
 import { describeRuntimeTargets, readRuntime, searchRuntime } from './queryAccess.js';
 import type { DkbReadRequest } from '@sjshovan/dkb-protocol/types.js';
+import { RuntimeHttpSecurity, type RuntimeHttpReadAccess } from './runtimeHttpSecurity.js';
 
 export interface ServeRuntimeOptions {
   runtime?: DkbRuntimeContext;
@@ -37,20 +37,18 @@ export interface ServeRuntimeOptions {
   runtimeId?: string;
   target?: string;
   adminToken?: string;
+  readToken?: string;
+  readAccess?: RuntimeHttpReadAccess;
+  allowedHosts?: string[];
+  allowedOrigins?: string[];
 }
 
 export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promise<http.Server> {
   const stateRoot = options.stateRoot ?? defaultRuntimeStateRoot();
   const host = options.host ?? process.env.DKB_RUNTIME_HOST ?? '127.0.0.1';
   const port = options.port ?? Number.parseInt(process.env.DKB_RUNTIME_PORT ?? '7331', 10);
-  const adminToken = options.adminToken ?? process.env.DKB_RUNTIME_ADMIN_TOKEN;
   const runtime = options.runtime ?? DEFAULT_DKB_RUNTIME_CONTEXT;
-
-  if (!adminToken && !isLoopbackHost(host)) {
-    throw new DkbError(
-      'DKB Runtime management routes require DKB_RUNTIME_ADMIN_TOKEN when listening beyond localhost.',
-    );
-  }
+  const security = new RuntimeHttpSecurity({ ...options, host });
 
   const instance = await ensureRuntimeState(stateRoot, {
     ...(options.libraryPath ? { libraryRoot: options.libraryPath } : {}),
@@ -69,12 +67,12 @@ export async function serveDkbRuntime(options: ServeRuntimeOptions = {}): Promis
     await withRuntimeClient(runtimeClientForRequest(request), async () => {
       try {
         if (mcp && await mcp.handle(request, response)) return;
-        await routeRequest(request, response, stateRoot, runtime, adminToken);
+        await routeRequest(request, response, stateRoot, runtime, security);
       } catch (error) {
         if (!response.headersSent) {
           sendJson(response, 500, {
             error: 'runtime_http_error',
-            message: error instanceof Error ? error.message : String(error),
+            message: security.errorMessage(error, request),
           });
         } else {
           response.end();
@@ -107,30 +105,16 @@ async function routeRequest(
   response: ServerResponse,
   stateRoot: string,
   runtime: DkbRuntimeContext,
-  adminToken?: string,
+  security: RuntimeHttpSecurity,
 ): Promise<void> {
-  setCommonHeaders(response);
-
-  if (request.method === 'OPTIONS') {
-    response.writeHead(204);
-    response.end();
-
-    return;
-  }
-
   try {
     const url = new URL(request.url ?? '/', 'http://dkb-runtime.local');
     const pathName = url.pathname;
 
-    if (isManagementRoute(request.method, pathName) && !isAuthorized(request, adminToken)) {
-      return sendJson(response, 401, {
-        error: 'unauthorized',
-        message: 'This DKB Runtime management route requires a valid admin bearer token.',
-      });
-    }
+    if (!security.authorize(request, response, pathName)) return;
 
     if (request.method === 'GET' && (pathName === '/api/health' || pathName === '/health')) {
-      return sendJson(response, 200, { ok: true, runtime: await runtimePublicStatus(stateRoot) });
+      return sendJson(response, 200, { ok: true });
     }
 
     if (request.method === 'GET' && pathName === '/.well-known/dkb.json') {
@@ -298,10 +282,10 @@ async function routeRequest(
       return sendJson(response, 200, await getTrace(stateRoot, decodeURIComponent(traceMatch[1]!)));
     }
 
-    return sendJson(response, 404, { error: 'not_found', message: `Unknown DKB Runtime route: ${request.method} ${pathName}` });
+    return sendJson(response, 404, { error: 'not_found', message: 'Unknown DKB Runtime route.' });
   } catch (error) {
     const status = error instanceof DkbError ? (error.code === 'runtime_refresh_required' ? 409 : 400) : 500;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = security.errorMessage(error, request);
 
     return sendJson(response, status, {
       error: error instanceof DkbError ? error.code : 'runtime_error',
@@ -397,41 +381,16 @@ async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
     return {} as T;
   }
 
-  return JSON.parse(body) as T;
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new DkbError('Runtime request body must contain valid JSON.', 'runtime_request_invalid');
+  }
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body, null, 2));
-}
-
-function setCommonHeaders(response: ServerResponse): void {
-  response.setHeader('access-control-allow-origin', '*');
-  response.setHeader('access-control-allow-methods', 'GET,POST,DELETE,OPTIONS');
-  response.setHeader('access-control-allow-headers', 'content-type,authorization');
-}
-
-function isManagementRoute(method: string | undefined, pathName: string): boolean {
-  if (method === 'GET' && pathName === '/api/runtime/pipelines') return true;
-  if (method === 'GET' && pathName === '/api/runtime/audit') return true;
-  if (pathName === '/api/runtime/reload' || pathName === '/api/runtime/pipeline' || pathName === '/api/runtime/library' || pathName === '/api/dkbs/import-artifact' || pathName === '/api/dkbs/install-registry') return true;
-  if (method === 'DELETE' && pathName.startsWith('/api/dkbs/')) return true;
-  if (pathName.startsWith('/api/traces')) return true;
-  return false;
-}
-
-function isAuthorized(request: IncomingMessage, adminToken?: string): boolean {
-  if (!adminToken) return true;
-  const authorization = request.headers.authorization;
-  if (!authorization?.startsWith('Bearer ')) return false;
-  const supplied = Buffer.from(authorization.slice('Bearer '.length), 'utf8');
-  const expected = Buffer.from(adminToken, 'utf8');
-
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-}
-
-function isLoopbackHost(host: string): boolean {
-  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
 }
 
 function installGracefulShutdown(server: http.Server, mcp: DkbMcpHttpHandler | null): void {

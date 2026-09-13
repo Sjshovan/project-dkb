@@ -16,6 +16,7 @@ const collectionId = `@${namespace}/complete-proof`;
 const stackRoot = path.join(os.homedir(), '.dkb', 'stacks', stackName);
 const stackEnvironment = parseEnvironment(await fs.readFile(path.join(stackRoot, 'stack.env'), 'utf8'));
 const runtimeUrl = `http://127.0.0.1:${required(stackEnvironment.DKB_RUNTIME_PORT, 'Runtime port')}`;
+const runtimeReadToken = required(stackEnvironment.DKB_RUNTIME_READ_TOKEN, 'Runtime read token');
 const mcpToken = required(stackEnvironment.DKB_MCP_BEARER_TOKEN, 'MCP token');
 const consoleState = JSON.parse(await fs.readFile(path.join(os.homedir(), '.dkb', 'console', 'process.json'), 'utf8'));
 const consoleUrl = required(consoleState.url, 'Console URL');
@@ -260,7 +261,8 @@ async function registryDkb(identity, version) {
 async function runtimeRetrieve(need) {
   const response = await fetch(`${runtimeUrl}/api/retrieve`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${runtimeReadToken}` },
+    redirect: 'error',
     body: JSON.stringify({ need, phrases: [need], intent: 'evidence', limit: 5 }),
     signal: AbortSignal.timeout(120_000),
   });
