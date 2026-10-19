@@ -77,7 +77,7 @@ test('Windows promotion survives a reader denial beyond the old retry window', {
   let attempts = 0;
   t.mock.method(fs, 'rename', async (from, to) => {
     attempts++;
-    if (performance.now() - started < 350) {
+    if (attempts <= 9 || performance.now() - started < 350) {
       assert.equal(await fs.readFile(destination, 'utf8'), 'old complete document');
       throw Object.assign(new Error('fixture reader holds destination'), { code: 'EPERM' });
     }

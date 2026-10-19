@@ -2,6 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Keep fixture paths identical across Node, Python, and Windows realpath checks.
+if (process.platform === 'win32') {
+  const temporaryRoot = fs.realpathSync.native(os.tmpdir());
+  for (const name of ['TEMP', 'TMP', 'TMPDIR']) process.env[name] = temporaryRoot;
+}
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), `dkb-test-global-${process.pid}-`));
 const configPath = path.join(root, 'config.json');
 

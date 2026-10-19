@@ -108,7 +108,26 @@ export async function runDockerOwnerWorker(kind: 'library' | 'stack' | 'install'
   if (ids.some(item => !/^[a-f0-9]{12,64}$/u.test(item))) throw new DkbError('Invalid Docker cleanup identity; no container was removed.', 'library_owner_cleanup_failed');
   for (const container of ids) {
     const removed = await ownerDockerProcess([...prefix, 'container', 'rm', '--force', ...(kind === 'install' ? ['--volumes'] : []), container]);
-    if (removed.code !== 0) throw new DkbError(`Owner container ${name} still needs cleanup. Library data was retained.`, 'library_owner_cleanup_failed');
+    if (removed.code !== 0) {
+      // Observe only this operation after removal fails. Keep the failure until
+      // Docker's removal result and exact remaining state can be diagnosed.
+      const observe = async (args: string[]) => {
+        try {
+          const result = await ownerDockerProcess([...prefix, ...args]);
+          return { code: result.code, stdout: result.stdout.slice(0, 2048), stderr: result.stderr.slice(0, 2048) };
+        } catch (error) {
+          return { error: (error instanceof Error ? error.message : String(error)).slice(0, 2048) };
+        }
+      };
+      const diagnostics = {
+        context: target.context, operation: id, container,
+        removal: { code: removed.code, stderr: removed.stderr.slice(0, 2048) },
+        remaining: await observe(['container', 'ls', '--all', '--filter', `label=dev.dkb.owner.operation=${id}`, '--format', '{{.ID}}']),
+        state: await observe(['container', 'inspect', '--format', '{{json .State}}', container]),
+      };
+      throw new DkbError(`Owner container ${name} still needs cleanup. Library data was retained. `
+        + `Docker cleanup diagnostics: ${JSON.stringify(diagnostics)}`, 'library_owner_cleanup_failed');
+    }
   }
   if (!creationAcknowledged && ids.length === 0) {
     // A timed-out client can finish before the daemon creates the container.

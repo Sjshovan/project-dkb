@@ -44,7 +44,18 @@ test('all provider bundles install independently offline, retain receipts, isola
     await fs.rm(root, { recursive: true, force: true });
   });
   work = proveIndependentProviderInstallation(root, signal);
-  await work;
+  try {
+    await work;
+  } catch (error) {
+    t.diagnostic(JSON.stringify({
+      code: error?.code ?? null,
+      signal: error?.signal ?? null,
+      killed: error?.killed ?? null,
+      stdout: Buffer.from(error?.stdout ?? '').subarray(-4096).toString('utf8'),
+      stderr: Buffer.from(error?.stderr ?? '').subarray(-4096).toString('utf8'),
+    }));
+    throw error;
+  }
 });
 
 async function proveIndependentProviderInstallation(root, signal) {

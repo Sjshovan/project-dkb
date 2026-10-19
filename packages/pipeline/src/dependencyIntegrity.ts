@@ -148,7 +148,7 @@ export async function validatePluginImports(
         if (!(packageName in declared)) throw new DkbError(`Plugin import ${specifier} is not a declared runtime dependency. Add it to package.json dependencies so its installed code participates in the recipe identity.`);
         continue;
       }
-      const candidate = path.resolve(path.dirname(file), specifier);
+      const candidate = path.resolve(path.dirname(actualFile), specifier);
       let resolved = candidate;
       try { resolved = await fs.realpath(candidate); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;

@@ -5,7 +5,7 @@ import test from 'node:test';
 
 // Replace Docker only in a child process. Exercise the actual owner transport,
 // including cancellation while the daemon is still creating its container.
-for (const scenario of ['success', 'unix-context', 'command-failure', 'cancel-create', 'cancel-start', 'cleanup-failure', 'create-reply-lost', 'create-reply-malformed', 'create-dispatch-unconfirmed', 'remote-context', 'remote-npipe', 'wrong-image', 'bind-volume']) {
+for (const scenario of ['success', 'unix-context', 'command-failure', 'cancel-create', 'cancel-start', 'cleanup-failure', 'cleanup-absent', 'cleanup-observation-failure', 'create-reply-lost', 'create-reply-malformed', 'create-dispatch-unconfirmed', 'remote-context', 'remote-npipe', 'wrong-image', 'bind-volume']) {
   test(`Library owner transport: ${scenario}`, async () => {
     const script = `
       import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ for (const scenario of ['success', 'unix-context', 'command-failure', 'cancel-cr
       const scenario = ${JSON.stringify(scenario)};
       const image = 'sha256:' + 'a'.repeat(64), container = 'b'.repeat(64);
       const controller = new AbortController(), calls = [];
-      let created = false, removed = false, request;
+      let created = false, removed = false, removalAttempted = false, request, operationLabel;
       cp.spawn = (file, args, options) => {
         assert.equal(file, 'docker');
         assert.equal(options.shell, false);
@@ -48,6 +48,7 @@ for (const scenario of ['success', 'unix-context', 'command-failure', 'cancel-cr
             Options: scenario === 'bind-volume' ? { type: 'none', o: 'bind', device: '/host' } : null,
             Mountpoint: '/var/lib/docker/volumes/proof-library/_data' }]));
           if (command[0] === 'create') {
+            operationLabel = command[command.indexOf('--label') + 1];
             assert.ok(command.includes('--read-only'));
             assert.equal(command[command.indexOf('--network') + 1], 'none');
             assert.equal(command[command.indexOf('--pull') + 1], 'never');
@@ -66,18 +67,33 @@ for (const scenario of ['success', 'unix-context', 'command-failure', 'cancel-cr
             assert.equal(created, true);
             request = JSON.parse(input);
             assert.equal(request.command, 'library.status');
-            if (scenario === 'cancel-start' || scenario === 'cleanup-failure') return controller.abort();
+            if (scenario === 'cancel-start' || scenario.startsWith('cleanup-')) return controller.abort();
             created = false;
             return finish(JSON.stringify({ ok: scenario !== 'command-failure' }), scenario === 'command-failure' ? 1 : 0);
           }
           if (command[0] === 'container' && command[1] === 'ls') {
             assert.match(command[command.indexOf('--filter') + 1], /^label=dev\\.dkb\\.owner\\.operation=[a-f0-9-]{36}$/u);
+            assert.equal(command[command.indexOf('--filter') + 1], 'label=' + operationLabel);
+            if (removalAttempted && scenario === 'cleanup-observation-failure') {
+              child.stderr.write('fixture observation unavailable'); return finish('', 1);
+            }
             return finish(created ? container : '');
           }
           if (command[0] === 'container' && command[1] === 'rm') {
             assert.deepEqual(command, ['container', 'rm', '--force', container]);
-            if (scenario === 'cleanup-failure') return finish('', 1);
+            removalAttempted = true;
+            if (scenario.startsWith('cleanup-')) {
+              if (scenario === 'cleanup-absent') created = false;
+              child.stderr.write('fixture removal denied'); return finish('', 17);
+            }
             removed = true; created = false; return finish(container);
+          }
+          if (command[0] === 'container' && command[1] === 'inspect') {
+            assert.deepEqual(command, ['container', 'inspect', '--format', '{{json .State}}', container]);
+            if (scenario === 'cleanup-absent' || scenario === 'cleanup-observation-failure') {
+              child.stderr.write('fixture state unavailable'); return finish('', 1);
+            }
+            return finish(JSON.stringify({ Status: 'running', Running: true }));
           }
           throw new Error('Unexpected Docker operation: ' + command[0]);
         }));
@@ -93,8 +109,23 @@ for (const scenario of ['success', 'unix-context', 'command-failure', 'cancel-cr
         assert.equal(removed, true);
       } else if (scenario === 'cancel-start') {
         await assert.rejects(running, { code: 'library_owner_cancelled' }); assert.equal(removed, true);
-      } else if (scenario === 'cleanup-failure') {
-        await assert.rejects(running, { code: 'library_owner_cleanup_failed' }); assert.equal(created, true);
+      } else if (scenario.startsWith('cleanup-')) {
+        await assert.rejects(running, error => {
+          assert.equal(error.code, 'library_owner_cleanup_failed');
+          const diagnostics = JSON.parse(error.message.split('Docker cleanup diagnostics: ')[1]);
+          assert.equal(diagnostics.context, 'desktop-linux');
+          assert.equal('dev.dkb.owner.operation=' + diagnostics.operation, operationLabel);
+          assert.equal(diagnostics.container, container);
+          assert.deepEqual(diagnostics.removal, { code: 17, stderr: 'fixture removal denied' });
+          assert.deepEqual(diagnostics.remaining, scenario === 'cleanup-observation-failure'
+            ? { code: 1, stdout: '', stderr: 'fixture observation unavailable' }
+            : { code: 0, stdout: scenario === 'cleanup-absent' ? '' : container, stderr: '' });
+          assert.deepEqual(diagnostics.state, scenario === 'cleanup-failure'
+            ? { code: 0, stdout: JSON.stringify({ Status: 'running', Running: true }), stderr: '' }
+            : { code: 1, stdout: '', stderr: 'fixture state unavailable' });
+          return true;
+        });
+        assert.equal(created, scenario !== 'cleanup-absent');
       } else if (scenario === 'create-dispatch-unconfirmed') {
         await assert.rejects(running, error => error.code === 'library_owner_cleanup_unconfirmed'
           && /dkb-library-owner-[a-f0-9-]{36}/u.test(error.message) && /delayed/iu.test(error.message));
