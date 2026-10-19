@@ -58,17 +58,25 @@ test('compiler cancellation aborts active work, waits for cleanup, and persists 
 
 test('compiler rejects duplicate active executions and expires deadlines without work', async (t) => {
   const jobs = new RegistryJobControl(await root(t));
+  // Filesystem setup must finish before the fixture advances its short deadline.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const input = control({ execution: { id: randomUUID(), expiresAt: new Date(Date.now() + 500).toISOString() } });
   let started;
   const ready = new Promise((resolve) => { started = resolve; });
   const running = jobs.run(input, async (signal) => { started(); await delay(60_000, undefined, { signal }); });
   const rejected = assert.rejects(running, /abort|deadline/iu);
-  await ready;
-  await assert.rejects(jobs.run(input, async () => {}), { code: 'compile_already_running' });
-  await rejected;
-  await assert.rejects(jobs.run(input, async () => assert.fail('Expired job started')), { code: 'compile_expired' });
-  for (const execution of [undefined, { id: 'not-uuid', expiresAt: new Date().toISOString() }, { id: randomUUID(), expiresAt: new Date(Date.now() + 48 * 3600_000).toISOString() }]) {
-    await assert.rejects(jobs.run(control({ execution }), async () => {}), { code: 'invalid_compile_execution' });
+  try {
+    await Promise.race([ready, running]);
+    await assert.rejects(jobs.run(input, async () => {}), { code: 'compile_already_running' });
+    t.mock.timers.tick(500);
+    await rejected;
+    await assert.rejects(jobs.run(input, async () => assert.fail('Expired job started')), { code: 'compile_expired' });
+    for (const execution of [undefined, { id: 'not-uuid', expiresAt: new Date().toISOString() }, { id: randomUUID(), expiresAt: new Date(Date.now() + 48 * 3600_000).toISOString() }]) {
+      await assert.rejects(jobs.run(control({ execution }), async () => {}), { code: 'invalid_compile_execution' });
+    }
+  } finally {
+    jobs.close();
+    await rejected.catch(() => {});
   }
 });
 

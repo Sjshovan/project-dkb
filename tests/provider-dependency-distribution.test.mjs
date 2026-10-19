@@ -72,6 +72,24 @@ test('all provider bundles install independently offline, retain receipts, isola
   try {
     await work;
   } catch (error) {
+    // npm's synthetic install cache is removed by the after hook. Preserve only
+    // a bounded log tail on failure so extraction/tree-processing stalls are visible.
+    let npmLog;
+    try {
+      const directory = path.join(root, 'empty-cache', '_logs');
+      const names = (await fs.readdir(directory, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && entry.name.endsWith('.log')).map(entry => entry.name).sort();
+      const name = names.at(-1);
+      if (name) {
+        const handle = await fs.open(path.join(directory, name), 'r');
+        try {
+          const { size } = await handle.stat();
+          const bytes = Buffer.alloc(Math.min(size, 8192));
+          const { bytesRead } = await handle.read(bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+          npmLog = { name, tail: bytes.subarray(0, bytesRead).toString('utf8') };
+        } finally { await handle.close(); }
+      }
+    } catch (logError) { npmLog = { unavailable: logError?.code ?? 'unreadable' }; }
     t.diagnostic(JSON.stringify({
       elapsedMs: Math.round(performance.now() - startedAt),
       completedCommands,
@@ -82,6 +100,7 @@ test('all provider bundles install independently offline, retain receipts, isola
       killed: error?.killed ?? null,
       stdout: Buffer.from(error?.stdout ?? '').subarray(-4096).toString('utf8'),
       stderr: Buffer.from(error?.stderr ?? '').subarray(-4096).toString('utf8'),
+      npmLog: npmLog ?? null,
     }));
     throw error;
   }
