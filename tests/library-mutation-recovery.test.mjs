@@ -130,14 +130,16 @@ test('nested mutation joins one generation and rejects public reads while pendin
 
 test('ordinary error rolls back exact bytes, and stale async context loses authority', async (t) => {
   const root = await fixture(t);
-  let late;
+  let late, releaseLate;
   await assert.rejects(withLibraryMutation(root, async () => {
-    late = new Promise((resolve) => setTimeout(() => {
-      assert.throws(() => assertLibraryMutation(root), /requires an active/u); resolve();
-    }, 100));
+    // Register in the owning async context, then resume only after rollback closes it.
+    late = new Promise((resolve) => { releaseLate = resolve; }).then(() => {
+      assert.throws(() => assertLibraryMutation(root), /requires an active/u);
+    });
     await writeLibraryMutationFile(root, path.join(root, 'dkb.json'), after);
     throw new Error('operation failed');
   }), /operation failed/u);
+  releaseLate();
   await late;
   assert.equal(await fs.readFile(path.join(root, 'dkb.json'), 'utf8'), before);
 });
