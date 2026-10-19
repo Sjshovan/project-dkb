@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -107,8 +108,38 @@ function renderMarkdown(document) {
 }
 
 async function assertCurrent(target, expected) {
-  const actual = await fs.readFile(target, 'utf8').catch(() => null);
-  if (actual !== expected) throw new Error(`${path.relative(root, target)} is stale. Run npm run graph:write.`);
+  const actualBytes = await fs.readFile(target).catch(() => null);
+  const actual = actualBytes?.toString('utf8') ?? null;
+  if (actual === expected) return;
+
+  const expectedBytes = Buffer.from(expected, 'utf8');
+  let firstDifferingByte = 0;
+  while (actualBytes && firstDifferingByte < Math.min(actualBytes.length, expectedBytes.length)
+    && actualBytes[firstDifferingByte] === expectedBytes[firstDifferingByte]) firstDifferingByte += 1;
+  const contextStartByte = Math.max(0, firstDifferingByte - 48);
+  const describe = (bytes) => {
+    if (!bytes) return null;
+    const text = bytes.toString('utf8');
+    const crlf = (text.match(/\r\n/g) ?? []).length;
+    const lf = (text.match(/\n/g) ?? []).length;
+    return {
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      crlf,
+      lf,
+      bareLf: lf - crlf,
+      context: bytes.subarray(contextStartByte, firstDifferingByte + 48).toString('utf8'),
+    };
+  };
+  console.error(`Workspace graph mismatch: ${JSON.stringify({
+    target: path.relative(root, target),
+    firstDifferingByte,
+    contextStartByte,
+    actual: describe(actualBytes),
+    expected: describe(expectedBytes),
+    newlineNormalizedEqual: actual !== null && actual.replace(/\r\n?/g, '\n') === expected,
+  }, null, 2)}`);
+  throw new Error(`${path.relative(root, target)} is stale. Run npm run graph:write.`);
 }
 
 async function readJson(target) {

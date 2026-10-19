@@ -17,6 +17,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare Changesets comparison branch
+        if: github.event_name == 'pull_request'
+        run: git branch development origin/development
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -30,6 +35,17 @@ jobs:
       - run: npm run docs:check
       - run: npm run check
       - run: npm test
+      - name: Verify Linux volume ownership preservation
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm --network none --read-only --user 0:0 \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m \
+            --mount "type=bind,source=$PWD,target=/workspace,readonly" \
+            --workdir /workspace \
+            node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node --import ./tests/test-environment.mjs --test tests/stack-volume-ownership.linux.mjs
       - run: npm run package:check
       - name: Verify Linux Library management and Stack configuration recovery
         if: runner.os == 'Linux'

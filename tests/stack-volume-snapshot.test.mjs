@@ -1,54 +1,28 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createWriteStream, createReadStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import test from 'node:test';
 import { c as createTar } from 'tar';
 import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
-import { createStackVolumeSnapshot } from '../apps/cli/dist/stack/volumeSnapshot.js';
 import { stageStackVolumeRestore } from '../apps/cli/dist/stack/volumeRestore.js';
 import { VolumeSnapshotVerifier } from '../apps/cli/dist/stack/volumeSnapshotStream.js';
 import { validateVolumeSnapshot } from '../apps/cli/dist/stack/volumeSnapshotInventory.js';
+import { fixture, limits, restoreStage, snapshot } from './stack-volume-snapshot-fixture.mjs';
 
-const limits = { maxBytes: 32 * 1024 * 1024, maxArchiveBytes: 40 * 1024 * 1024, maxEntries: 2000 };
-const storage = { format: 'dkb.stack-storage.v1', name: 'test', id: '12345678-1234-1234-1234-123456789abc', phase: 'ready',
-  owner: { context: 'desktop-linux', image: `sha256:${'a'.repeat(64)}`, libraryVolume: 'test-library', runtimeVolume: 'test-runtime', compilerVolume: 'test-compiler' },
-  volumes: { library: 'test-library', runtime: 'test-runtime', compiler: 'test-compiler', cache: 'test-cache' },
-  volumeEnvironment: { library: 'DKB_LIBRARY_VOLUME', runtime: 'DKB_RUNTIME_VOLUME', compiler: 'DKB_COMPILER_CONTEXT_VOLUME', cache: 'DKB_CACHE_VOLUME' },
-  sharedLibrary: false };
-
-async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-volume-snapshot-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const source = path.join(root, 'source'), archive = path.join(root, 'backup.tgz');
-  for (const name of ['host', ...Object.keys(storage.volumes).map(role => `volumes/${role}`)]) await fs.mkdir(path.join(source, name), { recursive: true });
-  await fs.writeFile(path.join(source, 'host', 'stack.env'), 'LOCAL_SECRET=private-fixture\n', { mode: 0o600 });
-  await fs.writeFile(path.join(source, 'volumes/library', 'source.txt'), 'Original knowledge\n');
-  return { root, source, archive };
-}
 const discard = () => new Writable({ write(_chunk, _encoding, next) { next(); } });
 async function verify(archive, budget = limits) {
   const verifier = new VolumeSnapshotVerifier(budget);
   await pipeline(createReadStream(archive), verifier, discard());
   return verifier.result();
 }
-async function snapshot(f, output = createWriteStream(f.archive, { flags: 'wx', mode: 0o600 }), budget = limits, signal) {
-  return createStackVolumeSnapshot(f.source, storage, output, budget, signal);
-}
 async function customArchive(f, manifest, names) {
   await fs.writeFile(path.join(f.source, 'snapshot.json'), JSON.stringify(manifest));
   await createTar({ cwd: f.source, file: f.archive, gzip: true, noDirRecurse: true,
     onWriteEntry: entry => { if (entry.path === 'snapshot.json') entry.stat.mode = 0o100600; } }, ['snapshot.json', ...(names ?? manifest.entries.map(entry => entry.path))]);
-}
-async function restoreStage(f, archive = f.archive) {
-  const destination = path.join(f.root, 'restored');
-  for (const name of ['host', ...Object.keys(storage.volumes).map(role => `volumes/${role}`)]) await fs.mkdir(path.join(destination, name), { recursive: true });
-  const digest = createHash('sha256').update(await fs.readFile(archive)).digest('hex');
-  return { destination, digest };
 }
 
 test('snapshot streams exact source, secret, empty directory and native lease bytes; permissions round-trip', async t => {
@@ -193,23 +167,4 @@ test('corrupt archive and cancelled restore never populate a staging volume', as
   const cancelled = AbortSignal.abort();
   await assert.rejects(stageStackVolumeRestore(f.archive, destination, digest, limits, cancelled), { name: 'AbortError' });
   assert.deepEqual(await fs.readdir(path.join(destination, 'volumes/library')), []);
-});
-
-test('restore preserves service-owned file and link metadata on Linux', { skip: process.platform !== 'linux' }, async t => {
-  const f = await fixture(t), cache = path.join(f.source, 'volumes/cache');
-  const file = path.join(cache, 'owned'), link = path.join(cache, 'linked');
-  await fs.writeFile(file, 'service data', { mode: 0o640 }); await fs.chown(file, 33, 33);
-  // Docker Desktop projects Windows-hosted configuration as 0777. node-tar's
-  // regular-file create is umask-filtered; exact restoration must repair it.
-  const projected = path.join(f.source, 'host/stack.env');
-  await fs.chmod(projected, 0o777);
-  await fs.symlink('owned', link); await fs.lchown(link, 33, 33);
-  await fs.utimes(file, 1_600_000_000, 1_600_000_000); await fs.lutimes(link, 1_600_000_000, 1_600_000_000);
-  const manifest = await snapshot(f), { destination, digest } = await restoreStage(f);
-  assert.deepEqual(await stageStackVolumeRestore(f.archive, destination, digest, limits), manifest);
-  assert.equal((await fs.stat(path.join(destination, 'host/stack.env'))).mode & 0o777, 0o777);
-  for (const name of ['owned', 'linked']) {
-    const stat = await fs.lstat(path.join(destination, 'volumes/cache', name));
-    assert.equal(stat.uid, 33); assert.equal(stat.gid, 33); assert.equal(stat.mtimeMs / 1000, 1_600_000_000);
-  }
 });
