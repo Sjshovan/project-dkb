@@ -1,6 +1,6 @@
 # Final Provider Architecture
 
-For the complete product topology and current implementation status, start with
+For the complete product topology and component ownership, start with
 the [DKB system map](system-map.md).
 
 The provider cut is defined by [ADR 0006](../decisions/0006-final-provider-architecture-and-storage-cutover.md),

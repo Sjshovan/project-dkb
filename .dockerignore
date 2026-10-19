@@ -3,6 +3,16 @@ dist
 .git
 .dkb
 .idea
+.agents
+.ai
+.codex
+.junie
+.codex-remote-attachments
+.env
+.env.*
+auth.json
+latest-session.jsonl
+rollout-*.jsonl
 storage
 archives
 runs

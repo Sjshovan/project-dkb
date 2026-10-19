@@ -310,13 +310,13 @@ the inventory is bounded to 32 MiB and at most one million entries. These are
 backup limits, not compile or corpus-size recommendations. Archives contain
 credentials and require private storage; Unix metadata is not a Windows ACL backup.
 
-Volume restoration currently reaches verified empty staging only. Public
-`stack restore` topology promotion remains unfinished and does not yet consume
-this new format. Do not treat this as complete disaster recovery or discard the
-original volumes. Volume-backed upgrades are explicitly blocked until their
-rollback path is connected and verified. The bounded public-backup/staged-restore
-proof is `node tests/stack-volume-snapshot-proof.mjs --run --public` from the
-checkout; consult the dated system map for its current result, not just this contract.
+Volume snapshots can be verified and restored into empty staging. Public
+`stack restore` cannot promote that staged state into live topology. Preserve
+original volumes: this is not a complete disaster-recovery workflow.
+Volume-backed upgrades are refused because they lack a supported rollback path.
+The snapshot transport check is
+`node tests/stack-volume-snapshot-proof.mjs --run --public`; it does not
+validate live restore or upgrade support.
 
 Upgrade only from a digest-pinned private release lock:
 
@@ -328,9 +328,8 @@ dkb stack upgrade local --lock C:\secure\dkb-stack-0.1.1.lock.json
 The existing host-directory upgrade path creates a backup first, pulls all exact image digests before mutation,
 runs migrations, starts the stack, and checks health. On failure it stops the
 candidate, restores the prior archive, and attempts to restart the previous
-version. The backup remains available for manual recovery. This is not yet a
-supported Linux-volume upgrade path: volume-backed backup/restore remains a
-release gate, and an older host-mounted Stack cannot restart without migration.
+version. The backup remains available for manual recovery. This host-directory procedure does not support Linux-volume upgrades.
+Older host-mounted Stacks require explicit migration before restart.
 
 For an individual Library:
 
@@ -418,9 +417,9 @@ native ownership lease cannot coordinate with an old binary that ignores it.
 This is a development hard cut; sources, logical package identity, and immutable
 build bytes do not need recompilation. Process-death recovery tests do not
 certify power-loss durability or arbitrary network filesystem support.
-The current recovery candidate refuses partially deleted directory trees.
+Recovery refuses partially deleted directory trees.
 Preserve these for explicit repair; see the
-[documented recovery limits](decisions/0012-crash-safe-library-mutations.md#explicit-recovery-limits).
+[documented recovery limits](decisions/0012-crash-safe-library-mutations.md#limits-and-verification).
 
 ### Supported Library storage
 
@@ -451,18 +450,16 @@ journal configuration and manifest together; pending recovery blocks reads.
 Host inventory updates follow the Library commit. Repeating an unchanged
 setting repairs convenience inventory without another Library mutation.
 
-**Deployment transition is not complete:** Linux-volume Stack startup and restart
-have an isolated real-service proof. Individual signed DKB install also passes
-an isolated CLI/Console Docker proof. Collection install/update, dependency reuse,
-rollback and cancellation recovery also pass on synthetic signed fixtures.
-Docker DKB upgrades use the same signed installer and generation guard; current
-proof status is recorded in the system map. Owner-side editable compilation,
-offline Pipeline preparation,
-volume-aware backups/restore, and explicit offline migration
-are still release gates. Existing host-bind Stack configuration must not be treated as
-compatible with the new guard. No existing Library is automatically moved,
-rewritten, or deleted; preserve its source and stop its writers before choosing
-the owning environment.
+Docker-owned Libraries do not expose editable-source compilation or offline
+Pipeline preparation through the Windows host. Public volume backup/restore,
+volume-backed Stack upgrade rollback, and automatic migration from old
+host-bind layouts are unavailable. Linux Docker recovery is not verified as a
+complete recovery workflow. Keep original data and independent backups; do not
+treat a volume snapshot alone as a tested restore plan.
+
+Existing host-bind Stack configuration is incompatible with the native ownership
+guard. Preserve its source and stop its writers before explicitly choosing the
+owning environment. No existing Library is automatically moved or rewritten.
 
 ## Host Console
 

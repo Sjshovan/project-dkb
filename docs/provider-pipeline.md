@@ -142,9 +142,9 @@ builds are reported as invalid, not silently treated as missing.
 Native process Runtimes can prepare editable source through the shared compiler.
 Docker/remote editable packages with missing builds still require compilation in
 their owning environment; the host never opens their database or imports compiler
-logic into the Runtime. Offline preparation and owner-side editable compilation
-remain release gates. Rebuilt matching CLI/Runtime candidates are required for
-the preparation receipt; there is no unchecked fallback to an older server.
+logic into the Runtime. Offline Docker preparation and delegated editable-source compilation are not
+supported. Preparation receipts require matching CLI/Runtime protocol versions;
+there is no unchecked fallback to an older server.
 
 ## Contracts
 

@@ -35,4 +35,4 @@ Registry and Runtime credentials remain server-side. Remote MCP stays read-only.
 The developer-preview Console is not a public Registry storefront, a remote
 multi-user admin portal, a source editor, or a replacement for Registry
 administration. It does not scan disks or networks, bundle Authentik, expose raw
-shell commands, or make either repository public.
+shell commands, or manage repository visibility.

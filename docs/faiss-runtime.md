@@ -55,16 +55,10 @@ metric, FAISS format, and Runtime protocol. If a package differs, activation
 fails and the previous config, Runtime lock, installed paths, managed-index
 state, and query snapshot are restored.
 
-## Historical Runtime Gate
 
-The current accepted runtime result on the existing 2,004-record stress corpus is:
+## Performance measurement
 
-- Warm direct retrieval: p50 72.857 ms, p95 83.978 ms.
-- Warm HTTP retrieval: p50 64.32 ms, p95 87.815 ms.
-- Cold first direct retrieval: 1031.458 ms.
-- Evidence correctness: all measured stress queries returned the expected marker evidence.
-
-This measurement predates the multi-build TEI promotion and remains a
-historical FAISS regression reference, not the current provider comparison.
-The current embedding benchmark and promotion result are recorded in
-[`artifact-architecture.md`](artifact-architecture.md).
+Measure complete validated Runtime queries separately from query embedding and
+index search. Record the corpus, exact provider/build identities, cold startup,
+warm latency distribution, concurrency and memory. See the
+[benchmark methodology](benchmarks/README.md).

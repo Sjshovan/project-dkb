@@ -1,6 +1,6 @@
 # Decision 0003: Host Inventory And Context Selection
 
-Status: implemented
+Status: Accepted
 
 ## Decision
 

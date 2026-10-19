@@ -1,110 +1,65 @@
-# Bounded Benchmarks
+# Benchmark methodology
 
-These are dated measurements, not certification of the current working tree.
-The Plugin API v3 milestone still requires fresh full-compilation and warm
-audited Runtime-query comparisons against a compatible baseline, with no more
-than a 10% regression. See the [current system map](../architecture/system-map.md).
+DKB performance depends on source density, parsing complexity, Evidence record
+count, embedding dimensions, selected providers and available hardware. File
+count alone is not a useful capacity estimate.
 
-## Corpus scale
-
-These reports exercise the real default `tei-faiss` ingestion, embedding, and
-index path with deterministic mixed prose, Markdown tables, and code. Generated
-corpora live only in a DKB-prefixed temporary directory and are removed after
-each run.
-
-Run the bounded smoke tier:
+## Bounded corpus benchmark
 
 ```powershell
 npm.cmd run benchmark:scale
 ```
 
-Select additional tiers only when the prior result is acceptable:
+The harness generates deterministic mixed prose, Markdown tables and code in a
+DKB-prefixed temporary directory and removes that corpus after the run. Start
+with the smoke tier. Opt into larger tiers only after inspecting its result:
 
 ```powershell
 $env:DKB_SCALE_TIERS = 'small,medium'
 npm.cmd run benchmark:scale
 ```
 
-The harness stops before a tier whose linear projection exceeds 15 minutes or
-whose initial working-set estimate exceeds 8 GiB. The compiler independently
-checks actual free space before ingestion and again after Evidence IR exists.
+The default harness stops before a tier projected to exceed 15 minutes or an
+8 GiB working set. The compiler separately checks actual free space before
+ingestion and after Evidence IR materialization. These limits bound a test;
+they are not guarantees about arbitrary input documents.
 
-Interpret source files as descriptive only. `evidenceRecords`,
-`evidenceTextBytes`, `recordsPerSource`, and `textBytesPerRecord` describe the
-work the retrieval build actually performs. `sourceToDerivedRatio` counts each
-immutable Evidence and Retrieval Build directory once. `artifactBytes` is a
-diagnostic subset of the Retrieval Build and is never added to the total a
-second time.
+## Record enough context to reproduce a result
 
-## Provider hard-cutover result
+Include the source revision, corpus hash and size, Evidence record/text counts,
+Pipeline and provider integrity receipts, pinned model/image identities, OS,
+CPU/GPU, memory, service configuration and cache state. Keep private corpora,
+machine-local paths, credentials and raw operational logs outside Git.
 
-The deterministic 1 MiB `small` corpus was rerun after the immutable-build
-storage cutover. Both reports use the same 24 generated source files, 1,062,058
-source bytes, 682 Evidence records, and `tei-faiss` target.
+Report at least three valid runs per condition, using medians and preserving
+the sample count. Separate cold, warm, cached and concurrent conditions. Record
+failures and timeouts instead of silently excluding them. Avoid running other
+DKB proofs concurrently when comparing implementations.
 
-| Measurement | 2026-08-28 baseline | 2026-08-29 cutover | Change |
-|---|---:|---:|---:|
-| Wall time | 207.02 s | 167.81 s | 18.9% faster |
-| Total derived bytes | 32,682,857 | 6,602,142 | 79.8% smaller |
-| Retrieval artifact files | 10 | 3 | 70.0% fewer |
+## Measure the whole operation
 
-That dated comparison passed the storage-cutover gates: compile time did not regress and
-removing the duplicate active artifact architecture reduced derived storage by
-more than the required 35%. The current total was recalculated from the stored
-Evidence and Retrieval Build byte counts after correcting an artifact-subset
-double count. See
-[`corpus-scale-small-2026-08-29.json`](corpus-scale-small-2026-08-29.json) for
-the complete receipt.
+- **Compilation:** source staging, parsing/chunking, processors, embedding,
+  indexing, validation and promotion; also report individual stage timings.
+- **Retrieval:** activation validation, query processing, provider search,
+  evidence resolution and mandatory audit, not only an embedding HTTP request.
+- **Resources:** the combined relevant processes and services, not just Node.
+- **Storage:** source bytes and each immutable Evidence/Retrieval directory once.
+  Retrieval artifact bytes are a subset, not another copy to add to the total.
+- **Correctness:** known-answer evidence, stable provenance, unrelated-query
+  insufficiency and identical compatibility checks.
 
-The hardened real-corpus proof passed on 2026-08-30 using a sanitized
-real-project architecture slice: 102 files, 989,281 source bytes, and three
-credential-bearing files rejected before staging. The signed Registry install
-retrieved all three known answers, MCP search/fetch resolved the same evidence,
-uninstall removed the evidence immediately, and reinstall restored it without
-compilation. No real-corpus source or compiled artifact is retained in Git.
+Use `evidenceRecords`, `evidenceTextBytes`, `recordsPerSource` and
+`textBytesPerRecord` to explain corpus density. A table-heavy PDF may generate
+more work than many short text files.
 
-A fresh bounded scale confirmation on 2026-08-30 produced:
+## Comparing providers
 
-| Tier | Source bytes | Evidence records | Wall time | Derived bytes | Expansion |
-|---|---:|---:|---:|---:|---:|
-| smoke | 136,870 | 88 | 33.99 s | 898,289 | 6.563x |
-| small | 1,062,058 | 682 | 152.60 s | 6,601,888 | 6.216x |
+Compare against the same source and Evidence Build when isolating retrieval
+compilation. Compare complete source-to-build jobs separately. A component
+speedup is not an end-to-end speedup, and a configured default is not a
+performance claim.
 
-The next 8 MiB tier was skipped before materialization because its
-1,205,317 ms linear projection exceeded the 15-minute guardrail. The generated
-corpus and its services were removed after the run.
-
-## Historical embedding component comparison
-
-The recorded 2026-08-30 component run reused one byte-identical 176-record Evidence
-Build from 32 sanitized files (232,937 source bytes) and compared only
-Retrieval compilation and query embedding. It did **not** measure complete
-source ingestion/compilation, an audited Runtime query, or the combined memory
-of every compiler/provider service. The earlier claim that this passed every
-default-promotion gate was not supported by that measurement scope.
-
-| Measurement | FastEmbed + FAISS | TEI + FAISS | TEI change |
-|---|---:|---:|---:|
-| Fresh Retrieval-build median | 168.01 s | 67.77 s | 59.7% lower |
-| Two-job median throughput | 1.626 records/s | 3.001 records/s | 84.6% higher |
-| Query-embedding latency p50 | 789.00 ms | 546.99 ms | 30.7% lower |
-| Sampled Node + embedder memory | 2.495 GiB | 0.776 GiB | 68.9% lower |
-
-The benchmark used three cold, fresh, cached, and concurrent samples for each
-provider plus 20 query-embedding samples. TEI remains the configured distribution
-default; that setting is not proof that the complete performance, resource,
-correctness, or security acceptance gates passed. FastEmbed remains bundled as
-a separate selectable embedding space. The
-checked-in
-[`embedding-providers-2026-08-29.json`](embedding-providers-2026-08-29.json)
-retains the preceding raw component report, unchanged. Its historical
-`eligibleForDefaultPromotion` field must not be used as current or whole-system
-approval. No second raw report was retained for the recorded 2026-08-30 numbers,
-so that table is historical context, not independently reproducible acceptance
-evidence. Current component reports explicitly withhold whole-system promotion.
-
-The remaining integrated performance proof must include the Evidence stage,
-full activation-validated and audited Runtime queries, all relevant service
-memory, exact corpus/model/image identities, and at least three valid timing
-runs. Component results cannot satisfy those missing measurements or the
-separate correctness and security gates.
+FastEmbed and TEI are distinct embedding spaces even with the same model name.
+Do not share vectors or relax compatibility to make a comparison pass. Pair
+performance measurements with the existing lifecycle and security tests before
+recommending a deployment change.

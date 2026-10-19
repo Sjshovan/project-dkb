@@ -1,8 +1,8 @@
 # Security Policy
 
-## Developer preview
+## Reporting a vulnerability
 
-DKB does not yet have a public security-support window. Do not place a public
+No long-term security-support window is offered for 0.x releases. Do not place a public
 issue containing credentials, private knowledge, signing material, access
 tokens, package archives, Runtime traces, or exploit details.
 
@@ -23,5 +23,5 @@ reproduction steps using synthetic data, impact, and any known mitigation.
   layers must be rejected before activation.
 
 See [Security](docs/security.md) and
-[Developer-preview boundaries](docs/developer-preview.md) for the current
+[Supported configurations](docs/developer-preview.md) for the current
 operational limits.

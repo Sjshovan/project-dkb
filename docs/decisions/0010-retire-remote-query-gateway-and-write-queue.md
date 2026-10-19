@@ -1,6 +1,6 @@
 # 0010 - Retire The Remote Query Gateway And Dormant Write Queue
 
-- **Status:** Accepted; implementation in current hardening milestone
+- **Status:** Accepted
 - **Date:** 2026-09-02
 - **Scope:** Runtime retrieval entry points, remote endpoint discovery, and inactive local write machinery
 - **Supersedes:** the remote-query role assigned to `dkb remote` in 0003

@@ -1,6 +1,6 @@
 # 0011 - Worker-confirmed compilation cancellation
 
-- **Status:** Accepted; worker integration verified, full release proof separate
+- **Status:** Accepted
 - **Date:** 2026-09-13
 - **Scope:** Existing compiler job control and the concrete Evidence worker
 
@@ -65,7 +65,7 @@ SQLite locks, not unsupported network filesystem semantics.
 Uploaded archive display names never select local write paths. The compiler
 uses fixed filenames inside its owned workspace for source and Evidence uploads.
 
-## Gate and limits
+## Verification and limits
 
 Require real in-flight service cancellation, no post-acknowledgment writes,
 cancel-before-start, lost acknowledgments, restart recovery, provider drift,
@@ -73,22 +73,10 @@ concurrent cancellation, and cleanup-error tests. Compare successful outputs and
 warm job medians against the previous worker; do not claim that preserving one
 warm PID alone proves the full system performance budget.
 
-The September 13 controlled proof holds the immutable image, parser, assets, and
-dependencies fixed and substitutes only the previously committed service module
-for the baseline. All twelve normal outputs match; five warm runs per side give
-4.702-second and 4.147-second medians. High sample variation prevents a broader
-speedup claim. One cold sample measured 19.408 versus 23.710 seconds; that is not
-a repeated cold-performance pass. Actual in-flight cancellation, lost-response
-recovery, and a PID-1 crash/restart also pass, including no writes after the exact
-terminal ack.
-
 Keep the worker endpoint stable across restarts. A changed ephemeral Docker host
 port is not authority to forward a retained private job token elsewhere; restore
 the configured endpoint before recovery. Compose's fixed internal URL avoids
 that test-only randomized-port behavior.
-
-Library crash transactions, signing-key history, Console retention, and the
-signed multi-recipe lifecycle remain separate following checkpoints.
 
 ## Sources
 

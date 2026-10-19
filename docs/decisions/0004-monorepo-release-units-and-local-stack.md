@@ -25,7 +25,7 @@ The split follows literal ownership boundaries:
 - Laravel owns remote identities, jobs, signing, storage, and publication.
 
 The implementation packages begin as independent `0.x` developer previews.
-The read protocol remains `1.0.0`. Package versions, provider build provenance,
+Protocol and implementation packages have independent version histories. Package versions, provider build provenance,
 and retrieval compatibility remain separate values.
 
 The root project becomes a private workspace orchestrator with no product
@@ -51,10 +51,9 @@ dependency direction, safety invariants, authoritative documentation, and
 focused verification. Repository checks enforce required guidance, package
 exports, dependency direction, and a fresh generated workspace graph.
 
-The cutover is complete only after the CLI package, Registry integration,
-default FAISS stack, alternate Meilisearch stack, package lifecycle, remote MCP,
-prompt-injection, Windows, and Linux gates pass. Until then, do not publish,
-merge `main`, make either repository public, or call the implementation stable.
+Release verification covers the CLI distribution, Registry integration, default
+and alternate provider lifecycles, read-only MCP, Windows/Linux behavior and
+package contents. Validate each supported distribution independently.
 
 ## Rejected Alternatives
 

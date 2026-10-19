@@ -21,7 +21,7 @@ Before changing behavior:
    - the relevant `providers/*/` workspace
    - `services/compiler/`
    - `services/runtime/`
-4. Check `docs/decisions/` for accepted directions that are not implemented yet.
+4. Check `docs/decisions/` for design rationale and superseding decisions.
 
 The Graphify report contains both extracted and inferred edges. Verify inferred
 relationships in source before relying on them. After changing TypeScript code,
@@ -77,18 +77,12 @@ py -m graphify update apps/cli/src
 Do not reintroduce YAML manifests, manifest-declared stores, model-facing shard
 handles, or an attention subsystem without an explicit architecture decision.
 
-## Current Direction
+## Architecture authority
 
-`docs/decisions/0001-cli-control-plane-and-release-gate.md` records the remaining
-public-release gate. `docs/decisions/0002-library-and-collections-hard-cutover.md`
-records the implemented Library and Collection model.
-`docs/decisions/0003-host-inventory-and-context-selection.md` records the
-implemented host-local inventory, selections, and resolution precedence.
-`docs/decisions/0006-final-provider-architecture-and-storage-cutover.md` records
-the provider and immutable-build hard cut. ADR 0008 supersedes its
-Library-owned activation assumptions with Runtime-owned bindings and locks. Verify
-actual behavior in source and tests rather than treating these records as
-runtime evidence.
+The [system map](docs/architecture/system-map.md) describes ownership and
+boundaries. [Decision records](docs/decisions/README.md) preserve rationale;
+[supported configurations](docs/developer-preview.md) describe operational
+limits. Verify behavior against source and tests before changing a contract.
 
 Do not add another command-specific root or connection resolver. Top-level
 package operations use the shared explicit, environment, nearest, then selected
@@ -114,8 +108,8 @@ stays under `dkb runtime`.
 - Put durable decisions in `docs/decisions/`; do not add per-task agent journals
   or internal work logs to the repository.
 - Update `docs/architecture/system-map.md` when ownership, trust, build identity,
-  or lifecycle boundaries change. Date its proof status; never label an ADR or
-  older passing run as verification of later edits.
+  or lifecycle boundaries change. Keep test-run evidence in CI or review records,
+  not running work-session journals in architecture documentation.
 
 ## Verification
 

@@ -131,21 +131,16 @@ validation. The ingestion service reuses initialized Docling and LlamaIndex
 parser/tokenizer state; it does not create final vectors. The selected
 embedding provider owns both document and query embeddings.
 
-FastEmbed uses a bounded native sidecar with 32-text batches on the proof host.
+FastEmbed uses a bounded native sidecar.
 TEI uses its own bounded HTTP batches and server-side dynamic batching. Both
 paths validate dimensions and finite values, honor cancellation/timeouts, and
 cache document vectors by Evidence digest, embedding-space digest, and
 normalized text hash.
 
-The fresh 2026-08-30 promotion gate used one shared 176-record Evidence Build
-from a deterministic, sanitized 32-file real-project slice (232,937 source
-bytes). Across three valid runs, TEI reduced fresh single-job median embedding
-time from 168.01 seconds to 67.77 seconds (59.7%), increased two-job throughput
-from 1.626 to 3.001 records per second (84.6%), reduced query p50 from 789.00 ms
-to 546.99 ms, and reduced measured combined peak memory from 2.495 GiB to
-0.776 GiB. Correctness and security lifecycle proofs also passed, so
-`tei-faiss` is the default recipe for new Libraries. Explicit FastEmbed
-Libraries remain unchanged and selectable.
+The distribution defaults to `tei-faiss`. FastEmbed remains a separate selectable
+space. See [benchmark methodology](benchmarks/README.md) for reproducible
+end-to-end measurements; embedding component timings alone do not establish
+complete compilation or audited-query performance.
 
 Corpus scale is measured after parsing by Evidence records and their text,
 not by file count alone. A compile result reports source files/bytes, Evidence
@@ -165,13 +160,7 @@ The bounded `npm run benchmark:scale` harness creates mixed dense prose,
 Markdown tables, and code only under a `dkb-corpus-scale-*` temporary root. It
 removes that root in `finally`, records no corpus in Git, and stops before the
 next tier when projected compilation exceeds 15 minutes or estimated working
-space exceeds 8 GiB unless an operator explicitly changes those limits. The
-2026-08-30 confirmation produced 88 records from 136,870 source bytes in
-33.99 seconds and 682 records from 1,062,058 source bytes in 152.60 seconds.
-The hard cut stores only immutable Evidence and Retrieval Builds; the resulting
-derived-storage ratios were 6.563x and 6.216x respectively. The next 8 MiB tier
-was skipped because its 1,205,317 ms projection exceeded the 15-minute
-guardrail.
+space exceeds 8 GiB unless an operator explicitly changes those limits. See [benchmark methodology](benchmarks/README.md) for interpreting the output.
 
 Operational commands:
 

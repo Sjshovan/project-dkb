@@ -6,9 +6,9 @@ operator tools such as Docker.
 This document describes the implemented presentation contract. The accepted
 control-plane model and public-release gate are recorded in
 [`decisions/0001-cli-control-plane-and-release-gate.md`](decisions/0001-cli-control-plane-and-release-gate.md).
-The ordinary package lifecycle from that decision is implemented; remaining
-release gates concern distribution, cross-platform proof, and operational
-hardening rather than missing public command names.
+See [supported configurations](developer-preview.md) for storage and deployment
+restrictions. Planned commands report an explicit unsupported capability rather
+than pretending the operation succeeded.
 
 ## Docker-owned Library commands
 

@@ -1,10 +1,10 @@
-# Private Developer-Preview Releases
+# Release packaging
 
-DKB release automation is private by design during the developer preview. The
-repository, npm packages, container packages, workflow artifacts, and draft
-releases must remain private until a separate public-release decision.
+Source distribution and binary publication are separate decisions. Existing
+release workflows publish only to private destinations and require an explicit
+maintainer invocation. Making source public does not publish packages or images.
 
-**Current availability:** this checkout produces verified package candidates;
+**Current availability:** this checkout builds package candidates;
 it does not provide an available standalone npm/GitHub Packages CLI release.
 The default distribution and its six providers intentionally retain
 `private: true`. That flag prohibits npm publication to **any** registry,
@@ -79,7 +79,7 @@ Before selecting `publish`:
 
 ## Using candidates today
 
-Use the [checkout installation instructions](../README.md#install-from-this-checkout)
+Use the [checkout installation instructions](../README.md#build-from-source)
 for the current CLI. A single CLI tarball is not a complete distribution: it
 depends on other unpublished DKB workspaces. Keep the complete candidate set
 together; its global-install proof installs all workspace archives together.

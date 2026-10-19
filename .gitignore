@@ -37,3 +37,15 @@ runs/*
 runs-debug/
 dkbr/
 studio/
+# Private host configuration and operational output
+.env
+.env.*
+!.env.example
+!*.env.example
+.agents/
+.ai/
+.codex/
+.junie/
+auth.json
+*.dkbevidence
+*.dkbbuild

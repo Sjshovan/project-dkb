@@ -1,6 +1,6 @@
 # 0001 - CLI Control Plane And Public-Release Gate
 
-- **Status:** Implemented command/control surface; public-release verification pending
+- **Status:** Accepted
 - **Date:** 2026-08-26
 - **Scope:** DKB CLI, local Library/runtime context, package lifecycle,
   authentication, distribution, and public-release readiness
@@ -13,45 +13,12 @@ operate on one coherent workspace, the ordinary package-management loop is
 complete, hosted-registry authentication is truthful, and the distributable
 artifact passes clean-install CI.
 
-The current human presentation is good enough to preserve. The next pass is a
-workflow and release-hardening pass, not a visual rewrite or new RAG runtime.
-
-The local-control-plane portion was implemented by the hard cutover recorded in
-[`0002-library-and-collections-hard-cutover.md`](0002-library-and-collections-hard-cutover.md):
-top-level install/list/uninstall resolve the nearest Library, one Runtime serves
-that Library, and namespaced Collections own exact shared dependencies. The
-package lifecycle and truthful token-authentication surface were completed on
-2026-08-28. Distribution and clean-environment proof remain release gates.
-
-## Evidence Snapshot
-
-The 2026-08-26 review verified:
-
-- TypeScript check passed.
-- Production build and all 39 current tests passed.
-- `git diff --check` passed.
-- `npm audit --omit=dev` reported no known production dependency
-  vulnerabilities at that time.
-- Human help, tables, color handling, progress, `--no-progress`, JSON output,
-  install preflight, archive verification, and atomic activation behaved well.
-
-The same review also reproduced a context failure: after bare `dkb init` saved a
-folder-specific upstream URL, bare `dkb list` selected the nested `.dkb/runtime`
-and resolved the default upstream instead of the initialized registry's config.
-
-`npm pack --dry-run --json` also showed an unsuitable release artifact: 766
-files and about 19.4 MB unpacked, including Graphify output, TypeScript source,
-tests, sourcemaps, `AGENTS.md`, and `.codex/hooks.json`.
-
-These numbers are a dated evidence snapshot, not permanent performance or
-security claims. Re-run the checks at release time.
-
 ## Decision
 
 ### One workspace context
 
 Introduce one shared context resolver for ordinary CLI commands. From any
-directory inside an initialized DKB registry, it must resolve:
+directory inside an initialized DKB Library, it must resolve:
 
 - the nearest Library root;
 - the active local runtime state root;
@@ -128,7 +95,7 @@ installation, `dkb --version`, help, and the lifecycle acceptance test.
 
 ### Keep the refactor narrow
 
-Split `src/cli/index.ts` by coherent command group and extract shared context and
+Split the CLI entrypoint by coherent command group and extract shared context and
 option helpers. Keep domain behavior in existing registry, runtime, compiler,
 retrieval, and MCP modules. Do not create a custom CLI framework or general
 dependency-injection layer.
@@ -170,7 +137,7 @@ preview is acceptable after this gate passes.
 
 This decision does not add:
 
-- a dashboard;
+- agent chat or a retrieval dashboard;
 - automatic package decay;
 - agent-controlled package writes;
 - a new retrieval engine;

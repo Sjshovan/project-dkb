@@ -54,10 +54,11 @@ Local build paths are content-addressed under `.dkb/builds/evidence/` and
 pruning. Uninstall removes the PackageVersion and every local build derived
 from it.
 
-This intentional coexistence increases disk use: active artifacts are retained
-for Runtime compatibility while immutable Evidence and Retrieval Builds enable
-switching and rollback. DKB therefore reports the bytes of each layer and
-preflights available space before source ingestion and retrieval compilation.
+Retaining inactive immutable builds enables switching and rollback at a storage
+cost. DKB reports each layer's bytes and preflights available space before
+source ingestion and retrieval compilation. There is no duplicate active-artifact
+mirror; Runtime activation references exact build paths.
+
 Capacity decisions use exact Evidence record/text density once chunking has
 finished, not document count.
 
@@ -71,10 +72,9 @@ before extraction or activation.
 
 Bundled targets include `fastembed-faiss`, `tei-faiss`, `tei-faiss-768`, and
 `tei-meilisearch`. FastEmbed and TEI are always different embedding spaces,
-even when they use the same model family. A 2026-08-28 three-run proof met the
-accepted speed, throughput, query-latency, memory, retrieval, and security
-gates, so `default` aliases the exact `tei-faiss` recipe for new contexts.
-Existing explicit FastEmbed contexts do not change.
+even when they use the same model family. The distribution's `default` target
+aliases `tei-faiss`; explicit FastEmbed contexts remain selectable. Default
+selection is configuration, not a hardware-independent performance guarantee.
 
 Multi-build storage is independent of that promotion decision. It remains the
 permanent mechanism for using one PackageVersion with different ingestion or

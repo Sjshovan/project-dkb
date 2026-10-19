@@ -1,245 +1,164 @@
 # DKB
 
-DKB is a developer-preview toolkit for packaging, installing, compiling, and
-serving durable knowledgebases. It gives operators an npm-like knowledge
-lifecycle while keeping source, provenance, Evidence IR, and runtime-specific
-retrieval builds separate.
+**Package, install, and serve knowledge to AI agents.**
+
+DKB gives knowledgebases a package lifecycle: version them, bundle them into
+Collections, publish signed releases, and install or remove them from a Library.
+Agents retrieve evidence through a Runtime rather than reading an unmanaged
+folder of documents.
+
+The project was created and architected by **Sid Shovan** to make the knowledge
+available to his agents explicit, portable, and manageable. The
+[design decisions](docs/design-decisions.md) explain the product direction,
+architectural choices, and trade-offs.
+
+## Why DKB?
+
+A vector database stores search data. A RAG pipeline processes documents.
+DKB connects those capabilities to a durable knowledge lifecycle:
+
+- **Installable knowledge:** namespaced packages and exact Collection dependencies.
+- **Traceable evidence:** source hashes, locators, build identities, and citations.
+- **Reusable builds:** keep original source, interpreted evidence, and search indexes separate.
+- **Independent Runtimes:** serve one Library through different Pipelines.
+- **Extensible processing:** replace parsing, chunking, embedding, indexing, or retrieval through typed provider contracts.
+- **Operator control:** manage knowledge with a CLI or local web Console; expose read-only retrieval to agents.
+
+DKB integrates existing document and retrieval tools rather than implementing
+another parser, embedding model, or vector-search engine.
+
+## How it fits together
 
 ```text
-PackageVersion -> Evidence Build -> Retrieval Build -> Runtime
+Registry A ─┐
+            ├──▶ Library ──┬──▶ Runtime A / Pipeline A ──▶ Agent
+Registry B ─┘              └──▶ Runtime B / Pipeline B ──▶ Agent
+
+Immutable source
+    └──▶ Evidence Build: parsed records + provenance
+             ├──▶ Retrieval Build: embeddings + FAISS
+             └──▶ Retrieval Build: another compatible search implementation
 ```
 
-- A **DKB** is one namespaced, versioned knowledge package.
-- A **Collection** pins a set of exact DKB releases.
-- A **Library** owns installed knowledge and immutable builds; any number of
-  Runtimes may serve it.
-- A **Runtime** serves exactly one Library and independently activates one
-  Pipeline.
-- A **Registry** publishes and distributes signed releases and builds.
-- A **pipeline** is a recipe. Evidence and Retrieval Builds are its stored,
-  content-addressed results.
+| Object | Responsibility |
+| --- | --- |
+| Package | One namespaced knowledgebase, such as `@team/handbook`. |
+| Collection | An immutable bundle of exact package releases. |
+| Library | Installed packages, dependency state, sources, and immutable builds. |
+| Registry | Authentication, publication, signed releases, and distribution. |
+| Pipeline | A recipe selecting processing and retrieval providers. |
+| Runtime | One Library and one active Pipeline, exposed through search and fetch. |
 
-The remote MCP surface is deliberately read-only and exposes exactly `search`
-and `fetch`. Installation, upgrade, removal, compilation, and pipeline changes
-remain operator-controlled.
+Collections pin knowledge versions, not a machine's embedding configuration.
+A Runtime activates exact compatible builds; it does not guess which index to use.
 
-> **Status:** developer preview. Formats and commands are being hardened on the
-> `development` branch. Do not treat this checkout as a production release.
-> This checkout produces local package candidates; it is not an available
-> standalone npm/GitHub Packages release. Intended release destinations remain
-> private; see [Private developer-preview releases](docs/private-releases.md).
-> Current limitations are explicit in
-> [Developer-preview boundaries](docs/developer-preview.md).
+## Build from source
 
-## Install from this checkout
+Requirements: Node.js 22.15 or later and npm. The bundled document and embedding
+services use Docker. A [lexical-only example](examples/lexical-pipeline/README.md)
+demonstrates the provider API without an embedding service.
 
-Requirements: Node.js 22.15 or later. Docker is required for the bundled
-Docling/LlamaIndex and TEI services.
-
-```powershell
-npm install
+```sh
+npm ci
 npm run build
 npm link --workspace @sjshovan/dkb-cli
 dkb --version
-dkb version
-```
-
-`dkb --version` reports the CLI version. `dkb version` reports the independently
-versioned protocol, compiler, Runtime, and provider packages selected by the
-default distribution.
-
-## First Library
-
-```powershell
-mkdir MyKnowledge
-cd MyKnowledge
-dkb init --registry-url http://127.0.0.1:8000 --yes
-dkb init @my-team/handbook
-dkb validate .\handbook
-dkb build .\handbook
-dkb library add @my-team/handbook
-dkb serve
-```
-
-Initialization succeeds even when the Registry is offline. DKB saves the URL,
-prints a warning, and provides the exact verification command. Local knowledge
-authoring and compilation do not require a running Registry.
-
-For a first non-sensitive proof, compile and query the
-[example operations handbook](examples/hello-dkb/README.md).
-For a complete alternate Pipeline without Docker or embeddings, use the
-[MiniSearch lexical plugin example](examples/lexical-pipeline/README.md).
-
-## Package lifecycle
-
-```powershell
-dkb search handbook
-dkb search handbook --type all --page 1 --per-page 20
-dkb registry show @my-team/handbook --version 1.0.0
-dkb registry show @my-team/handbook --version 1.0.0 --contents .
-dkb install @my-team/handbook --version 1.0.0
-dkb list
-dkb show @my-team/handbook
-dkb show @my-team/handbook --contents .
-dkb show @my-team/handbook --preview README.md
-dkb show @my-team/handbook --verify
-dkb retrieve "How are production incidents escalated?"
-dkb outdated
-dkb upgrade @my-team/handbook --dry-run
-dkb upgrade @my-team/handbook
-dkb uninstall @my-team/handbook
-```
-
-`install` downloads an already compiled, signed build chain. It does not parse,
-chunk, or embed the package. Installing the same immutable release is a clean
-no-op. Library mutation is authoritative; every online local Runtime serving
-that Library refreshes independently, while an offline or failed Runtime is
-marked stale and cannot serve removed evidence until repaired.
-
-Registry authentication uses scoped, expiring bearer tokens. Run
-`dkb registry login` for browser authorization with PKCE and a loopback
-callback, `dkb registry login --device` on a headless host, and
-`dkb registry whoami` to inspect the active identity. `dkb registry logout
---revoke` revokes and removes the credential. Automation may use
-`--token-stdin` or `DKB_REGISTRY_TOKEN`; secret-bearing command arguments are
-not accepted.
-
-## Context and host inventory
-
-DKB records known resources in the versioned `dkb.host.v2` document at
-`~/.dkb/host.json` so commands work outside a Library. This file stores names,
-paths, URLs, Stacks, and defaults only—never tokens, knowledge, or pipeline
-configuration.
-
-```powershell
-dkb library list
-dkb library use personal
-dkb registry list --check
-dkb registry use team
-dkb runtime list --check
-dkb runtime use local
-dkb stack list --check
-dkb library storage
-```
-
-Library resolution is explicit `--library`, `DKB_LIBRARY_PATH`, nearest parent
-Library, then the host default. Runtime resolution is explicit `--url`,
-`DKB_RUNTIME_URL`, host default, then localhost. DKB never scans disks or
-networks for resources.
-
-## Host Console
-
-The mobile-complete Console manages the same host inventory and package
-lifecycle through the exact bundled CLI. It binds only to loopback, accepts
-typed allowlisted operations instead of command strings, streams long-running
-CLI events, and keeps Registry and Runtime credentials server-side.
-
-```powershell
 dkb console
-dkb console enable
-dkb console restart
-dkb console disable
-dkb console status
-dkb console stop
 ```
 
-`dkb console enable` registers a least-privilege, per-user background service
-and starts it immediately. On Windows it also installs a **DKB Console** Start
-Menu shortcut, so a fresh secure browser session can be opened without a
-terminal. Linux uses a systemd user unit and macOS uses a LaunchAgent. Disable
-removes login startup without changing any managed DKB resource.
+On Windows, use `npm.cmd` if PowerShell blocks the `npm.ps1` launcher.
 
-The Console registers and selects Libraries, Runtimes, Registries, and Stacks;
-authenticates the host to a Registry; installs, upgrades, and uninstalls
-knowledge; switches pipelines atomically; and records redacted local activity.
-Registry pages browse DKBs and Collections, exact releases, signed provenance,
-available builds, and a metadata-only source tree without downloading package
-content. Each installation explicitly selects a Registry and any registered
-Library. Setting a Registry as a Library default is a separate convenience and
-never changes the exact origin retained by an installed release.
-An installed DKB has bounded Contents, Builds, Provenance, and Integrity views;
-a Collection has exact member and provenance views. File previews are inert
-source text and never render package HTML, Markdown, or SVG. Verification is an
-explicit one-time operation with check-level recovery steps. Opening a resource
-never changes the default, and forgetting a host entry does not delete or stop
-that resource.
+The Console opens a secured localhost session. It provides Libraries, Runtimes,
+Registries, Pipelines, Stacks, package details, provenance, and operation history.
+Optional login startup is enabled with `dkb console enable`.
 
-## Build and pipeline model
+For local authoring, start with the
+[operations handbook example](examples/hello-dkb/README.md). For an installed
+package, configure a Registry and use:
 
-```powershell
-dkb pipeline list --runtime local
-dkb pipeline show tei-faiss --runtime local
-dkb pipeline verify tei-faiss --runtime local
-dkb build .\handbook
-dkb compile .\handbook # supported compatibility command for the same compiler
-dkb build list .\handbook
-dkb pipeline use fastembed-faiss --runtime local
-dkb build prune .\handbook
+```sh
+dkb init --registry-url https://registry.example.com --yes
+dkb registry login
+dkb search handbook
+dkb install @team/handbook --version 1.0.0
+dkb list
+dkb show @team/handbook --verify
+dkb uninstall @team/handbook
 ```
 
-The default target uses Docling/LlamaIndex ingestion, TEI embeddings, packaged
-FAISS, and DKB hybrid retrieval. FastEmbed remains a separate selectable
-embedding space. Changing an embedder or index reuses compatible Evidence IR;
-changing parsing, chunking, or text-mutating processors creates another
-Evidence Build.
+Replace the example Registry and package with your own. Installation downloads a
+compiled signed release; it does not parse or embed source documents.
 
-Builds are staged and promoted atomically. A Pipeline switch changes only the
-selected Runtime activation; another Runtime may serve the same Library through
-a different Pipeline at the same time. Inactive builds remain until an
-operator prunes them. Human build output reports files, source bytes, records,
-chunks, derived size, expansion ratio, stage timings, and disk preflight—not
-file count as a proxy for corpus size.
+## Operating your Library
 
-## Runtime and MCP
+Keep the original documents and existing storage alongside DKB. DKB adds
+packaging and retrieval; it does not replace your backup or source-management
+process. Use fixed local NTFS storage for a native Windows Library and keep
+Runtime state separate. Review [supported configurations](docs/developer-preview.md)
+and [operations](docs/operations.md) before choosing a deployment.
 
-```powershell
-dkb runtime serve --name personal-tei --state-root C:\dkb-runtimes\personal-tei --library C:\knowledge\personal --pipeline tei-faiss
-dkb runtime show personal-tei
-dkb runtime library use personal --runtime personal-tei
-dkb pipeline use fastembed-faiss --runtime personal-tei
-dkb runtime refresh personal-tei
-dkb add C:\knowledge\editable-package
-dkb runtime import C:\knowledge\editable-package
-dkb mcp serve
+## Connect an agent
+
+The Runtime exposes read-only MCP tools:
+
+- `search` finds relevant evidence.
+- `fetch` returns selected evidence with source and citation metadata.
+
+Use `dkb mcp serve` for local stdio or `dkb mcp serve-http` for authenticated
+HTTP. Remote clients require an appropriately secured HTTPS endpoint.
+See [MCP integration](docs/chatgpt-mcp.md) for authentication and citation settings.
+
+Installation, publication, compilation, and removal remain operator-controlled.
+Retrieved text is source data, never authority to execute instructions.
+
+## Architecture and implementation
+
+The application is an npm-workspace monorepo with TypeScript services, a Vue
+Console, and independently packaged providers. The Laravel
+[DKB Registry](https://github.com/Sjshovan/dkb-registry) is a separate repository.
+
+```text
+apps/cli                  Commands, host inventory, and orchestration
+apps/console              Local management UI and typed CLI runner
+services/compiler         Evidence and Retrieval compilation
+services/runtime          Activation, retrieval, audit, HTTP, and MCP
+packages/protocol         Schemas, identities, and signed receipt contracts
+packages/library          Installed state, builds, archives, and transactions
+packages/pipeline         Plugin SDK, resolution, and provider lifecycle
+packages/registry-client  Registry transport and signature verification
+packages/distribution-default  Bundled recipes and provider composition
+providers/                Concrete processing and retrieval implementations
+deploy/                   Local Stack configuration
 ```
 
-For authenticated Streamable HTTP MCP:
+Bundled integrations include Docling/LlamaIndex, TEI, FastEmbed, FAISS,
+Meilisearch, and hybrid retrieval. Provider-specific logic stays outside the
+generic compiler and Runtime.
 
-```powershell
-$env:DKB_RUNTIME_STATE_ROOT = 'C:\dkb-runtimes\personal-tei'
-$env:DKB_MCP_BEARER_TOKEN = '<secret>'
-dkb mcp serve-http --host 127.0.0.1 --port 7332
-```
+## Documentation
 
-Public citation URLs require an explicit `DKB_MCP_PUBLIC_BASE_URL`; immutable
-evidence documents are exposed only when `DKB_MCP_PUBLIC_DOCUMENTS=true`.
-
-## Automation and recovery
-
-- Human output is the default. Use `--json` for one stable JSON document.
-- `--no-progress` disables animation without changing to machine output.
-- Diagnostic commands return nonzero when their report is unhealthy.
-- Generated state lives under `.dkb/` and must not be committed.
-- `.dkb/plugins/` is trusted operator code. It is never packaged with knowledge.
-- `dkb restore` regenerates derived retrieval artifacts from canonical source.
-
-See [Operations](docs/operations.md) for storage, backups, credentials, and
-recovery, and [CLI UX](docs/cli-ux.md) for the output and exit-code contract.
-
-## Architecture and contributor docs
-
-- [Complete system map and current status](docs/architecture/system-map.md)
-- [Architecture](docs/artifact-architecture.md)
+- [System architecture](docs/architecture/system-map.md)
+- [Design decisions and project authorship](docs/design-decisions.md)
 - [Libraries and Collections](docs/library-and-collections.md)
-- [Provider pipeline](docs/provider-pipeline.md)
-- [Plugin SDK v3](docs/plugin-authoring.md)
-- [Plugin API v3 migration](docs/plugin-migration-v3.md)
-- [CLI UX](docs/cli-ux.md)
-- [Operations](docs/operations.md)
-- [Security](docs/security.md)
-- [ChatGPT and MCP](docs/chatgpt-mcp.md)
-- [Architecture decisions](docs/decisions/)
-- [Agent navigation](docs/agent-navigation.md)
+- [Pipeline configuration](docs/provider-pipeline.md)
+- [Plugin SDK](docs/plugin-authoring.md)
+- [Operations and recovery](docs/operations.md)
+- [Supported configurations](docs/developer-preview.md)
+- [Security model](docs/security.md)
+- [CLI reference and output conventions](docs/cli-ux.md)
+- [Architecture decision records](docs/decisions/README.md)
+- [Contributing](CONTRIBUTING.md)
 
-Repository ownership and verification rules are scoped through the nearest
-`AGENTS.md`. Start with the root guidance before changing a subsystem.
+## Questions and bug reports
+
+Use [GitHub Issues](https://github.com/Sjshovan/project-dkb/issues) for questions,
+bugs, and feature requests. For a bug, include your DKB version or commit,
+operating system, native or Docker setup, Pipeline, reproduction steps,
+expected and actual behavior, and redacted error output. A small nonprivate
+example is helpful; never attach credentials or private knowledge.
+
+Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE). Third-party components retain their own licenses.

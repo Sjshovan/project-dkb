@@ -1,6 +1,6 @@
 # 0002 - Library And Collections Hard Cutover
 
-- **Status:** Implemented; public publication not authorized
+- **Status:** Accepted; Runtime ownership refined by ADR 0008
 - **Date:** 2026-08-26
 - **Scope:** local Library layout, namespaced identities, Collections, remote Registry snapshots, install state, Runtime, and MCP
 
@@ -35,31 +35,11 @@ Rename the old local-registry concept to **Library** and keep **Registry** for t
 
 ### Runtime and MCP
 
-- One Runtime serves one Library and builds one aggregate query snapshot from its active DKB set.
-- Shared DKBs are deduplicated before aggregate SQLite and FAISS construction.
-- All active DKBs must match the Library retrieval profile. A mismatch restores the previous filesystem, manifest, lock, ledger, and catalog.
-- Local stdio MCP retains the broad local surface. Remote Streamable HTTP MCP exposes only read-only `search` and `fetch` with untrusted-evidence boundaries and stable citations.
-
-## Acceptance Evidence
-
-The implementation was exercised with an isolated Registry and synthetic packages:
-
-- published two compiled signed DKBs and an immutable two-member Collection;
-- installed into a fresh Library and retrieved known markers through the Runtime and HTTP MCP;
-- confirmed ChatGPT independently selected the DKB connector, searched and
-  fetched the three known-answer records, and returned evidence-insufficient
-  for an unrelated question;
-- confirmed the public evidence URL and evidence-insufficient unrelated search;
-- uninstalled and reinstalled the Collection with no additional compile job;
-- shared one exact DKB across two Collections and pruned only the unshared member;
-- rejected a conflicting Collection update without changing the lock;
-- installed the update after removing the conflicting owner;
-- rejected a 768-dimensional package from a 384-dimensional Library with the
-  aggregate lock and artifact manifest restored byte for byte;
-- installed and queried that package in a separate valid 768-dimensional Library;
-- verified signed receipts remain with installed Registry DKBs.
-
-This evidence is a local development gate, not authorization to publish, merge to `main`, or claim production hosting readiness.
+One Runtime serves one Library. [ADR 0008](0008-runtime-bound-pipelines-and-shared-libraries.md)
+places Pipeline selection and activation in each Runtime, allowing multiple
+Runtimes to share immutable Library builds. Shared dependencies are deduplicated
+by exact release identity. Both MCP transports expose only read-only `search`
+and `fetch`; package lifecycle remains operator-controlled.
 
 ## Non-Goals
 
