@@ -16,6 +16,9 @@ const dockerAvailable = process.env.DKB_SKIP_DOCKER_TESTS !== '1' && spawnSync('
   timeout: 5_000,
   windowsHide: true,
 }).status === 0;
+if (process.env.DKB_REQUIRE_DOCKER_TESTS === '1') {
+  assert.ok(dockerAvailable, 'This test run requires Docker; refusing to skip the stopped-stack backup and restore proof.');
+}
 
 test('Stack persists independent HTTP credentials with private reads and explicit public citations', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-http-secrets-'));
