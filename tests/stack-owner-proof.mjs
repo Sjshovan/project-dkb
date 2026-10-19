@@ -75,8 +75,8 @@ try {
   // Each independent suite keeps the existing 45-second command bound. Test count
   // growth is not a reason to relax production transport or operation deadlines.
   const suites = [['stack-owner', 10], ['stack-owner-initialization', 9], ['stack-owner-configuration', 22],
-    ['stack-owner-startup', 26], ['runtime-owner-routing', 6], ['build-signing', 7], ['registry-client-download', 6], ['archive-rejection', 8],
-    ['library-owner-install', 2], ['library-install-transport', 11], ['docker-registry-resolution', 9], ['console-credential-location', 1]];
+    ['stack-owner-startup', 26], ['runtime-owner-routing', 10], ['build-signing', 7], ['registry-client-download', 6], ['archive-rejection', 8],
+    ['library-owner-install', 2], ['library-install-transport', 21], ['docker-registry-resolution', 9], ['console-credential-location', 1]];
   for (const [file, count] of suites) {
     const suiteName = `${prefix}-${file}`;
     await docker(['create', '--name', suiteName, ...common(owner), '--env', 'TMPDIR=/state',

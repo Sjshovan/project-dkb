@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { channel } from 'node:diagnostics_channel';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -35,19 +36,47 @@ test('all provider bundles install independently offline, retain receipts, isola
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-native-install-'));
   const controller = new AbortController();
   const signal = AbortSignal.any([t.signal, controller.signal]);
+  const startedAt = performance.now();
+  const childProcesses = channel('child_process');
+  let activeCommand;
+  let lastCommand;
+  let completedCommands = 0;
+  // Observe nested npm commands without replacing their execution or cancellation.
+  // Only this test's synthetic command metadata is retained; never capture env.
+  const observeCommand = ({ process: child }) => {
+    const commandStartedAt = performance.now();
+    const snapshot = () => ({
+      file: String(child.spawnfile ?? '').slice(0, 512),
+      args: (child.spawnargs ?? []).slice(1, 33).map(argument => String(argument).slice(0, 256)),
+      argumentCount: Math.max(0, (child.spawnargs?.length ?? 1) - 1),
+      elapsedMs: Math.round(performance.now() - commandStartedAt),
+    });
+    activeCommand = snapshot;
+    child.once('close', (code, signal) => {
+      completedCommands += 1;
+      lastCommand = { ...snapshot(), code, signal };
+      if (activeCommand === snapshot) activeCommand = undefined;
+    });
+  };
   let work;
   t.after(async () => {
     controller.abort();
     await work?.catch(() => {});
+    childProcesses.unsubscribe(observeCommand);
     assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
     assert.ok(path.basename(root).startsWith('dkb-provider-native-install-'));
     await fs.rm(root, { recursive: true, force: true });
   });
+  childProcesses.subscribe(observeCommand);
   work = proveIndependentProviderInstallation(root, signal);
   try {
     await work;
   } catch (error) {
     t.diagnostic(JSON.stringify({
+      elapsedMs: Math.round(performance.now() - startedAt),
+      completedCommands,
+      activeCommand: activeCommand?.() ?? null,
+      lastCommand: lastCommand ?? null,
       code: error?.code ?? null,
       signal: error?.signal ?? null,
       killed: error?.killed ?? null,

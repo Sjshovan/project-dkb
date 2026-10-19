@@ -72,9 +72,25 @@ test('authenticated compiler requests retain capability, validation, and cancell
   });
   assert.equal(changed.status, 401);
   await changed.arrayBuffer();
-  const capabilities = await fetch(`${url}/capabilities`, {
-    headers: { authorization: `bEaReR ${token}` }, signal: AbortSignal.timeout(10_000),
-  });
+  const capabilitiesSignal = AbortSignal.timeout(10_000);
+  const capabilitiesStarted = Date.now();
+  let capabilities;
+  try {
+    capabilities = await fetch(`${url}/capabilities`, {
+      headers: { authorization: `bEaReR ${token}` }, signal: capabilitiesSignal,
+    });
+  } catch (error) {
+    const describe = value => ({
+      name: value?.name ?? null, code: value?.code ?? null,
+      message: String(value?.message ?? '').slice(0, 1024),
+    });
+    t.diagnostic(JSON.stringify({
+      event: 'compiler_capabilities_request_failed', elapsedMs: Date.now() - capabilitiesStarted,
+      aborted: capabilitiesSignal.aborted, reason: describe(capabilitiesSignal.reason),
+      error: describe(error), cause: describe(error?.cause),
+    }));
+    throw error;
+  }
   assert.equal(capabilities.status, 200);
   const catalog = await capabilities.json();
   assert.equal(catalog.service, 'dkb.registry.compiler');

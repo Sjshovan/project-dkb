@@ -59,7 +59,16 @@ test('Windows probe failure requires positive .NET verification; a negative OS a
           if(script && mode==='negative') return callback(null,'dkb.windows-storage.v1:unsupported','');
           if(script && mode==='malformed') return callback(null,'not a volume result','');
           if(script || mode==='both-unavailable') return callback(new Error('unavailable'));
-          return original(file,args,options,callback);
+          const started=Date.now();
+          return original(file,args,options,(error,stdout,stderr)=>{
+            if(error) console.error(JSON.stringify({
+              event:'windows_storage_powershell_failed', mode, elapsedMs:Date.now()-started,
+              code:error.code??null, signal:error.signal??null, killed:error.killed??null,
+              stdout:Buffer.from(stdout??'').subarray(-4096).toString('utf8'),
+              stderr:Buffer.from(stderr??'').subarray(-4096).toString('utf8'),
+            }));
+            callback(error,stdout,stderr);
+          });
         };
         cp.execFile[promisify.custom]=(file,args,options)=>new Promise((resolve,reject)=>cp.execFile(file,args,options,
           (error,stdout,stderr)=>error?reject(error):resolve({stdout,stderr})));

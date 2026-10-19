@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import childProcess, { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -747,13 +748,26 @@ test('Stack image attestation does not substitute the running image into another
   assert.equal(JSON.parse(await fs.readFile(configPath, 'utf8')).targets.separate.options['@dkb/embedding-tei'].imageDigest, `sha256:${'b'.repeat(64)}`);
 });
 
-test('stopped stack backup and restore preserve state with a verified sidecar', { skip: !dockerAvailable }, async () => {
+test('stopped stack backup and restore preserve state with a verified sidecar', { skip: !dockerAvailable }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-backup-test-'));
   const backups = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-backup-output-'));
   const previousRoot = process.env.DKB_STACK_STATE_ROOT;
   const previousBackups = process.env.DKB_STACK_BACKUP_ROOT;
   process.env.DKB_STACK_STATE_ROOT = root;
   process.env.DKB_STACK_BACKUP_ROOT = backups;
+  const originalSpawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = (...args) => {
+    const started = performance.now();
+    const result = originalSpawnSync(...args);
+    if (args[0] === 'docker' && args[1]?.[0] === 'compose' && args[1]?.[1] === 'version'
+      && (result.error || result.status !== 0)) {
+      t.diagnostic(JSON.stringify({ probe: 'docker compose version', elapsedMs: performance.now() - started,
+        errorCode: result.error?.code ?? null, status: result.status, signal: result.signal,
+        stderr: String(result.stderr ?? '').slice(-2048) }));
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
 
   try {
     const stack = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'backup-proof', { compilerTarget: 'fastembed-faiss', runtimeTarget: 'fastembed-faiss' });
@@ -766,6 +780,8 @@ test('stopped stack backup and restore preserve state with a verified sidecar', 
     const restored = await restoreDkbStack(DEFAULT_DKB_DISTRIBUTION, backup.archive);
     assert.equal(await fs.readFile(path.join(restored.stateRoot, 'runtime', 'proof.txt'), 'utf8'), 'preserve me');
   } finally {
+    childProcess.spawnSync = originalSpawnSync;
+    syncBuiltinESMExports();
     if (previousRoot === undefined) delete process.env.DKB_STACK_STATE_ROOT;
     else process.env.DKB_STACK_STATE_ROOT = previousRoot;
     if (previousBackups === undefined) delete process.env.DKB_STACK_BACKUP_ROOT;

@@ -35,6 +35,26 @@ jobs:
       - run: npm run docs:check
       - run: npm run check
       - run: npm test
+        if: runner.os != 'Windows'
+      - name: Test Windows with isolated provider packaging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm.cmd run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Packaging scans and stages large dependency trees. Keep its existing
+          # deadline while avoiding contention with the parallel behavior suite.
+          $packaging = 'tests/provider-dependency-distribution.test.mjs'
+          $testFiles = @(Get-ChildItem -LiteralPath tests -Filter '*.test.mjs' -File | Sort-Object Name | ForEach-Object { "tests/$($_.Name)" })
+          if (($testFiles | Where-Object { $_ -eq $packaging }).Count -ne 1) { throw 'Provider packaging test must be included exactly once.' }
+          $parallelFiles = @($testFiles | Where-Object { $_ -ne $packaging })
+          if ($parallelFiles.Count -eq 0) { throw 'No parallel behavior tests were found.' }
+          node --import ./tests/test-environment.mjs --test --test-concurrency=4 @parallelFiles
+          $parallelExit = $LASTEXITCODE
+          node --import ./tests/test-environment.mjs --test --test-concurrency=4 $packaging
+          $packagingExit = $LASTEXITCODE
+          if ($parallelExit -ne 0) { exit $parallelExit }
+          exit $packagingExit
       - name: Verify Linux volume ownership preservation
         if: runner.os == 'Linux'
         run: |
