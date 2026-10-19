@@ -41,6 +41,7 @@ test('all provider bundles install independently offline, retain receipts, isola
   let activeCommand;
   let lastCommand;
   let completedCommands = 0;
+  const installation = { cache: path.join(root, 'empty-cache') };
   // Observe nested npm commands without replacing their execution or cancellation.
   // Only this test's synthetic command metadata is retained; never capture env.
   const observeCommand = ({ process: child }) => {
@@ -68,7 +69,7 @@ test('all provider bundles install independently offline, retain receipts, isola
     await fs.rm(root, { recursive: true, force: true });
   });
   childProcesses.subscribe(observeCommand);
-  work = proveIndependentProviderInstallation(root, signal);
+  work = proveIndependentProviderInstallation(root, signal, installation);
   try {
     await work;
   } catch (error) {
@@ -76,7 +77,7 @@ test('all provider bundles install independently offline, retain receipts, isola
     // a bounded log tail on failure so extraction/tree-processing stalls are visible.
     let npmLog;
     try {
-      const directory = path.join(root, 'empty-cache', '_logs');
+      const directory = path.join(installation.cache, '_logs');
       const names = (await fs.readdir(directory, { withFileTypes: true }))
         .filter(entry => entry.isFile() && entry.name.endsWith('.log')).map(entry => entry.name).sort();
       const name = names.at(-1);
@@ -106,7 +107,7 @@ test('all provider bundles install independently offline, retain receipts, isola
   }
 });
 
-async function proveIndependentProviderInstallation(root, signal) {
+async function proveIndependentProviderInstallation(root, signal, installation) {
   const npmCli = await installedNpmCli();
   const providers = await providerPackages();
   const output = path.join(root, 'candidates');
@@ -139,13 +140,19 @@ async function proveIndependentProviderInstallation(root, signal) {
     DKB_GLOBAL_ROOT: path.join(root, 'global'),
     DKB_CLI_CONFIG: path.join(root, 'global/config.json'),
   };
-  await execute(process.execPath, [npmCli, 'install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts',
-    '--cache', path.join(root, 'empty-cache'), '--registry', 'http://127.0.0.1:1', '--no-audit', '--no-fund',
-    // Bare archive arguments make npm extract each bundle just to discover its
-    // name. These names are already known; retain the same exact file inputs.
-    ...[...packages, ...conflictingPackages].map(report => `${report.name}@file:${report.archive}`)], {
-    cwd: unrelated, env: environment, windowsHide: true, timeout: 120_000, maxBuffer: 4 * 1024 * 1024, signal,
-  });
+  // Prove each provider installs beside the competing host packages with an
+  // empty cache. Keep each command's budget and the overall 600-second budget.
+  for (const [index, report] of packages.entries()) {
+    signal.throwIfAborted();
+    installation.cache = path.join(root, `empty-cache-${index}`);
+    await fs.mkdir(installation.cache);
+    await execute(process.execPath, [npmCli, 'install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts',
+      '--cache', installation.cache, '--registry', 'http://127.0.0.1:1', '--no-audit', '--no-fund',
+      // Known names avoid npm's redundant name-discovery extraction.
+      ...[report, ...conflictingPackages].map(candidate => `${candidate.name}@file:${candidate.archive}`)], {
+      cwd: unrelated, env: environment, windowsHide: true, timeout: 120_000, maxBuffer: 4 * 1024 * 1024, signal,
+    });
+  }
   const modules = path.join(prefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules');
   const installed = providers.map(provider => path.join(modules, provider.manifest.name));
   const receiptPaths = installed.map(packageRoot => path.join(packageRoot, 'dist/provider.integrity.json'));

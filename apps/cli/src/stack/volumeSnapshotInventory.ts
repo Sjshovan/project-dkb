@@ -68,7 +68,8 @@ export async function scanSnapshot(root: string, storage: StackStorage, limits: 
       const entry: SnapshotEntry = { path: relative, type, size: type === 'file' ? stat.size : 0,
         // Windows does not expose directory traversal bits; node-tar adds them.
         mode: (stat.mode & 0o1777) | (process.platform === 'win32' && type === 'directory' ? 0o111 : 0),
-        uid: stat.uid, gid: stat.gid, mtime: Math.floor(stat.mtimeMs / 1000) };
+        // Match node-tar's Date timestamp, including submillisecond rounding.
+        uid: stat.uid, gid: stat.gid, mtime: Math.floor(stat.mtime.getTime() / 1000) };
       bytes += entry.size;
       if (!Number.isSafeInteger(bytes) || bytes > limits.maxBytes) throw snapshotError('Snapshot exceeds its uncompressed byte budget.', 'stack_snapshot_capacity');
       if (type === 'symlink') {

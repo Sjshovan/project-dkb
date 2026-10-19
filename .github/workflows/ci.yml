@@ -36,18 +36,22 @@ jobs:
       - run: npm run check
       - run: npm test
         if: runner.os != 'Windows'
-      - name: Test Windows with isolated provider packaging
+      - name: Test Windows with isolated Docker and provider packaging
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           npm.cmd run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Packaging scans and stages large dependency trees. Keep its existing
-          # deadline while avoiding contention with the parallel behavior suite.
+          # Real Docker probes and packaging need their own process budget;
+          # preserve deadlines without competing with parallel behavior tests.
+          $stack = 'tests/stack.test.mjs'
           $packaging = 'tests/provider-dependency-distribution.test.mjs'
+          $isolatedFiles = @($stack, $packaging)
           $testFiles = @(Get-ChildItem -LiteralPath tests -Filter '*.test.mjs' -File | Sort-Object Name | ForEach-Object { "tests/$($_.Name)" })
-          if (($testFiles | Where-Object { $_ -eq $packaging }).Count -ne 1) { throw 'Provider packaging test must be included exactly once.' }
-          $parallelFiles = @($testFiles | Where-Object { $_ -ne $packaging })
+          foreach ($isolated in $isolatedFiles) {
+            if (($testFiles | Where-Object { $_ -eq $isolated }).Count -ne 1) { throw "$isolated must be included exactly once." }
+          }
+          $parallelFiles = @($testFiles | Where-Object { $_ -notin $isolatedFiles })
           if ($parallelFiles.Count -eq 0) { throw 'No parallel behavior tests were found.' }
           # Each test file may launch more processes. Match workers to this
           # runner's CPU allocation while keeping all files and deadlines.
@@ -55,10 +59,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $testConcurrency = [Math]::Max(1, [Math]::Min(4, [int]$testCpuCount))
           Write-Output "Running $($testFiles.Count) test files with at most $testConcurrency workers."
+          node --import ./tests/test-environment.mjs --test --test-concurrency=1 $stack
+          $stackExit = $LASTEXITCODE
           node --import ./tests/test-environment.mjs --test --test-concurrency=$testConcurrency @parallelFiles
           $parallelExit = $LASTEXITCODE
           node --import ./tests/test-environment.mjs --test --test-concurrency=$testConcurrency $packaging
           $packagingExit = $LASTEXITCODE
+          if ($stackExit -ne 0) { exit $stackExit }
           if ($parallelExit -ne 0) { exit $parallelExit }
           exit $packagingExit
       - name: Verify Linux volume ownership preservation

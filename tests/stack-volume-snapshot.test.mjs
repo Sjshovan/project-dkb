@@ -43,6 +43,30 @@ test('snapshot streams exact source, secret, empty directory and native lease by
   }
 });
 
+test('snapshot inventory matches tar timestamp rounding at second boundaries', async t => {
+  const second = 1_700_000_000;
+  for (const [fraction, expected] of [[0.9994, second], [0.9996, second + 1]]) {
+    const f = await fixture(t), file = path.join(f.source, 'volumes/library/source.txt');
+    await fs.utimes(file, second + fraction, second + fraction);
+    const stat = await fs.stat(file);
+    assert.equal(Math.floor(stat.mtimeMs / 1000), second, 'fixture retains its fractional filesystem timestamp');
+    assert.equal(Math.floor(stat.mtime.getTime() / 1000), expected, 'fixture exercises Date rounding across a second');
+    const manifest = await snapshot(f);
+    const entry = manifest.entries.find(item => item.path === 'volumes/library/source.txt');
+    assert.equal(entry.mtime, expected);
+    assert.deepEqual(await verify(f.archive), manifest);
+    const { destination, digest } = await restoreStage(f);
+    assert.deepEqual(await stageStackVolumeRestore(f.archive, destination, digest, limits), manifest);
+    assert.equal(Math.floor((await fs.stat(path.join(destination, entry.path))).mtime.getTime() / 1000), expected);
+    const changed = structuredClone(manifest);
+    changed.entries.find(item => item.path === entry.path).mtime++;
+    await customArchive(f, changed);
+    await assert.rejects(verify(f.archive), {
+      code: 'stack_snapshot_invalid', message: 'Archive timestamps disagree with the inventory.',
+    });
+  }
+});
+
 test('snapshot refuses a concurrent Runtime or nested package compile lease', async t => {
   const f = await fixture(t), packageRoot = path.join(f.source, 'volumes/library/vendor/acme/package');
   await fs.mkdir(packageRoot, { recursive: true });
