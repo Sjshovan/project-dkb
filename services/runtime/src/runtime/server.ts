@@ -20,7 +20,7 @@ import { DKB_RUNTIME_VERSION } from '../version.js';
 import { createDkbMcpHttpHandler, type DkbMcpHttpHandler } from '../mcp/http.js';
 import { refreshRuntimeActivation, switchRuntimeLibrary, switchRuntimePipelineFromRegistry } from './pipelineSwitch.js';
 import { withRuntimeMutation } from './mutation.js';
-import { runtimePipelineCatalog } from './pipelineCatalog.js';
+import { inspectRuntimePipelines, validateRuntimePipelinePreparation } from './pipelinePreparation.js';
 import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
 import type { DkbRuntimeContext } from './context.js';
 import { runtimeClientForRequest, withRuntimeClient } from './clientContext.js';
@@ -126,13 +126,7 @@ async function routeRequest(
     }
 
     if (request.method === 'GET' && pathName === '/api/runtime/pipelines') {
-      const current = await ensureRuntimeState(stateRoot);
-      return sendJson(response, 200, await runtimePipelineCatalog({
-        distribution: runtime.distribution,
-        root: current.stateRoot,
-        libraryRoot: current.libraryRoot,
-        activeTarget: current.target,
-      }));
+      return sendJson(response, 200, await inspectRuntimePipelines(stateRoot, runtime));
     }
 
     if (request.method === 'GET' && pathName === '/api/runtime/audit') {
@@ -145,8 +139,9 @@ async function routeRequest(
 
     if (request.method === 'POST' && pathName === '/api/runtime/reload') {
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, async () => {
-        await refreshRuntimeActivation({ runtime, stateRoot });
-        return reloadRuntimeState(stateRoot);
+        const refreshed = await refreshRuntimeActivation({ runtime, stateRoot });
+        return { ...await reloadRuntimeState(stateRoot), indexCleanup: refreshed.indexCleanup,
+          ...(refreshed.warning ? { warning: refreshed.warning } : {}) };
       }));
     }
 
@@ -154,13 +149,15 @@ async function routeRequest(
       const body = await readJsonBody<{
         target: string;
         registryUrl?: string;
-        grants?: Record<string, { plan: unknown; installGrant: string }>;
+        grants?: Record<string, { plan: unknown; installGrant: string; registryTransportUrl?: string }>;
+        expected?: unknown;
       }>(request);
 
       const { validateInstallPlan } = await import('@sjshovan/dkb-protocol/builds.js');
       const grants = Object.fromEntries(Object.entries(body.grants ?? {}).map(([identity, grant]) => [identity, {
         installGrant: requiredString(grant.installGrant, `grants.${identity}.installGrant`),
         plan: validateInstallPlan(grant.plan, `Runtime pipeline install plan for ${identity}`),
+        ...(grant.registryTransportUrl !== undefined ? { registryTransportUrl: requiredString(grant.registryTransportUrl, 'registryTransportUrl') } : {}),
       }]));
 
       return sendJson(response, 200, await withRuntimeMutation(stateRoot, () => switchRuntimePipelineFromRegistry({
@@ -168,7 +165,7 @@ async function routeRequest(
         stateRoot,
         target: requiredString(body.target, 'target'),
         ...(body.registryUrl ? { registryUrl: body.registryUrl } : {}),
-        ...(process.env.DKB_REGISTRY_URL ? { registryTransportUrl: process.env.DKB_REGISTRY_URL } : {}),
+        ...(body.expected !== undefined ? { expected: validateRuntimePipelinePreparation(body.expected) } : {}),
         grants,
       })));
     }
@@ -284,7 +281,9 @@ async function routeRequest(
 
     return sendJson(response, 404, { error: 'not_found', message: 'Unknown DKB Runtime route.' });
   } catch (error) {
-    const status = error instanceof DkbError ? (error.code === 'runtime_refresh_required' ? 409 : 400) : 500;
+    const status = error instanceof DkbError
+      ? (['runtime_refresh_required', 'runtime_pipeline_conflict', 'library_recovery_required', 'library_busy'].includes(error.code) ? 409 : 400)
+      : 500;
     const message = security.errorMessage(error, request);
 
     return sendJson(response, status, {

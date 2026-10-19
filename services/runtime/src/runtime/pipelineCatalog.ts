@@ -13,11 +13,14 @@ import { resolvedProviderServices } from '@sjshovan/dkb-pipeline/capabilities.js
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbCapabilityServiceRequirement } from '@sjshovan/dkb-protocol/compilerCapabilities.js';
 import { verifyRetainedRegistryBuild } from './registryInstall.js';
+import type { DkbRuntimePipelinePreparation } from './pipelinePreparation.js';
 
 export interface DkbRuntimePipelinePackageCoverage {
   id: string;
   version: string | null;
   source: 'local' | 'registry';
+  registryUrl?: string;
+  status: 'ready' | 'missing' | 'invalid';
   compatible: boolean;
   ready: boolean;
   trust: 'local' | 'registry-signed' | 'unverified';
@@ -41,6 +44,8 @@ export interface DkbRuntimePipelineTarget {
   evidenceProfileDigest: string | null;
   retrievalProfileDigest: string | null;
   compatibilityDigest: string | null;
+  configDigest: string | null;
+  preparation?: DkbRuntimePipelinePreparation;
 }
 
 export interface DkbRuntimePipelineCatalog {
@@ -133,7 +138,8 @@ export async function runtimePipelineCatalog(input: {
       }));
       const compatibilityDigest = stableHash(profile.compatibility);
       const coverage = await Promise.all(packageEntries.map(async (entry): Promise<DkbRuntimePipelinePackageCoverage> => {
-        const base = { id: entry.identity, version: entry.version ?? null, source: entry.source };
+        const base = { id: entry.identity, version: entry.version ?? null, source: entry.source,
+          ...(entry.registryUrl ? { registryUrl: entry.registryUrl } : {}) };
         let compatible = false;
         try {
           const packageRoot = path.resolve(input.libraryRoot, entry.path);
@@ -152,9 +158,10 @@ export async function runtimePipelineCatalog(input: {
             if (!entry.registryUrl) throw new DkbError('Registry package has no pinned origin. Reinstall it from its Registry.', 'registry_build_untrusted');
             await verifyRetainedRegistryBuild({ libraryRoot: input.libraryRoot, registryUrl: entry.registryUrl, packageRoot, graph, target: name });
           }
-          return { ...base, compatible, ready: true, trust: entry.source === 'registry' ? 'registry-signed' : 'local' };
+          return { ...base, compatible, ready: true, status: 'ready', trust: entry.source === 'registry' ? 'registry-signed' : 'local' };
         } catch (error) {
-          return { ...base, compatible, ready: false, trust: 'unverified', detail: error instanceof Error ? error.message : String(error) };
+          return { ...base, compatible, ready: false, status: error instanceof DkbError && error.code === 'retrieval_build_missing' ? 'missing' : 'invalid',
+            trust: 'unverified', detail: error instanceof Error ? error.message : String(error) };
         }
       }));
       await pipelineHost.assertCurrent();
@@ -177,6 +184,7 @@ export async function runtimePipelineCatalog(input: {
         evidenceProfileDigest: profile.evidenceProfileDigest,
         retrievalProfileDigest: profile.retrievalProfileDigest,
         compatibilityDigest,
+        configDigest: profile.configDigest,
       };
     } catch (error) {
       return {
@@ -200,6 +208,7 @@ export async function runtimePipelineCatalog(input: {
         evidenceProfileDigest: null,
         retrievalProfileDigest: null,
         compatibilityDigest: null,
+        configDigest: null,
       };
     } finally {
       await host?.dispose();

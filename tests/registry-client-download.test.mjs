@@ -180,3 +180,25 @@ test('Registry authentication failures include exact recovery commands', async (
     new RegExp(`lacks permission.*dkb registry login --url ${baseUrl}`, 'u'),
   );
 });
+
+test('layer capacity admission rejects before requesting or replacing bytes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-download-capacity-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, 'existing.dkbbuild');
+  await fs.writeFile(destination, 'retained');
+  let requests = 0;
+  const payload = Buffer.from('new-bytes');
+  const server = http.createServer((_req, res) => { requests++; res.setHeader('content-type', 'application/vnd.dkb.retrieval-build+gzip'); res.end(payload); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const client = new DkbRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: '' });
+  const layer = { kind: 'retrieval', digest: `sha256:${createHash('sha256').update(payload).digest('hex')}`,
+    mediaType: 'application/vnd.dkb.retrieval-build+gzip', bytes: payload.length, url: '/layer', receiptHash: `sha256:${'a'.repeat(64)}`, receipt: {} };
+  const capacity = t.mock.method(fs, 'statfs', async () => ({ bsize: 4096n, bavail: 1n }));
+  await assert.rejects(client.writeInstallLayer(layer, destination), { code: 'download_capacity_exceeded' });
+  capacity.mock.mockImplementation(async () => { throw new Error('unknown storage secret'); });
+  await assert.rejects(client.writeInstallLayer(layer, destination), error => error.code === 'download_capacity_unavailable' && !error.message.includes('secret'));
+  assert.equal(requests, 0);
+  assert.equal(await fs.readFile(destination, 'utf8'), 'retained');
+  assert.deepEqual(await fs.readdir(root), ['existing.dkbbuild']);
+});

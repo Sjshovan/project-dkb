@@ -61,7 +61,7 @@ test('Stack remount followed by rejected activation restores the old mount, conf
   }), /missing|not found|not installed/iu);
   await assertPreviousReady(f);
   assert.equal(f.docker.mount, f.libraryA);
-  assert.deepEqual(f.docker.calls.map((call) => call.command), ['ps', 'up', 'down', 'up']);
+  assert.deepEqual(f.docker.calls.map((call) => call.command), ['containers', 'up', 'down', 'up']);
 });
 
 test('Stack failed Compose up restores the previous running topology without writing activation', async (t) => {
@@ -145,7 +145,7 @@ test('Stack rejects malformed recovery expectations without changing admitted st
   assert.deepEqual(f.docker.calls, []);
 });
 
-test('competing Stack starts reclaim an abandoned lease without deleting the new owner lock', async (t) => {
+test('Stack startup preserves an earlier guard instead of inferring takeover from a foreign PID', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-stack-startup-lock-'));
   const previousRoot = process.env.DKB_STACK_STATE_ROOT;
   process.env.DKB_STACK_STATE_ROOT = root;
@@ -155,35 +155,14 @@ test('competing Stack starts reclaim an abandoned lease without deleting the new
     assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
     await fs.rm(root, { recursive: true, force: true });
   });
-  const deadPid = 2147483647;
-  const nativeKill = process.kill.bind(process);
-  t.mock.method(process, 'kill', (pid, signal) => {
-    if (pid === deadPid) throw Object.assign(new Error('fixture abandoned process'), { code: 'ESRCH' });
-    return nativeKill(pid, signal);
-  });
   const lockPath = path.join(root, 'lease', 'startup.lock');
-  await json(lockPath, { token: 'abandoned', pid: deadPid, host: os.hostname() });
-  let release;
-  let reportEntered;
-  let entered = 0;
-  const hold = new Promise((resolve) => { release = resolve; });
-  const firstEntered = new Promise((resolve) => { reportEntered = resolve; });
-  const action = async () => { entered++; reportEntered(); await hold; return 'finished'; };
-  const runs = [withStackStartup(DEFAULT_DKB_DISTRIBUTION, 'lease', action), withStackStartup(DEFAULT_DKB_DISTRIBUTION, 'lease', action)];
-  let timeout;
-  let results;
-  const deadline = new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Competing Stack starts did not enforce one owner')), 5_000); });
-  try {
-    await assert.rejects(Promise.race([...runs, deadline]), (error) => error.code === 'stack_busy');
-    await Promise.race([firstEntered, deadline]);
-    const owner = JSON.parse(await fs.readFile(lockPath, 'utf8'));
-    assert.equal(owner.pid, process.pid);
-    assert.notEqual(owner.token, 'abandoned');
-    assert.equal(entered, 1);
-  } finally { clearTimeout(timeout); release(); results = await Promise.allSettled(runs); }
-  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
-  assert.equal(results.filter((result) => result.status === 'rejected' && result.reason.code === 'stack_busy').length, 1);
-  await assert.rejects(fs.access(lockPath), { code: 'ENOENT' });
+  await json(lockPath, { token: 'earlier-protocol', pid: 2147483647, host: 'old-machine' });
+  const before = await fs.readFile(lockPath);
+  await fs.utimes(lockPath, new Date(0), new Date(0));
+  await assert.rejects(withStackStartup(DEFAULT_DKB_DISTRIBUTION, 'lease', async () => assert.fail('old owner bypassed')),
+    { code: 'stack_recovery_required' });
+  assert.deepEqual(await fs.readFile(lockPath), before);
+  await assert.rejects(fs.access(path.join(root, 'lease', 'runtime')), { code: 'ENOENT' });
 });
 
 async function fixture(t) {
@@ -230,11 +209,15 @@ async function fixture(t) {
   const docker = { mount: libraryA, calls: [], failNextUp: false };
   const mocked = t.mock.method(childProcess, 'spawnSync', (command, args) => {
     assert.equal(command, 'docker');
+    if (args[0] === 'container') {
+      assert.deepEqual(args, ['container', 'ls', '--all', '--filter', `label=com.docker.compose.project=dkb-${name}`, '--format', '{{json .}}']);
+      docker.calls.push({ command: 'containers' });
+      return { status: 0, stdout: docker.mount ? `${JSON.stringify({ ID: 'a'.repeat(64), State: 'running' })}\n` : '', stderr: '' };
+    }
     assert.equal(args[0], 'compose');
-    const operation = args.find((arg) => ['ps', 'down', 'up'].includes(arg));
+    const operation = args.find((arg) => ['down', 'up'].includes(arg));
     assert.ok(operation, `Unexpected mocked Docker operation ${args.join(' ')}`);
     docker.calls.push({ command: operation });
-    if (operation === 'ps') return { status: 0, stdout: docker.mount ? 'fixture-container\n' : '', stderr: '' };
     if (operation === 'down') docker.mount = null;
     if (operation === 'up') {
       if (docker.failNextUp) { docker.failNextUp = false; return { status: 1, stderr: 'fixture Compose failure', stdout: '' }; }

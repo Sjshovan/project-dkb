@@ -103,7 +103,7 @@ test('Console historical Evidence validates typed inputs and delegates the exact
   await fs.writeFile(path.join(webRoot, 'index.html'), '<title>Test</title>');
   const prior = process.env.DKB_CONSOLE_STATE_ROOT;
   process.env.DKB_CONSOLE_STATE_ROOT = path.join(fixture.root, 'console');
-  const server = await startDkbConsoleServer({ cliEntrypoint: cli, webRoot, bootstrapSecret: 'isolated-test-secret' });
+  const server = await startDkbConsoleServer({ cliEntrypoint: cli, webRoot, bootstrapSecret: 'isolated-test-secret', port: 0 });
   fixture.cleanups.push(async () => { await server.close(); if (prior === undefined) delete process.env.DKB_CONSOLE_STATE_ROOT; else process.env.DKB_CONSOLE_STATE_ROOT = prior; });
   const login = await fetch(`${server.url}/api/session/bootstrap`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ secret: 'isolated-test-secret' }) });
   const cookie = login.headers.get('set-cookie').split(';')[0];

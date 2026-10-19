@@ -5,11 +5,12 @@ import type { DkbRuntimeActivation, DkbRuntimeActivationEntry } from '@sjshovan/
 import { readRetrievalProfileLock, resolveProviderRetrievalProfile, type DkbResolvedRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbIndexMutationResult, DkbIndexProvider, DkbJsonValue } from '@sjshovan/dkb-pipeline/types.js';
-import { validateIndexMutationResult } from '@sjshovan/dkb-pipeline/validation.js';
+import { validateIndexMutationResult, validateManagedStorageIdentity } from '@sjshovan/dkb-pipeline/validation.js';
 import { DkbSdkError } from '@sjshovan/dkb-pipeline/sdk.js';
 import { DKB_RETRIEVAL_BUILD_ARTIFACTS, resolveLibraryActivationBuilds, validateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
 import path from 'node:path';
 import type { DkbRuntimeContext } from '../runtime/context.js';
+import { retainManagedIndexPackage } from './managedIndexRetention.js';
 
 export interface PreparedRuntimeIndexPackage {
   providerId: string;
@@ -73,7 +74,15 @@ export async function prepareRuntimeIndexPackage(input: {
       ...(input.signal ? { signal: input.signal } : {}),
     }), selected, buildGraph.evidence.recordCount);
     let installed: DkbIndexMutationResult | undefined;
+    let storageIdentity: string | undefined;
     if (provider.mode === 'managed') {
+      storageIdentity = validateManagedStorageIdentity(await provider.storageIdentity({ options, signal: input.signal }));
+      await retainManagedIndexPackage(input.runtimeStateRoot, {
+        runtimeId: input.runtimeId, libraryRoot: input.libraryRoot, libraryId: input.libraryId,
+        target: input.target ?? host.config.activeTarget, providerId: selected,
+        retrievalProfileDigest: profile.retrievalProfileDigest, optionsDigest: stableHash(options), storageIdentity,
+        packageId: input.dkb.manifest.id, packageVersion: input.dkb.manifest.version,
+      });
       try {
         installed = validateLifecycleResult(await provider.installPackage({
           libraryRoot: input.libraryRoot,
@@ -106,7 +115,7 @@ export async function prepareRuntimeIndexPackage(input: {
         return discardPreparedIndex({
           ...input, target: input.target ?? host.config.activeTarget,
           artifactsRoot: path.join(buildGraph.retrievalPath, DKB_RETRIEVAL_BUILD_ARTIFACTS),
-          indexId: installed.indexId, profile, optionsDigest: stableHash(options),
+          indexId: installed.indexId, profile, optionsDigest: stableHash(options), storageIdentity: storageIdentity!,
         });
       },
     };
@@ -126,6 +135,7 @@ async function discardPreparedIndex(input: {
   indexId: string;
   profile: DkbResolvedRetrievalProfile;
   optionsDigest: string;
+  storageIdentity: string;
 }): Promise<DkbIndexMutationResult> {
   const host = await DkbProviderHost.create({ root: input.runtimeStateRoot, libraryRoot: input.libraryRoot, target: input.target, distribution: input.runtime.distribution });
   try {
@@ -140,6 +150,9 @@ async function discardPreparedIndex(input: {
     }
     if (provider.mode !== 'managed' || typeof provider.discardPackage !== 'function') {
       throw new DkbError(`Provider ${host.config.target.index} cannot discard exact index ${input.indexId}; broad package deletion is unsafe.`, 'runtime_index_cleanup_required');
+    }
+    if (validateManagedStorageIdentity(await provider.storageIdentity({ options })) !== input.storageIdentity) {
+      throw new DkbError(`Managed storage changed after preparing index ${input.indexId}; no cleanup was attempted through the changed endpoint.`, 'runtime_index_cleanup_required');
     }
     await host.assertCurrent();
     const result = validateLifecycleResult(await provider.discardPackage({
@@ -199,42 +212,6 @@ export async function verifyRuntimeIndex(input: {
   }
 }
 
-export async function cleanupRuntimeIndexPackage(input: {
-  runtime: DkbRuntimeContext;
-  runtimeStateRoot: string;
-  libraryRoot: string;
-  libraryId: string;
-  packageId: string;
-  packageVersion: string;
-  target: string;
-  signal?: AbortSignal;
-}): Promise<DkbIndexMutationResult | null> {
-  const host = await DkbProviderHost.create({
-    root: input.runtimeStateRoot,
-    libraryRoot: input.libraryRoot,
-    target: input.target,
-    distribution: input.runtime.distribution,
-  });
-
-  try {
-    const provider = host.provider<DkbIndexProvider>('index');
-
-    if (provider.mode !== 'managed' || !provider.uninstallPackage) {
-      return null;
-    }
-    return validateLifecycleResult(await provider.uninstallPackage({
-      libraryRoot: input.libraryRoot,
-      libraryId: input.libraryId,
-      packageId: input.packageId,
-      packageVersion: input.packageVersion,
-      options: host.optionsFor(host.config.target.index),
-      ...(input.signal ? { signal: input.signal } : {}),
-    }), host.config.target.index, 'uninstall');
-  } finally {
-    await host.dispose();
-  }
-}
-
 function validatePackageResult(value: unknown, providerId: string, expectedCount: number): { documentCount: number } {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
@@ -247,9 +224,9 @@ function validatePackageResult(value: unknown, providerId: string, expectedCount
   return { documentCount: Number(documentCount) };
 }
 
-function validateLifecycleResult(value: unknown, providerId: string, operation: 'install' | 'verify' | 'uninstall' | 'discard', expectedCount?: number): DkbIndexMutationResult {
+function validateLifecycleResult(value: unknown, providerId: string, operation: 'install' | 'verify' | 'discard', expectedCount?: number): DkbIndexMutationResult {
   const result = validateIndexMutationResult(value, providerId);
-  const allowed = operation === 'uninstall' || operation === 'discard' ? ['removed', 'orphaned'] : ['ready'];
+  const allowed = operation === 'discard' ? ['removed', 'orphaned'] : ['ready'];
   if (!allowed.includes(result.status) || (expectedCount !== undefined && result.documentCount !== expectedCount)
     || (operation === 'install' && typeof result.created !== 'boolean')
     || (result.status === 'orphaned' && !result.warning)) {

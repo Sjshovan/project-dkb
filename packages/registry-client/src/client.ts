@@ -16,6 +16,8 @@ import {
   type DkbInstallPlanArtifact,
 } from '@sjshovan/dkb-protocol/builds.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
+import { validateRegistryCollectionRevision, type DkbRegistryCollectionRevision } from '@sjshovan/dkb-protocol/registryCollections.js';
+export type { DkbRegistryCollectionRevision } from '@sjshovan/dkb-protocol/registryCollections.js';
 import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import {
@@ -85,20 +87,6 @@ export interface DkbRegistryPackageSummary {
   name?: string;
   description?: string;
   visibility?: string;
-}
-
-export interface DkbRegistryCollectionRevision {
-  collectionId: string;
-  revision: number;
-  digest: string;
-  manifest: {
-    type: 'collection';
-    id: string;
-    name: string;
-    revision: number;
-    digest: string;
-    members: Array<{ id: string; version: string; digest: string }>;
-  };
 }
 
 export interface DkbRegistryBuildRequest {
@@ -340,7 +328,7 @@ export class DkbRegistryClient {
     return {
       type: 'collection',
       entry: { ...catalogEntry(entry, 'collection'), revisions },
-      selectedRevision: selectedRevision as unknown as DkbRegistryCollectionDetail['selectedRevision'],
+      selectedRevision,
     };
   }
 
@@ -706,6 +694,7 @@ export class DkbRegistryClient {
     }
     const outputPath = path.resolve(targetPath);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await assertLayerCapacity(path.dirname(outputPath), artifact.bytes);
     const temporaryPath = siblingTemporaryPath(outputPath, artifact.kind);
     const hash = createHash('sha256');
     let received = 0;
@@ -922,12 +911,7 @@ export class DkbRegistryClient {
     const selector = revision === undefined ? 'latest' : String(revision);
     const data = resourceData(await this.get(`/api/registry/collections/${identityRoute(collectionId)}/revisions/${selector}`));
 
-    if (!data || data.collectionId !== collectionId || typeof data.revision !== 'number'
-      || typeof data.digest !== 'string' || !isCollectionManifest(data.manifest)) {
-      throw new DkbError(`Registry returned invalid Collection revision for ${collectionId}@${selector}.`);
-    }
-
-    return data as unknown as DkbRegistryCollectionRevision;
+    return validateRegistryCollectionRevision(data, { collectionId, revision });
   }
 
   async publishCollection(input: {
@@ -943,12 +927,7 @@ export class DkbRegistryClient {
       { members: input.members },
     ));
 
-    if (!data || data.collectionId !== input.id || typeof data.revision !== 'number'
-      || typeof data.digest !== 'string' || !isCollectionManifest(data.manifest)) {
-      throw new DkbError(`Registry returned invalid published Collection revision for ${input.id}.`);
-    }
-
-    return data as unknown as DkbRegistryCollectionRevision;
+    return validateRegistryCollectionRevision(data, { collectionId: input.id });
   }
 
   private get(path: string) {
@@ -1176,6 +1155,23 @@ export class DkbRegistryClient {
   }
 }
 
+/** Admission only, not a reservation against other processes consuming storage. */
+async function assertLayerCapacity(directory: string, bytes: number): Promise<void> {
+  let block: bigint, available: bigint;
+  try {
+    const capacity = await fs.statfs(directory, { bigint: true });
+    block = capacity.bsize;
+    available = block * capacity.bavail;
+    if (block <= 0n || available < 0n) throw new Error('Invalid capacity');
+  } catch {
+    throw new DkbError('Cannot verify download storage capacity. Check storage and retry; no layer was requested.', 'download_capacity_unavailable');
+  }
+  const allocated = ((BigInt(bytes) + block - 1n) / block + 1n) * block;
+  if (allocated > available / 2n) {
+    throw new DkbError('Signed layer download exceeds half the destination free space. Free space or choose a larger destination and retry.', 'download_capacity_exceeded');
+  }
+}
+
 async function openRegistryDownload(
   url: URL,
   headers: Record<string, string>,
@@ -1206,8 +1202,12 @@ async function openRegistryDownload(
   }
 
   if (status < 200 || status >= 300) {
-    const detail = await readNativeResponseText(response);
-    throw new DkbError(detail || `GET ${url.pathname} failed with HTTP ${status}`);
+    // Error bodies are untrusted and may echo the download credential. They are
+    // not diagnostics; terminate immediately without retaining or forwarding them.
+    response.destroy();
+    throw new DkbError(status === 401 || status === 403
+      ? `Registry layer download was denied (HTTP ${status}). Request a fresh signed install grant and retry.`
+      : `Registry layer download failed with HTTP ${status}. Check Registry health and retry.`, 'registry_layer_download_failed');
   }
 
   const header = response.headers['content-type'];
@@ -1249,17 +1249,6 @@ async function requestRegistryDownload(
     });
     pending.end();
   });
-}
-
-async function readNativeResponseText(response: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const value of response) {
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    if (bytes < 64 * 1024) chunks.push(chunk.subarray(0, 64 * 1024 - bytes));
-    bytes += chunk.byteLength;
-  }
-  return Buffer.concat(chunks).toString('utf8').trim();
 }
 
 function positiveDuration(value: string | undefined, fallback: number): number {
@@ -1379,20 +1368,6 @@ function identityRoute(identity: string): string {
   const parsed = parseDkbIdentity(identity, 'Registry identity');
 
   return `${encodeURIComponent(parsed.namespace)}/${encodeURIComponent(parsed.name)}`;
-}
-
-function isCollectionManifest(value: unknown): value is DkbRegistryCollectionRevision['manifest'] {
-  return isRecord(value)
-    && value.type === 'collection'
-    && typeof value.id === 'string'
-    && typeof value.name === 'string'
-    && typeof value.revision === 'number'
-    && typeof value.digest === 'string'
-    && Array.isArray(value.members)
-    && value.members.every((member) => isRecord(member)
-      && typeof member.id === 'string'
-      && typeof member.version === 'string'
-      && typeof member.digest === 'string');
 }
 
 export async function writeArchiveFileFromPath(sourcePath: string, targetPath: string, options: { force?: boolean } = {}): Promise<{

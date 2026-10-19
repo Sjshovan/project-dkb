@@ -93,6 +93,8 @@ export interface DkbDistributionService {
 }
 
 export interface DkbDistribution {
+  /** Additional Linux-local Stack volumes: inert role to Compose environment binding. */
+  stackVolumes?: Record<string, string>;
   id: string;
   version: string;
   defaults: DkbContextConfig;
@@ -709,7 +711,7 @@ function validateProvider(provider: DkbProvider, pluginId: string): void {
       || !provider.capabilities || !['required', 'optional', 'none'].includes(provider.capabilities.vectors)
       || typeof provider.compilePackage !== 'function' || typeof provider.validatePackage !== 'function'
       || typeof provider.verifyRuntime !== 'function' || typeof provider.openRuntime !== 'function'
-      || (provider.mode === 'managed' && (typeof provider.installPackage !== 'function' || typeof provider.discardPackage !== 'function' || typeof provider.uninstallPackage !== 'function')))) {
+      || (provider.mode === 'managed' && (typeof provider.storageIdentity !== 'function' || typeof provider.installPackage !== 'function' || typeof provider.discardPackage !== 'function' || typeof provider.uninstallPackage !== 'function')))) {
     throw new DkbError(`Plugin ${pluginId} index provider must implement the complete ${provider.mode} index contract`);
   }
   if (provider.kind === 'retrieval'

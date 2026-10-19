@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { readStateStore } from './stateStore.js';
+import { assertLibraryReadFence, captureLibraryReadFence, pendingLibraryLock, stageLibraryLock, withLibraryMutation } from './mutation.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
-import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { loadLibraryManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
 import { validateDkbLibraryLockManifest } from '@sjshovan/dkb-protocol/validation.js';
 import type { DkbEntryStatus, DkbLibraryLockEntry, DkbLibraryLockManifest } from '@sjshovan/dkb-protocol/types.js';
@@ -27,21 +28,6 @@ export interface DkbLibraryStateIdentity {
   stateDigest: string;
 }
 
-interface StateRow {
-  identity: string;
-  kind: DkbLibraryLockEntry['kind'];
-  source: DkbLibraryLockEntry['source'];
-  version: string | null;
-  revision: number | null;
-  digest: string | null;
-  path: string;
-  registry_url: string | null;
-  required_by: string;
-  installed_at: string;
-  status: DkbEntryStatus;
-  generation: number;
-}
-
 export function libraryLockPath(libraryRoot: string): string {
   return path.join(path.resolve(libraryRoot), DKB_LIBRARY_LOCK_FILENAME);
 }
@@ -51,65 +37,95 @@ export function libraryStatePath(libraryRoot: string): string {
 }
 
 export async function maybeReadLibraryLock(libraryRoot: string): Promise<DkbLibraryLockManifest | null> {
+  const pending = pendingLibraryLock(libraryRoot);
+  if (pending) return pending.lock;
+  const fence = await captureLibraryReadFence(libraryRoot);
   const source = libraryLockPath(libraryRoot);
 
   try {
-    return validateDkbLibraryLockManifest(JSON.parse(await fs.readFile(source, 'utf8')) as unknown, source);
+    const lock = validateDkbLibraryLockManifest(JSON.parse(await fs.readFile(source, 'utf8')) as unknown, source);
+    await assertLibraryReadFence(libraryRoot, fence);
+    return lock;
   } catch (error) {
+    await assertLibraryReadFence(libraryRoot, fence);
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
 
     // A compiler artifact lock from before the hard cutover is not a Library
     // lock. Callers can still rebuild it, but must not infer installation state
     // from its package map.
     const value = await maybeReadJson(source);
+    await assertLibraryReadFence(libraryRoot, fence);
     if (isRecord(value) && 'artifacts' in value && 'packages' in value) return null;
     throw error;
   }
 }
 
 export async function readLibraryState(libraryRoot: string): Promise<DkbLibraryStateSnapshot> {
-  const databasePath = libraryStatePath(libraryRoot);
-
+  const root = path.resolve(libraryRoot);
+  const pending = pendingLibraryLock(root);
+  if (pending) return snapshotFromLock(root, pending.lock);
+  const { generation, rows, fence } = await readStateStore(root);
   try {
-    await fs.access(databasePath);
-  } catch {
-    return { generation: 0, entries: {} };
-  }
-
-  const database = openLibraryStateReadOnly(databasePath);
-  try {
-    const generation = Number((database.prepare("SELECT value FROM metadata WHERE key = 'generation'").get() as { value?: string } | undefined)?.value ?? 0);
-    const rows = database.prepare('SELECT * FROM entries ORDER BY identity').all() as unknown as StateRow[];
     const entries: Record<string, DkbLibraryStateEntry> = {};
-
     for (const row of rows) {
-      const resolved = resolveContainedPath(libraryRoot, row.path, `Installed entry ${row.identity} path`);
-      const present = await exists(path.join(resolved, 'dkb.json'));
+      if (row.generation !== generation || !['installed', 'broken'].includes(row.status)) throw new DkbError('Invalid applied entry generation or status.');
       entries[row.identity] = {
-        identity: row.identity,
-        kind: row.kind,
-        source: row.source,
-        ...(row.version ? { version: row.version } : {}),
-        ...(row.revision ? { revision: row.revision } : {}),
-        ...(row.digest ? { digest: row.digest } : {}),
-        path: row.path,
-        ...(row.registry_url ? { registryUrl: row.registry_url } : {}),
-        requiredBy: parseRequiredBy(row.required_by, row.identity),
-        installedAt: row.installed_at,
-        status: present ? row.status : 'broken',
-        generation: row.generation,
+        identity: row.identity, kind: row.kind, source: row.source,
+        ...(row.version !== null ? { version: row.version } : {}),
+        ...(row.revision !== null ? { revision: row.revision } : {}),
+        ...(row.digest !== null ? { digest: row.digest } : {}),
+        path: row.path, ...(row.registry_url !== null ? { registryUrl: row.registry_url } : {}),
+        requiredBy: parseRequiredBy(row.required_by, row.identity), installedAt: row.installed_at,
+        status: row.status, generation: row.generation,
       };
     }
-
+    if (rows.length || generation > 0) validateDkbLibraryLockManifest({
+      library: { name: 'Applied state validation' }, generation,
+      entries: Object.fromEntries(Object.entries(entries).map(([key, { status, generation: entryGeneration, ...entry }]) => [key, entry])),
+      resolvedAt: new Date().toISOString(),
+    }, 'Applied Library state');
+    if (rows.length || generation > 0) {
+      const lock = validateDkbLibraryLockManifest(JSON.parse(await fs.readFile(libraryLockPath(root), 'utf8')), 'Resolved Library state');
+      const normalized = (value: DkbLibraryLockEntry) => ({ ...value, path: value.path.replace(/\\/gu, '/'), requiredBy: [...value.requiredBy].sort() });
+      const applied = Object.fromEntries(Object.entries(entries).map(([key, { status, generation: entryGeneration, ...entry }]) => [key, normalized(entry)]));
+      const resolved = Object.fromEntries(Object.entries(lock.entries).map(([key, entry]) => [key, normalized(entry)]));
+      if (lock.generation !== generation || stableHash(applied) !== stableHash(resolved)) {
+        throw new DkbError(`Resolved Library lock differs from applied state. Run dkb library recover --library "${root}".`, 'library_recovery_required');
+      }
+    }
+    for (const entry of Object.values(entries)) {
+      const target = resolveContainedPath(root, entry.path, `Installed entry ${entry.identity} path`);
+      if (!(await exists(path.join(target, 'dkb.json')))) entry.status = 'broken';
+    }
+    await assertLibraryReadFence(root, fence);
     return { generation, entries };
-  } finally {
-    database.close();
+  } catch (error) {
+    await assertLibraryReadFence(root, fence);
+    throw error;
   }
+}
+
+async function snapshotFromLock(root: string, lock: DkbLibraryLockManifest | null): Promise<DkbLibraryStateSnapshot> {
+  if (!lock) return { generation: 0, entries: {} };
+  const entries: Record<string, DkbLibraryStateEntry> = {};
+  for (const [identity, entry] of Object.entries(lock.entries)) {
+    const target = resolveContainedPath(root, entry.path, `Installed entry ${identity} path`);
+    entries[identity] = { ...entry, generation: lock.generation, status: await exists(path.join(target, 'dkb.json')) ? 'installed' : 'broken' };
+  }
+  return { generation: lock.generation, entries };
 }
 
 export async function libraryStateIdentity(libraryRoot: string): Promise<DkbLibraryStateIdentity> {
   const root = path.resolve(libraryRoot);
-  const [library, state] = await Promise.all([loadLibrary(root), readLibraryState(root)]);
+  const fence = await captureLibraryReadFence(root);
+  // Identity belongs to the canonical root manifest and applied ledger, not a
+  // fresh traversal of editable source folders. Activation validates the full
+  // package graph; query contexts separately fence its exact immutable inputs.
+  const reads = await Promise.allSettled([loadLibraryManifest(root), readLibraryState(root)]);
+  await assertLibraryReadFence(root, fence);
+  if (reads[0].status === 'rejected') throw reads[0].reason;
+  if (reads[1].status === 'rejected') throw reads[1].reason;
+  const library = reads[0].value, state = reads[1].value;
   const entries = Object.fromEntries(Object.entries(state.entries)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([identity, entry]) => [identity, {
@@ -126,11 +142,12 @@ export async function libraryStateIdentity(libraryRoot: string): Promise<DkbLibr
       generation: entry.generation,
     }]));
 
+  await assertLibraryReadFence(root, fence);
   return {
-    id: library.manifest.id,
+    id: library.id,
     generation: state.generation,
     stateDigest: stableHash({
-      libraryId: library.manifest.id,
+      libraryId: library.id,
       generation: state.generation,
       entries,
     }),
@@ -139,57 +156,12 @@ export async function libraryStateIdentity(libraryRoot: string): Promise<DkbLibr
 
 export async function applyLibraryLock(libraryRoot: string, input: DkbLibraryLockManifest): Promise<DkbLibraryStateSnapshot> {
   const root = path.resolve(libraryRoot);
-  const lock = validateDkbLibraryLockManifest(input, `${libraryLockPath(root)}#candidate`);
-  await assertLockPaths(root, lock);
-  await fs.mkdir(path.dirname(libraryStatePath(root)), { recursive: true });
-
-  const target = libraryLockPath(root);
-  const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  await fs.writeFile(temp, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
-
-  const database = openLibraryState(libraryStatePath(root));
-  database.exec('BEGIN IMMEDIATE');
-  try {
-    database.exec('DELETE FROM entries');
-    const insert = database.prepare(`
-      INSERT INTO entries (
-        identity, kind, source, version, revision, digest, path,
-        registry_url, required_by, installed_at, status, generation
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'installed', ?)
-    `);
-
-    for (const entry of Object.values(lock.entries).sort((left, right) => left.identity.localeCompare(right.identity))) {
-      insert.run(
-        entry.identity,
-        entry.kind,
-        entry.source,
-        entry.version ?? null,
-        entry.revision ?? null,
-        entry.digest ?? null,
-        normalizeRelativePath(entry.path),
-        entry.registryUrl ?? null,
-        JSON.stringify([...entry.requiredBy].sort()),
-        entry.installedAt,
-        lock.generation,
-      );
-    }
-
-    database.prepare(`
-      INSERT INTO metadata (key, value) VALUES ('generation', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(String(lock.generation));
-
-    await replaceFile(temp, target);
-    database.exec('COMMIT');
-  } catch (error) {
-    database.exec('ROLLBACK');
-    await fs.rm(temp, { force: true });
-    throw error;
-  } finally {
-    database.close();
-  }
-
-  return readLibraryState(root);
+  return withLibraryMutation(root, async () => {
+    const lock = validateDkbLibraryLockManifest(input, `${libraryLockPath(root)}#candidate`);
+    await assertLockPaths(root, lock);
+    stageLibraryLock(root, lock);
+    return readLibraryState(root);
+  });
 }
 
 export async function assertLibraryStateConsistent(libraryRoot: string): Promise<void> {
@@ -213,43 +185,14 @@ export async function assertLibraryStateConsistent(libraryRoot: string): Promise
     throw new DkbError('Library lock and applied-state ledger contain different entries');
   }
 
+  for (const [identity, entry] of Object.entries(lock.entries)) {
+    const { status, generation, ...applied } = state.entries[identity]!;
+    if (stableHash(entry) !== stableHash(applied)) throw new DkbError(`Library lock differs from applied state for ${identity}.`);
+  }
   const broken = Object.values(state.entries).filter((entry) => entry.status === 'broken');
   if (broken.length > 0) {
     throw new DkbError(`Library has missing installed content: ${broken.map((entry) => entry.identity).join(', ')}`);
   }
-}
-
-function openLibraryState(databasePath: string): DatabaseSync {
-  const database = new DatabaseSync(path.toNamespacedPath(databasePath));
-  database.exec('PRAGMA journal_mode = WAL');
-  database.exec('PRAGMA foreign_keys = ON');
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS metadata (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS entries (
-      identity TEXT PRIMARY KEY,
-      kind TEXT NOT NULL CHECK (kind IN ('dkb', 'collection')),
-      source TEXT NOT NULL CHECK (source IN ('local', 'registry')),
-      version TEXT,
-      revision INTEGER,
-      digest TEXT,
-      path TEXT NOT NULL,
-      registry_url TEXT,
-      required_by TEXT NOT NULL,
-      installed_at TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('installed', 'broken')),
-      generation INTEGER NOT NULL,
-      CHECK ((kind = 'dkb' AND version IS NOT NULL AND revision IS NULL)
-        OR (kind = 'collection' AND version IS NULL))
-    );
-  `);
-  return database;
-}
-
-function openLibraryStateReadOnly(databasePath: string): DatabaseSync {
-  return new DatabaseSync(path.toNamespacedPath(databasePath), { readOnly: true });
 }
 
 async function assertLockPaths(root: string, lock: DkbLibraryLockManifest): Promise<void> {
@@ -259,25 +202,6 @@ async function assertLockPaths(root: string, lock: DkbLibraryLockManifest): Prom
       throw new DkbError(`Cannot activate ${entry.identity}; manifest is missing at ${target}`);
     }
   }
-}
-
-async function replaceFile(temp: string, target: string): Promise<void> {
-  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
-  const hadTarget = await exists(target);
-
-  if (hadTarget) await fs.rename(target, backup);
-  try {
-    await fs.rename(temp, target);
-    await fs.rm(backup, { force: true });
-  } catch (error) {
-    await fs.rm(target, { force: true });
-    if (hadTarget && await exists(backup)) await fs.rename(backup, target);
-    throw error;
-  }
-}
-
-function normalizeRelativePath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 function parseRequiredBy(value: string, identity: string): string[] {
@@ -306,7 +230,8 @@ async function exists(target: string): Promise<boolean> {
   try {
     await fs.access(target);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }

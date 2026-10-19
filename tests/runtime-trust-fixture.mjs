@@ -14,11 +14,10 @@ import { verifyStoredSignedBuildChain } from '@sjshovan/dkb-runtime/runtime/regi
 import { createDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
 
 /** Convert an isolated editable fixture into a correctly signed, retained release. */
-export async function signRuntimeFixture(fixture, { downloadable = false } = {}) {
+export async function signRuntimeFixture(fixture, { downloadable = false, origin = 'https://offline-registry.example.test' } = {}) {
   await closeRuntimeQuerySnapshot(fixture.runtimeRoot);
   const instance = await ensureRuntimeState(fixture.runtimeRoot);
   const graph = await validateStoredPackageBuild(fixture.packageRoot, instance.activation.packages[fixture.packageId]);
-  const origin = 'https://offline-registry.example.test';
   const sourceHash = graph.evidence.package.sourceDigest;
   const packageTreeHash = (await hashPortablePackageTree(fixture.packageRoot)).hash;
   const publisher = generateSigningKeyPair();

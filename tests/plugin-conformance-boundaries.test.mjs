@@ -61,7 +61,7 @@ test('index conformance requires an opened Runtime and the actual indexed Eviden
   }
 });
 
-function indexPlugin({ validation = { documentCount: 1 }, verification = { indexId: 'fixture', documentCount: 1, status: 'ready' }, mode = 'packaged', installedCount = 1, missingRuntime = false, hits = [{ id: 'evidence-1', score: 1 }] } = {}) {
+function indexPlugin({ validation = { documentCount: 1 }, verification = { indexId: 'fixture', documentCount: 1, status: 'ready' }, mode = 'packaged', installedCount = 1, missingRuntime = false, hits = [{ id: 'evidence-1', score: 1 }], storageIdentity = () => `sha256:${'a'.repeat(64)}` } = {}) {
   const define = mode === 'managed' ? defineManagedIndexProvider : definePackagedIndexProvider;
   return plugin('@test/conformance-index', (context) => context.registerProvider(define({
     kind: 'index', mode, format: 'test.index.v1', capabilities: { vectors: 'none' },
@@ -71,12 +71,21 @@ function indexPlugin({ validation = { documentCount: 1 }, verification = { index
     async openRuntime() { return missingRuntime ? null : { providerId: '@test/conformance-index', mode, format: 'test.index.v1', packages: [],
       async search() { return { hits, trace: {} }; }, async close() {} }; },
     ...(mode === 'managed' ? {
+      storageIdentity,
       async installPackage() { return { indexId: 'fixture', documentCount: installedCount, status: 'ready', created: true }; },
       async discardPackage({ indexId }) { return { indexId, documentCount: 0, status: 'removed' }; },
       async uninstallPackage() { return { indexId: 'fixture', documentCount: 0, status: 'removed' }; },
     } : {}),
   })));
 }
+
+test('managed conformance rejects invalid and unstable backing-store identities', async () => {
+  for (const value of [undefined, '', 'https://index.example', 'sha256:bad', 42]) {
+    failed(await runPluginConformance(indexPlugin({ mode: 'managed', storageIdentity: () => value })), 'managed index lifecycle');
+  }
+  let call = 0;
+  failed(await runPluginConformance(indexPlugin({ mode: 'managed', storageIdentity: () => `sha256:${String(++call).repeat(64)}` })), 'managed index lifecycle');
+});
 
 test('provider health cannot override host identity or smuggle non-boolean readiness', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-provider-health-'));
@@ -150,6 +159,7 @@ test('managed conformance failures clean up only their validated newly-created i
         const indexId = 'new-conformance-index';
         const definition = plugin(id, (context) => context.registerProvider(defineManagedIndexProvider({
           kind: 'index', mode: 'managed', format: 'test.index.v1', capabilities: { vectors: 'none' },
+          storageIdentity() { return `sha256:${'a'.repeat(64)}`; },
           async compilePackage() { return null; },
           async validatePackage() { return { documentCount: 1 }; },
           async installPackage() { calls.push('install'); return { indexId, documentCount: installedCount, status: 'ready', ...(created === undefined ? {} : { created }) }; },

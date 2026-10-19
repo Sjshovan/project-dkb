@@ -23,6 +23,7 @@ export type {
 } from './compilerCore.js';
 
 export interface CompileComposeProjectOptions {
+  signal?: AbortSignal;
   force?: boolean;
   target?: string;
   contextRoot?: string;
@@ -30,6 +31,7 @@ export interface CompileComposeProjectOptions {
 }
 
 export interface CompileRetrievalFromEvidenceOptions {
+  signal?: AbortSignal;
   target: string;
   contextRoot?: string;
   targetOptions?: Record<string, Record<string, unknown>>;

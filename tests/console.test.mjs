@@ -62,7 +62,7 @@ test('Console secures loopback sessions and invokes only typed CLI commands', as
     console.log(JSON.stringify({ ...base, sequence: 2, event: 'completion', status: 'succeeded' }));
   `);
 
-  const server = await startDkbConsoleServer({ cliEntrypoint: cli, bootstrapSecret: 'one-time-secret', controlToken: 'control-secret', webRoot });
+  const server = await startDkbConsoleServer({ cliEntrypoint: cli, bootstrapSecret: 'one-time-secret', controlToken: 'control-secret', webRoot, port: 0 });
   try {
     const hostile = await fetch(`${server.url}/healthz`, { headers: { origin: 'https://hostile.example' } });
     assert.equal(hostile.status, 403);

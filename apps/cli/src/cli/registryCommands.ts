@@ -5,6 +5,8 @@ import type { Command } from 'commander';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity } from '@sjshovan/dkb-protocol/identity.js';
 import type { CliPresenter } from './presentation.js';
+import type { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
+import type { DkbServingRuntimeRefresh } from '../runtime/refresh.js';
 import {
   summarizeRegistryBuildRequest,
   summarizePackageListing,
@@ -25,11 +27,12 @@ import {
 export interface RegistryCommandContext {
   presenter(): CliPresenter;
   currentLibraryRoot(explicit?: string, cwd?: string): Promise<string>;
+  currentRuntimeAdminClient(url?: string): Promise<DkbRuntimeClient>;
   parsePositiveInteger(value: string): number;
 }
 
 export function registerRegistryCommands(program: Command, context: RegistryCommandContext): void {
-  const { presenter, currentLibraryRoot, parsePositiveInteger } = context;
+  const { presenter, parsePositiveInteger } = context;
   const registry = program
     .command('registry')
     .description('Manage the DKB package registry');
@@ -203,56 +206,63 @@ export function registerRegistryCommands(program: Command, context: RegistryComm
     .command('use')
     .description('Set the upstream Registry URL for the current DKB Library')
     .argument('<name-or-url>', 'Registered Registry name or Registry API URL')
-    .option('--root <path>', 'DKB Library to configure')
+    .option('--root <library>', 'Registered Library name or local Library path to configure')
     .option('--global', 'Set the user-wide fallback instead of a folder-specific URL')
     .option('--no-verify', 'Save the URL without validating it first')
     .action(async (nameOrUrl: string, options: { root?: string; global?: boolean; verify?: boolean }) => {
       const { normalizeRegistryUrl, verifyRegistryEndpoint, writeConfiguredRegistryUrl } = await import('./registryConfig.js');
-      const { hostInventoryPath, registerHostLibrary, registerHostRegistry, registeredHostRegistry } = await import('../host/inventory.js');
+      const { hostInventoryPath, registerHostLibrary, registerDockerHostLibrary, registeredHostLibrary, registerHostRegistry, registeredHostRegistry } = await import('../host/inventory.js');
+      const { resolveCliLibraryReference } = await import('./context.js');
+      const { executeCliLibraryOperation } = await import('./libraryOperation.js');
+      const { withRuntimeRefreshes } = await import('../runtime/refresh.js');
 
       if (options.global && options.root) {
         throw new DkbError('Registry configuration cannot use --global and --root together.');
       }
 
-      await presenter().run('Configuring registry', async () => {
+      await presenter().run('Configuring registry', async (progress) => {
         const known = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/iu.test(nameOrUrl)
           ? await registeredHostRegistry(nameOrUrl)
           : null;
         const url = known?.registry.url ?? normalizeRegistryUrl(nameOrUrl);
         const verification = options.verify === false ? undefined : await verifyRegistryEndpoint(url);
-        const hostRegistry = known ?? await registerHostRegistry(undefined, url, { select: true });
-        if (known) {
-          await registerHostRegistry(known.name, known.registry.url, { select: true });
-        }
-        const configuredRoot = options.global ? undefined : await currentLibraryRoot(options.root);
-        const configured = await writeConfiguredRegistryUrl(url, {
-          root: configuredRoot,
-          global: Boolean(options.global),
-        });
-        if (configuredRoot) {
-          await registerHostLibrary(configuredRoot, {
-            registryName: hostRegistry.name,
-            registryUrl: configured.url,
-          });
+        const reference = options.global ? undefined : await resolveCliLibraryReference({ explicit: options.root, allowUnavailableManifest: true });
+        const write = async (root?: string) => {
+          const configured = await writeConfiguredRegistryUrl(url, { root, global: Boolean(options.global) });
+          return { status: configured.changed ? 'configured' : 'unchanged', registry: configured };
+        };
+        const result = reference ? await executeCliLibraryOperation({ reference, command: 'library.registry.use',
+          input: { registryUrl: url }, progress, runtimeClient: context.currentRuntimeAdminClient }, write) : await write();
+        const configured = result.registry;
+        let host: { registry: string; inventoryPath: string } | undefined;
+        let hostWarning: string | undefined;
+        try {
+          // Convenience state follows the authoritative Library commit, never precedes it.
+          const hostRegistry = await registerHostRegistry(known?.name, url, { select: true });
+          if (reference?.kind === 'docker') {
+            const registered = await registeredHostLibrary(reference.name);
+            await registerDockerHostLibrary(reference.storage, { name: reference.name,
+              displayName: registered?.library.displayName ?? reference.name, registryName: hostRegistry.name, registryUrl: configured.url });
+          } else if (reference) {
+            await registerHostLibrary(reference.path, { registryName: hostRegistry.name, registryUrl: configured.url });
+          }
+          host = { registry: hostRegistry.name, inventoryPath: hostInventoryPath() };
+        } catch {
+          hostWarning = 'Registry configuration was saved, but the host inventory could not be updated. Repair the host inventory and repeat this command to synchronize it.';
         }
 
-        return {
-          status: 'configured',
+        const verificationWarning = verification && !verification.ok
+          ? `Upstream registry URL was saved, but ${configured.url} could not be verified.`
+          : options.verify === false ? `Upstream registry ${configured.url} was saved without verification.` : undefined;
+        const warning = [verificationWarning, hostWarning].filter(Boolean).join(' ');
+        return withRuntimeRefreshes({
+          status: result.status,
           registry: configured,
-          host: { registry: hostRegistry.name, inventoryPath: hostInventoryPath() },
+          ...(host ? { host } : {}),
           ...(verification ? { verification } : {}),
-          ...(verification && !verification.ok
-            ? {
-                warning: `Upstream registry URL was saved, but ${configured.url} could not be verified.`,
-                retryCommand: `dkb registry status --url ${configured.url}`,
-              }
-            : options.verify === false
-              ? {
-                  warning: `Upstream registry ${configured.url} was saved without verification.`,
-                  retryCommand: `dkb registry status --url ${configured.url}`,
-                }
-              : {}),
-        };
+          ...(warning ? { warning } : {}),
+          ...(verificationWarning ? { retryCommand: `dkb registry status --url ${configured.url}` } : {}),
+        }, (result as typeof result & { runtimeRefreshes?: DkbServingRuntimeRefresh[] }).runtimeRefreshes ?? []);
       }, summarizeRegistryConfiguration);
     });
 

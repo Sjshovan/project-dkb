@@ -8,6 +8,7 @@ import {
   installMeilisearchPackage,
   discardMeilisearchPackage,
   meilisearchProviderHealth,
+  meilisearchStorageIdentity,
   openMeilisearchRuntime,
   uninstallMeilisearchPackage,
   validateMeilisearchPackageArtifact,
@@ -59,6 +60,7 @@ export const MEILISEARCH_PLUGIN: DkbBundledPluginModule = {
     context.registerProvider({
       kind: 'index',
       mode: 'managed',
+      storageIdentity: meilisearchStorageIdentity,
       format: MEILISEARCH_INDEX_FORMAT,
       capabilities: { vectors: 'required' },
       compilePackage: writeMeilisearchPackageArtifacts,

@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
@@ -12,6 +11,7 @@ import type {
   LoadedDkb,
 } from '@sjshovan/dkb-protocol/types.js';
 import { applyLibraryLock, maybeReadLibraryLock } from './state.js';
+import { withLibraryMutation, writeLibraryMutationFile } from './mutation.js';
 
 export interface SyncLibraryResult {
   status: 'synchronized' | 'unchanged';
@@ -49,7 +49,7 @@ export async function resolveLibraryLock(libraryRoot: string): Promise<DkbLibrar
       ...(collection.manifest.revision ? { revision: collection.manifest.revision } : {}),
       digest,
       path: relative,
-      ...(source === 'registry' && sourceManifest.registry?.url ? { registryUrl: sourceManifest.registry.url } : {}),
+      ...registryOrigin(source, previousEntry, { digest, path: relative }, sourceManifest.registry?.url),
       requiredBy: [`root:${collection.manifest.id}`],
       installedAt: reusableInstalledAt(previousEntry, { digest, path: relative }) ?? now,
     };
@@ -94,17 +94,15 @@ export async function resolveLibraryLock(libraryRoot: string): Promise<DkbLibrar
 }
 
 export async function syncLibrary(libraryRoot: string): Promise<SyncLibraryResult> {
-  const previous = await maybeReadLibraryLock(libraryRoot);
-  const lock = await resolveLibraryLock(libraryRoot);
-  await applyLibraryLock(libraryRoot, lock);
-
-  return {
-    status: previous?.generation === lock.generation ? 'unchanged' : 'synchronized',
-    lock,
-  };
+  return withLibraryMutation(libraryRoot, async () => {
+    const previous = await maybeReadLibraryLock(libraryRoot);
+    await applyLibraryLock(libraryRoot, await resolveLibraryLock(libraryRoot));
+    const lock = (await maybeReadLibraryLock(libraryRoot))!;
+    return { status: previous?.generation === lock.generation ? 'unchanged' : 'synchronized', lock };
+  });
 }
 
-export async function addLibraryRoot(libraryRoot: string, identity: string): Promise<SyncLibraryResult> {
+async function addLibraryRootOwned(libraryRoot: string, identity: string): Promise<SyncLibraryResult> {
   parseDkbIdentity(identity);
   const root = path.resolve(libraryRoot);
   const manifest = await requireLibraryManifest(root);
@@ -128,7 +126,7 @@ export async function addLibraryRoot(libraryRoot: string, identity: string): Pro
   });
 }
 
-export async function removeLibraryRoot(libraryRoot: string, identity: string): Promise<SyncLibraryResult> {
+async function removeLibraryRootOwned(libraryRoot: string, identity: string): Promise<SyncLibraryResult> {
   parseDkbIdentity(identity);
   const root = path.resolve(libraryRoot);
   const manifest = await requireLibraryManifest(root);
@@ -156,6 +154,7 @@ function addDkbEntry(
   const source = localIdentities.has(dkb.manifest.id) ? 'local' as const : 'registry' as const;
   const previousEntry = previous?.entries[dkb.manifest.id];
   const digest = source === 'registry'
+    && previousEntry?.source === 'registry'
     && previousEntry?.version === dkb.manifest.version
     && previousEntry.path === relative
     && previousEntry.digest
@@ -179,7 +178,7 @@ function addDkbEntry(
     version: dkb.manifest.version,
     digest,
     path: relative,
-    ...(source === 'registry' && libraryManifest.registry?.url ? { registryUrl: libraryManifest.registry.url } : {}),
+    ...registryOrigin(source, previousEntry, { digest, path: relative }, libraryManifest.registry?.url),
     requiredBy: [requiredBy],
     installedAt: reusableInstalledAt(previousEntry, { digest, path: relative }) ?? now,
   };
@@ -190,18 +189,8 @@ async function mutateLibraryRoots(
   manifest: DkbSourceManifest,
   roots: NonNullable<DkbSourceManifest['roots']>,
 ): Promise<SyncLibraryResult> {
-  const target = path.join(root, 'dkb.json');
-  const previousSource = await fs.readFile(target, 'utf8');
-  const previousLock = await maybeReadLibraryLock(root);
-
-  try {
-    await writeJsonAtomic(target, { ...manifest, roots });
-    return await syncLibrary(root);
-  } catch (error) {
-    await fs.writeFile(target, previousSource, 'utf8');
-    if (previousLock) await applyLibraryLock(root, previousLock).catch(() => undefined);
-    throw error;
-  }
+  await writeLibraryMutationFile(root, path.join(root, 'dkb.json'), `${JSON.stringify({ ...manifest, roots }, null, 2)}\n`);
+  return syncLibrary(root);
 }
 
 async function requireLibraryManifest(root: string): Promise<DkbSourceManifest> {
@@ -239,6 +228,18 @@ function reusableInstalledAt(
   return previous?.digest === candidate.digest && previous.path === candidate.path ? previous.installedAt : null;
 }
 
+function registryOrigin(
+  source: 'local' | 'registry',
+  previous: DkbLibraryLockEntry | undefined,
+  candidate: { digest: string; path: string },
+  defaultUrl?: string,
+): { registryUrl?: string } {
+  if (source !== 'registry') return {};
+  const url = previous?.source === 'registry' && previous.digest === candidate.digest && previous.path === candidate.path
+    ? previous.registryUrl ?? defaultUrl : defaultUrl;
+  return url ? { registryUrl: url } : {};
+}
+
 function relativeEntryPath(root: string, entryRoot: string): string {
   const relative = path.relative(root, entryRoot).replace(/\\/g, '/');
   if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) {
@@ -255,17 +256,10 @@ function registryRevision(manifest: DkbSourceManifest): number {
   return revision;
 }
 
-async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
-  const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
-  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await fs.rename(target, backup);
-  try {
-    await fs.rename(temp, target);
-    await fs.rm(backup, { force: true });
-  } catch (error) {
-    await fs.rm(target, { force: true });
-    await fs.rename(backup, target);
-    throw error;
-  }
+export async function addLibraryRoot(libraryRoot: string, identity: string): Promise<SyncLibraryResult> {
+  return withLibraryMutation(libraryRoot, () => addLibraryRootOwned(libraryRoot, identity));
+}
+
+export async function removeLibraryRoot(libraryRoot: string, identity: string): Promise<SyncLibraryResult> {
+  return withLibraryMutation(libraryRoot, () => removeLibraryRootOwned(libraryRoot, identity));
 }

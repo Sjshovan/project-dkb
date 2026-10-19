@@ -16,6 +16,11 @@ are authoritative.
   compiler internals here.
 - Promote Runtime activations atomically. Library mutation is authoritative;
   stale Runtimes fail closed until refreshed and cannot serve removed evidence.
+- `runtime/mutation.ts` owns native shared-query/exclusive-mutation leases on
+  verified local state storage. Never reclaim ownership by PID or age, delete
+  prior-protocol guards, or upgrade a query's read authority. Docker state uses
+  Linux-local volumes independently of the Library; see
+  [ADR 0013](../../docs/decisions/0013-library-storage-ownership.md).
 - Resolve exact signed Evidence/Retrieval chains. Never choose a newest or
   partial match, and never mix compatibility spaces in one snapshot.
 - Preserve stable evidence identities, bounded untrusted-source output,

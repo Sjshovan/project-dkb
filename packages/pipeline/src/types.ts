@@ -290,6 +290,8 @@ export interface DkbPackagedIndexProvider extends DkbIndexProviderBase {
 
 export interface DkbManagedIndexProvider extends DkbIndexProviderBase {
   mode: 'managed';
+  /** Exact backing store/tenant digest. Exclude credentials; change on endpoint/namespace changes. */
+  storageIdentity(input: { options: DkbProviderOptions; signal?: AbortSignal }): Promise<string> | string;
   compilePackage(input: {
     artifactsRoot: string;
     dkb: LoadedDkb;

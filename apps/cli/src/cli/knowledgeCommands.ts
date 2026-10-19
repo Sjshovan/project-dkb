@@ -12,12 +12,9 @@ import { registerRemoteCommands } from './remoteCommands.js';
 import {
   summarizeCollectionInstall,
   summarizeCollectionRevision,
-  summarizeCollectionUninstall,
   summarizeInstalledPackages,
   summarizeInstallResult,
-  summarizeLibrarySync,
   summarizePublishResult,
-  summarizeRemoveResult,
   summarizeRetrievalResult,
 } from './summaries.js';
 
@@ -112,11 +109,20 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .option('--revision <revision>', 'Collection revision', parsePositiveInteger)
     .option('--target <name>', 'Exact compiled pipeline target for a DKB; defaults to the Registry target')
     .option('--url <url>', 'Registry API URL')
-    .option('--runtime-url <url>', 'Owning Runtime URL; closes live retrieval handles before installation')
+    .option('--runtime-url <url>', 'Refresh this Runtime after installation; never changes the destination Library')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
     .option('--force', 'Repair an incomplete install or replace an installed DKB')
     .action(async (packageId: string, options: { version?: string; revision?: number; target?: string; url?: string; runtimeUrl?: string; library?: string; force?: boolean }) => {
-      const libraryRoot = await currentLibraryRoot(options.library);
+      const { resolveCliLibraryReference } = await import('./context.js');
+      const reference = await resolveCliLibraryReference({ explicit: options.library });
+      if (reference.kind === 'docker') {
+        const { installCliDockerPackage } = await import('./packageInstallation.js');
+        await presenter().run('Installing knowledge', progress => installCliDockerPackage(reference, {
+          ...options, identity: packageId, progress, runtimeClient: currentRuntimeAdminClient,
+        }), value => value && typeof value === 'object' && 'collectionId' in value ? summarizeCollectionInstall(value) : summarizeInstallResult(value));
+        return;
+      }
+      const libraryRoot = reference.path;
       const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
       const { installDkbFromRegistry } = await import('@sjshovan/dkb-runtime/runtime/registryInstall.js');
       const { configuredRegistry } = await import('./registryConfig.js');
@@ -127,37 +133,13 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
       if (kind === 'collection') {
         if (options.version) throw new DkbError('--version applies to DKBs; use --revision for a Collection.');
         if (options.target) throw new DkbError('--target applies to DKBs. Install the Collection, then run dkb pipeline use <target>.');
-        const { installRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
-        await presenter().run('Installing Collection', async (progress) => {
-          const result = await installRegistryCollection({
-            client,
-            collectionId: packageId,
-            revision: options.revision,
-            libraryRoot,
-            progress,
-          });
-          if (options.runtimeUrl) await (await currentRuntimeAdminClient(options.runtimeUrl)).reload();
-          const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
-          return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
-        }, summarizeCollectionInstall);
+        const { installCliCollection } = await import('./packageInstallation.js');
+        await presenter().run('Installing Collection', progress => installCliCollection(reference, {
+          ...options, identity: packageId, progress, runtimeClient: currentRuntimeAdminClient,
+        }, client), summarizeCollectionInstall);
         return;
       }
       if (options.revision) throw new DkbError('--revision applies to Collections; use --version for a DKB.');
-
-      if (options.runtimeUrl) {
-        const runtime = await currentRuntimeAdminClient(options.runtimeUrl);
-        await presenter().run('Installing DKB', async () => {
-          const version = options.version ?? await client.latestPackageVersion(packageId);
-          const grant = await client.createInstallGrant(packageId, version, options.target);
-          return runtime.installRegistryDkb({
-          registryUrl: registryConfig.url,
-          installGrant: grant.installGrant,
-          plan: grant.plan,
-          force: Boolean(options.force),
-          });
-        }, summarizeInstallResult);
-        return;
-      }
 
       await presenter().run('Installing DKB', async (progress) => {
         const result = await installDkbFromRegistry({
@@ -169,8 +151,8 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
           force: Boolean(options.force),
           progress,
         });
-        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
-        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
+        const { refreshCliLibraryMutation } = await import('./libraryOperation.js');
+        return refreshCliLibraryMutation(result, reference, currentRuntimeAdminClient, options.runtimeUrl);
       }, summarizeInstallResult);
     });
 
@@ -181,17 +163,14 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .action(async (options: { library?: string }) => {
       const { listLibraryPackages } = await import('@sjshovan/dkb-runtime/runtime/state.js');
       const { configuredRegistry } = await import('./registryConfig.js');
-      const libraryRoot = await currentLibraryRoot(options.library);
-      const [listing, upstream] = await Promise.all([
-        listLibraryPackages(libraryRoot),
-        configuredRegistry({ root: libraryRoot }),
-      ]);
-
-      presenter().print({
-        ...listing,
-        registryUrl: upstream.url,
-        registrySource: upstream.source,
-      }, summarizeInstalledPackages);
+      const { executeCliLibraryOperation } = await import('./libraryOperation.js');
+      const result = await executeCliLibraryOperation({ library: options.library, command: 'library.packages' }, async libraryRoot => {
+        const [listing, upstream] = await Promise.all([
+          listLibraryPackages(libraryRoot), configuredRegistry({ root: libraryRoot }),
+        ]);
+        return { ...listing, registryUrl: upstream.url, registrySource: upstream.source };
+      });
+      presenter().print(result, summarizeInstalledPackages);
     });
 
   registerPackageLifecycleCommands(program, {
@@ -305,44 +284,12 @@ export function registerKnowledgeCommands(program: Command, runtime: Command, co
     .description('Uninstall a DKB or Collection from the current Library')
     .argument('<identity>', 'Scoped @namespace/name identity')
     .option('--library <library>', 'Library name or path; defaults to the nearest or selected Library')
-    .option('--url <url>', 'Owning Runtime URL; use when the Library is served by a running Runtime')
+    .option('--url <url>', 'Refresh this Runtime after removal; never changes the destination Library')
     .action(async (identity: string, options: { library?: string; url?: string }) => {
-      const { readLibraryState } = await import('@sjshovan/dkb-library/state.js');
-      const libraryRoot = await currentLibraryRoot(options.library);
-      const entry = (await readLibraryState(libraryRoot)).entries[identity];
-
-      if (entry?.kind === 'collection' && entry.source === 'registry') {
-        const { uninstallRegistryCollection } = await import('@sjshovan/dkb-runtime/runtime/collections.js');
-
-        await presenter().run(`Uninstalling Collection ${identity}`, async () => {
-          const result = await uninstallRegistryCollection({ libraryRoot, collectionId: identity });
-          if (options.url) await (await currentRuntimeAdminClient(options.url)).reload();
-          const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
-          return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
-        }, summarizeCollectionUninstall);
-        return;
-      }
-
-      if (entry?.kind === 'collection') {
-        const { removeLibraryRoot } = await import('@sjshovan/dkb-library/resolver.js');
-
-        await presenter().run(`Deactivating ${identity}`, async () => removeLibraryRoot(libraryRoot, identity), summarizeLibrarySync);
-        return;
-      }
-
-      if (options.url) {
-        const runtime = await currentRuntimeAdminClient(options.url);
-        await presenter().run(`Uninstalling ${identity}`, async () => runtime.removeDkb(identity), summarizeRemoveResult);
-        return;
-      }
-
-      const { removeDkbFromLibrary } = await import('@sjshovan/dkb-runtime/runtime/state.js');
-
-      await presenter().run(`Uninstalling ${identity}`, async (progress) => {
-        const result = await removeDkbFromLibrary(identity, libraryRoot, { progress });
-        const { refreshServingLocalRuntimes, withRuntimeRefreshes } = await import('../runtime/refresh.js');
-        return withRuntimeRefreshes(result, await refreshServingLocalRuntimes(libraryRoot, currentRuntimeAdminClient));
-      }, summarizeRemoveResult);
+      const { removeCliKnowledge, summarizeKnowledgeRemoval } = await import('./packageRemoval.js');
+      await presenter().run(`Uninstalling ${identity}`, progress => removeCliKnowledge({
+        identity, library: options.library, runtimeUrl: options.url, progress, runtimeClient: currentRuntimeAdminClient,
+      }), summarizeKnowledgeRemoval);
     });
 
   program

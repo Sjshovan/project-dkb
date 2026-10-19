@@ -651,6 +651,19 @@ test('Stack retains unresolved inactive recipes without silently restricting the
   await assert.rejects(prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'unavailable', { compilerTarget: 'fastembed-faiss' }), /override is incomplete/u);
 });
 
+test('Stack image preparation rejects changed recipe options even when service choices and model are unchanged', async t => {
+  const { stackRoot } = await isolatedStack(t, 'recipe-drift');
+  const current = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'recipe-drift');
+  const compilerFile = path.join(stackRoot, 'compiler-context', '.dkb', 'config.json');
+  const runtimeFile = path.join(stackRoot, 'runtime', '.dkb', 'config.json');
+  const edited = JSON.parse(await fs.readFile(compilerFile, 'utf8'));
+  edited.targets = { default: { options: { '@dkb/embedding-tei': { dimensions: 769 } } } };
+  await fs.writeFile(compilerFile, JSON.stringify(edited));
+  const before = await Promise.all([compilerFile, runtimeFile].map(file => fs.readFile(file, 'utf8')));
+  await assert.rejects(writeStackProviderIdentityConfig(current, stackImageDigests(current), DEFAULT_DKB_DISTRIBUTION), /configuration changed/u);
+  assert.deepEqual(await Promise.all([compilerFile, runtimeFile].map(file => fs.readFile(file, 'utf8'))), before);
+});
+
 test('Stack refuses conflicting shared service options and preserves explicit image pins', async t => {
   const { stackRoot } = await isolatedStack(t, 'conflict');
   const current = await prepareDkbStack(DEFAULT_DKB_DISTRIBUTION, 'conflict');
@@ -665,7 +678,7 @@ test('Stack refuses conflicting shared service options and preserves explicit im
   await fs.writeFile(compilerPath, JSON.stringify(pinned));
   const compilerBefore = await fs.readFile(compilerPath, 'utf8');
   const runtimeBefore = await fs.readFile(runtimePath, 'utf8');
-  await assert.rejects(writeStackProviderIdentityConfig(current, stackImageDigests(current), DEFAULT_DKB_DISTRIBUTION), /will not overwrite operator options/u);
+  await assert.rejects(writeStackProviderIdentityConfig(await readDkbStack(DEFAULT_DKB_DISTRIBUTION, 'conflict'), stackImageDigests(current), DEFAULT_DKB_DISTRIBUTION), /will not overwrite operator options/u);
   assert.equal(await fs.readFile(compilerPath, 'utf8'), compilerBefore);
   assert.equal(await fs.readFile(runtimePath, 'utf8'), runtimeBefore);
 });

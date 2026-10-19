@@ -12,6 +12,7 @@ import { assertNoSymlinkPath } from '@sjshovan/dkb-protocol/security/sourceConte
 import { listPackageBuilds } from './builds.js';
 import { readEvidenceCatalog } from './evidenceCatalog.js';
 import { libraryStatePath, readLibraryState } from './state.js';
+import { assertLibraryReadFence, captureLibraryReadFence } from './mutation.js';
 
 interface EvidenceInspectionInput {
   libraryRoot: string; identity: string; version: string; evidenceDigest: string; evidenceId: string;
@@ -28,6 +29,7 @@ export async function inspectInstalledEvidence(input: EvidenceInspectionInput): 
 
 async function inspectEvidence(input: EvidenceInspectionInput): Promise<DkbEvidenceInspection> {
   const root = path.resolve(input.libraryRoot);
+  const fence = await captureLibraryReadFence(root);
   const identity = parseDkbIdentity(input.identity, 'Evidence package identity').identity;
   if (!/^sha256:[a-f0-9]{64}$/u.test(input.evidenceDigest) || !/^sha256:[a-f0-9]{64}$/u.test(input.evidenceId)) {
     throw new DkbError('Evidence inspection requires an exact Evidence Build digest and Evidence ID.', 'invalid_evidence_inspection');
@@ -77,6 +79,7 @@ async function inspectEvidence(input: EvidenceInspectionInput): Promise<DkbEvide
     throw new DkbError(`The Library changed during Evidence inspection. ${recovery}`, 'historical_evidence_changed');
   }
   await assertFileSnapshotCurrent(snapshot);
+  await assertLibraryReadFence(root, fence);
   return result;
 }
 

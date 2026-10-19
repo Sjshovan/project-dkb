@@ -5,6 +5,9 @@ import path from 'node:path';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { AsyncResource } from 'node:async_hooks';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
@@ -31,7 +34,10 @@ import { generateSigningKeyPair } from '@sjshovan/dkb-library/signing.js';
 import { pinRegistryTrustedKeys, readPinnedRegistryKeys } from '../services/runtime/dist/runtime/registryTrust.js';
 import { verifyRetainedRegistryBuild } from '@sjshovan/dkb-runtime/runtime/registryInstall.js';
 import { signRuntimeFixture } from './runtime-trust-fixture.mjs';
-import { cleanupRuntimeIndexPackage, verifyRuntimeIndex } from '../services/runtime/dist/providers/runtimeIndex.js';
+import { verifyRuntimeIndex } from '../services/runtime/dist/providers/runtimeIndex.js';
+import { refreshRuntimeActivation } from '../services/runtime/dist/runtime/pipelineSwitch.js';
+import { removeDkbFromLibrary } from '../services/runtime/dist/runtime/packageLifecycle.js';
+import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
 import { runtimePipelineCatalog } from '../services/runtime/dist/runtime/pipelineCatalog.js';
 import { verifyInstalledBuildTrust } from '../services/runtime/dist/runtime/buildTrust.js';
 import { createDkbPackageArchive } from '@sjshovan/dkb-library/archive.js';
@@ -1062,11 +1068,211 @@ test('Runtime validates managed index install, verify, and uninstall results bef
   malformed = { indexId: 'test', documentCount: 1, status: 'removed' };
   await assert.rejects(() => verifyRuntimeIndex({ ...common, activation: instance.activation }), /inconsistent/);
   operation = 'uninstall';
+  await removeDkbFromLibrary(fixture.packageId, fixture.libraryRoot);
   malformed = { indexId: 'test', documentCount: 1, status: 'orphaned' };
-  await assert.rejects(() => cleanupRuntimeIndexPackage(common), /inconsistent/);
+  const incomplete = await refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot });
+  assert.equal(incomplete.indexCleanup.pending, 1);
+  assert.match(incomplete.warning, /cleanup.*needs attention/);
   malformed = { indexId: 'test', documentCount: 0, status: 'orphaned', warning: 'Delete the unused test index after restoring its service.' };
-  assert.equal((await cleanupRuntimeIndexPackage(common)).status, 'orphaned');
-  assert.deepEqual(await activationBytes(fixture.runtimeRoot), previous);
+  assert.equal((await refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot })).indexCleanup.pending, 1);
+  malformed = { indexId: 'test', documentCount: 0, status: 'removed' };
+  assert.equal((await refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot })).indexCleanup.removed, 1);
+  assert.deepEqual((await ensureRuntimeState(fixture.runtimeRoot)).activation.packages, {});
+});
+
+test('managed retention preserves concurrent spaces, then cleans only removed Library versions under ownership', async (t) => {
+  const fixture = await createWarmRuntimeFixture(t, { managed: true });
+  await ensurePackageBuildForTarget(fixture.packageRoot, { target: 'tei', contextRoot: fixture.libraryRoot });
+  const second = path.join(fixture.root, 'second-runtime');
+  await ensureRuntimeState(second, { runtimeId: 'second', libraryRoot: fixture.libraryRoot, target: 'fast' });
+  const createHost = DkbProviderHost.create.bind(DkbProviderHost);
+  const removed = [];
+  let queuedMutation;
+  let writerEntered = false;
+  const independent = new AsyncResource('independent-index-reinstall');
+  t.after(() => independent.emitDestroy());
+  t.mock.method(DkbProviderHost, 'create', async (...args) => {
+    const host = await createHost(...args);
+    host.provider('index').uninstallPackage = async (input) => {
+      removed.push([input.libraryRoot, input.packageId, input.packageVersion]);
+      // A concurrent process cannot reinstall between the absent-version check and deletion.
+      if (!queuedMutation) {
+        queuedMutation = independent.runInAsyncScope(() => withDkbFileLock(fixture.libraryRoot, 'library-mutation', async () => { writerEntered = true; }));
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.equal(writerEntered, false, 'the Library lease covers the external delete');
+      }
+      assert.equal(input.packageId, fixture.packageId);
+      assert.equal(input.packageVersion, '1.0.0');
+      return { indexId: 'all-retired-package-spaces', documentCount: 0, status: 'removed' };
+    };
+    return host;
+  });
+  const refresh = stateRoot => refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot });
+  await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: second, target: 'fast' });
+  const otherBefore = await activationBytes(second);
+  const changed = await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot, target: 'tei' });
+  assert.equal(changed.indexCleanup.retained, 2, 'inactive and active spaces are both retained');
+  assert.equal(removed.length, 0);
+  assert.deepEqual(await activationBytes(second), otherBefore);
+  await removeDkbFromLibrary(fixture.packageId, fixture.libraryRoot);
+  await assert.rejects(() => searchRuntime({ stateRoot: second, runtime: DEFAULT_DKB_RUNTIME_CONTEXT, query: 'PIPELINE-SWITCH-42' }), /changed|stale|refresh/i);
+  const result = await refresh(fixture.runtimeRoot);
+  assert.equal(result.indexCleanup.removed, 2);
+  assert.equal(result.indexCleanup.pending, 0);
+  assert.deepEqual(await activationBytes(second), otherBefore, 'cleanup never writes another Runtime activation');
+  await queuedMutation;
+  assert.equal(writerEntered, true);
+  assert.equal((await refresh(fixture.runtimeRoot)).indexCleanup.removed, 0, 'successful cleanup receipts are consumed');
+  assert.equal((await refresh(second)).indexCleanup.removed, 1, 'another Runtime may idempotently reconcile the same retired version');
+  assert.equal(removed.every(([root]) => root === fixture.libraryRoot), true);
+});
+
+test('managed cleanup persists retry authority, rejects recipe drift and malformed receipts, and never rolls back activation', async (t) => {
+  const fixture = await createWarmRuntimeFixture(t, { managed: true });
+  const createHost = DkbProviderHost.create.bind(DkbProviderHost);
+  let behavior = 'throws';
+  let calls = 0;
+  t.mock.method(DkbProviderHost, 'create', async (...args) => {
+    const host = await createHost(...args);
+    if (behavior === 'storage-drift') host.provider('index').storageIdentity = () => `sha256:${'b'.repeat(64)}`;
+    host.provider('index').uninstallPackage = async () => {
+      calls++;
+      if (behavior === 'throws') throw new Error('secret fixture provider credential must not escape');
+      return { indexId: 'test', documentCount: 0, status: 'removed' };
+    };
+    return host;
+  });
+  const directory = path.join(fixture.runtimeRoot, '.dkb', 'managed-index-retention');
+  const [filename] = await fs.readdir(directory);
+  const receipt = path.join(directory, filename);
+  const bytes = await fs.readFile(receipt);
+  await removeDkbFromLibrary(fixture.packageId, fixture.libraryRoot);
+  const refresh = () => refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot });
+  const failed = await refresh();
+  assert.equal(failed.indexCleanup.pending, 1);
+  assert.match(failed.warning, /dkb runtime refresh warm-drift/);
+  assert.doesNotMatch(JSON.stringify(failed), /secret fixture/);
+  assert.deepEqual((await ensureRuntimeState(fixture.runtimeRoot)).activation.packages, {});
+  assert.deepEqual(await fs.readFile(receipt), bytes);
+  const configPath = path.join(fixture.libraryRoot, '.dkb', 'config.json');
+  const configBytes = await fs.readFile(configPath);
+  const changed = JSON.parse(configBytes);
+  changed.targets.fast.options = { '@test/core': { service: 'a-different-service' } };
+  await writeJson(configPath, changed);
+  behavior = 'removed';
+  assert.equal((await refresh()).indexCleanup.pending, 1);
+  assert.equal(calls, 1, 'changed provider options cannot authorize cleanup');
+  await fs.writeFile(configPath, configBytes);
+  behavior = 'storage-drift';
+  assert.equal((await refresh()).indexCleanup.pending, 1);
+  assert.equal(calls, 1, 'an environment-resolved store change cannot authorize cleanup');
+  behavior = 'removed';
+  await fs.writeFile(receipt, '{broken');
+  assert.equal((await refresh()).indexCleanup.pending, 1);
+  assert.equal(calls, 1, 'invalid receipt grants no deletion authority');
+  await fs.writeFile(receipt, bytes);
+  const invalid = Array.from({ length: 23 }, (_, index) => path.join(directory, `invalid-${index}.json`));
+  for (const file of invalid) await fs.writeFile(file, '{broken');
+  const bounded = await refresh();
+  assert.equal(bounded.indexCleanup.pending, 23);
+  assert.equal(bounded.indexCleanup.warnings.length, 21, 'twenty details plus a bounded summary');
+  assert.match(bounded.indexCleanup.warnings.at(-1), /3 additional cleanup scopes/);
+  for (const file of invalid) await fs.unlink(file);
+  assert.equal(bounded.indexCleanup.removed, 1, 'the valid receipt reconciles independently');
+  const recovered = await refresh();
+  assert.equal(recovered.indexCleanup.removed, 0);
+  assert.equal(recovered.warning, undefined);
+  assert.equal((await fs.readdir(directory)).length, 0);
+});
+
+test('managed cleanup of an upgraded version preserves the installed release and records before provider import', async (t) => {
+  const fixture = await createWarmRuntimeFixture(t, { managed: true });
+  const manifest = path.join(fixture.packageRoot, 'dkb.json');
+  await writeJson(manifest, { ...JSON.parse(await fs.readFile(manifest, 'utf8')), version: '1.1.0' });
+  // Model replacement by another package release, not mutation of the old build graph.
+  await fs.rm(path.join(fixture.packageRoot, '.dkb', 'builds'), { recursive: true });
+  await compileComposeProject(fixture.packageRoot, { force: true, target: 'fast', contextRoot: fixture.libraryRoot });
+  const lock = libraryLock(fixture.packageId, 2);
+  lock.entries[fixture.packageId].version = '1.1.0';
+  await applyLibraryLock(fixture.libraryRoot, lock);
+  const createHost = DkbProviderHost.create.bind(DkbProviderHost);
+  const removals = [];
+  t.mock.method(DkbProviderHost, 'create', async (...args) => {
+    const host = await createHost(...args);
+    const index = host.provider('index');
+    const install = index.installPackage.bind(index);
+    index.installPackage = async input => {
+      const dir = path.join(fixture.runtimeRoot, '.dkb', 'managed-index-retention');
+      const records = await Promise.all((await fs.readdir(dir)).map(async name => JSON.parse(await fs.readFile(path.join(dir, name), 'utf8'))));
+      assert.equal(records.some(record => record.packageVersion === '1.1.0'), true, 'receipt precedes remote side effects');
+      return install(input);
+    };
+    index.uninstallPackage = async input => {
+      removals.push(input.packageVersion);
+      return { indexId: 'old-version-only', documentCount: 0, status: 'removed' };
+    };
+    return host;
+  });
+  const result = await refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: fixture.runtimeRoot });
+  assert.deepEqual(removals, ['1.0.0']);
+  assert.equal(result.indexCleanup.retained, 1);
+  assert.equal(result.packages[0].version, '1.1.0');
+});
+
+test('real Meilisearch refresh reclaims retired spaces without touching another Library and reimports retained builds', {
+  skip: process.env.DKB_RUN_MANAGED_INDEX_PROOF !== '1', timeout: 120_000,
+}, async t => {
+  const execute = promisify(execFile);
+  const container = `dkb-managed-retention-${randomUUID()}`;
+  const image = process.env.DKB_MANAGED_INDEX_PROOF_IMAGE;
+  assert.match(image ?? '', /^sha256:[a-f0-9]{64}$/u, 'select an already installed immutable Meilisearch image');
+  const key = `synthetic-${randomUUID()}`;
+  const docker = (...args) => execute('docker', args, { windowsHide: true, timeout: 30_000, env: { ...process.env, MEILI_MASTER_KEY: key } });
+  await docker('run', '-d', '--rm', '--name', container, '--label', 'dev.dkb.managed-retention-proof=true',
+    '--memory', '512m', '--cpus', '1', '--tmpfs', '/meili_data', '-p', '127.0.0.1::7700',
+    '-e', 'MEILI_MASTER_KEY', '-e', 'MEILI_NO_ANALYTICS=true', image);
+  t.after(() => docker('rm', '-f', container));
+  const port = (await docker('port', container, '7700/tcp')).stdout.trim().split(':').at(-1);
+  const origin = `http://127.0.0.1:${port}`;
+  const request = async endpoint => {
+    const response = await fetch(origin + endpoint, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) });
+    assert.equal(response.ok, true, await response.clone().text());
+    return response.json();
+  };
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    try { await request('/health'); break; }
+    catch (error) { if (Date.now() > deadline) throw error; await new Promise(resolve => setTimeout(resolve, 150)); }
+  }
+  const previousUrl = process.env.DKB_TEST_RETENTION_MEILI_URL;
+  const previousKey = process.env.DKB_TEST_RETENTION_MEILI_KEY;
+  process.env.DKB_TEST_RETENTION_MEILI_URL = origin;
+  process.env.DKB_TEST_RETENTION_MEILI_KEY = key;
+  t.after(() => {
+    for (const [name, value] of [['DKB_TEST_RETENTION_MEILI_URL', previousUrl], ['DKB_TEST_RETENTION_MEILI_KEY', previousKey]]) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  });
+  const first = await createWarmRuntimeFixture(t, { managedService: true });
+  const other = await createWarmRuntimeFixture(t, { managedService: true });
+  const indexes = async () => (await request('/indexes?limit=100')).results.map(entry => entry.uid).sort();
+  const otherIndexes = await indexes();
+  assert.equal(otherIndexes.length, 2);
+  await ensurePackageBuildForTarget(first.packageRoot, { target: 'tei', contextRoot: first.libraryRoot });
+  await switchRuntimePipelineFromRegistry({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: first.runtimeRoot, target: 'tei' });
+  assert.equal((await indexes()).length, 3, 'inactive space remains installed');
+  const stored = await listPackageBuilds(first.packageRoot);
+  await removeDkbFromLibrary(first.packageId, first.libraryRoot);
+  const refresh = await refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: first.runtimeRoot });
+  assert.equal(refresh.indexCleanup.pending, 0, refresh.warning);
+  assert.equal((await indexes()).length, 1, 'only the other Library survives');
+  assert.equal((await searchRuntime({ stateRoot: other.runtimeRoot, runtime: DEFAULT_DKB_RUNTIME_CONTEXT, query: 'PIPELINE-SWITCH-42' })).results.length, 1);
+  await writeJson(path.join(first.libraryRoot, 'dkb.json'), { type: 'library', name: 'Warm Runtime Library', roots: { [first.packageId]: { path: 'knowledge' } } });
+  await applyLibraryLock(first.libraryRoot, libraryLock(first.packageId, 3));
+  await refreshRuntimeActivation({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, stateRoot: first.runtimeRoot });
+  assert.deepEqual(await listPackageBuilds(first.packageRoot), stored, 'no compilation on reactivation');
+  assert.equal((await indexes()).length, 2);
+  assert.equal((await searchRuntime({ stateRoot: first.runtimeRoot, runtime: DEFAULT_DKB_RUNTIME_CONTEXT, query: 'PIPELINE-SWITCH-42' })).results.length, 1);
 });
 
 test('managed preparation never guesses ownership from malformed install results', async (t) => {
@@ -1181,7 +1387,7 @@ function libraryLock(packageId, generation) {
   };
 }
 
-async function createWarmRuntimeFixture(t, { stalledObserver = false, managed = false } = {}) {
+async function createWarmRuntimeFixture(t, { stalledObserver = false, managed = false, managedService = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-warm-drift-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const libraryRoot = path.join(root, 'library');
@@ -1195,7 +1401,7 @@ async function createWarmRuntimeFixture(t, { stalledObserver = false, managed = 
     manifestVersion: 1, type: 'dkb', name: packageId, version: '1.0.0', permissions: { read: true, write: false },
   });
   await fs.writeFile(path.join(packageRoot, 'knowledge.md'), 'The retained build marker is PIPELINE-SWITCH-42.\n', 'utf8');
-  await writePipelinePlugins(libraryRoot, { managed });
+  await writePipelinePlugins(libraryRoot, { managed, managedService });
   if (stalledObserver) {
     await writePlugin(libraryRoot, '@test', 'failing-observer', `
 export const apiVersion=3; export const id='@test/failing-observer'; export const version='1.0.0'; export const optionsSchema={'~standard':{version:1,vendor:'test',validate(value){return {value:value??{}};}}};
@@ -1215,12 +1421,18 @@ async function activationBytes(runtimeRoot) {
   return fs.readFile(path.join(runtimeRoot, ...DKB_RUNTIME_ACTIVATION_PATH.split('/')));
 }
 
-async function writePipelinePlugins(root, { managed = false } = {}) {
+async function writePipelinePlugins(root, { managed = false, managedService = false } = {}) {
+  const index = managedService ? '@dkb/index-meilisearch' : '@test/core';
+  const retrieval = managedService ? '@dkb/retrieval-hybrid' : '@test/core';
+  const options = managedService ? { '@dkb/index-meilisearch': {
+    urlEnv: 'DKB_TEST_RETENTION_MEILI_URL', apiKeyEnv: 'DKB_TEST_RETENTION_MEILI_KEY', timeoutMs: 10_000,
+    imageDigest: process.env.DKB_MANAGED_INDEX_PROOF_IMAGE,
+  } } : {};
   await writeJson(path.join(root, '.dkb', 'config.json'), {
     format: 'dkb.config.v2', activeTarget: 'fast',
     targets: {
-      fast: { evidence: '@test/core', embedding: '@test/fast', index: '@test/core', retrieval: '@test/core', observers: ['@test/core', '@test/failing-observer'] },
-      tei: { evidence: '@test/core', embedding: '@test/tei', index: '@test/core', retrieval: '@test/core', observers: ['@test/core', '@test/failing-observer'] },
+      fast: { evidence: '@test/core', embedding: '@test/fast', index, options, retrieval, observers: ['@test/core', '@test/failing-observer'] },
+      tei: { evidence: '@test/core', embedding: '@test/tei', index, options, retrieval, observers: ['@test/core', '@test/failing-observer'] },
     },
   });
   await writePlugin(root, '@test', 'core', `
@@ -1228,8 +1440,8 @@ import fs from 'node:fs/promises'; import path from 'node:path';
   export const apiVersion=3; export const id='@test/core'; export const version='1.0.0'; export const optionsSchema={'~standard':{version:1,vendor:'test',validate(value){return {value:value??{}};}}};
 export function setup(context) {
   context.registerProvider({kind:'evidence',async compile({dkb}){const text=await fs.readFile(path.join(dkb.root,'knowledge.md'),'utf8');return {records:[{id:'record-1',chunkId:'record-1',text,provenance:{assetId:'knowledge.md',storeId:'filesystem',sourceType:'filesystem',locator:{path:'knowledge.md',chunk:0},assetLocator:{path:'knowledge.md'},title:'knowledge.md',sourceHash:'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',updatedAt:'2026-08-28T00:00:00.000Z',chunkOrdinal:0,chunkStart:0,chunkEnd:text.length},metadata:{dkb_path:'knowledge.md',dkb_source_hash:'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}],receipt:{build:{}}};}});
-  context.registerProvider({kind:'index',mode:'${managed ? 'managed' : 'packaged'}',format:'test.index.v1',capabilities:{vectors:'required'},async compilePackage({artifactsRoot,compiled}){const target=path.join(artifactsRoot,'test-index.json');await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,JSON.stringify(compiled.records));return {build:{recordCount:compiled.records.length}};},async validatePackage({artifactsRoot}){const records=JSON.parse(await fs.readFile(path.join(artifactsRoot,'test-index.json'),'utf8'));return {documentCount:records.length};},${managed ? "async installPackage(){return {indexId:'test',documentCount:1,status:'ready',created:false};},async discardPackage({indexId}){return {indexId,documentCount:0,status:'removed'};},async uninstallPackage(){return {indexId:'test',documentCount:0,status:'removed'};}," : ''}async verifyRuntime(){return {indexId:'test',documentCount:1,status:'ready'};},async openRuntime(){return null;}});
-  context.registerProvider({kind:'retrieval',protocol:'dkb.evidence.v1',capabilities:{vectors:'optional'},openRuntime({evidence}){const evidenceId=evidence.records[0]?.evidenceId;return {providerId:id,protocol:'dkb.evidence.v1',async search({query}){const matchedTokens=query.toLowerCase().includes('pipeline-switch-42')?['pipeline-switch-42','pipeline','switch','42']:[];return {hits:evidenceId&&matchedTokens.length?[{evidenceId,score:0.99,channels:['lexical'],matchedTokens}]:[],trace:{mode:'fixture'}};},async close(){}};}});
+  if (${!managedService}) context.registerProvider({kind:'index',mode:'${managed ? 'managed' : 'packaged'}',format:'test.index.v1',capabilities:{vectors:'required'},async compilePackage({artifactsRoot,compiled}){const target=path.join(artifactsRoot,'test-index.json');await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,JSON.stringify(compiled.records));return {build:{recordCount:compiled.records.length}};},async validatePackage({artifactsRoot}){const records=JSON.parse(await fs.readFile(path.join(artifactsRoot,'test-index.json'),'utf8'));return {documentCount:records.length};},${managed ? "storageIdentity(){return 'sha256:'+'a'.repeat(64);},async installPackage(){return {indexId:'test',documentCount:1,status:'ready',created:false};},async discardPackage({indexId}){return {indexId,documentCount:0,status:'removed'};},async uninstallPackage(){return {indexId:'test',documentCount:0,status:'removed'};}," : ''}async verifyRuntime(){return {indexId:'test',documentCount:1,status:'ready'};},async openRuntime(){return null;}});
+  if (${!managedService}) context.registerProvider({kind:'retrieval',protocol:'dkb.evidence.v1',capabilities:{vectors:'optional'},openRuntime({evidence}){const evidenceId=evidence.records[0]?.evidenceId;return {providerId:id,protocol:'dkb.evidence.v1',async search({query}){const matchedTokens=query.toLowerCase().includes('pipeline-switch-42')?['pipeline-switch-42','pipeline','switch','42']:[];return {hits:evidenceId&&matchedTokens.length?[{evidenceId,score:0.99,channels:['lexical'],matchedTokens}]:[],trace:{mode:'fixture'}};},async close(){}};}});
   context.registerQueryObserver({id:'@test/core',version:'1.0.0',async observe(event,{root}){const auditPath=path.join(root,'.dkb','query-audit.sqlite');const auditPersisted=await fs.access(auditPath).then(()=>true,()=>false);const frozen=Object.isFrozen(event)&&Object.isFrozen(event.data);try{event.data.query='tampered';}catch{}const mutationBlocked=event.data.query!=='tampered';const output=path.join(root,'.dkb','observer-events.json');const previous=await fs.readFile(output,'utf8').then(JSON.parse,()=>[]);previous.push({eventId:event.eventId,auditPersisted,frozen,mutationBlocked});await fs.writeFile(output,JSON.stringify(previous));}});
 }`);
   await writePlugin(root, '@test', 'failing-observer', `

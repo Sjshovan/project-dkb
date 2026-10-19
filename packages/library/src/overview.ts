@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { discoverLibraryEntries, loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { readLibraryState } from './state.js';
+import { assertLibraryReadFence, captureLibraryReadFence } from './mutation.js';
 
 export interface LibraryOverviewEntry {
   identity: string;
@@ -24,13 +25,19 @@ export async function inspectLibraryOverview(libraryRoot: string): Promise<{
   entries: LibraryOverviewEntry[];
 }> {
   const root = path.resolve(libraryRoot);
+  const fence = await captureLibraryReadFence(root);
   const manifest = await loadManifest(root);
   if (manifest.type !== 'library') throw new Error(`Not a DKB Library: ${root}`);
-  const [direct, state, vendor] = await Promise.all([
+  const reads = await Promise.allSettled([
     discoverLibraryEntries(root),
     readLibraryState(root),
     discoverVendorEntries(root),
   ]);
+  await assertLibraryReadFence(root, fence);
+  if (reads[0].status === 'rejected') throw reads[0].reason;
+  if (reads[1].status === 'rejected') throw reads[1].reason;
+  if (reads[2].status === 'rejected') throw reads[2].reason;
+  const direct = reads[0].value, state = reads[1].value, vendor = reads[2].value;
   const entries = new Map<string, LibraryOverviewEntry>();
 
   for (const item of [...direct, ...vendor]) {
@@ -69,6 +76,7 @@ export async function inspectLibraryOverview(libraryRoot: string): Promise<{
   const counts = { installed: 0, inactive: 0, broken: 0, untracked: 0 };
   for (const entry of sorted) counts[entry.status] += 1;
 
+  await assertLibraryReadFence(root, fence);
   return {
     root,
     name: manifest.name,

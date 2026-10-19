@@ -230,8 +230,24 @@ export async function runCompilerService(
     if (!await confirmServiceTermination(state)) throw terminationUnconfirmed(state);
     await cleanupAndSettleWorker(state, pending, options.execution);
     if (options.signal?.aborted) throw options.signal.reason ?? new DkbError('Evidence compilation cancelled.', 'compile_cancelled');
-    throw new DkbError('LlamaIndex compiler service request failed after its worker acknowledged completion or cancellation.');
+    throw new DkbError(`Evidence compiler service request failed (${safeServiceFailure(error)}). Its worker acknowledged termination or safe completion, and scratch was cleaned up. Check the selected Evidence service health before retrying.`, 'compiler_service_request_failed');
   }
+}
+
+// Never include service bodies, URLs or arbitrary exception messages: they may
+// contain source text or worker credentials. Retain only known failure classes.
+function safeServiceFailure(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  switch (code) {
+    case 'ECONNRESET': return 'connection reset';
+    case 'ECONNREFUSED': return 'connection refused';
+    case 'ETIMEDOUT': return 'connection timed out';
+    case 'ENOTFOUND': return 'service host not found';
+    case 'EAI_AGAIN': return 'service host lookup temporarily unavailable';
+  }
+  if (error instanceof SyntaxError) return 'invalid JSON response';
+  if (error instanceof DkbError) return 'worker validation or cleanup failure';
+  return 'transport or response failure';
 }
 
 /** Only the concrete provider interprets opaque recovery state or worker handles. */
@@ -399,10 +415,17 @@ async function terminateOwnedContainer(state: WorkerState): Promise<boolean> {
     const id = container.Id;
     if (container.State.Running || container.State.Restarting) {
       try { await execFile('docker', ['stop', '--time', '3', id], { timeout: 5_000 }); }
-      catch { await execFile('docker', ['kill', id], { timeout: 5_000 }); }
+      catch { /* The client may fail after the daemon stopped the worker. */ }
       container = await inspectOwnedContainer(state);
       if (!container) return true;
-      if (container.Id !== id || container.State.Running || container.State.Restarting) return false;
+      if (container.Id !== id) return false;
+      if (container.State.Running || container.State.Restarting) {
+        try { await execFile('docker', ['kill', id], { timeout: 5_000 }); }
+        catch { /* Only a fresh owned-container inspection can confirm termination. */ }
+        container = await inspectOwnedContainer(state);
+        if (!container) return true;
+        if (container.Id !== id || container.State.Running || container.State.Restarting) return false;
+      }
     }
     if (container.State.Status !== 'created') await execFile('docker', ['wait', id], { timeout: 5_000 });
     await execFile('docker', ['rm', id], { timeout: 5_000 });

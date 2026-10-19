@@ -166,6 +166,15 @@ that method separately from `uninstallPackage`: it must reject a foreign index
 ID and never remove another Pipeline's retained index. An unsupported or failed
 cleanup produces an actionable orphan warning, not a broad uninstall fallback.
 
+Managed API v3 providers also implement `storageIdentity({ options, signal })`:
+return an exact `sha256:` digest identifying the resolved backing store and tenant
+or namespace. The same storage must return the same identity; changing an
+environment-resolved endpoint must change it. Credential rotation must not change
+it, and credentials must not be included. This operational identity is separate
+from build compatibility. The public conformance suite rejects invalid or unstable
+identities. Existing development managed plugins must add this method; there is
+no guessed identity or silent cleanup fallback.
+
 Runtime observer health is keyed to the exact activation and records each
 selected observer's last result plus cumulative success and failure counts in
 the existing Runtime audit database. Inspect it with `dkb runtime show` or the

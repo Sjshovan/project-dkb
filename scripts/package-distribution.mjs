@@ -68,19 +68,25 @@ async function installedSeeds(npmCli, workspace, repositoryRoot, signal) {
 export async function inspectPackageArchive(archive) {
   const paths = [];
   let manifestText = '';
+  let rejection;
   await listTar({ file: archive, onReadEntry(entry) {
-    if (!['File', 'Directory'].includes(entry.type)) throw new Error(`Package archive contains an unsupported ${entry.type} entry: ${entry.path}`);
-    const relative = entry.path.replace(/^package\//u, '');
-    if (!entry.path.startsWith('package/') || relative.includes('\\') || relative.split('/').includes('..') || path.posix.isAbsolute(relative)) {
-      throw new Error(`Package archive contains an unsafe path: ${entry.path}`);
-    }
-    if (entry.type !== 'File') return;
-    paths.push(relative);
-    if (relative === 'package.json') {
-      if (entry.size > 2 * 1024 * 1024) throw new Error('Package manifest exceeds the inspection limit.');
-      entry.on('data', bytes => { manifestText += bytes.toString('utf8'); });
-    }
+    if (rejection) return;
+    try {
+      if (!['File', 'Directory'].includes(entry.type)) throw new Error(`Package archive contains an unsupported ${entry.type} entry: ${entry.path}`);
+      const relative = entry.path.replace(/^package\//u, '');
+      if (!entry.path.startsWith('package/') || relative.includes('\\') || relative.split('/').includes('..') || path.posix.isAbsolute(relative)) {
+        throw new Error(`Package archive contains an unsafe path: ${entry.path}`);
+      }
+      if (entry.type !== 'File') return;
+      paths.push(relative);
+      if (relative === 'package.json') {
+        if (entry.size > 2 * 1024 * 1024) throw new Error('Package manifest exceeds the inspection limit.');
+        entry.on('data', bytes => { manifestText += bytes.toString('utf8'); });
+      }
+    } catch (error) { rejection = error; }
   } });
+  // Never throw out of tar's event callback: that bypasses release staging cleanup.
+  if (rejection) throw rejection;
   const forbidden = findForbiddenPackagePaths(paths);
   forbidden.push(...paths.filter(file => /(^|\/)(?:\.npmrc|\.git|\.cache|__pycache__)(\/|$)/iu.test(file)));
   if (forbidden.length) throw new Error(`Package archive contains forbidden files: ${[...new Set(forbidden)].join(', ')}`);

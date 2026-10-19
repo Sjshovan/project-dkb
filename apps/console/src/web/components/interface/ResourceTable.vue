@@ -23,7 +23,7 @@ const columns = computed<ConsoleDataTableColumn[]>(() => [
 function singular(kind: ResourceKind): 'library' | 'runtime' | 'registry' | 'stack' {
   return ({ libraries: 'library', runtimes: 'runtime', registries: 'registry', stacks: 'stack' } as const)[kind];
 }
-function resourceLocation(row: ResourceRow): string { return row.path ?? row.url ?? row.stateRoot ?? '—'; }
+function resourceLocation(row: ResourceRow): string { return row.location ?? row.path ?? row.url ?? row.stateRoot ?? '—'; }
 function resourceSubtitle(row: ResourceRow): string | undefined {
   return row.displayName && row.displayName !== row.name && row.displayName.toLowerCase() !== 'state' ? row.displayName : undefined;
 }

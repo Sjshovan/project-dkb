@@ -13,6 +13,10 @@ are authoritative.
 - Generate secrets into ignored host-local state. Do not commit defaults that
   can operate as credentials or copy secrets into locks, inventory, or images.
 - SQLite and local volumes are developer-preview defaults only.
+- Live Library, Runtime, compiler and Registry storage stays in Linux-local
+  external volumes. Never restore host bind mounts or let Compose create an
+  empty replacement for a missing recorded volume. See
+  [ADR 0013](../docs/decisions/0013-library-storage-ownership.md).
 - `down` preserves volumes, secrets, Libraries, and host inventory unless an
   explicit destructive command is added later.
 

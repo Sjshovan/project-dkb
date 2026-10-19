@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DKB_PACKAGE_RECEIPT_PATH, parsePackageReceipt } from '@sjshovan/dkb-library/signing.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
+import { captureLibraryReadFence, assertLibraryReadFence } from '@sjshovan/dkb-library/mutation.js';
 import { validateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
 import { libraryStateIdentity } from '@sjshovan/dkb-library/state.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
@@ -54,6 +55,7 @@ export type DkbRuntimePublicStatus = Omit<DkbRuntimeStatus, 'stateRoot' | 'libra
 
 export interface DkbRuntimePackageListing {
   libraryRoot: string;
+  generation: number;
   packages: Array<{
     id: string;
     version: string;
@@ -61,6 +63,8 @@ export interface DkbRuntimePackageListing {
     status: 'installed' | 'broken' | 'untracked';
     recordCount?: number;
     path: string;
+    source?: 'local' | 'registry';
+    registryUrl?: string;
   }>;
 }
 
@@ -179,6 +183,7 @@ export async function listLibraryPackages(
   activation: DkbRuntimeActivation | null = null,
 ): Promise<DkbRuntimePackageListing> {
   const resolvedLibraryRoot = path.resolve(libraryRoot);
+  const fence = await captureLibraryReadFence(resolvedLibraryRoot);
   const state = await readLibraryState(resolvedLibraryRoot);
   const candidates = new Map<string, string>();
 
@@ -218,16 +223,19 @@ export async function listLibraryPackages(
 
     return {
       id,
-      version: typeof manifest.version === 'string' ? manifest.version : stateEntry?.revision ? `r${stateEntry.revision}` : '-',
+      version: stateEntry?.version ?? (typeof manifest.version === 'string' ? manifest.version : stateEntry?.revision ? `r${stateEntry.revision}` : '-'),
       kind,
       status: stateEntry?.status ?? 'untracked' as const,
       ...(typeof recordCount === 'number' ? { recordCount } : {}),
       path: packagePath,
+      ...(stateEntry ? { source: stateEntry.source, ...(stateEntry.registryUrl ? { registryUrl: stateEntry.registryUrl } : {}) } : {}),
     };
   }));
 
+  await assertLibraryReadFence(resolvedLibraryRoot, fence);
   return {
     libraryRoot: resolvedLibraryRoot,
+    generation: state.generation,
     packages: packages.sort((left, right) => left.id.localeCompare(right.id)),
   };
 }

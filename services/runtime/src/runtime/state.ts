@@ -7,6 +7,7 @@ export {
   createRuntimeActivation,
   ensureRuntimeState,
   initializeRuntimeBinding,
+  inspectRuntimeSelection,
   maybeReadRuntimeActivation,
   maybeReadRuntimeBinding,
   maybeReadRuntimeBindingFromStateRoot,

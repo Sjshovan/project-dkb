@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { hostLibraryLocation, validateDockerLibraryStorage, type HostLibraryLocation, type DockerLibraryStorage } from './libraryLocation.js';
 
 export const DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v2';
 const LEGACY_DKB_HOST_INVENTORY_FORMAT = 'dkb.host.v1';
@@ -11,13 +12,15 @@ const processMutationTails = new Map<string, Promise<void>>();
 
 export type DkbHostRuntimeKind = 'process' | 'docker' | 'remote';
 
-export interface DkbHostLibraryRecord {
-  path: string;
+interface DkbHostLibraryMetadata {
   displayName: string;
   registry?: string;
   registeredAt: string;
   updatedAt: string;
 }
+
+export type DkbHostLibraryRecord = DkbHostLibraryMetadata & HostLibraryLocation;
+export type DkbHostLocalLibraryRecord = DkbHostLibraryMetadata & { path: string; storage?: never };
 
 export interface DkbHostRegistryRecord {
   url: string;
@@ -131,7 +134,7 @@ export async function readHostInventory(target = hostInventoryPath()): Promise<D
 export async function registerHostLibrary(
   libraryPath: string,
   options: RegisterHostLibraryOptions = {},
-): Promise<{ name: string; library: DkbHostLibraryRecord; registry?: { name: string; registry: DkbHostRegistryRecord } }> {
+): Promise<{ name: string; library: DkbHostLocalLibraryRecord; registry?: { name: string; registry: DkbHostRegistryRecord } }> {
   const library = await inspectLibraryPath(libraryPath);
 
   return mutateHostInventory(async (inventory) => {
@@ -157,7 +160,7 @@ export async function registerHostLibrary(
       registryName = registryResult.name;
     }
 
-    const record: DkbHostLibraryRecord = {
+    const record: DkbHostLocalLibraryRecord = {
       path: library.path,
       displayName: library.displayName,
       ...(registryName ? { registry: registryName } : {}),
@@ -175,6 +178,36 @@ export async function registerHostLibrary(
       },
       inventory,
     };
+  });
+}
+
+/** Register a previously verified owner handle; inventory remains convenience state. */
+export async function registerDockerHostLibrary(
+  storage: DockerLibraryStorage,
+  options: RegisterHostLibraryOptions & { displayName: string },
+): Promise<{ name: string; library: DkbHostLibraryRecord }> {
+  const owner = validateDockerLibraryStorage(storage);
+  const displayName = requiredString(options.displayName, 'Library display name');
+  return mutateHostInventory(async inventory => {
+    const existing = Object.entries(inventory.libraries).find(([, record]) =>
+      record.storage?.context === owner.context && record.storage.volume === owner.volume);
+    if (existing && options.name && existing[0] !== normalizeHostName(options.name, 'Library name')) {
+      throw new DkbError(`Docker Library ${owner.volume} is already registered as ${existing[0]}. Unregister it before assigning another name.`);
+    }
+    const name = existing?.[0] ?? availableName(inventory.libraries, options.name, displayName,
+      `${owner.context}/${owner.volume}`, 'Library name');
+    const now = new Date().toISOString();
+    const registry = options.registryUrl
+      ? ensureRegistryRecord(inventory, options.registryUrl, options.registryName, now).name
+      : existing?.[1].registry;
+    const library: DkbHostLibraryRecord = {
+      storage: owner, displayName,
+      ...(registry ? { registry } : {}),
+      registeredAt: existing?.[1].registeredAt ?? now, updatedAt: now,
+    };
+    inventory.libraries[name] = library;
+    applyDefault(inventory.defaults, 'library', name, options.select);
+    return { inventory, value: { name, library } };
   });
 }
 
@@ -196,7 +229,7 @@ export async function rebindMigratedStackLibrary(
 
     const expectedLegacyPath = path.join(stack.stateRoot, 'runtime');
     const expectedLibraryPath = path.join(stack.stateRoot, 'library');
-    if (comparablePath(existing.path) !== comparablePath(expectedLegacyPath)
+    if (existing.storage || comparablePath(existing.path) !== comparablePath(expectedLegacyPath)
       || comparablePath(library.path) !== comparablePath(expectedLibraryPath)) {
       throw new DkbError(`Stack ${normalizedStackName} Library migration does not match its legacy Runtime and Library paths.`);
     }
@@ -217,7 +250,7 @@ export async function rebindMigratedStackLibrary(
   });
 }
 
-export async function unregisterHostLibrary(nameOrPath: string): Promise<{ name: string; path: string; selectedCleared: boolean }> {
+export async function unregisterHostLibrary(nameOrPath: string): Promise<{ name: string; path?: string; location: string; selectedCleared: boolean }> {
   return mutateHostInventory(async (inventory) => {
     const resolved = await resolveLibraryEntry(inventory, nameOrPath);
 
@@ -244,7 +277,7 @@ export async function unregisterHostLibrary(nameOrPath: string): Promise<{ name:
     }
 
     return {
-      value: { name: resolved.name, path: resolved.record.path, selectedCleared },
+      value: { name: resolved.name, ...(resolved.record.path ? { path: resolved.record.path } : {}), location: hostLibraryLocation(resolved.record), selectedCleared },
       inventory,
     };
   });
@@ -258,7 +291,7 @@ export async function selectHostLibrary(nameOrPath: string): Promise<{ name: str
       throw new DkbError(`Unknown host Library: ${nameOrPath}. Register it with: dkb library register "${nameOrPath}"`);
     }
 
-    await inspectLibraryPath(resolved.record.path);
+    if (!resolved.record.storage) await inspectLibraryPath(resolved.record.path);
     inventory.defaults.library = resolved.name;
 
     return { value: { name: resolved.name, library: resolved.record }, inventory };
@@ -814,12 +847,12 @@ async function resolveLibraryEntry(
   return entryByPath(inventory.libraries, canonical);
 }
 
-function entryByPath<T extends { path: string }>(
+function entryByPath<T extends { path?: string }>(
   entries: Record<string, T>,
   candidate: string,
 ): { name: string; record: T } | null {
   const key = comparablePath(candidate);
-  const found = Object.entries(entries).find(([, entry]) => comparablePath(entry.path) === key);
+  const found = Object.entries(entries).find(([, entry]) => entry.path !== undefined && comparablePath(entry.path) === key);
 
   return found ? { name: found[0], record: found[1] } : null;
 }
@@ -851,9 +884,15 @@ function applyDefault(
 
 function validateLibraryRecord(value: unknown, source: string): DkbHostLibraryRecord {
   assertRecord(value, source);
-  assertOnlyKeys(value, ['path', 'displayName', 'registry', 'registeredAt', 'updatedAt'], source);
+  assertOnlyKeys(value, ['path', 'storage', 'displayName', 'registry', 'registeredAt', 'updatedAt'], source);
+  if (Object.hasOwn(value, 'storage') === Object.hasOwn(value, 'path')) {
+    throw new DkbError(`Invalid DKB host inventory at ${source}: exactly one local path or Docker storage descriptor is required.`);
+  }
+  const location: HostLibraryLocation = Object.hasOwn(value, 'storage')
+    ? { storage: validateDockerLibraryStorage(value.storage) }
+    : { path: requiredString(value.path, `${source} path`) };
   return {
-    path: requiredString(value.path, `${source} path`),
+    ...location,
     displayName: requiredString(value.displayName, `${source} displayName`),
     ...(value.registry === undefined ? {} : { registry: normalizeHostName(requiredString(value.registry, `${source} registry`), 'Registry name') }),
     registeredAt: requiredTimestamp(value.registeredAt, `${source} registeredAt`),

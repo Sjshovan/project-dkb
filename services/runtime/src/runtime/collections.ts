@@ -4,13 +4,15 @@ import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
 import { loadManifest } from '@sjshovan/dkb-protocol/manifest.js';
-import type { DkbLibraryLockManifest, DkbSourceManifest } from '@sjshovan/dkb-protocol/types.js';
-import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
-import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import type { DkbSourceManifest } from '@sjshovan/dkb-protocol/types.js';
+import { validateRegistryCollectionRevision } from '@sjshovan/dkb-protocol/registryCollections.js';
+import { readLibraryState, applyLibraryLock, maybeReadLibraryLock } from '@sjshovan/dkb-library/state.js';
+import { promoteLibraryPath, removeLibraryPath, withLibraryMutation, writeLibraryMutationFile } from '@sjshovan/dkb-library/mutation.js';
 import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
-import { DKB_INSTALL_PLAN_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
-import { DkbRegistryClient, type DkbRegistryCollectionRevision } from '@sjshovan/dkb-registry-client/client.js';
-import { installDkbPlanIntoLibraryWithinMutation, preflightDkbInstall } from './registryInstall.js';
+import type { DkbRegistryClient, DkbRegistryCollectionRevision } from '@sjshovan/dkb-registry-client/client.js';
+import { normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
+import { installDkbPlanIntoLibraryWithinMutation } from './registryInstall.js';
+import { prepareCollectionPlans } from './collectionPlans.js';
 import type { DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 
 export interface CollectionInstallResult {
@@ -22,8 +24,11 @@ export interface CollectionInstallResult {
   libraryRoot: string;
 }
 
+/** Acquisition only: native login and delegated grants share one transaction. */
+export type CollectionRegistrySource = Pick<DkbRegistryClient, 'baseUrl' | 'collectionRevision' | 'publicKeys' | 'installPlan' | 'writeInstallLayer'>;
+
 export async function installRegistryCollection(options: {
-  client: DkbRegistryClient;
+  client: CollectionRegistrySource;
   collectionId: string;
   revision?: number;
   libraryRoot?: string;
@@ -31,7 +36,7 @@ export async function installRegistryCollection(options: {
   progress?: DkbProgressReporter;
 }): Promise<CollectionInstallResult> {
   const libraryRoot = requiredLibraryRoot(options.libraryRoot);
-  return withDkbFileLock(libraryRoot, 'library-mutation', () => installRegistryCollectionUnlocked(options, libraryRoot));
+  return withLibraryMutation(libraryRoot, () => installRegistryCollectionUnlocked(options, libraryRoot));
 }
 
 async function installRegistryCollectionUnlocked(
@@ -39,84 +44,52 @@ async function installRegistryCollectionUnlocked(
   libraryRoot: string,
 ): Promise<CollectionInstallResult> {
   const collectionId = parseDkbIdentity(options.collectionId, 'Collection identity').identity;
-  const revision = await options.client.collectionRevision(collectionId, options.revision);
+  const revision = validateRegistryCollectionRevision(await options.client.collectionRevision(collectionId, options.revision), { collectionId, revision: options.revision });
   const state = await readLibraryState(libraryRoot);
   const current = state.entries[collectionId];
 
   if (current) {
     if (current.kind !== 'collection') throw new DkbError(`${collectionId} is already installed as a DKB.`);
-    if (current.revision === revision.revision && current.digest === revision.digest) {
-      const complete = await collectionMembersHaveInstallReceipts(libraryRoot, revision);
-      if (complete) return resultFor('already_installed', revision, libraryRoot);
-    } else if (!options.update) {
+    if (current.source !== 'registry') throw new DkbError(`Editable local Collection ${collectionId} cannot be replaced by a Registry Collection.`);
+    if (current.revision === revision.revision && current.digest !== revision.digest) {
+      throw new DkbError(`Collection ${collectionId}@r${revision.revision} changed its immutable digest.`);
+    }
+    if (current.registryUrl && normalizeRegistryUrl(current.registryUrl) !== normalizeRegistryUrl(options.client.baseUrl) && current.digest !== revision.digest) {
+      throw new DkbError(`Registry origin conflict for ${collectionId}. Uninstall it before changing its Registry origin.`);
+    }
+    if (current.revision !== revision.revision && !options.update) {
       throw new DkbError(`${collectionId}@r${current.revision ?? '?'} is already installed. Run collection update to move to r${revision.revision}.`);
     }
   }
 
-  assertNoDuplicateMembers(revision);
-  const releases = await Promise.all(revision.manifest.members.map(async (member) => {
-    const release = await options.client.packageRelease(member.id, member.version);
-    if (release.packageTreeHash !== member.digest) {
-      throw new DkbError(`Collection snapshot digest mismatch for ${member.id}@${member.version}.`);
-    }
-    return release;
-  }));
-
-  const replaceable = new Set<string>();
-  const unchanged = new Set<string>();
-  for (const release of releases) {
-    const installed = state.entries[release.packageId];
-    if (!installed) continue;
-    if (installed.kind !== 'dkb') throw new DkbError(`${release.packageId} is installed as a Collection, not a DKB.`);
-    if (installed.version === release.version && (!installed.digest || installed.digest === release.packageTreeHash)) {
-      if (await hasInstallPlanReceipt(libraryRoot, release.packageId)) unchanged.add(release.packageId);
-      else replaceable.add(release.packageId);
-      continue;
-    }
-
-    const allowedOwner = `collection:${collectionId}`;
-    if (!options.update || installed.requiredBy.some((owner) => owner !== allowedOwner)) {
-      throw new DkbError(
-        `Version conflict for ${release.packageId}: installed ${installed.version ?? '?'}, `
-        + `${collectionId}@r${revision.revision} requires ${release.version}.`,
-      );
-    }
-    replaceable.add(release.packageId);
+  const { members, trustedKeys, unchanged, replaceable } = await prepareCollectionPlans({ ...options, libraryRoot, revision });
+  if (current?.revision === revision.revision && unchanged.size === members.length) {
+    const installed = await loadManifest(path.resolve(libraryRoot, current.path));
+    const retained = validateRegistryCollectionRevision({
+      collectionId: installed.name, revision: installed.meta?.revision, digest: installed.meta?.digest,
+      manifest: { type: installed.type, id: installed.name, name: installed.displayName ?? installed.name,
+        revision: installed.meta?.revision, digest: installed.meta?.digest,
+        members: Object.entries(installed.members ?? {}).map(([id, version]) => ({ id, version, digest: state.entries[id]?.digest })),
+      },
+    }, { collectionId, revision: revision.revision });
+    if (retained.digest !== revision.digest) throw new DkbError(`Installed Collection ${collectionId} differs from its immutable Registry snapshot.`);
+    return resultFor('already_installed', revision, libraryRoot);
   }
 
-  const transaction = await snapshotLibraryMutation(libraryRoot, [
-    collectionId,
-    ...new Set([...releases.map((release) => release.packageId), ...currentCollectionMembers(state, collectionId)]),
-  ]);
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-collection-install-'));
   const originalManifest = await requireLibraryManifest(libraryRoot);
   const originalRootIds = new Set(Object.keys(originalManifest.roots ?? {}));
   const previousMemberIds = currentCollectionMembers(state, collectionId);
 
   try {
-    const keysResponse = await options.client.publicKeys();
-    const trustedKeys = isRecord(keysResponse) && Array.isArray(keysResponse.keys) ? keysResponse.keys : null;
-    if (!trustedKeys) throw new DkbError('Registry returned an invalid signing-key document.');
-
     if (current) {
       await prepareCollectionUpdate(libraryRoot, collectionId, state);
     }
 
-    for (const release of releases) {
+    for (const { release, plan } of members) {
       if (unchanged.has(release.packageId)) continue;
-      await preflightDkbInstall({
-        libraryRoot,
-        registryUrl: options.client.baseUrl,
-        candidate: release,
-        force: replaceable.has(release.packageId),
-      });
-    }
-
-    for (const release of releases) {
-      if (unchanged.has(release.packageId)) continue;
-      const layerRoot = path.join(tempRoot, safeFilename(release.packageId));
+      const layerRoot = path.join(tempRoot, ...release.packageId.split('/'));
       await fs.mkdir(layerRoot, { recursive: true });
-      const plan = await options.client.installPlan(release.packageId, release.version);
       for (const artifact of plan.artifacts) {
         const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
         await options.client.writeInstallLayer(artifact, path.join(layerRoot, `${artifact.kind}${extension}`), { progress: options.progress });
@@ -125,7 +98,7 @@ async function installRegistryCollectionUnlocked(
         plan,
         layerRoot,
         libraryRoot,
-        trustedKeys: trustedKeys as Parameters<typeof installDkbPlanIntoLibraryWithinMutation>[0]['trustedKeys'],
+        trustedKeys,
         registryUrl: options.client.baseUrl,
         force: replaceable.has(release.packageId),
         progress: options.progress,
@@ -136,32 +109,20 @@ async function installRegistryCollectionUnlocked(
     await activateCollectionRoot(
       libraryRoot,
       revision,
-      new Set([...releases.map((release) => release.packageId), ...previousMemberIds]),
+      new Set([...members.map(({ release }) => release.packageId), ...previousMemberIds]),
       originalRootIds,
     );
-    await pruneOldCollectionMembers(libraryRoot, state, collectionId, new Set(releases.map((release) => release.packageId)));
-    await transaction.commit();
+    const lock = (await maybeReadLibraryLock(libraryRoot))!;
+    const installed = lock.entries[collectionId]!;
+    await applyLibraryLock(libraryRoot, { ...lock, entries: { ...lock.entries, [collectionId]: {
+      ...installed, registryUrl: current?.registryUrl ?? normalizeRegistryUrl(options.client.baseUrl),
+    } } });
+    await pruneOldCollectionMembers(libraryRoot, state, collectionId, new Set(members.map(({ release }) => release.packageId)));
 
     return resultFor(current ? 'updated' : 'installed', revision, libraryRoot);
-  } catch (error) {
-    await transaction.rollback();
-    throw error;
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
-}
-
-async function collectionMembersHaveInstallReceipts(
-  libraryRoot: string,
-  revision: DkbRegistryCollectionRevision,
-): Promise<boolean> {
-  const results = await Promise.all(revision.manifest.members.map((member) => hasInstallPlanReceipt(libraryRoot, member.id)));
-  return results.every(Boolean);
-}
-
-async function hasInstallPlanReceipt(libraryRoot: string, identity: string): Promise<boolean> {
-  const receiptPath = path.join(registryPackagePath(libraryRoot, identity), ...DKB_INSTALL_PLAN_RECEIPT_PATH.split('/'));
-  return fs.stat(receiptPath).then((stat) => stat.isFile()).catch(() => false);
 }
 
 export async function uninstallRegistryCollection(options: {
@@ -169,7 +130,7 @@ export async function uninstallRegistryCollection(options: {
   libraryRoot?: string;
 }): Promise<{ status: 'removed'; collectionId: string; removedDkbs: string[]; libraryRoot: string }> {
   const libraryRoot = requiredLibraryRoot(options.libraryRoot);
-  return withDkbFileLock(libraryRoot, 'library-mutation', () => uninstallRegistryCollectionUnlocked(options, libraryRoot));
+  return withLibraryMutation(libraryRoot, () => uninstallRegistryCollectionUnlocked(options, libraryRoot));
 }
 
 async function uninstallRegistryCollectionUnlocked(
@@ -186,25 +147,17 @@ async function uninstallRegistryCollectionUnlocked(
     .filter((entry) => entry.kind === 'dkb' && entry.source === 'registry'
       && entry.requiredBy.length === 1 && entry.requiredBy[0] === `collection:${collectionId}`)
     .map((entry) => entry.identity);
-  const transaction = await snapshotLibraryMutation(libraryRoot, [collectionId, ...removable]);
+  const manifest = await requireLibraryManifest(libraryRoot);
+  const roots = { ...(manifest.roots ?? {}) };
+  delete roots[collectionId];
+  await writeLibraryMutationJson(libraryRoot, path.join(libraryRoot, 'dkb.json'), { ...manifest, roots });
+  await syncLibrary(libraryRoot);
 
-  try {
-    const manifest = await requireLibraryManifest(libraryRoot);
-    const roots = { ...(manifest.roots ?? {}) };
-    delete roots[collectionId];
-    await writeJsonAtomic(path.join(libraryRoot, 'dkb.json'), { ...manifest, roots });
-    await syncLibrary(libraryRoot);
-
-    for (const identity of [collectionId, ...removable]) {
-      await fs.rm(registryPackagePath(libraryRoot, identity), { recursive: true, force: true });
-    }
-    await transaction.commit();
-
-    return { status: 'removed', collectionId, removedDkbs: removable.sort(), libraryRoot };
-  } catch (error) {
-    await transaction.rollback();
-    throw error;
+  for (const identity of [collectionId, ...removable]) {
+    await removeLibraryPath(libraryRoot, registryPackagePath(libraryRoot, identity));
   }
+
+  return { status: 'removed', collectionId, removedDkbs: removable.sort(), libraryRoot };
 }
 
 async function activateCollectionRoot(
@@ -220,7 +173,7 @@ async function activateCollectionRoot(
     if (!originalRootIds.has(identity)) delete roots[identity];
   }
   roots[revision.collectionId] = { revision: revision.revision };
-  await writeJsonAtomic(path.join(libraryRoot, 'dkb.json'), { ...manifest, roots });
+  await writeLibraryMutationJson(libraryRoot, path.join(libraryRoot, 'dkb.json'), { ...manifest, roots });
   await syncLibrary(libraryRoot);
 }
 
@@ -238,14 +191,16 @@ async function prepareCollectionUpdate(
     if (entry?.version) roots[identity] = { version: entry.version };
   }
 
-  await writeJsonAtomic(path.join(libraryRoot, 'dkb.json'), { ...manifest, roots });
+  await writeLibraryMutationJson(libraryRoot, path.join(libraryRoot, 'dkb.json'), { ...manifest, roots });
   await syncLibrary(libraryRoot);
 }
 
 async function writeInstalledCollection(libraryRoot: string, revision: DkbRegistryCollectionRevision): Promise<void> {
   const target = registryPackagePath(libraryRoot, revision.collectionId);
-  await fs.mkdir(target, { recursive: true });
-  await writeJsonAtomic(path.join(target, 'dkb.json'), {
+  const stagingParent = path.join(libraryRoot, '.dkb', 'tmp');
+  await fs.mkdir(stagingParent, { recursive: true });
+  const staged = await fs.mkdtemp(path.join(stagingParent, 'collection-'));
+  const manifest = {
     manifestVersion: 1,
     type: 'collection',
     name: revision.collectionId,
@@ -255,7 +210,15 @@ async function writeInstalledCollection(libraryRoot: string, revision: DkbRegist
       revision: revision.revision,
       digest: revision.digest,
     },
-  });
+  };
+  try {
+    await fs.writeFile(path.join(staged, 'dkb.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    await promoteLibraryPath(libraryRoot, staged, target);
+  } finally {
+    // Promotion transfers ownership into the Library journal; this is only the
+    // empty original staging path, never a retained backup or installed tree.
+    await fs.rm(staged, { recursive: true, force: true });
+  }
 }
 
 async function pruneOldCollectionMembers(
@@ -268,7 +231,7 @@ async function pruneOldCollectionMembers(
     if (retained.has(identity)) continue;
     const previous = previousState.entries[identity];
     if (previous?.source === 'registry' && previous.requiredBy.length === 1) {
-      await fs.rm(registryPackagePath(libraryRoot, identity), { recursive: true, force: true });
+      await removeLibraryPath(libraryRoot, registryPackagePath(libraryRoot, identity));
     }
   }
 }
@@ -279,66 +242,10 @@ function currentCollectionMembers(state: Awaited<ReturnType<typeof readLibrarySt
     .map((entry) => entry.identity);
 }
 
-async function snapshotLibraryMutation(libraryRoot: string, identities: string[]): Promise<{
-  commit: () => Promise<void>;
-  rollback: () => Promise<void>;
-}> {
-  const transactionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-library-rollback-'));
-  const manifestSource = await fs.readFile(path.join(libraryRoot, 'dkb.json'), 'utf8');
-  const lock = await maybeReadLibraryLock(libraryRoot);
-  const snapshots: Array<{ identity: string; source: string; snapshot: string; existed: boolean }> = [];
-  try {
-    for (const identity of [...new Set(identities)]) {
-      const source = registryPackagePath(libraryRoot, identity);
-      const snapshot = path.join(transactionRoot, safeFilename(identity));
-      const existed = await exists(source);
-      if (existed) await fs.cp(source, snapshot, { recursive: true });
-      snapshots.push({ identity, source, snapshot, existed });
-    }
-  } catch (error) {
-    await fs.rm(transactionRoot, { recursive: true, force: true });
-    throw error;
-  }
-
-  return {
-    commit: async () => {
-      await fs.rm(transactionRoot, { recursive: true, force: true }).catch(() => undefined);
-    },
-    rollback: async () => {
-      for (const item of snapshots) {
-        await fs.rm(item.source, { recursive: true, force: true });
-        if (item.existed) {
-          await fs.mkdir(path.dirname(item.source), { recursive: true });
-          await fs.cp(item.snapshot, item.source, { recursive: true });
-        }
-      }
-      await fs.writeFile(path.join(libraryRoot, 'dkb.json'), manifestSource, 'utf8');
-      await restoreLibraryLock(libraryRoot, lock);
-      await fs.rm(transactionRoot, { recursive: true, force: true });
-    },
-  };
-}
-
 function requiredLibraryRoot(value?: string): string {
   const root = value ?? process.env.DKB_LIBRARY_PATH;
   if (!root) throw new DkbError('A Library is required. Pass --library or set DKB_LIBRARY_PATH.');
   return path.resolve(root);
-}
-
-async function restoreLibraryLock(libraryRoot: string, lock: DkbLibraryLockManifest | null): Promise<void> {
-  if (lock) {
-    await applyLibraryLock(libraryRoot, lock);
-    return;
-  }
-
-  const manifest = await requireLibraryManifest(libraryRoot);
-  await applyLibraryLock(libraryRoot, {
-    library: { name: manifest.name },
-    generation: 0,
-    entries: {},
-    resolvedAt: new Date().toISOString(),
-  });
-  await fs.rm(path.join(libraryRoot, 'dkb-lock.json'), { force: true });
 }
 
 async function requireLibraryManifest(libraryRoot: string): Promise<DkbSourceManifest> {
@@ -347,21 +254,8 @@ async function requireLibraryManifest(libraryRoot: string): Promise<DkbSourceMan
   return manifest;
 }
 
-async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
-  const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
-  const hadTarget = await exists(target);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  if (hadTarget) await fs.rename(target, backup);
-  try {
-    await fs.rename(temp, target);
-    await fs.rm(backup, { recursive: true, force: true });
-  } catch (error) {
-    await fs.rm(target, { recursive: true, force: true });
-    if (hadTarget && await exists(backup)) await fs.rename(backup, target);
-    throw error;
-  }
+async function writeLibraryMutationJson(root: string, target: string, value: unknown): Promise<void> {
+  await writeLibraryMutationFile(root, target, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function resultFor(status: CollectionInstallResult['status'], revision: DkbRegistryCollectionRevision, libraryRoot: string): CollectionInstallResult {
@@ -373,30 +267,4 @@ function resultFor(status: CollectionInstallResult['status'], revision: DkbRegis
     members: revision.manifest.members,
     libraryRoot,
   };
-}
-
-function assertNoDuplicateMembers(revision: DkbRegistryCollectionRevision): void {
-  const seen = new Set<string>();
-  for (const member of revision.manifest.members) {
-    parseDkbIdentity(member.id, `Collection ${revision.collectionId} member`);
-    if (seen.has(member.id)) throw new DkbError(`Collection revision contains duplicate member ${member.id}.`);
-    seen.add(member.id);
-  }
-}
-
-function safeFilename(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'entry';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
 }

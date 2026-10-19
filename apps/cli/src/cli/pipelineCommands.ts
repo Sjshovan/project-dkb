@@ -1,10 +1,10 @@
 import path from 'node:path';
 import { Command } from 'commander';
-import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import type { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import type { CliPresenter } from './presentation.js';
+import { nativeRuntimeStateRoot } from '../host/runtimeLocation.js';
 import {
   summarizeBuildInspect,
   summarizeBuildList,
@@ -128,7 +128,7 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
     .option('--runtime <runtime>', 'Registered Runtime name')
     .action(async (options: { runtime?: string }) => {
       const selected = await runtimeSelection(options.runtime);
-      if (!selected.runtime.stateRoot) {
+      if (!nativeRuntimeStateRoot(selected.runtime)) {
         presenter().print(await (await currentRuntimeAdminClient(selected.runtime.url)).pipelines(), summarizePipelineList);
         return;
       }
@@ -159,7 +159,7 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
     .option('--runtime <runtime>', 'Registered Runtime name')
     .action(async (pipelineName: string, options: { runtime?: string }) => {
       const selection = await runtimeSelection(options.runtime);
-      if (!selection.runtime.stateRoot) {
+      if (!nativeRuntimeStateRoot(selection.runtime)) {
         const catalog = await (await currentRuntimeAdminClient(selection.runtime.url)).pipelines() as { targets?: Array<Record<string, unknown>> };
         const target = catalog.targets?.find((entry) => entry.name === pipelineName);
         if (!target) throw new DkbError(`Pipeline ${pipelineName} is not available on Runtime ${selection.name}.`);
@@ -199,134 +199,24 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
     .argument('<name>', 'Configured Pipeline name')
     .option('--runtime <runtime>', 'Registered Runtime name')
     .option('--runtime-url <url>', 'Owning Runtime URL')
-    .option('--registry-url <url>', 'Registry API URL used to fetch missing signed builds')
+    .option('--registry-url <url>', 'Confirm the installed Registry origin and scope an environment token')
     .action(async (name: string, options: { runtime?: string; runtimeUrl?: string; registryUrl?: string }) => {
-      const selected = await localRuntimeSelection(options.runtime);
-      const root = selected.instance.libraryRoot;
-      await presenter().run(`Activating pipeline ${name}`, async () => {
-        const distribution = await defaultDistribution();
-        const [{ readLibraryState }, { ensurePackageBuildForTarget }, { resolveHostProviderIdentityOptions }] = await Promise.all([
-          import('@sjshovan/dkb-library/state.js'),
-          import('@sjshovan/dkb-compiler/compile.js'),
-          import('../providers/externalIdentities.js'),
-        ]);
-        const { targetOptions } = await resolveHostProviderIdentityOptions({
-          distribution,
-          root: selected.instance.stateRoot,
-          libraryRoot: root,
-          target: name,
-        });
-        const state = await readLibraryState(root);
-        const localPreparations = [];
-        for (const entry of Object.values(state.entries)
-          .filter((item) => item.kind === 'dkb' && item.source === 'local' && item.status === 'installed')
-          .sort((left, right) => left.identity.localeCompare(right.identity))) {
-          localPreparations.push({
-            package: entry.identity,
-            ...await ensurePackageBuildForTarget(path.resolve(root, entry.path), {
-              target: name,
-              contextRoot: selected.instance.stateRoot,
-              libraryRoot: root,
-              targetOptions,
-            }),
-          });
+      const selected = await runtimeSelection(options.runtime);
+      await presenter().run(`Activating pipeline ${name}`, async (progress) => {
+        const { prepareLocalRuntimePipeline, useRuntimePipeline } = await import('../providers/runtimePipeline.js');
+        let local: Awaited<ReturnType<typeof prepareLocalRuntimePipeline>> | undefined;
+        if (nativeRuntimeStateRoot(selected.runtime)) {
+          const selection = await localRuntimeSelection(options.runtime);
+          local = await prepareLocalRuntimePipeline({ root: selection.instance.libraryRoot,
+            stateRoot: selection.instance.stateRoot, target: name, distribution: await defaultDistribution() });
         }
-        const [{ configuredRegistry }, { DkbProviderHost }, { resolveProviderRetrievalProfile }] = await Promise.all([
-          import('./registryConfig.js'),
-          import('@sjshovan/dkb-pipeline/host.js'),
-          import('@sjshovan/dkb-pipeline/profile.js'),
-        ]);
-        const profileHost = await DkbProviderHost.create({
-          root: selected.instance.stateRoot,
-          libraryRoot: root,
-          target: name,
-          targetOptions,
-          distribution,
-        });
-        const profile = await resolveProviderRetrievalProfile(profileHost).finally(() => profileHost.dispose());
-        const compatibilityDigest = stableHash(profile.compatibility);
-        const runtime = await currentRuntimeAdminClient(options.runtimeUrl ?? selected.runtime.url, 40 * 60_000);
-        const runtimeCatalog = await runtime.pipelines() as {
-          targets?: Array<{
-            name?: unknown;
-            health?: unknown;
-            healthDetails?: Array<{ detail?: string }>;
-            evidenceProfileDigest?: unknown;
-            retrievalProfileDigest?: unknown;
-            compatibilityDigest?: unknown;
-          }>;
-        };
-        const runtimeTarget = runtimeCatalog.targets?.find((candidate) => candidate.name === name);
-        if (!runtimeTarget) {
-          throw new DkbError(`Pipeline ${name} is not configured by Runtime ${selected.name}.`);
-        }
-        if (runtimeTarget.health !== 'ready') {
-          const detail = runtimeTarget.healthDetails?.find((item) => item.detail)?.detail;
-          throw new DkbError(`Pipeline ${name} is unavailable on Runtime ${selected.name}${detail ? `: ${detail}` : '.'}`);
-        }
-        const profileMismatches = [
-          ['evidenceProfileDigest', profile.evidenceProfileDigest, runtimeTarget.evidenceProfileDigest],
-          ['retrievalProfileDigest', profile.retrievalProfileDigest, runtimeTarget.retrievalProfileDigest],
-          ['compatibilityDigest', compatibilityDigest, runtimeTarget.compatibilityDigest],
-        ].filter(([, host, runtimeValue]) => host !== runtimeValue);
-        if (profileMismatches.length > 0) {
-          throw new DkbError(
-            `Pipeline ${name} resolves differently between this host and Runtime ${selected.name}. `
-            + `Mismatched ${profileMismatches.map(([field, host, runtimeValue]) => `${field} (host ${String(host)}, Runtime ${String(runtimeValue)})`).join('; ')}. `
-            + 'Refresh the local Stack configuration before requesting Registry builds.',
-          );
-        }
-        const grants: Record<string, { plan: import('@sjshovan/dkb-protocol/builds.js').DkbInstallPlan; installGrant: string }> = {};
-        for (const entry of Object.values(state.entries)
-          .filter((item) => item.kind === 'dkb' && item.source === 'registry' && item.status === 'installed')
-          .sort((left, right) => left.identity.localeCompare(right.identity))) {
-          if (!entry.version) throw new DkbError(`Installed Registry DKB ${entry.identity} has no resolved version.`);
-          if (!entry.registryUrl) {
-            throw new DkbError(
-              `Installed Registry DKB ${entry.identity}@${entry.version} does not retain an exact Registry origin. `
-              + 'Reinstall it from its Registry before switching Pipelines.',
-            );
-          }
-          const packageRoot = path.resolve(root, entry.path);
-          const [{ listPackageBuilds, selectStoredPackageBuild }, { verifyRetainedRegistryBuild }] = await Promise.all([
-            import('@sjshovan/dkb-library/builds.js'),
-            import('@sjshovan/dkb-runtime/runtime/registryInstall.js'),
-          ]);
-          const stored = await listPackageBuilds(packageRoot);
-          if (stored.retrieval.some((build) => build.profileDigest === profile.retrievalProfileDigest)) {
-            const graph = await selectStoredPackageBuild({ root: packageRoot, target: name,
-              evidenceProfileDigest: profile.evidenceProfileDigest,
-              retrievalProfileDigest: profile.retrievalProfileDigest, compatibilityDigest });
-            await verifyRetainedRegistryBuild({ libraryRoot: root, registryUrl: entry.registryUrl, packageRoot, graph, target: name });
-            continue;
-          }
-          const registry = await configuredRegistry({ url: options.registryUrl ?? entry.registryUrl, root });
-          const { DkbRegistryClient } = await import('@sjshovan/dkb-registry-client/client.js');
-          const { prepareRegistryPipelineGrant } = await import('../providers/registryBuilds.js');
-          const registryClient = new DkbRegistryClient({ baseUrl: registry.url });
-          const grant = await prepareRegistryPipelineGrant(registryClient, {
-            packageId: entry.identity,
-            version: entry.version,
-            target: name,
-            evidenceProfileDigest: profile.evidenceProfileDigest,
-            retrievalProfileDigest: profile.retrievalProfileDigest,
-            compatibilityDigest,
-          });
-          grants[entry.identity] = { plan: grant.plan, installGrant: grant.installGrant };
-        }
-        const switched = await runtime.switchPipeline({
-          target: name,
+        return useRuntimePipeline({
+          client: await currentRuntimeAdminClient(options.runtimeUrl ?? selected.runtime.url, 40 * 60_000),
+          name: selected.name, target: name, kind: selected.runtime.kind,
           ...(options.registryUrl ? { registryUrl: options.registryUrl } : {}),
-          grants,
+          ...(local ? { local } : {}), progress,
         });
-        if (!switched || typeof switched !== 'object' || Array.isArray(switched)) {
-          throw new DkbError('Runtime returned an invalid pipeline-switch response');
-        }
-        return { ...switched as Record<string, unknown>, localPreparations };
-      }, (result) => result && typeof result === 'object' && !Array.isArray(result)
-        && (result as Record<string, unknown>).status === 'pipeline_switched'
-        ? summarizePipelineSwitch(result)
-        : summarizePipeline(result));
+      }, summarizePipelineSwitch);
     });
 
   pipeline
@@ -388,7 +278,7 @@ export function registerPipelineCommands(program: Command, context: PipelineComm
     .option('--runtime <runtime>', 'Registered Runtime name')
     .action(async (pipelineName: string, options: { runtime?: string }) => {
       const selection = await runtimeSelection(options.runtime);
-      if (!selection.runtime.stateRoot) {
+      if (!nativeRuntimeStateRoot(selection.runtime)) {
         const catalog = await (await currentRuntimeAdminClient(selection.runtime.url)).pipelines() as { targets?: Array<Record<string, unknown>> };
         const target = catalog.targets?.find((entry) => entry.name === pipelineName);
         if (!target) throw new DkbError(`Pipeline ${pipelineName} is not available on Runtime ${selection.name}.`);
@@ -537,8 +427,10 @@ async function localRuntimeSelection(name?: string) {
     import('../host/inventory.js'),
     import('@sjshovan/dkb-runtime/runtime/state.js'),
   ]);
-  if (!selected.runtime.stateRoot) {
-    throw new DkbError(`Runtime ${selected.name} is remote and does not expose local Pipeline configuration. Use its authenticated Runtime administration endpoint.`);
+  const nativeRoot = nativeRuntimeStateRoot(selected.runtime);
+  if (!nativeRoot) {
+    throw new DkbError(`Runtime ${selected.name} does not expose native host Pipeline state. Local compilation cannot use Docker or remote state through a saved host path. `
+      + `Inspect its own catalog with: dkb pipeline list --runtime ${selected.name}. Pipeline preparation must run in its owning environment.`, 'unsupported_capability');
   }
   if (!selected.runtime.library) {
     throw new DkbError(`Runtime ${selected.name} has no host Library association. Run: dkb runtime library use <library> --runtime ${selected.name}`);
@@ -547,13 +439,15 @@ async function localRuntimeSelection(name?: string) {
   if (!library) {
     throw new DkbError(`Runtime ${selected.name} refers to unknown Library ${selected.runtime.library}. Run: dkb library list`);
   }
-  const stateRoot = path.resolve(selected.runtime.stateRoot);
+  const { localHostLibraryPath } = await import('../host/libraryLocation.js');
+  const libraryRoot = localHostLibraryPath(library.library);
+  const stateRoot = path.resolve(nativeRoot);
   const binding = await maybeReadRuntimeBindingFromStateRoot(stateRoot);
   return {
     ...selected,
     instance: {
       stateRoot,
-      libraryRoot: library.library.path,
+      libraryRoot,
       target: binding?.target ?? 'default',
     },
   };

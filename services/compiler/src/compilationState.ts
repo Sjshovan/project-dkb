@@ -104,9 +104,7 @@ export function providerStageStatistics(
 export async function collectRegistryState(
   registry: LoadedLibrary,
   desiredProfile: DkbResolvedRetrievalProfile,
-  distribution: DkbDistribution,
-  contextRoot = registry.root,
-  targetOptions?: Record<string, Record<string, unknown>>,
+  providerHost: DkbProviderHost,
   signal?: AbortSignal,
   execution?: ProviderExecutionFactory,
 ): Promise<RegistryCompileState> {
@@ -115,28 +113,14 @@ export async function collectRegistryState(
     ...registry.collections.flatMap((collection) => collection.dkbs),
     ...registry.dkbs,
   ]);
-  const providerHost = await DkbProviderHost.create({
-    root: contextRoot,
-    distribution,
-    target: desiredProfile.target,
-    ...(targetOptions ? { targetOptions } : {}),
-  });
-  let packageEntries: Awaited<ReturnType<typeof collectDkbState>>[];
-
-  try {
-    // Await every owner before disposing the shared host or permitting scratch cleanup.
-    const settled = await Promise.allSettled(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost, signal, execution)));
-    const failures = settled.filter((entry) => entry.status === 'rejected');
-    if (failures.length) {
-      const uncertain = failures.find((entry) => entry.reason instanceof DkbError && entry.reason.code === 'compile_termination_unconfirmed');
-      throw (uncertain ?? failures[0]!).reason;
-    }
-    packageEntries = settled.map((entry) => (entry as PromiseFulfilledResult<Awaited<ReturnType<typeof collectDkbState>>>).value);
-  } catch (error) {
-    // Disposal must not replace the compilation outcome (particularly an unconfirmed worker stop).
-    await providerHost.dispose().catch(() => undefined);
-    throw error;
+  // The caller owns this host. Drain all work before it disposes or releases the lease.
+  const settled = await Promise.allSettled(allDkbs.map(async (dkb) => collectDkbState(dkb, desiredProfile, registry.root, providerHost, signal, execution)));
+  const failures = settled.filter((entry) => entry.status === 'rejected');
+  if (failures.length) {
+    const uncertain = failures.find((entry) => entry.reason instanceof DkbError && entry.reason.code === 'compile_termination_unconfirmed');
+    throw (uncertain ?? failures[0]!).reason;
   }
+  const packageEntries = settled.map((entry) => (entry as PromiseFulfilledResult<Awaited<ReturnType<typeof collectDkbState>>>).value);
   const sourceUnits = packageEntries.flatMap((entry) => entry.sourceUnits);
   const packages = Object.fromEntries(packageEntries.map((entry) => [entry.package.id, entry.package]));
   const compilerArtifacts = packageEntries.flatMap((entry) => entry.compilerArtifact ? [entry.compilerArtifact] : []);

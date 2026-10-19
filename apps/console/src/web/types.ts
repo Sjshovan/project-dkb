@@ -16,6 +16,7 @@ export interface ResourceRow {
   status?: string;
   displayName?: string;
   path?: string;
+  location?: string;
   url?: string;
   kind?: string;
   library?: string;

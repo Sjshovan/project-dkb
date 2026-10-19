@@ -25,3 +25,5 @@ Statuses:
 - [0009 - Trusted Plugin SDK and Registry recipes](0009-trusted-plugin-sdk-and-registry-recipes.md) — Accepted; current hardening milestone.
 - [0010 - Retire the remote query gateway and dormant write queue](0010-retire-remote-query-gateway-and-write-queue.md) — Accepted; implementation in the current hardening milestone.
 - [0011 - Worker-confirmed compilation cancellation](0011-worker-confirmed-compilation-cancellation.md) — Accepted; real worker and recovery verification required.
+- [0012 - Crash-safe Library mutations](0012-crash-safe-library-mutations.md) — Accepted; durable Library recovery checkpoint.
+- [0013 - One storage environment per Library](0013-library-storage-ownership.md) — Accepted; Docker-owned Linux storage and delegated management gate.

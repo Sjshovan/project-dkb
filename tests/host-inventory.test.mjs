@@ -10,6 +10,7 @@ import {
   readHostInventory,
   rebindMigratedStackLibrary,
   registerHostLibrary,
+  registerDockerHostLibrary,
   registerHostRegistry,
   registerHostRuntime,
   registerHostStack,
@@ -21,12 +22,85 @@ import {
   unregisterHostRegistry,
 } from '../apps/cli/dist/host/inventory.js';
 import { inspectHostLibraries } from '../apps/cli/dist/host/inspection.js';
-import { resolveCliLibraryRoot, resolveCliRuntimeUrl } from '../apps/cli/dist/cli/context.js';
+import { resolveCliLibraryReference, resolveCliLibraryRoot, resolveCliRuntimeUrl } from '../apps/cli/dist/cli/context.js';
 import { configuredRegistry, writeConfiguredRegistryUrl } from '../apps/cli/dist/cli/registryConfig.js';
-import { refreshServingLocalRuntimes } from '../apps/cli/dist/runtime/refresh.js';
+import { refreshServingLocalRuntimes, refreshLibraryRuntimes, withRuntimeRefreshes } from '../apps/cli/dist/runtime/refresh.js';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repositoryRoot, 'apps', 'cli', 'dist', 'cli', 'index.js');
+const dockerStorage = { kind: 'docker', context: 'desktop-linux', volume: 'synthetic-library', image: `sha256:${'a'.repeat(64)}` };
+
+test('Docker Library handles deduplicate without local paths or implicit Docker calls', async () => {
+  await withInventory(async ({ root, inventoryPath }) => {
+    const registered = await registerDockerHostLibrary(dockerStorage, { displayName: 'Volume Library', name: 'volume', select: true, registryUrl: 'https://registry.example' });
+    const repeated = await registerDockerHostLibrary(dockerStorage, { displayName: 'Volume Library' });
+    assert.equal(repeated.name, registered.name);
+    assert.equal(Object.hasOwn(repeated.library, 'path'), false);
+    await assert.rejects(registerDockerHostLibrary(dockerStorage, { displayName: 'Other', name: 'other' }), /already registered/);
+    const local = await writeLibrary(path.join(root, 'local'), 'Local');
+    await assert.rejects(registerHostLibrary(local, { name: 'volume' }), /already/);
+    const listing = await inspectHostLibraries();
+    assert.equal(listing.libraries[0].status, 'known');
+    assert.equal(listing.libraries[0].location, 'docker://desktop-linux/synthetic-library');
+    assert.equal(listing.libraries[0].path, undefined);
+    assert.doesNotMatch(await fs.readFile(inventoryPath, 'utf8'), /token|password/iu);
+    await selectHostLibrary('volume');
+    const result = await unregisterHostLibrary('volume');
+    assert.equal(result.location, 'docker://desktop-linux/synthetic-library');
+    assert.equal(result.selectedCleared, true);
+    assert.deepEqual((await readHostInventory()).libraries, {});
+  });
+});
+
+test('Docker Library resolution preserves explicit, environment, nearest, and selected precedence', async () => {
+  await withInventory(async ({ root }) => {
+    await registerDockerHostLibrary(dockerStorage, { displayName: 'Docker', name: 'docker', select: true });
+    const local = await writeLibrary(path.join(root, 'local'), 'Local');
+    await registerHostLibrary(local, { name: 'local' });
+    assert.equal((await resolveCliLibraryReference({ cwd: root })).kind, 'docker');
+    assert.equal((await resolveCliLibraryReference({ cwd: local })).kind, 'local');
+    process.env.DKB_LIBRARY_PATH = 'docker';
+    assert.equal((await resolveCliLibraryReference({ cwd: local })).kind, 'docker');
+    assert.equal((await resolveCliLibraryReference({ explicit: 'local', cwd: root })).kind, 'local');
+    for (const allowUnavailableManifest of [false, true]) {
+      await assert.rejects(resolveCliLibraryRoot({ explicit: 'docker', cwd: root, allowUnavailableManifest }), { code: 'unsupported_capability' });
+    }
+    assert.equal((await resolveCliLibraryReference({ explicit: 'docker', cwd: local })).name, 'docker');
+  });
+});
+
+test('inventory rejects ambiguous, unpinned and secret-bearing Docker locations', async () => {
+  await withInventory(async ({ inventoryPath }) => {
+    await registerDockerHostLibrary(dockerStorage, { displayName: 'Docker', name: 'docker' });
+    const good = await readHostInventory();
+    for (const change of [
+      { path: 'C:/not-a-volume' }, { storage: { ...dockerStorage, image: 'latest' } },
+      { storage: { ...dockerStorage, token: 'synthetic' } }, { storage: { ...dockerStorage, kind: 'remote' } },
+    ]) {
+      const bad = structuredClone(good);
+      Object.assign(bad.libraries.docker, change);
+      await fs.writeFile(inventoryPath, JSON.stringify(bad));
+      await assert.rejects(readHostInventory);
+    }
+  });
+});
+
+test('Docker Library mutations refresh all associated local Runtimes, not other Libraries or remote endpoints', async () => {
+  await withInventory(async () => {
+    await registerDockerHostLibrary(dockerStorage, { displayName: 'Docker', name: 'docker' });
+    await registerHostRuntime('a', 'http://127.0.0.1:7331', { kind: 'docker', library: 'docker' });
+    await registerHostRuntime('b', 'http://127.0.0.1:7332', { kind: 'docker', library: 'docker' });
+    await registerHostRuntime('remote', 'https://runtime.example', { kind: 'remote', library: 'docker' });
+    const calls = [];
+    const results = await refreshLibraryRuntimes('docker', async url => ({ reload: async () => {
+      calls.push(url);
+      if (url.endsWith('7332')) throw new Error('offline');
+    } }));
+    assert.equal(calls.length, 2);
+    assert.deepEqual(results.map(item => item.status), ['refreshed', 'stale']);
+    assert.equal(results[1].recovery, 'dkb runtime refresh b');
+  });
+});
 
 test('host inventory registers Libraries and Registries without storing secrets', async () => {
   await withInventory(async ({ inventoryPath, root }) => {
@@ -321,7 +395,7 @@ test('focused host commands and selected Library work from an unrelated director
     assert.equal(JSON.parse(registries.stdout).registries[0].usedBy[0], 'consumer');
     assert.equal(packages.code, 0, packages.stderr);
     assert.equal(JSON.parse(packages.stdout).libraryRoot, await fs.realpath(libraryRoot));
-    assert.match(humanLibraries.stdout, /DEFAULT\s+NAME\s+STATUS\s+REGISTRY\s+PATH/);
+    assert.match(humanLibraries.stdout, /DEFAULT\s+NAME\s+STATUS\s+REGISTRY\s+KIND\s+LOCATION/);
     assert.doesNotMatch(humanLibraries.stdout, /SELECTED/);
   });
 });
@@ -366,12 +440,19 @@ test('Library mutations refresh every serving local Runtime and leave offline Ru
       async reload() {
         calls.push(url);
         if (url.endsWith('7332')) throw new Error('connection refused');
+        return { status: 'reloaded', indexCleanup: { pending: 1 }, warning: 'Do not echo arbitrary provider credentials.' };
       },
     }));
 
     assert.deepEqual(calls.sort(), ['http://127.0.0.1:7331', 'http://127.0.0.1:7332']);
     assert.deepEqual(results.map((entry) => [entry.name, entry.status]), [['fast', 'refreshed'], ['tei', 'stale']]);
     assert.equal(results[1].recovery, 'dkb runtime refresh tei');
+    assert.match(results[0].warning, /refreshed.*managed-index cleanup/);
+    assert.equal(results[0].recovery, 'dkb runtime refresh fast');
+    const output = withRuntimeRefreshes({ status: 'installed' }, results);
+    assert.match(output.warning, /managed-index cleanup/);
+    assert.match(output.warning, /remain.*stale/);
+    assert.doesNotMatch(JSON.stringify(output), /arbitrary provider credentials/);
   });
 });
 

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveLibraryActivationBuilds, selectStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
 import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import { assertLibraryReadFence, captureLibraryReadFence } from '@sjshovan/dkb-library/mutation.js';
 import { libraryStateIdentity, readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { validateInstallPlan, type DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
@@ -18,7 +19,7 @@ import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { DkbRegistryClient } from '@sjshovan/dkb-registry-client/client.js';
-import { normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
+import { normalizeRegistryUrl, validateRegistryTransportUrl } from '@sjshovan/dkb-registry-client/config.js';
 import {
   attachSignedBuildChainWithinMutation,
   parseRegistryTrustedKeys,
@@ -36,8 +37,10 @@ import {
   promoteRuntimeSelection,
 } from './activation.js';
 import { prepareRuntimeIndexPackage, type PreparedRuntimeIndexPackage } from '../providers/runtimeIndex.js';
+import { reconcileManagedIndexPackages, type ManagedIndexCleanup } from '../providers/managedIndexRetention.js';
 import type { DkbRuntimeContext } from './context.js';
 import { defaultRuntimeStateRoot } from './paths.js';
+import { assertRuntimePipelinePreparation, type DkbRuntimePipelinePreparation } from './pipelinePreparation.js';
 
 export interface DkbRuntimePipelineSwitchResult {
   status: 'pipeline_switched';
@@ -49,6 +52,8 @@ export interface DkbRuntimePipelineSwitchResult {
   retrievalProfileDigest: string;
   compatibilityDigest: string;
   activationGeneration: number;
+  indexCleanup?: ManagedIndexCleanup;
+  warning?: string;
   packageCount: number;
   packages: Array<{
     id: string;
@@ -63,6 +68,7 @@ export interface DkbRuntimePipelineSwitchResult {
 export interface DkbRuntimePipelineBuildGrant {
   plan: DkbInstallPlan;
   installGrant: string;
+  registryTransportUrl?: string;
 }
 
 interface PreparedPackage {
@@ -86,14 +92,19 @@ export async function switchRuntimePipelineFromRegistry(options: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  expected?: DkbRuntimePipelinePreparation;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const stateRoot = path.resolve(options.stateRoot ?? defaultRuntimeStateRoot());
-  const registryTransportUrl = options.registryTransportUrl?.trim() || process.env.DKB_REGISTRY_URL?.trim();
-  return withRuntimeMutation(stateRoot, () => switchRuntimePipelineUnlocked({
-    ...options,
-    stateRoot,
-    ...(registryTransportUrl ? { registryTransportUrl } : {}),
-  }));
+  const registryTransportUrl = options.registryTransportUrl?.trim();
+  return withRuntimeMutation(stateRoot, async () => {
+    const result = await switchRuntimePipelineUnlocked({
+      ...options, stateRoot, ...(registryTransportUrl ? { registryTransportUrl } : {}),
+    });
+    // Activation is committed and its Library lease released before maintenance.
+    // Cleanup failure must never roll back the new snapshot or its prepared indexes.
+    const indexCleanup = await reconcileManagedIndexPackages({ runtime: options.runtime, stateRoot, runtimeId: result.runtimeId });
+    return { ...result, indexCleanup, ...(indexCleanup.pending ? { warning: indexCleanup.warnings.join(' ') } : {}) };
+  });
 }
 
 async function switchRuntimePipelineUnlocked(options: {
@@ -107,9 +118,11 @@ async function switchRuntimePipelineUnlocked(options: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  expected?: DkbRuntimePipelinePreparation;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const instance = await ensureRuntimeState(options.stateRoot);
   const libraryRoot = path.resolve(options.libraryRoot ?? instance.libraryRoot);
+  await captureLibraryReadFence(libraryRoot);
   await loadLibrary(libraryRoot);
   return withDkbFileLock(libraryRoot, 'library-mutation', () => switchRuntimePipelineWithinLibraryMutation(
     { ...options, libraryRoot },
@@ -128,9 +141,12 @@ async function switchRuntimePipelineWithinLibraryMutation(options: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  expected?: DkbRuntimePipelinePreparation;
 }, instance: Awaited<ReturnType<typeof ensureRuntimeState>>): Promise<DkbRuntimePipelineSwitchResult> {
   const libraryRoot = options.libraryRoot;
+  const libraryFence = await captureLibraryReadFence(libraryRoot);
   const target = requiredTarget(options.target);
+  if (options.expected !== undefined) await assertRuntimePipelinePreparation(options.expected, instance, libraryRoot, target);
   const registryTransportUrl = options.registryTransportUrl?.trim();
   const stageRoot = path.join(instance.stateDir, `pipeline-stage-${process.pid}-${Date.now().toString(36)}`);
   const prepared: PreparedPackage[] = [];
@@ -151,6 +167,7 @@ async function switchRuntimePipelineWithinLibraryMutation(options: {
       );
     }
     const profile = await resolveProviderRetrievalProfile(host);
+    if (options.expected !== undefined) await assertRuntimePipelinePreparation(options.expected, instance, libraryRoot, target, profile);
     const compatibilityDigest = stableHash(profile.compatibility);
     const state = await readLibraryState(libraryRoot);
     const entries = Object.values(state.entries)
@@ -231,6 +248,7 @@ async function switchRuntimePipelineWithinLibraryMutation(options: {
     await Promise.all([host.assertCurrent(), assertFileSnapshotCurrent(candidateInputs), ...prepared.map((item) => assertFileSnapshotCurrent(item.inputs))]);
     await closeRuntimeQuerySnapshot(instance.stateRoot);
     await Promise.all([host.assertCurrent(), assertFileSnapshotCurrent(candidateInputs), ...prepared.map((item) => assertFileSnapshotCurrent(item.inputs))]);
+    await assertLibraryReadFence(libraryRoot, libraryFence);
     await promoteRuntimeSelection(instance.stateRoot, {
       format: DKB_RUNTIME_BINDING_FORMAT,
       runtimeId: instance.runtimeId,
@@ -351,8 +369,7 @@ async function preparePackageBuild(input: {
   try {
     retained = await selectStoredPackageBuild({ root: input.packageRoot, ...profileSelection(input) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/No stored Retrieval Build exists/u.test(message)) throw error;
+    if (!(error instanceof DkbError) || error.code !== 'retrieval_build_missing') throw error;
   }
 
   if (retained) {
@@ -394,7 +411,9 @@ async function preparePackageBuild(input: {
     `Runtime Pipeline install plan for ${input.id}@${input.version}`,
   );
   assertInstallPlanMatchesTarget(plan, input);
-  const transportUrl = normalizeRegistryUrl(input.registryTransportUrl ?? input.registryUrl);
+  const transportUrl = input.grant.registryTransportUrl
+    ? validateRegistryTransportUrl(input.registryUrl, input.grant.registryTransportUrl)
+    : normalizeRegistryUrl(input.registryTransportUrl ?? input.registryUrl);
   const publicClient = new DkbRegistryClient({ baseUrl: transportUrl, token: '' });
   const downloadClient = new DkbRegistryClient({
     baseUrl: transportUrl,

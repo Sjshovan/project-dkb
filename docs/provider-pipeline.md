@@ -130,6 +130,22 @@ Runtime's activation. Registry packages download signed missing layers; editable
 packages reuse matching Evidence IR when possible and compile through the same
 shared runner. Failure leaves that Runtime's previous activation intact.
 
+For online Docker and remote Runtimes, the host reads authenticated coverage and
+an exact preparation receipt from the owner. The receipt pins Runtime selection,
+Library generation/state, and resolved recipe digests without filesystem paths.
+Registry credentials remain on the host; only exact signed plans and short-lived
+grants are submitted. Each package keeps its installed Registry origin, even when
+the Stack or Library has a different default. Changed state or configuration
+rejects preparation before downloading or promoting builds. Corrupt retained
+builds are reported as invalid, not silently treated as missing.
+
+Native process Runtimes can prepare editable source through the shared compiler.
+Docker/remote editable packages with missing builds still require compilation in
+their owning environment; the host never opens their database or imports compiler
+logic into the Runtime. Offline preparation and owner-side editable compilation
+remain release gates. Rebuilt matching CLI/Runtime candidates are required for
+the preparation receipt; there is no unchecked fallback to an older server.
+
 ## Contracts
 
 The public authoring contract, scaffolds, validation rules, conformance suite,
@@ -320,3 +336,17 @@ failed activation attempt. `uninstallPackage` removes every index for an
 explicitly uninstalled package release. Installation returns a boolean `created`
 ownership flag; retained indexes are never discarded during rollback. A cleanup
 failure reports the exact orphan index and preserves the previous activation.
+
+After a successful activation, Runtime reconciliation removes only recorded
+package versions no longer present in their Library's applied state. The Library
+writer lease spans that check and external deletion, preventing a reinstall race.
+Still-installed releases retain all spaces even if a Runtime switches Pipelines
+or Libraries. Receipts in `.dkb/managed-index-retention/` precede external imports
+and contain package/Library identity, recipe/options digests and the provider's
+credential-free `storageIdentity` digest—not URLs, tokens or option values.
+Meilisearch requires a plain HTTP(S) endpoint without URL credentials, query
+parameters or fragments; its existing `apiKeyEnv` reference supplies authentication.
+Reconciliation rejects changed recipes, options or backing stores. Failed cleanup
+retains its receipt, reports a warning and retries on `dkb runtime refresh`;
+the newly committed activation remains valid. Older untracked external indexes
+are never discovered or deleted by guessing: inspect them through their provider.

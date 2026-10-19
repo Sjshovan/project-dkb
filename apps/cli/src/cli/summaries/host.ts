@@ -43,7 +43,8 @@ export function summarizeHostLibraries(value: unknown): string[] {
           name: item.name ?? '-',
           status: item.status ?? '-',
           registry: item.registry ?? '-',
-          path: item.path ?? '-',
+          kind: item.kind ?? 'local',
+          location: item.location ?? item.path ?? '-',
         };
       }),
     }),
@@ -116,6 +117,7 @@ export function summarizeHostMutation(value: unknown): string[] {
     runtime.library ? `Library: ${String(runtime.library)}` : '',
     runtime.url ? `URL: ${String(runtime.url)}` : '',
     result.path && !library.path ? `path: ${String(result.path)}` : '',
+    result.location && !result.path ? `location: ${String(result.location)}` : '',
     result.url && !registry.url && !runtime.url ? `URL: ${String(result.url)}` : '',
     result.composeFile ? `compose file: ${String(result.composeFile)}` : '',
     typeof result.selectedCleared === 'boolean' ? `default cleared: ${result.selectedCleared ? 'yes' : 'no'}` : '',

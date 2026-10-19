@@ -9,6 +9,7 @@ const fastembedTestPin = { modelRepository: 'test/onnx', modelRevision: 'a'.repe
 
 test('FastEmbed provider bounds document batches and preserves result order', async (t) => {
   const requests = [];
+  let acceptedConnections = 0;
   const server = http.createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -21,15 +22,24 @@ test('FastEmbed provider bounds document batches and preserves result order', as
       vectors: body.texts.map((text) => [text.length, requests.length]),
     }));
   });
+  server.on('connection', () => acceptedConnections++);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(() => server.close());
+  t.after(() => new Promise((resolve, reject) => {
+    server.closeAllConnections();
+    server.close(error => error ? reject(error) : resolve());
+  }));
   const address = server.address();
   const vectors = await embedWithFastEmbed(
     ['one', 'two', 'three', 'four', 'five'],
     'document',
     { url: `http://127.0.0.1:${address.port}/embed`, model: 'test-model', ...fastembedTestPin, dimensions: 2, batchSize: 2 },
-  );
+  ).catch(error => {
+    // Diagnostic only: preserve the failure and its socket cause, not request text.
+    assert.fail(JSON.stringify({ message: error.message, cause: error.cause && {
+      name: error.cause.name, code: error.cause.code, syscall: error.cause.syscall,
+    }, listening: server.listening, acceptedConnections, receivedBatches: requests.length }));
+  });
 
   assert.deepEqual(requests.map((request) => request.texts), [['one', 'two'], ['three', 'four'], ['five']]);
   assert.deepEqual(vectors, [[3, 1], [3, 1], [5, 2], [4, 2], [4, 3]]);

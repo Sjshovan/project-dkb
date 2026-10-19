@@ -144,3 +144,34 @@ test('Runtime credentials cannot follow redirects or leak in unauthorized error 
   await assert.rejects(client.library(), error => error.code === 'runtime_unauthorized' && !error.message.includes(secret));
   assert.throws(() => new DkbRuntimeClient({ baseUrl: `https://user:${secret}@example.test` }), error => !error.message.includes(secret));
 });
+
+test('Runtime transport diagnostics retain safe nested causes without retries or secrets', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const secret = 'private-transport-sentinel';
+  const client = new DkbRuntimeClient({ baseUrl: 'https://runtime.example.test', adminToken: secret });
+  const socket = code => Object.assign(new Error(secret), { code });
+  const cyclic = new Error(secret);
+  cyclic.cause = cyclic;
+  const cases = [
+    [new TypeError(secret, { cause: socket('ECONNREFUSED') }), 'connection refused'],
+    [new TypeError(secret, { cause: new AggregateError([socket('ECONNRESET'), socket('ETIMEDOUT')], secret) }), 'connection reset; connection timed out'],
+    [Object.assign(new Error(secret), { name: 'TimeoutError' }), 'request timed out'],
+    [socket('ERR_TLS_CERT_ALTNAME_INVALID'), 'TLS hostname mismatch'],
+    [socket('EADDRNOTAVAIL'), 'local connection address unavailable'],
+    [socket('constructor'), 'connection or protocol failure'],
+    [cyclic, 'connection or protocol failure'],
+  ];
+  for (const [failure, detail] of cases) {
+    let calls = 0;
+    globalThis.fetch = async () => { calls += 1; throw failure; };
+    await assert.rejects(client.reload(), error => {
+      assert.equal(error.code, 'runtime_transport_failed');
+      assert.ok(error.message.includes(detail));
+      assert.ok(error.message.includes('Check the Runtime endpoint and service status.'));
+      assert.ok(!error.message.includes(secret));
+      return true;
+    });
+    assert.equal(calls, 1, 'management mutations must never retry implicitly');
+  }
+});

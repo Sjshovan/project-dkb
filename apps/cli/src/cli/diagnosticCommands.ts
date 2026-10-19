@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 import type { DkbRuntimeContext } from '@sjshovan/dkb-runtime/runtime/context.js';
 import type { CliPresenter } from './presentation.js';
 import { summarizeQueryResult } from './summaries.js';
+import { nativeRuntimeStateRoot } from '../host/runtimeLocation.js';
 
 export interface DiagnosticCommandContext {
   presenter(): CliPresenter;
@@ -232,8 +233,9 @@ async function diagnosticRuntime(name?: string): Promise<{
     const detail = name ? `Unknown host Runtime: ${name}.` : 'This host has no selected Runtime.';
     throw new (await import('@sjshovan/dkb-protocol/errors.js')).DkbError(`${detail} Run: dkb runtime list`);
   }
+  const stateRoot = nativeRuntimeStateRoot(selected.runtime);
   return {
-    ...(selected.runtime.stateRoot ? { stateRoot: selected.runtime.stateRoot } : {}),
+    ...(stateRoot ? { stateRoot } : {}),
     client: await runtimeClientForUrl(selected.runtime.url),
   };
 }

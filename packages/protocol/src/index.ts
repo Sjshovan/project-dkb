@@ -9,6 +9,7 @@ export * from './paths.js';
 export * from './progress.js';
 export * from './providerReceipts.js';
 export * from './registryCatalog.js';
+export * from './registryCollections.js';
 export * from './retrievalProfile.js';
 export * from './runtimeActivation.js';
 export * from './space.js';

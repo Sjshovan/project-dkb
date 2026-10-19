@@ -17,7 +17,7 @@ import { DKB_EVIDENCE_CATALOG_FILENAME } from '@sjshovan/dkb-protocol/evidence/c
 import { DKB_ARTIFACT_MANIFEST_FILENAME } from '@sjshovan/dkb-protocol/artifacts.js';
 import { retrievalProfileLockForRetrievalPipelines } from '@sjshovan/dkb-pipeline/profile.js';
 import { validateEvidenceIr, type DkbEvidenceIr } from '@sjshovan/dkb-protocol/evidence/ir.js';
-import { DkbProviderHost } from '@sjshovan/dkb-pipeline/host.js';
+import { withCompilationHost } from './compilationHost.js';
 import { indexedSourceUnitFromPipelineRecord } from './records.js';
 import { embedDkbEvidenceWithProviderHost } from './pipelineRunner.js';
 import { summarizeEvidenceCorpus } from './buildStatistics.js';
@@ -87,60 +87,63 @@ export async function compileComposeProject(
     const totalStart = performance.now();
     const registry = await loadCompose(resolvedRoot);
     const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
-    const desiredProfile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, undefined, options.targetOptions);
-    const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
-    const sourceSnapshotStart = performance.now();
-    const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
-    const sourceStatistics = sourceStatisticsForSnapshot(sourceSnapshot);
-    const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
-    const cacheLookupStart = performance.now();
-    const existingBuilds = await listPackageBuilds(resolvedRoot);
-    const existingMatch = existingBuilds.retrieval.find((build) => build.profileDigest === desiredProfile.retrievalProfileDigest);
-    const existingProfile = existingMatch ? await readRetrievalBuildProfile(existingMatch.path) : null;
-    const profileDrift = !existingProfile
-      || existingProfile.profile.configDigest !== desiredProfile.configDigest
-      || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;
-    const cached = options.force || profileDrift
-      ? null
-      : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, lockPath);
-    const cacheLookupMs = elapsedMs(cacheLookupStart);
-    options.signal?.throwIfAborted();
+    return withCompilationHost({ root: contextRoot, distribution: options.distribution,
+      ...(options.target ? { target: options.target } : {}),
+      ...(options.targetOptions ? { targetOptions: options.targetOptions } : {}),
+    }, async (providerHost, desiredProfile) => {
+      const lockPath = resolveFrom(resolvedRoot, COMPILE_RECEIPT_PATH);
+      const sourceSnapshotStart = performance.now();
+      const sourceSnapshot = await quickSourceSnapshotForRegistry(registry);
+      const sourceStatistics = sourceStatisticsForSnapshot(sourceSnapshot);
+      const sourceSnapshotMs = elapsedMs(sourceSnapshotStart);
+      const cacheLookupStart = performance.now();
+      const existingBuilds = await listPackageBuilds(resolvedRoot);
+      const existingMatch = existingBuilds.retrieval.find((build) => build.profileDigest === desiredProfile.retrievalProfileDigest);
+      const existingProfile = existingMatch ? await readRetrievalBuildProfile(existingMatch.path) : null;
+      const profileDrift = !existingProfile
+        || existingProfile.profile.configDigest !== desiredProfile.configDigest
+        || existingProfile.profile.providerBuildDigest !== desiredProfile.providerBuildDigest;
+      const cached = options.force || profileDrift
+        ? null
+        : await cachedCompileResultFor(resolvedRoot, registry, sourceSnapshot, lockPath);
+      const cacheLookupMs = elapsedMs(cacheLookupStart);
+      options.signal?.throwIfAborted();
 
-    if (cached) {
-      const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
-      return {
-        ...cached,
-        profile: {
-          timingsMs: {
-            sourceSnapshot: sourceSnapshotMs,
-            cacheLookup: cacheLookupMs,
-            collectState: 0,
-            aggregateArtifacts: 0,
-            compileCacheWrite: 0,
-            total: elapsedMs(totalStart),
-          },
-          ...(statistics ? {
-            statistics: {
-              ...statistics,
-              diskCapacity: { retrieval: [] },
-              providerStages: [],
+      if (cached) {
+        const statistics = await readCompileStatistics(resolvedRoot, sourceStatistics);
+        await providerHost.assertCurrent();
+        return {
+          ...cached,
+          profile: {
+            timingsMs: {
+              sourceSnapshot: sourceSnapshotMs,
+              cacheLookup: cacheLookupMs,
+              collectState: 0,
+              aggregateArtifacts: 0,
+              compileCacheWrite: 0,
+              total: elapsedMs(totalStart),
             },
-          } : {}),
-        },
-      };
-    }
+            ...(statistics ? {
+              statistics: {
+                ...statistics,
+                diskCapacity: { retrieval: [] },
+                providerStages: [],
+              },
+            } : {}),
+          },
+        };
+      }
 
-    const ingestionCapacity = await assertDiskCapacity(
-      resolvedRoot,
-      estimateIngestionWorkingBytes(sourceStatistics.bytes),
-      `ingestion of ${registry.manifest.id}`,
-    );
-    const collectStateStart = performance.now();
-    const state = await collectRegistryState(registry, desiredProfile, options.distribution, contextRoot, options.targetOptions, options.signal, options.execution);
-    state.packageSourceDigest = options.sourceDigest;
-    const collectStateMs = elapsedMs(collectStateStart);
+      const ingestionCapacity = await assertDiskCapacity(
+        resolvedRoot,
+        estimateIngestionWorkingBytes(sourceStatistics.bytes),
+        `ingestion of ${registry.manifest.id}`,
+      );
+      const collectStateStart = performance.now();
+      const state = await collectRegistryState(registry, desiredProfile, providerHost, options.signal, options.execution);
+      state.packageSourceDigest = options.sourceDigest;
+      const collectStateMs = elapsedMs(collectStateStart);
 
-    try {
       const aggregateStart = performance.now();
       const written = await writeAtomicCompileArtifacts(
         resolvedRoot,
@@ -187,9 +190,7 @@ export async function compileComposeProject(
           } : {}),
         },
       };
-    } finally {
-      await state.providerHost?.dispose();
-    }
+    });
   }, options.signal);
 }
 
@@ -273,33 +274,28 @@ export async function compileRetrievalFromEvidence(
     }
     const dkb = allDkbs[0]!;
     const contextRoot = path.resolve(options.contextRoot ?? resolvedRoot);
-    const desiredProfile = await resolvedProviderProfile(contextRoot, options.distribution, options.target, undefined, options.targetOptions);
-    if (desiredProfile.evidenceProfileDigest !== evidence.evidenceProfileDigest) {
-      throw new DkbError(
-        `Evidence Profile mismatch: target ${options.target} requires ${desiredProfile.evidenceProfileDigest}, Evidence Build uses ${evidence.evidenceProfileDigest}`,
-      );
-    }
-    const packageEvidence = evidence.evidence.filter((record) => {
-      return record.packageId === dkb.manifest.id && record.packageVersion === dkb.manifest.version;
-    });
-    if (packageEvidence.length !== evidence.evidence.length) {
-      throw new DkbError(`Evidence Build identity does not match ${dkb.manifest.id}@${dkb.manifest.version}`);
-    }
-    const sourceStatistics = sourceStatisticsForSnapshot(await quickSourceSnapshotForRegistry(registry));
-    const corpus = summarizeEvidenceCorpus(evidence, sourceStatistics);
-    const retrievalCapacity = await assertDiskCapacity(
-      resolvedRoot,
-      estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding?.dimensions ?? 0),
-      `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
-    );
-    const providerHost = await DkbProviderHost.create({
-      root: contextRoot,
-      distribution: options.distribution,
-      target: desiredProfile.target,
+    return withCompilationHost({ root: contextRoot, distribution: options.distribution,
+      target: options.target,
       ...(options.targetOptions ? { targetOptions: options.targetOptions } : {}),
-    });
-
-    try {
+    }, async (providerHost, desiredProfile) => {
+      if (desiredProfile.evidenceProfileDigest !== evidence.evidenceProfileDigest) {
+        throw new DkbError(
+          `Evidence Profile mismatch: target ${options.target} requires ${desiredProfile.evidenceProfileDigest}, Evidence Build uses ${evidence.evidenceProfileDigest}`,
+        );
+      }
+      const packageEvidence = evidence.evidence.filter((record) => {
+        return record.packageId === dkb.manifest.id && record.packageVersion === dkb.manifest.version;
+      });
+      if (packageEvidence.length !== evidence.evidence.length) {
+        throw new DkbError(`Evidence Build identity does not match ${dkb.manifest.id}@${dkb.manifest.version}`);
+      }
+      const sourceStatistics = sourceStatisticsForSnapshot(await quickSourceSnapshotForRegistry(registry));
+      const corpus = summarizeEvidenceCorpus(evidence, sourceStatistics);
+      const retrievalCapacity = await assertDiskCapacity(
+        resolvedRoot,
+        estimateRetrievalWorkingBytes(corpus, desiredProfile.embedding?.dimensions ?? 0),
+        `retrieval compilation of ${dkb.manifest.id}@${dkb.manifest.version}`,
+      );
       const evidenceLockPath = path.join(evidenceBuildPath(resolvedRoot, evidence.evidenceProfileDigest, evidence.evidenceDigest), DKB_EVIDENCE_BUILD_LOCK);
       const parentLock = validateEvidenceBuildLock(options.evidenceLock
         ?? JSON.parse(await fs.readFile(evidenceLockPath, 'utf8')), evidenceLockPath);
@@ -373,9 +369,7 @@ export async function compileRetrievalFromEvidence(
           } : {}),
         },
       };
-    } finally {
-      await providerHost.dispose();
-    }
+    });
   }, options.signal);
 }
 

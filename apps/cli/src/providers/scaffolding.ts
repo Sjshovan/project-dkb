@@ -99,6 +99,7 @@ function managedIndexSource(): string {
   // A production managed provider must replace this map with durable storage.
   /** @type {Map<string, {scope:string, data:StoredIndex}>} */
   const installed = new Map();
+  const storageId = crypto.randomUUID();
   let disposed = false;
   const assertOpen = () => { if (disposed) throw new Error('Index provider is disposed'); };
   /** @param {Parameters<import('@sjshovan/dkb-pipeline').DkbManagedIndexProvider['openRuntime']>[0]} input */
@@ -117,6 +118,7 @@ function managedIndexSource(): string {
     return entries;
   }
   context.registerProvider(defineManagedIndexProvider({ kind: 'index', mode: 'managed', format: indexFormat, capabilities: { vectors: 'none' },
+    storageIdentity() { return 'sha256:' + fingerprint(['educational-process-local', storageId]); },
     async compilePackage(input) { assertOpen(); return writeIndex(input); },
     async validatePackage(input) { assertOpen(); return { documentCount: (await readIndex(input)).records.length }; },
     async installPackage(input) {

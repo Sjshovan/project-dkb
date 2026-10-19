@@ -149,6 +149,7 @@ test('a lexical-only Pipeline resolves and locks without an embedding provider o
   const runtimeRoot = path.join(root, 'runtime');
   const libraryRoot = path.join(root, 'library');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(libraryRoot);
   const plugin = pluginFixture('@test/lexical', (context) => {
     context.registerProvider({ kind: 'evidence', async compile() { return { records: [], receipt: { build: {} } }; } });
     context.registerProvider({ kind: 'index', mode: 'packaged', format: 'test.lexical.v1', capabilities: { vectors: 'none' }, async compilePackage() { return { build: {} }; }, async validatePackage() { return { documentCount: 0 }; }, async verifyRuntime() { return { indexId: 'lexical', documentCount: 0, status: 'ready' }; }, async openRuntime() { return null; } });
@@ -194,6 +195,7 @@ test('Runtime Pipeline catalog shares health probes for identical resolved provi
   const runtimeRoot = path.join(root, 'runtime');
   const healthCalls = [];
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(libraryRoot);
   const plugin = pluginFixture('@test/health',
     (context) => {
       const health = (kind) => async () => {
@@ -236,6 +238,7 @@ test('Runtime Pipeline catalog reports a target with unresolved external identit
   const libraryRoot = path.join(root, 'library');
   const runtimeRoot = path.join(root, 'runtime');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(libraryRoot);
   const sharedTarget = { evidence: '@test/all', embedding: '@test/all', index: '@test/all', retrieval: '@test/all' };
   const attestedPlugin = {
     ...allPlugin,

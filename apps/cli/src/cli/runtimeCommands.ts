@@ -248,12 +248,13 @@ export function registerRuntimeCommands(program: Command, context: RuntimeComman
       }
       if (!remote && options.handle) throw new DkbError('--handle is only valid for a remote Runtime.');
       const knownLibrary = remote ? null : await registeredHostLibrary(library) ?? await registerHostLibrary(library);
+      const { localHostLibraryPath } = await import('../host/libraryLocation.js');
       const url = options.url ?? knownRuntime?.runtime.url ?? await context.currentRuntimeUrl();
       await context.presenter().run('Switching Runtime Library', async () => {
         const client = await context.currentRuntimeAdminClient(url, 40 * 60_000);
         return remote
           ? client.switchLibrary({ libraryHandle: options.handle! })
-          : client.switchLibrary({ libraryPath: knownLibrary!.library.path });
+          : client.switchLibrary({ libraryPath: localHostLibraryPath(knownLibrary!.library) });
       });
       if (knownRuntime && knownLibrary) {
         await registerHostRuntime(knownRuntime.name, knownRuntime.runtime.url, {
@@ -310,16 +311,14 @@ function registerStackCommands(program: Command, context: RuntimeCommandContext)
     .argument('[name]', 'Stack name', 'local')
     .option('--compiler-target <target>', 'Trusted Registry compiler target')
     .option('--pipeline <pipeline>', 'Pipeline served by this Stack Runtime')
-    .option('--library <library>', 'Registered Library name or local Library path')
+    .option('--library <library>', 'Registered Docker-owned Library in the same local Docker context')
     .action(async (name: string, options: { compilerTarget?: DkbStackTarget; pipeline?: DkbStackTarget; library?: string }) => {
       const { upDkbStack } = await import('../stack/manager.js');
       const distribution = await context.defaultDistribution();
-      let libraryRoot: string | undefined;
-      if (options.library) libraryRoot = await context.currentLibraryRoot(options.library);
       await context.presenter().run('Starting DKB stack', async () => upDkbStack(distribution, name, {
         compilerTarget: options.compilerTarget,
         runtimeTarget: options.pipeline,
-        libraryRoot,
+        library: options.library,
       }), summarizeStackStatus);
     });
 

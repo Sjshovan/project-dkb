@@ -10,12 +10,14 @@ test('Runtime mutation waits for an in-flight query and blocks later queries', a
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const events = [];
   let releaseFirstQuery;
+  let reportFirstQuery;
+  const firstStarted = new Promise(resolve => { reportFirstQuery = resolve; });
   const firstQuery = withRuntimeQuery(root, async () => {
     events.push('query-1-start');
-    await new Promise((resolve) => { releaseFirstQuery = resolve; });
+    await new Promise((resolve) => { releaseFirstQuery = resolve; reportFirstQuery(); });
     events.push('query-1-end');
   });
-  await nextTurn();
+  await firstStarted;
   const mutation = withRuntimeMutation(root, async () => {
     events.push('mutation-start');
     await nextTurn();
@@ -38,6 +40,7 @@ test('independent Runtime roots do not share a mutation gate', async (t) => {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const left = path.join(root, 'left');
   const right = path.join(root, 'right');
+  await fs.mkdir(right);
   let releaseMutation;
   let markMutationStarted;
   const mutationStarted = new Promise((resolve) => { markMutationStarted = resolve; });
@@ -53,7 +56,7 @@ test('independent Runtime roots do not share a mutation gate', async (t) => {
   await mutation;
 });
 
-test('Runtime mutation is reentrant for one owning operation and removes its file lock', async (t) => {
+test('Runtime mutation is reentrant and releases its persistent native lease', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-runtime-gate-reentrant-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const events = [];
@@ -65,6 +68,7 @@ test('Runtime mutation is reentrant for one owning operation and removes its fil
 
   assert.deepEqual(events, ['outer', 'inner']);
   await assert.rejects(fs.access(path.join(root, '.dkb', 'locks', 'runtime-mutation.lock')), (error) => error?.code === 'ENOENT');
+  assert.equal((await fs.stat(path.join(root, '.dkb', 'locks', 'runtime-mutation.lease.sqlite'))).isFile(), true);
 });
 
 function nextTurn() {

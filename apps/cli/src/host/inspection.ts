@@ -5,6 +5,8 @@ import { verifyRegistryEndpoint } from '@sjshovan/dkb-registry-client/config.js'
 import { loadRegistryCredentialSync } from '@sjshovan/dkb-registry-client/credentials.js';
 import { runtimeClientForUrl } from './runtimeClient.js';
 import { hostInventoryPath, readHostInventory } from './inventory.js';
+import { hostLibraryLocation, dockerLibraryOwner } from './libraryLocation.js';
+import { readDockerLibraryCommand } from './libraryOwnerResult.js';
 
 export interface DkbHostLibraryListing {
   inventoryPath: string;
@@ -14,9 +16,11 @@ export interface DkbHostLibraryListing {
     selected: boolean;
     displayName: string;
     libraryId?: string;
-    path: string;
+    path?: string;
+    location: string;
+    kind: 'local' | 'docker';
     registry?: string;
-    status: 'ready' | 'missing' | 'invalid';
+    status: 'ready' | 'missing' | 'invalid' | 'known' | 'unavailable';
     message?: string;
   }>;
 }
@@ -66,16 +70,20 @@ export interface DkbHostRuntimeListing {
   }>;
 }
 
-export async function inspectHostLibraries(): Promise<DkbHostLibraryListing> {
+export async function inspectHostLibraries(options: { check?: boolean } = {}): Promise<DkbHostLibraryListing> {
   const inventory = await readHostInventory();
   const libraries = await Promise.all(Object.entries(inventory.libraries).map(async ([name, library]) => {
-    const status = await inspectLibrary(library.path);
+    const status = library.storage
+      ? options.check ? await inspectDockerLibrary(dockerLibraryOwner(library.storage), name) : { status: 'known' as const }
+      : await inspectLibrary(library.path);
 
     return {
       name,
       selected: inventory.defaults.library === name,
       displayName: library.displayName,
-      path: library.path,
+      ...(!library.storage ? { path: library.path } : {}),
+      location: hostLibraryLocation(library),
+      kind: library.storage ? 'docker' as const : 'local' as const,
       ...(library.registry ? { registry: library.registry } : {}),
       ...status,
     };
@@ -86,6 +94,15 @@ export async function inspectHostLibraries(): Promise<DkbHostLibraryListing> {
     ...(inventory.defaults.library ? { selected: inventory.defaults.library } : {}),
     libraries: libraries.sort((left, right) => left.name.localeCompare(right.name)),
   };
+}
+
+async function inspectDockerLibrary(owner: import('./libraryOwner.js').DockerLibraryOwner, libraryName: string) {
+  try {
+    await readDockerLibraryCommand(owner, 'library.status', {}, { signal: AbortSignal.timeout(20_000), libraryName });
+    return { status: 'ready' as const };
+  } catch (error) {
+    return { status: 'unavailable' as const, message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function inspectHostRegistries(options: { check?: boolean } = {}): Promise<DkbHostRegistryListing> {

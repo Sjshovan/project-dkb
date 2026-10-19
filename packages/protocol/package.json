@@ -30,6 +30,7 @@
     "./progress.js": { "types": "./dist/progress.d.ts", "import": "./dist/progress.js" },
     "./providerReceipts.js": { "types": "./dist/providerReceipts.d.ts", "import": "./dist/providerReceipts.js" },
     "./registryCatalog.js": { "types": "./dist/registryCatalog.d.ts", "import": "./dist/registryCatalog.js" },
+    "./registryCollections.js": { "types": "./dist/registryCollections.d.ts", "import": "./dist/registryCollections.js" },
     "./retrievalProfile.js": { "types": "./dist/retrievalProfile.d.ts", "import": "./dist/retrievalProfile.js" },
     "./runtimeActivation.js": { "types": "./dist/runtimeActivation.d.ts", "import": "./dist/runtimeActivation.js" },
     "./security/sourceContent.js": { "types": "./dist/security/sourceContent.d.ts", "import": "./dist/security/sourceContent.js" },

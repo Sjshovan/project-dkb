@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
+import { registryCollectionDigest } from '@sjshovan/dkb-protocol/registryCollections.js';
 import fs from 'node:fs/promises';
+import { allLibraryReads, withLibraryReadFence } from './readFence.js';
 import path from 'node:path';
 import {
   validateEvidenceBuildLock,
@@ -61,7 +62,7 @@ import { readLibraryState, type DkbLibraryStateEntry } from './state.js';
 
 export { inspectInstalledEvidence } from './packageEvidence.js';
 
-export async function inspectInstalledPackage(
+async function inspectInstalledPackageSnapshot(
   libraryRoot: string,
   identity: string,
 ): Promise<DkbInstalledEntryDetail> {
@@ -146,7 +147,7 @@ export async function inspectInstalledPackage(
   };
 }
 
-export async function listInstalledPackageContents(input: {
+async function listInstalledPackageContentsSnapshot(input: {
   libraryRoot: string;
   identity: string;
   directory?: string;
@@ -176,7 +177,7 @@ export async function listInstalledPackageContents(input: {
   };
 }
 
-export async function previewInstalledPackageFile(input: {
+async function previewInstalledPackageFileSnapshot(input: {
   libraryRoot: string;
   identity: string;
   file: string;
@@ -197,7 +198,7 @@ export async function previewInstalledPackageFile(input: {
   };
 }
 
-export async function verifyInstalledPackage(input: {
+async function verifyInstalledPackageSnapshot(input: {
   libraryRoot: string;
   identity: string;
   trustedKeys?: DkbSigningKeyRecord[];
@@ -299,17 +300,17 @@ async function inspectDkbBuilds(
   entry: DkbLibraryStateEntry,
 ) {
   try {
-    const [verification, listed] = await Promise.all([verifyKnowledgeBuilds(packageRoot), listPackageBuilds(packageRoot)]);
+    const [verification, listed] = await allLibraryReads([verifyKnowledgeBuilds(packageRoot), listPackageBuilds(packageRoot)]);
     if (!verification.ok) {
       throw new DkbError(verification.checks.filter((item) => !item.ok).map((item) => item.detail).join('; '));
     }
     const graph = await representativeStoredPackageGraph(packageRoot, listed);
     const catalog = readEvidenceCatalog(graph.evidencePath);
     const builds: DkbInstalledBuildSummary[] = [];
-    const retrievalDetails = await Promise.all(listed.retrieval.map(async (item) => {
+    const retrievalDetails = await allLibraryReads(listed.retrieval.map(async (item) => {
       const lockPath = path.join(item.path, DKB_RETRIEVAL_BUILD_LOCK);
       const manifestPath = path.join(item.path, DKB_ARTIFACT_MANIFEST_FILENAME);
-      const [lock, profile, manifest, bytes] = await Promise.all([
+      const [lock, profile, manifest, bytes] = await allLibraryReads([
         fs.readFile(lockPath, 'utf8').then((value) => validateRetrievalBuildLock(JSON.parse(value), lockPath)),
         readRetrievalBuildProfile(item.path),
         fs.readFile(manifestPath, 'utf8').then((value) => validateArtifactManifest(JSON.parse(value), manifestPath)),
@@ -327,7 +328,7 @@ async function inspectDkbBuilds(
         bytes: await directoryBytes(item.path), generatedAt: lock.generatedAt, recordCount: lock.recordCount, chunkCount: lock.chunkCount,
         providers: evidenceProfile?.providers.map(({ id, version, kind }) => ({ id, version, kind })) ?? [],
         processors: evidenceProfile?.processors.map(({ id, version, stage }) => ({ id, version, stage })) ?? [],
-        files: await Promise.all([
+        files: await allLibraryReads([
           installedBuildFile(item.path, DKB_EVIDENCE_BUILD_IR, 'evidence_ir'),
           installedBuildFile(item.path, DKB_EVIDENCE_CATALOG_FILENAME, 'evidence_catalog'),
           installedBuildFile(item.path, DKB_EVIDENCE_BUILD_LOCK, 'build_lock'),
@@ -478,13 +479,13 @@ async function verifyCollectionSnapshot(
     members.push({ id: identity, version: member.version, digest: member.digest });
   }
   const snapshot = {
-    type: 'collection',
+    type: 'collection' as const,
     id: entry.identity,
     name: manifest.displayName ?? manifest.name,
-    revision,
+    revision: revision as number,
     members,
   };
-  const computedDigest = `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
+  const computedDigest = registryCollectionDigest(snapshot);
   const valid = computedDigest === recordedDigest
     && recordedDigest === entry.digest
     && revision === entry.revision;
@@ -619,7 +620,7 @@ async function verifyAttachedInstallPlanReceipts(
       const plan = validateInstallPlan(JSON.parse(await fs.readFile(receiptPath, 'utf8')), receiptPath);
       if (stableHash(plan) === stableHash(installedPlan)) continue;
       const [source, evidence, retrieval] = plan.artifacts;
-      const [evidenceResult, retrievalResult, planResult] = await Promise.all([
+      const [evidenceResult, retrievalResult, planResult] = await allLibraryReads([
         verifyLayerReceipt(evidence.receipt, resolver, `${receiptPath} Evidence receipt`),
         verifyLayerReceipt(retrieval.receipt, resolver, `${receiptPath} Retrieval receipt`),
         verifyLayerReceipt(plan.receipt, resolver, receiptPath),
@@ -899,3 +900,19 @@ function humanLabel(value: string): string { return value.replace(/[._-]+/gu, ' 
 function unique(values: string[]): string[] { return [...new Set(values)]; }
 
 interface EvidenceFileSummary { sourceId: string; sourceHash: string; records: number }
+
+export async function inspectInstalledPackage(...args: Parameters<typeof inspectInstalledPackageSnapshot>): ReturnType<typeof inspectInstalledPackageSnapshot> {
+  return withLibraryReadFence(args[0], () => inspectInstalledPackageSnapshot(...args));
+}
+
+export async function listInstalledPackageContents(...args: Parameters<typeof listInstalledPackageContentsSnapshot>): ReturnType<typeof listInstalledPackageContentsSnapshot> {
+  return withLibraryReadFence(args[0].libraryRoot, () => listInstalledPackageContentsSnapshot(...args));
+}
+
+export async function previewInstalledPackageFile(...args: Parameters<typeof previewInstalledPackageFileSnapshot>): ReturnType<typeof previewInstalledPackageFileSnapshot> {
+  return withLibraryReadFence(args[0].libraryRoot, () => previewInstalledPackageFileSnapshot(...args));
+}
+
+export async function verifyInstalledPackage(...args: Parameters<typeof verifyInstalledPackageSnapshot>): ReturnType<typeof verifyInstalledPackageSnapshot> {
+  return withLibraryReadFence(args[0].libraryRoot, () => verifyInstalledPackageSnapshot(...args));
+}

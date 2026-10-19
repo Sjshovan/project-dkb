@@ -202,7 +202,7 @@ export async function selectStoredPackageBuild(input: {
 }): Promise<DkbStoredPackageBuildGraph> {
   const builds = await listPackageBuilds(input.root);
   const selected = builds.retrieval.filter((build) => build.profileDigest === input.retrievalProfileDigest);
-  if (selected.length === 0) throw new DkbError(`No stored Retrieval Build exists for pipeline ${input.target} (${input.retrievalProfileDigest})`);
+  if (selected.length === 0) throw new DkbError(`No stored Retrieval Build exists for pipeline ${input.target} (${input.retrievalProfileDigest})`, 'retrieval_build_missing');
   if (selected.length > 1) throw new DkbError(`Package has multiple Retrieval Builds for exact profile ${input.retrievalProfileDigest}; immutable compilation is non-deterministic`);
   const retrievalPath = selected[0]!.path;
   const retrievalLockPath = path.join(retrievalPath, DKB_RETRIEVAL_BUILD_LOCK);

@@ -12,6 +12,8 @@ import {
 } from './context.js';
 import { runCompose } from './docker.js';
 import type { DkbStackStatus, DkbStackTarget, DkbStackUpgrade } from './types.js';
+import { withStackControl } from './control.js';
+import { readStackStorage } from './ownedStorage.js';
 
 type StartStack = (name: string, target: DkbStackTarget) => Promise<{ services: DkbStackStatus['services'] }>;
 
@@ -21,6 +23,13 @@ export async function upgradeDkbStackRelease(
   lockPath: string,
   startStack: StartStack,
 ): Promise<DkbStackUpgrade> {
+  return withStackControl(name, () => upgradeStack(distribution, name, lockPath, startStack));
+}
+
+async function upgradeStack(distribution: DkbDistribution, name: string, lockPath: string, startStack: StartStack): Promise<DkbStackUpgrade> {
+  if (await readStackStorage(name)) {
+    throw new DkbError('Volume-backed Stack upgrades require verified topology restoration for rollback. That release gate is not yet available; keep the current release. No images, configuration or data were changed.', 'stack_volume_restore_required');
+  }
   const context = await readDkbStack(distribution, name);
   await requireStoppedStack(context, 'upgrade');
   const lockFile = path.resolve(lockPath);

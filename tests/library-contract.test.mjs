@@ -50,8 +50,8 @@ test('Library manifest identity reads do not traverse packages or create applied
   await assert.rejects(() => loadLibraryManifest(root), /Expected a Library manifest/);
 });
 
-test('active Library mutation leases heartbeat so contenders cannot reap a long-running owner', async (t) => {
-  const root = await tempDirectory(t, 'dkb-library-lock-heartbeat-');
+test('active Library mutation leases cannot be reaped after a stale timestamp threshold', async (t) => {
+  const root = await tempDirectory(t, 'dkb-library-lock-live-owner-');
   let entered;
   let release;
   const enteredPromise = new Promise((resolve) => { entered = resolve; });
@@ -65,7 +65,7 @@ test('active Library mutation leases heartbeat so contenders cannot reap a long-
 
   await assert.rejects(
     withDkbFileLock(root, 'library-mutation', async () => undefined, { staleMs: 45, timeoutMs: 75 }),
-    /Timed out waiting for DKB library mutation lock/u,
+    /DKB library mutation is busy.*retry this command/u,
   );
   release();
   await owner;

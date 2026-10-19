@@ -22,6 +22,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=moderate
       - run: npm run version:status
       - run: npm run graph:check
       - run: npm run boundaries:check
@@ -30,4 +31,11 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run package:check
+      - name: Verify Linux Library management and Stack configuration recovery
+        if: runner.os == 'Linux'
+        run: |
+          cli_version="$(node -p "require('./apps/cli/package.json').version")"
+          docker build --build-arg "DKB_VERSION=$cli_version" --build-arg "DKB_COMMIT=$GITHUB_SHA" -f apps/cli/Dockerfile -t dkb-cli:owner-candidate .
+          node tests/library-owner-cli-proof.mjs --run
+          node tests/stack-owner-proof.mjs --run
       - run: npm run temp:audit

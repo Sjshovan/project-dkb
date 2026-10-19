@@ -37,6 +37,16 @@ export const MEILISEARCH_INDEX_FORMAT = 'meilisearch.userProvided.v1';
 export const MEILISEARCH_ARTIFACT_DIR = 'meilisearch';
 export const MEILISEARCH_RECORDS_PATH = `${MEILISEARCH_ARTIFACT_DIR}/records.jsonl`;
 export const MEILISEARCH_MANIFEST_PATH = `${MEILISEARCH_ARTIFACT_DIR}/manifest.json`;
+/** Password/API-key rotation does not change the backing store. */
+export function meilisearchStorageIdentity(input: { options: Readonly<Record<string, unknown>> }): string {
+  let url: URL;
+  try { url = new URL(meilisearchUrl(input.options)); }
+  catch { throw new DkbError('Meilisearch storage requires a valid HTTP(S) endpoint; use apiKeyEnv for credentials.'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new DkbError('Meilisearch storage requires an HTTP(S) endpoint without credentials, query parameters or fragments; use apiKeyEnv for credentials.');
+  }
+  return stableHash({ endpoint: url.href.replace(/\/+$/u, '') });
+}
 const MEILI_EMBEDDER = 'dkb';
 
 export interface MeilisearchImportManifest {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -199,6 +200,7 @@ test('bare init creates an idempotent Library and stores its verified upstream R
         source: 'project',
         configPath: libraryRegistryConfigPath(registryRoot),
         root: registryRoot,
+        changed: true,
       },
       host: {
         library: 'knowledge',
@@ -583,33 +585,21 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-package-lifecycle-'));
   const packageRoot = path.join(tempRoot, 'vendor', '@acct-test', 'knowledge');
   const requests = [];
+  const invoke = async (args, extraEnv = {}, cwd) => {
+    const transportPath = path.join(tempRoot, 'loopback-diagnostic.json');
+    await fs.rm(transportPath, { force: true });
+    const result = await runCli(args, { ...extraEnv, DKB_TEST_TRANSPORT_DIAGNOSTICS: transportPath }, cwd);
+    const transport = await fs.readFile(transportPath, 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return 'diagnostic unavailable';
+      throw error;
+    });
+    assert.equal(result.code, 0, JSON.stringify({ stdout: result.stdout, stderr: result.stderr, requests, transport }));
+    return result;
+  };
   let unrelated;
-  let upgradeRequest;
   const server = http.createServer(async (request, response) => {
     requests.push(request.url);
     response.setHeader('content-type', 'application/json');
-
-    if (request.method === 'POST' && request.url === '/api/dkbs/install-registry') {
-      const chunks = [];
-      for await (const chunk of request) chunks.push(chunk);
-      upgradeRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      response.end(JSON.stringify({
-        status: 'installed',
-        packageId: '@acct-test/knowledge',
-        version: '1.1.0',
-        packagePath: packageRoot,
-      }));
-      return;
-    }
-
-    if (request.method === 'POST' && request.url === '/api/registry/packages/acct-test/knowledge/versions/1.1.0/install-grant') {
-      response.end(JSON.stringify({
-        plan: fakeInstallPlan('@acct-test/knowledge', '1.1.0'),
-        installGrant: `dkb_grant_${'g'.repeat(64)}`,
-        expiresAt: '2026-08-26T00:05:00.000Z',
-      }));
-      return;
-    }
 
     if (request.url === '/api/registry/packages?q=knowledge&page=1&perPage=20') {
       response.end(JSON.stringify({
@@ -668,7 +658,9 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     }
 
     if (request.url === '/api/registry/collections/acct-test/knowledge-bundle/revisions/2') {
-      response.end(JSON.stringify({ data: { collectionId: '@acct-test/knowledge-bundle', revision: 2, digest: `sha256:${'a'.repeat(64)}`, manifest: { type: 'collection', id: '@acct-test/knowledge-bundle', name: 'Knowledge bundle', revision: 2, digest: `sha256:${'a'.repeat(64)}`, members: [{ id: '@acct-test/knowledge', version: '1.1.0', digest: `sha256:${'d'.repeat(64)}` }] } } }));
+      const manifest = { type: 'collection', id: '@acct-test/knowledge-bundle', name: 'Knowledge bundle', revision: 2, members: [{ id: '@acct-test/knowledge', version: '1.1.0', digest: `sha256:${'d'.repeat(64)}` }] };
+      const digest = `sha256:${createHash('sha256').update(JSON.stringify(manifest)).digest('hex')}`;
+      response.end(JSON.stringify({ data: { collectionId: manifest.id, revision: 2, digest, manifest: { ...manifest, digest } } }));
       return;
     }
 
@@ -712,23 +704,18 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     await fs.writeFile(libraryRegistryConfigPath(tempRoot), `${JSON.stringify({ format: 'dkb.config.v2', registry: { url: registryUrl } }, null, 2)}\n`);
 
     unrelated = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-registry-browse-'));
-    const search = await runCli(['--json', 'search', 'knowledge', '--url', registryUrl, '--type', 'all', '--page', '1', '--per-page', '20'], { DKB_REGISTRY_URL: '' }, unrelated);
-    assert.equal(search.code, 0, search.stderr);
+    const search = await invoke(['--json', 'search', 'knowledge', '--url', registryUrl, '--type', 'all', '--page', '1', '--per-page', '20'], { DKB_REGISTRY_URL: '' }, unrelated);
     assert.deepEqual(JSON.parse(search.stdout).entries.map((entry) => entry.type), ['dkb', 'collection']);
-    const remoteDkb = await runCli(['--json', 'registry', 'show', '@acct-test/knowledge', '--version', '1.1.0', '--url', registryUrl], {}, unrelated);
-    assert.equal(remoteDkb.code, 0, remoteDkb.stderr);
+    const remoteDkb = await invoke(['--json', 'registry', 'show', '@acct-test/knowledge', '--version', '1.1.0', '--url', registryUrl], {}, unrelated);
     assert.equal(JSON.parse(remoteDkb.stdout).selectedVersion.version, '1.1.0');
-    const remoteCollection = await runCli(['--json', 'registry', 'show', '@acct-test/knowledge-bundle', '--revision', '2', '--url', registryUrl], {}, unrelated);
-    assert.equal(remoteCollection.code, 0, remoteCollection.stderr);
+    const remoteCollection = await invoke(['--json', 'registry', 'show', '@acct-test/knowledge-bundle', '--revision', '2', '--url', registryUrl], {}, unrelated);
     assert.equal(JSON.parse(remoteCollection.stdout).selectedRevision.revision, 2);
-    const remoteContents = await runCli(['--json', 'registry', 'show', '@acct-test/knowledge', '--version', '1.1.0', '--url', registryUrl, '--contents', '.', '--limit', '10'], {}, unrelated);
-    assert.equal(remoteContents.code, 0, remoteContents.stderr);
+    const remoteContents = await invoke(['--json', 'registry', 'show', '@acct-test/knowledge', '--version', '1.1.0', '--url', registryUrl, '--contents', '.', '--limit', '10'], {}, unrelated);
     assert.equal(JSON.parse(remoteContents.stdout).entries[0].path, 'README.md');
     await fs.rm(unrelated, { recursive: true, force: true });
     unrelated = undefined;
 
-    const shown = await runCli(['--json', 'show', '@acct-test/knowledge', '--library', tempRoot]);
-    assert.equal(shown.code, 0, shown.stderr);
+    const shown = await invoke(['--json', 'show', '@acct-test/knowledge', '--library', tempRoot]);
     const shownPackage = JSON.parse(shown.stdout);
     assert.equal(shownPackage.format, 'dkb.installed-entry-detail.v2');
     assert.equal(shownPackage.identity, '@acct-test/knowledge');
@@ -745,26 +732,25 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
     assert.equal(shownPackage.provenance.installChainStatus, 'missing');
     assert.equal(shownPackage.activeBuild, undefined);
 
-    const storage = await runCli(['--json', 'library', 'storage', '--library', tempRoot]);
-    assert.equal(storage.code, 0, storage.stderr);
+    const storage = await invoke(['--json', 'library', 'storage', '--library', tempRoot]);
     assert.equal(JSON.parse(storage.stdout).packages[0].id, '@acct-test/knowledge');
     assert.ok(JSON.parse(storage.stdout).packages[0].sourceBytes > 0);
     assert.equal(JSON.parse(storage.stdout).packages[0].buildBytes, 0);
 
-    const outdated = await runCli(['--json', 'outdated', '--library', tempRoot], { DKB_REGISTRY_URL: '' });
-    assert.equal(outdated.code, 0, outdated.stderr);
+    const outdated = await invoke(['--json', 'outdated', '--library', tempRoot], { DKB_REGISTRY_URL: '' });
     assert.equal(JSON.parse(outdated.stdout).updates, 1);
     assert.equal(JSON.parse(outdated.stdout).packages[0].latest, '1.1.0');
 
-    const upgrade = await runCli([
+    const upgrade = await invoke([
       '--json',
       'upgrade',
       '@acct-test/knowledge',
       '--dry-run',
+      '--runtime-url',
+      registryUrl,
       '--library',
       tempRoot,
     ], { DKB_REGISTRY_URL: '' });
-    assert.equal(upgrade.code, 0, upgrade.stderr);
     assert.deepEqual(JSON.parse(upgrade.stdout), {
       status: 'update_available',
       packageId: '@acct-test/knowledge',
@@ -775,73 +761,16 @@ test('package search, show, outdated, and upgrade dry-run form one read-only lif
       dryRun: true,
     });
 
-    const applied = await runCli([
-      '--json',
-      'upgrade',
-      '@acct-test/knowledge',
-      '--library',
-      tempRoot,
-      '--url',
-      registryUrl,
-      '--runtime-url',
-      registryUrl,
-    ], { DKB_REGISTRY_URL: '' });
-    assert.equal(applied.code, 0, applied.stderr);
-    assert.equal(JSON.parse(applied.stdout).version, '1.1.0');
-    assert.deepEqual(upgradeRequest, {
-      registryUrl,
-      installGrant: `dkb_grant_${'g'.repeat(64)}`,
-      plan: fakeInstallPlan('@acct-test/knowledge', '1.1.0'),
-      force: true,
-    });
     assert.ok(requests.includes('/api/registry/packages?q=knowledge&page=1&perPage=20'));
     assert.ok(requests.includes('/api/registry/collections?q=knowledge&page=1&perPage=20'));
     assert.ok(requests.includes('/api/registry/packages/acct-test/knowledge/versions/1.1.0/contents?path=.&perPage=10'));
-    assert.ok(requests.includes('/api/registry/packages/acct-test/knowledge/versions/1.1.0/install-grant'));
-    assert.ok(requests.includes('/api/dkbs/install-registry'));
+    assert.equal(requests.some(url => /install-grant|install-plan|\/api\/dkbs|\/api\/runtime/u.test(url)), false);
   } finally {
     await close(server);
     if (unrelated) await fs.rm(unrelated, { recursive: true, force: true });
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
-
-function fakeInstallPlan(packageId, version) {
-  const digest = (label) => `sha256:${label.repeat(64).slice(0, 64)}`;
-  const signature = (role) => ({
-    ...(role === 'publisher' ? { accountId: '@acct-test' } : { registryId: 'test-registry' }),
-    keyId: `${role}-key`,
-    publicKeyFingerprint: digest(role === 'publisher' ? 'a' : 'b'),
-    algorithm: 'ed25519',
-    value: 'signature',
-    signedAt: '2026-08-26T00:00:00.000Z',
-  });
-  const receipt = (type) => ({
-    type,
-    version: 1,
-    package: { id: packageId, version, sourceHash: digest('c') },
-    payloadHash: digest('d'),
-    payload: {},
-    publisher: signature('publisher'),
-    registry: signature('registry'),
-  });
-  const payload = {
-    format: 'dkb.install-plan.v1',
-    package: { id: packageId, version, sourceDigest: digest('c') },
-    target: 'default',
-    evidenceProfileDigest: digest('e'),
-    evidenceDigest: digest('f'),
-    retrievalProfileDigest: digest('1'),
-    compatibilityDigest: digest('2'),
-    retrievalBuildDigest: digest('3'),
-    artifacts: [
-      { kind: 'source', digest: digest('4'), mediaType: 'application/vnd.dkb.source+gzip', bytes: 1, url: '/source', receiptHash: digest('5'), receipt: receipt('dkb.evidence.receipt') },
-      { kind: 'evidence', digest: digest('6'), mediaType: 'application/vnd.dkb.evidence+gzip', bytes: 1, url: '/evidence', receiptHash: digest('7'), receipt: receipt('dkb.evidence.receipt') },
-      { kind: 'retrieval', digest: digest('8'), mediaType: 'application/vnd.dkb.retrieval-build+gzip', bytes: 1, url: '/retrieval', receiptHash: digest('9'), receipt: receipt('dkb.retrieval.receipt') },
-    ],
-  };
-  return { ...payload, receipt: { ...receipt('dkb.install-plan.receipt'), payload } };
-}
 
 test('archive extraction reports a single indeterminate pass with an explicit completion', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-cli-extract-'));
@@ -1704,11 +1633,12 @@ test('nested help uses the same color system for command groups and leaves', asy
   assert.equal(leaf.code, 0);
   assert.ok(group.stdout.includes('\u001b[1m\u001b[36mCommands:\u001b[39m\u001b[22m'));
   assert.ok(group.stdout.includes('\u001b[36madd [options] <identity>\u001b[39m'));
-  assert.ok(group.stdout.includes('\u001b[36mregister [options] <path>\u001b[39m'));
+  assert.ok(group.stdout.includes('\u001b[36mregister [options] [path]\u001b[39m'));
   assert.ok(leaf.stdout.includes('\u001b[1m\u001b[36mArguments:\u001b[39m\u001b[22m'));
   assert.ok(leaf.stdout.includes('\u001b[36mpath\u001b[39m'));
   assert.ok(leaf.stdout.includes('\u001b[1m\u001b[36mOptions:\u001b[39m\u001b[22m'));
   assert.ok(leaf.stdout.includes('\u001b[36m--name <name>\u001b[39m'));
+  assert.ok(leaf.stdout.includes('\u001b[36m--docker-volume <volume>\u001b[39m'));
 });
 
 test('nested help remains plain when color is disabled', async () => {
@@ -1719,7 +1649,7 @@ test('nested help remains plain when color is disabled', async () => {
 
   assert.equal(result.code, 0);
   assert.match(result.stdout, /Commands:/);
-  assert.match(result.stdout, /register \[options\] <path>/);
+  assert.match(result.stdout, /register \[options\] \[path\]/);
   assert.doesNotMatch(result.stdout, /\u001b\[/);
 });
 
@@ -1801,7 +1731,9 @@ function runCli(args, extraEnv = {}, cwd = repositoryRoot) {
     : extraEnv.DKB_HOST_INVENTORY;
 
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, ...args], {
+    const preload = extraEnv.DKB_TEST_TRANSPORT_DIAGNOSTICS
+      ? ['--import', new URL('./fixtures/loopback-transport-diagnostics.mjs', import.meta.url).href] : [];
+    const child = spawn(process.execPath, [...preload, cliPath, ...args], {
       cwd,
       env: {
         ...process.env,

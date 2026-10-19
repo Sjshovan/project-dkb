@@ -86,6 +86,7 @@ export async function writeAtomicCompileArtifacts(
     let promotedBuildGraph: DkbPackageBuildGraph;
 
     try {
+      await state.providerHost.assertCurrent();
       for (const [source, lockName] of [
         [buildGraph.evidencePath, 'evidence.lock.json'],
         [buildGraph.retrievalPath, 'retrieval.lock.json'],

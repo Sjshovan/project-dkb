@@ -538,3 +538,8 @@ function malformed(providerId: string, detail: string): DkbSdkError {
 function formatIssue(issue: { message: string; path?: readonly PropertyKey[] }): string {
   return issue.path?.length ? `${issue.path.map(String).join('.')}: ${issue.message}` : issue.message;
 }
+/** Operational storage identity never substitutes for retrieval compatibility. */
+export function validateManagedStorageIdentity(value: unknown): string {
+  if (!isSha256Digest(value)) throw new DkbSdkError('invalid_storage_identity', 'Managed index storageIdentity must return an exact sha256 digest of its backing store, excluding credentials.');
+  return value;
+}

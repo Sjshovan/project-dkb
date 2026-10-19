@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { loadLibrary } from '@sjshovan/dkb-protocol/manifest.js';
+import { loadLibrary, loadLibraryManifest } from '@sjshovan/dkb-protocol/manifest.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { assertLibraryReadFence, captureLibraryReadFence } from '@sjshovan/dkb-library/mutation.js';
 import {
   DKB_RUNTIME_ACTIVATION_FORMAT,
   DKB_RUNTIME_BINDING_FORMAT,
@@ -19,7 +20,7 @@ import {
   writeJsonAtomic,
   type DkbRuntimeStatePaths,
 } from './paths.js';
-import { withRuntimeMutation } from './mutation.js';
+import { withRuntimeMutation, withRuntimeQuery } from './mutation.js';
 
 export interface DkbRuntimeInstance extends DkbRuntimeStatePaths {
   runtimeId: string;
@@ -124,7 +125,10 @@ async function readRuntimeInstance(paths: DkbRuntimeStatePaths, binding: DkbRunt
   const libraryRoot = binding.library.kind === 'local'
     ? path.resolve(binding.library.path)
     : await resolveRuntimeLibraryHandle(binding.library.handle);
-  await loadLibrary(libraryRoot);
+  const libraryFence = await captureLibraryReadFence(libraryRoot);
+  // Reading a binding validates its Library identity, not every source file.
+  // Activation/context admission owns the exact installed package/build graph.
+  await loadLibraryManifest(libraryRoot);
   const activation = await maybeReadRuntimeActivation(paths.activationPath);
   if (activation && activation.runtimeId !== binding.runtimeId) {
     throw new DkbError(`Runtime activation belongs to ${activation.runtimeId}, not ${binding.runtimeId}`);
@@ -137,6 +141,7 @@ async function readRuntimeInstance(paths: DkbRuntimeStatePaths, binding: DkbRunt
     );
   }
 
+  await assertLibraryReadFence(libraryRoot, libraryFence);
   return {
     ...paths,
     runtimeId: binding.runtimeId,
@@ -188,7 +193,9 @@ export async function initializeRuntimeBinding(
       return existing;
     }
 
+    const libraryFence = await captureLibraryReadFence(libraryRoot);
     await loadLibrary(libraryRoot);
+    await assertLibraryReadFence(libraryRoot, libraryFence);
     await writeJsonAtomic(paths.bindingPath, candidate);
     return candidate;
   });
@@ -261,6 +268,27 @@ export async function maybeReadRuntimeBindingFromStateRoot(stateRoot: string): P
   return maybeReadRuntimeBinding(runtimePaths(stateRoot).bindingPath);
 }
 
+/** Observe a complete committed pair without repairing a journal or changing activation. */
+export async function inspectRuntimeSelection(stateRoot: string): Promise<{ binding: DkbRuntimeBinding | null; activation: DkbRuntimeActivation | null }> {
+  return withRuntimeQuery(stateRoot, async () => {
+    const paths = runtimePaths(stateRoot);
+    const journal = runtimeSelectionTransactionPath(paths);
+    const names = await fs.readdir(path.dirname(journal)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    if (names.some(name => name === path.basename(journal) || name.startsWith(`${path.basename(journal)}.replace-`))) {
+      throw new DkbError('Runtime activation recovery is pending. Start or refresh it through its owning environment before inspecting a committed selection.', 'runtime_activation_recovery_required');
+    }
+    const binding = await maybeReadRuntimeBinding(paths.bindingPath);
+    const activation = await maybeReadRuntimeActivation(paths.activationPath);
+    if (activation && (!binding || activation.runtimeId !== binding.runtimeId || activation.target !== binding.target)) {
+      throw new DkbError('Runtime binding and activation do not describe one committed selection. Recover the Runtime before retrying.', 'runtime_activation_invalid');
+    }
+    return { binding, activation };
+  });
+}
+
 export async function maybeReadRuntimeActivation(source: string): Promise<DkbRuntimeActivation | null> {
   return maybeReadValidated(source, validateRuntimeActivation);
 }
@@ -289,7 +317,9 @@ export async function resolveRuntimeLibraryHandle(handle: string): Promise<strin
     throw new DkbError(`Runtime Library handle ${handle} is not configured on this Runtime host.`);
   }
   const resolved = path.resolve(value);
+  const libraryFence = await captureLibraryReadFence(resolved);
   await loadLibrary(resolved);
+  await assertLibraryReadFence(resolved, libraryFence);
   return resolved;
 }
 

@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { DkbError } from './errors.js';
+import type { DkbRegistryCollectionRevision } from './registryCollections.js';
 
 export const DKB_SOURCE_INVENTORY_FORMAT = 'dkb.source-inventory.v1' as const;
 export const DKB_SOURCE_INVENTORY_MEDIA_TYPE = 'application/vnd.dkb.source-inventory+json' as const;
@@ -114,13 +115,7 @@ export interface DkbRegistryCollectionDetail {
       publishedAt?: string | null;
     }>;
   };
-  selectedRevision: {
-    collectionId: string;
-    revision: number;
-    digest: string;
-    manifest: Record<string, unknown>;
-    publishedAt?: string | null;
-  };
+  selectedRevision: DkbRegistryCollectionRevision;
 }
 
 export function validateSourceInventory(value: unknown, source: string): DkbSourceInventory {

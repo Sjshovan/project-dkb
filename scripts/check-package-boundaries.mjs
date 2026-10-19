@@ -148,6 +148,7 @@ for (const file of await listTypeScript(path.join(root, 'services/runtime/src'))
 
 const approvedDistributionImports = new Set([
   'apps/cli/src/cli/index.ts',
+  'apps/cli/src/stack/ownerWorker.ts',
   'apps/cli/src/providers/localCompilation.ts',
   'services/compiler/src/compile.ts',
   'services/compiler/src/server.ts',

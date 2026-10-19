@@ -51,6 +51,14 @@ mutations and build promotion use filesystem locks. After a Library mutation,
 online local Runtimes are refreshed independently; an outdated Runtime remains
 unavailable until its exact activation can be rebuilt.
 
+Managed-index retention is Runtime-owned operational state. Import records its
+package scope, recipe/options digests and credential-free backing-store identity
+before provider side effects. After activation, reconciliation acquires each
+recorded Library's mutation lease and deletes only versions absent from applied
+state. It preserves installed/inactive spaces, rejects changed storage/provider
+identity, and retains failed-cleanup receipts for refresh retries. Cleanup cannot
+roll back a committed activation or write another Runtime's selection.
+
 Remote Runtime administration never sends a host-local path. A remote Runtime
 may change binding only through an authenticated Runtime-local Library handle.
 MCP remains exactly the read-only `search` and `fetch` tools. Cross-Runtime

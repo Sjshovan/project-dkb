@@ -32,6 +32,24 @@ test('Evidence cancellation waits for acknowledged writes to stop before removin
   await assert.rejects(fs.access(fixture.state.jobRoot), { code: 'ENOENT' });
 });
 
+for (const [mode, detail] of [['reset-connection', 'connection reset'], ['invalid-json', 'invalid JSON response']]) {
+  test(`Evidence ${mode} reports a safe cause only after acknowledged cleanup`, async t => {
+    const fixture = await workerFixture(t, mode);
+    await assert.rejects(fixture.compile(), error => {
+      assert.equal(error.code, 'compiler_service_request_failed');
+      assert.ok(error.message.includes(detail));
+      assert.doesNotMatch(error.message, /synthetic-private-source|http:\/\//u);
+      assert.ok(!error.message.includes(fixture.state.jobToken));
+      return true;
+    });
+    assert.equal(fixture.requests.filter(item => item.route === '/compile').length, 1, 'a failed request is never silently retried');
+    assert.equal(fixture.requests.filter(item => item.route === '/jobs/cancel').length, 1);
+    assert.equal(fixture.pending.size, 0);
+    assert.equal(fixture.workerTerminated, true);
+    await assert.rejects(fs.access(fixture.state.jobRoot), { code: 'ENOENT' });
+  });
+}
+
 test('abort after registration but before dispatch creates a bound tombstone without starting a worker', async t => {
   const fixture = await workerFixture(t, 'cancel', { abortOnRegistration: true });
   await assert.rejects(fixture.compile(), { code: 'compile_cancelled' });
@@ -121,7 +139,7 @@ test('already-aborted Evidence input never stages or dispatches work', async t =
   await assert.rejects(fs.access(path.join(fixture.serviceRoot, 'jobs')), { code: 'ENOENT' });
 });
 
-for (const outcome of ['confirmed', 'unconfirmed', 'foreign-owner']) {
+for (const outcome of ['confirmed', 'stop-lost-ack', 'kill-lost-ack', 'replaced-after-stop', 'unconfirmed', 'foreign-owner']) {
   test(`owned Docker cancellation ${outcome} verifies identity and waits before cleanup`, async () => {
     // Replace only the Docker command boundary in a separate Node process. No
     // real container, shared service, or global process is stopped by this test.
@@ -130,6 +148,7 @@ for (const outcome of ['confirmed', 'unconfirmed', 'foreign-owner']) {
       import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
       import cp from 'node:child_process';import {promisify} from 'node:util';import {syncBuiltinESMExports} from 'node:module';
       const outcome=${JSON.stringify(outcome)}, image='sha256:'+ 'a'.repeat(64), id='b'.repeat(64);
+      const confirmed=['confirmed','stop-lost-ack','kill-lost-ack'].includes(outcome);
       const root=await fs.mkdtemp(path.join(os.tmpdir(),'dkb-llamaindex-'));
       await fs.mkdir(path.join(root,'request'));await fs.mkdir(path.join(root,'output'));
       const controller=new AbortController(),commands=[];let owned,state,settled=false,restored=false;
@@ -149,8 +168,17 @@ for (const outcome of ['confirmed', 'unconfirmed', 'foreign-owner']) {
         if(args[0]==='inspect'){if(!owned)throw new Error('No such container');return {stdout:JSON.stringify([owned]),stderr:''};}
         if(args[0]==='start') {owned.State={Running:true,Status:'running'};controller.abort(new Error('Synthetic cancellation'));throw new Error('Docker client aborted');}
         if(['stop','kill','wait','rm'].includes(args[0]))assert.equal(args.at(-1),id,'destructive commands use the exact verified container ID');
-        if(args[0]==='stop')throw new Error('Synthetic ignored TERM');
-        if(args[0]==='kill') {if(outcome==='unconfirmed'&&!restored)throw new Error('Synthetic engine loss');owned.State={Running:false,Status:'exited'};}
+        if(args[0]==='stop') {
+          if(outcome==='stop-lost-ack')owned.State={Running:false,Status:'exited'};
+          if(outcome==='replaced-after-stop'&&!restored)owned.Id='c'.repeat(64);
+          throw new Error('Synthetic lost stop acknowledgement');
+        }
+        if(args[0]==='kill') {
+          if(outcome==='unconfirmed'&&!restored)throw new Error('Synthetic engine loss');
+          assert.equal(owned.State.Running,true,'never kill a worker already confirmed stopped');
+          owned.State={Running:false,Status:'exited'};
+          if(outcome==='kill-lost-ack')throw new Error('Synthetic lost kill acknowledgement');
+        }
         if(args[0]==='wait') {assert.equal(owned.State.Running,false);await fs.access(root);}
         if(args[0]==='rm') {assert.ok(commands.some(item=>item[0]==='wait'));owned=undefined;}
         return {stdout:'0',stderr:''};
@@ -161,13 +189,17 @@ for (const outcome of ['confirmed', 'unconfirmed', 'foreign-owner']) {
       try {
         const execution={registerPending:async value=>{state=value;return 'pending';},settlePending:async()=>{await assert.rejects(fs.access(root),{code:'ENOENT'});settled=true;}};
         await assert.rejects(runCompiler('synthetic:image',path.resolve('/input'),path.join(root,'request'),path.join(root,'output'),{imageDigest:image,signal:controller.signal,execution}),
-          error=>outcome==='confirmed'?error.message==='Synthetic cancellation':error.code==='compile_termination_unconfirmed');
-        if(outcome==='confirmed') {
+          error=>confirmed?error.message==='Synthetic cancellation':error.code==='compile_termination_unconfirmed');
+        if(confirmed) {
           assert.equal(settled,true);assert.equal(owned,undefined);
-          const order=commands.map(item=>item[0]);assert.ok(order.indexOf('stop')<order.indexOf('kill'));assert.ok(order.indexOf('kill')<order.indexOf('wait'));assert.ok(order.indexOf('wait')<order.indexOf('rm'));
+          const order=commands.map(item=>item[0]);
+          assert.ok(order.indexOf('stop')<order.indexOf('wait'));assert.ok(order.indexOf('wait')<order.indexOf('rm'));
+          if(outcome==='stop-lost-ack')assert.ok(!order.includes('kill'));
+          else {assert.ok(order.indexOf('stop')<order.indexOf('kill'));assert.ok(order.indexOf('kill')<order.indexOf('wait'));}
         } else {
           assert.equal(settled,false);await fs.access(path.join(root,'.dkb-worker-control.json'));
           if(outcome==='foreign-owner')assert.ok(!commands.some(item=>['stop','kill','wait','rm'].includes(item[0])));
+          else if(outcome==='replaced-after-stop')assert.ok(!commands.some(item=>['kill','wait','rm'].includes(item[0])));
           else {
             restored=true;
             assert.deepEqual(await cancelLlamaIndexPending({state,options:{image:'synthetic:image',imageDigest:image}}),{safeToCleanup:true});
@@ -307,6 +339,8 @@ async function workerFixture(t, mode, { abortOnRegistration = false } = {}) {
         assert.equal(control.deadline, body.deadline);
         assert.ok(Date.parse(body.deadline) > Date.now());
         fixture.state = control;
+        if (fixture.mode === 'reset-connection') { response.destroy(); return; }
+        if (fixture.mode === 'invalid-json') { response.end('synthetic-private-source: ' + body.jobToken); return; }
         if (fixture.mode === 'completed') {
           const identity = EVIDENCE_DOCLING_LLAMAINDEX_PLUGIN.identity({ options: body.evidenceOptions });
           response.end(JSON.stringify({
@@ -326,7 +360,7 @@ async function workerFixture(t, mode, { abortOnRegistration = false } = {}) {
       if (fixture.mode === 'wrong-job') ack.jobId = 'job-00000000-0000-0000-0000-000000000000';
       if (fixture.mode === 'wrong-token') ack.jobTokenHash = `sha256:${'0'.repeat(64)}`;
       if (fixture.mode === 'unsafe-terminal') { ack.safeToCleanup = false; ack.terminated = false; }
-      if (fixture.mode === 'cancel') {
+      if (['cancel', 'reset-connection', 'invalid-json'].includes(fixture.mode)) {
         if (!abortOnRegistration && !fixture.workerTerminated) {
           await new Promise(resolve => setTimeout(resolve, 25));
           await fs.writeFile(path.join(fixture.state.jobRoot, 'last-worker-write'), 'write before acknowledged stop');

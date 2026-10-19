@@ -82,9 +82,14 @@ export async function runSample(root, options) {
     await host.dispose();
     host = undefined;
     result.stage = 'compile';
+    if (process.env.DKB_QUERY_COST_PROFILE === '1') globalThis.__dkbQueryCostPhases = {};
     const started = performance.now();
     const compiled = await compileComposeProject(packageRoot, { force: true, ...composition });
     const wallMs = performance.now() - started;
+    if (globalThis.__dkbQueryCostPhases) {
+      result.diagnostics = { compile: globalThis.__dkbQueryCostPhases };
+      globalThis.__dkbQueryCostPhases = undefined;
+    }
     assert.equal(compiled.cacheHit, false, 'Full compilation must not reuse an existing build');
     assert.ok(compiled.recordCount > 0);
     assert.ok(compiled.profile?.statistics, 'Compiler statistics are required');
@@ -108,6 +113,7 @@ export async function runSample(root, options) {
     result.queries = [];
     const expectedAudit = [];
     result.stage = 'queries';
+    if (process.env.DKB_QUERY_COST_PROFILE === '1') globalThis.__dkbQueryCostPhases = {};
     for (let iteration = 0; iteration < options.warmups + options.querySamples; iteration++) {
       const measured = iteration >= options.warmups;
       const query = async (kind, operation, check) => {
@@ -140,6 +146,10 @@ export async function runSample(root, options) {
       });
       await query('insufficient', () => searchRuntime({ stateRoot, runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
         query: WORKLOAD.insufficient.query, limit: WORKLOAD.insufficient.limit }), (value) => assert.equal(value.results.length, 0));
+    }
+    if (globalThis.__dkbQueryCostPhases) {
+      result.diagnostics.queries = globalThis.__dkbQueryCostPhases;
+      globalThis.__dkbQueryCostPhases = undefined;
     }
     const events = await listQueryAudit(stateRoot, expectedAudit.length + 1);
     assert.equal(events.length, expectedAudit.length, 'Exactly one terminal audit event per request');

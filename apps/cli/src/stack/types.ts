@@ -9,14 +9,14 @@ export interface DkbStackControlContext {
   composeFile: string;
   envFile: string;
   allProfiles: string[];
+  dockerContext?: string;
 }
 
-export interface DkbStackContext extends DkbStackControlContext {
+export interface DkbStackServiceContext extends DkbStackControlContext {
   target: DkbStackTarget;
   runtimeTarget: DkbStackTarget;
   compilerTargets: string[];
-  libraryRoot: string;
-  runtimeStateRoot: string;
+  recipeDigest: string;
   registryUrl: string;
   runtimeUrl: string;
   registryPort: number;
@@ -26,6 +26,12 @@ export interface DkbStackContext extends DkbStackControlContext {
   inactiveComposeServices: string[];
   servicePorts: Record<string, number>;
   version?: string;
+}
+
+/** Native contexts remain limited to explicit host-state recovery tooling. */
+export interface DkbStackContext extends DkbStackServiceContext {
+  libraryRoot: string;
+  runtimeStateRoot: string;
 }
 
 export interface DkbStackStatus {

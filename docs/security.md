@@ -16,6 +16,28 @@ knowledge:
 Uploaded or installed knowledge cannot select providers, supply executable
 plugins, mutate other packages, or change a Runtime's active Pipeline.
 
+Archive extraction uses the existing streaming `node-tar` parser. Before each
+entry is written, DKB checks expanded payload bytes, an entry-count budget
+(100,000 by default), and conservative allocation against half the destination's
+observed available space. Duplicate entries are charged again and implied
+directories count toward allocation. Unknown capacity fails closed. Trusted
+callers may set stricter expanded-byte limits or a reviewed entry-count limit;
+archive metadata cannot raise limits or bypass the free-space check. A failure
+rejects to the existing staging/rollback owner rather than activating partial
+output. This budget is not an OS quota or a reservation against concurrent disk
+users; disk monitoring and capacity planning remain necessary.
+
+Docker Library DKB installation uses a distinct fixed worker profile. Host
+credentials only mint the exact-plan grant; the worker receives the grant and
+signed plan through bounded private input, not argv or environment. Its only
+mounts are the existing local Library and an inspected anonymous local scratch
+volume. Ordinary management workers remain network-disabled; only this download
+profile uses bridge networking. Loopback Registry origins have one deterministic
+Docker transport translation, preserving port, path and HTTPS; arbitrary alternate
+credential destinations are rejected. Signed receipts, artifact bounds and digests
+remain required. Scratch is removed with the owned container, never by deleting
+the named Library. Creation/cleanup uncertainty is reported rather than concealed.
+
 ## MCP boundary
 
 Remote MCP is Runtime-owned, authenticated, and read-only. It exposes exactly:

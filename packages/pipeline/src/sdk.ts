@@ -69,6 +69,7 @@ export function definePackagedIndexProvider(provider: DkbPackagedIndexProvider):
 export function defineManagedIndexProvider(provider: DkbManagedIndexProvider): DkbManagedIndexProvider {
   return {
     ...provider,
+    async storageIdentity(input) { assertNotAborted(input.signal); return provider.storageIdentity(input); },
     async compilePackage(input) { assertNotAborted(input.signal); return provider.compilePackage(input); },
     async validatePackage(input) { assertNotAborted(input.signal); return provider.validatePackage(input); },
     async installPackage(input) { assertNotAborted(input.signal); return provider.installPackage(input); },

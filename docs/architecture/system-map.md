@@ -13,16 +13,1311 @@ remain recorded under [architecture decisions](../decisions/).
 
 ## Snapshot
 
-- **Map revision:** 35
-- **Checked against:** both `development` branches on 2026-09-13
+- **Map revision:** 78
+- **Checked against:** DKB `development` on 2026-10-14; Registry verification below remains dated October 9
 - **Committed HTTP-security checkpoint:** DKB `59b2cdc`, Registry `18123c9`
+- **Committed worker-cancellation checkpoint:** DKB `46e1888`, Registry `ba6b3ef`
 - **Active milestone:** Plugin API v3, trusted Registry recipes, multi-build
   hardening, one Runtime activation gate, and complete query audit chains
 - **Release state:** private developer preview; not published or merged to
   `main`
-- **Checkpoint state:** HTTP authentication is committed. Worker-confirmed
-  compilation cancellation is the current verification boundary. The broader
+- **Checkpoint state:** HTTP authentication and worker-confirmed compilation
+  cancellation are committed. Native storage ownership and crash-safe Library
+  recovery have a tested uncommitted foundation; public Linux-volume Stack startup
+  and offline uninstall are connected. Individual signed DKB installation is now
+  connected through CLI and Console. Docker Collection install/update shares the
+  same exact signed-chain verification and atomic dependency transaction as native
+  installation. Docker DKB upgrades now use the same signed installer with a
+  generation guard. Online signed missing-build acquisition now delegates to the
+  owning Runtime. Editable-source owner compilation, offline Pipeline preparation,
+  arbitrary rebinding, volume backup/restore and migration remain implementation
+  boundaries. The broader
   milestone remains incomplete; historical green runs do not certify later edits.
+
+### Archive staging safety — October 14, Windows suite verified
+
+A deterministic regression demonstrated that the old PID/time scratch filename
+could overwrite and delete an already existing temporary file. Backup creation
+now uses an exclusively created per-operation directory, cleans only its own
+known file, and refuses unexpected directory contents. Linux archive permissions
+are set before publication, checksum writes are flushed, and a racing final
+destination receives the same actionable refusal as an existing backup.
+The 39 focused checks pass with two Linux-only skips. The full Windows rerun
+passes **938 tests, zero failures, seven skips** out of 945 (267.3s), including
+the production build. The skips require Linux or Docker and are not counted as
+passes. Graphify is refreshed to 679 nodes / 1,826 edges / 19 communities.
+The 943-test result below is the preceding candidate. Docker still times out on
+a bounded version request, so the corrected Linux proof and disposal of the
+earlier synthetic snapshot resources remain unverified. Docker was not restarted
+and no existing user Library was changed. Fresh Windows distribution verification
+passes for this staging correction: all 15 archives install into an isolated
+global prefix, CLI 0.2.0 initializes an unrelated directory, and all six provider
+integrity receipts verify. Package boundaries, workspace graph, documentation and
+agent-guidance checks pass. The test installation removed its own temporary root.
+
+Docker unavailability has now blocked the corrected Linux recovery proof across
+three consecutive goal turns. The implementation goal is blocked, not complete;
+resume after the engine responds. Public volume restore/topology promotion and
+migration, editable Docker compilation, offline Pipeline preparation, arbitrary
+rebinding and the final integrated release gates remain open. No publication,
+commit, user-data migration or unrelated-container restart was performed here.
+
+### Public volume backup integration — October 13, preceding candidate
+
+`stack backup` now selects native host archives or recorded Docker-volume
+snapshots without opening Linux databases from Windows. The existing private
+Docker transport supports bounded binary output with backpressure, separate
+stderr, cancellation and confirmed cleanup. Snapshot workers use a matching image
+protocol, validate volume ownership labels, and read only the trusted host Stack
+configuration path. Both sides validate the archive; promotion refuses an existing
+output. Volume-backed upgrades remain blocked because their restore/rollback
+topology integration is still unfinished.
+
+The first rebuilt image completed public human/JSON backups, active-consumer
+refusal and overwrite protection. Its staged-restore verification caught tar's
+umask changing Windows-projected regular-file modes (0777 to 0755). The no-follow
+descriptor correction and regression test are implemented but their Linux rerun
+is pending. Docker stopped responding during disposal of that synthetic proof;
+its labelled resources need confirmed cleanup before another run. No original
+Library or unrelated container was changed. This is not a green recovery gate.
+
+Six binary-stream tests pass, including an 18 MiB payload, bounded buffering,
+cancellation, timeout and write failure. Backup destinations reject dot-prefixed
+children and linked-parent aliases as well as existing archives/checksums.
+TypeScript/Vue checks and production build pass. Broader tests caught eager
+snapshot imports loading SQLite before CLI warning initialization; snapshot
+contracts now load only when that worker is selected. The corrected full Windows
+suite passes **936 tests, zero failures, seven skips** out of 943 (276.4s).
+The skips are four Docker service proofs, two Linux metadata/link checks and the
+Docker-dependent stopped-Stack check; Docker was unavailable, so they are not
+counted as passes. Boundaries, dependency graph, guidance and docs checks pass.
+Graphify is refreshed to 678 nodes / 1,824 edges / 19 communities. All 15 package
+archives pass inspection. A fresh global Windows CLI install from those archives
+initializes a Library from an unrelated directory and verifies all six providers.
+These changes are uncommitted; the corrected Linux image/install/restore proof
+remains open. The read-only Temp audit removed nothing; the interrupted synthetic
+volume proof is intentionally retained until its Docker resources can be settled.
+The preceding snapshot candidate's full run was 934 tests:
+931 passed, one Windows loopback connect timeout, two Linux-only skips; the
+11-test recovery-focused rerun passed without changing its expectations.
+
+### Owner-side snapshot and staged restore — October 13, preceding candidate
+
+The private snapshot worker now streams a checksummed file inventory and tar data
+while holding native compiler, Runtime, Library and discovered nested build leases.
+It uses the existing tar library, bounds compressed/expanded bytes and metadata,
+and rejects changed files, unknown entries, outside links and ownership conflicts.
+Restoration verifies the complete archive before touching empty staging, checks
+each entry again during extraction, and verifies restored bytes and Linux metadata.
+It never promotes a Stack binding or deletes original storage.
+
+Twelve focused tests pass on Linux, including contained link chains, hard links,
+service-owned files, cancellation, corruption and nonempty-target refusal. The
+six-stage Docker-volume proof streams Linux SQLite/source/cache fixtures through
+a Windows archive into separate Linux volumes and confirms original and restored
+data independently. It also proves competing native ownership blocks snapshots
+and a wrong checksum leaves staging empty. This is **not** a full Stack restore or new packaged-image
+proof: current compiled code is mounted read-only into the preceding candidate.
+Reproduce with `node tests/stack-volume-snapshot-proof.mjs --run`.
+
+At this checkpoint public volume dispatch was not connected. Public backup
+integration is described above; shared-Library replacement policy, recoverable
+restore topology promotion and explicit migration remain unfinished. The 922-test
+result below predates both snapshot and backup-integration code.
+
+### Shared-storage backup prerequisites — October 13, preceding candidate
+
+The stopped-state gate now checks all exact recorded volumes, including consumers
+in other Compose projects. Created, running, paused, restarting and removing
+containers block the operation; storage/environment drift and unknown Docker
+metadata fail closed. DKB does not stop those other consumers. A three-stage real
+Windows/Docker proof verified independent created/running/paused consumers,
+admission after confirmed stop, and unchanged topology. Its labelled resources
+were removed; no user resource was changed.
+
+Legacy host archives now reject volume descriptors and every declared volume
+before restoring configuration. A valid native archive can still recover missing
+native Library/Runtime directories; missing archive payload preserves the old
+Stack. Current full-candidate Windows validation passes **922 tests, zero failures
+and zero skips** (380.6s), with the real Evidence and Meilisearch opt-ins enabled.
+The 20 focused recovery/control checks also pass on Windows and Linux; Linux
+mounts the current compiled CLI read-only into the preceding proof image, rather
+than claiming a new published image. Boundaries, dependency graph, guidance and
+documentation checks pass. Graphify is refreshed to 644 nodes / 1,714 edges /
+18 communities. All 15 distributable archives pass inspection; fresh global CLI
+installs from unrelated Windows and Linux directories initialize successfully and
+verify all six provider bundles. TypeScript/Vue checks pass. Nothing was published
+and the separate Registry checkout was not modified by this boundary.
+
+This is a preflight, not a snapshot lock or completed volume backup. Volume
+export/restore must retain owner-side exclusion throughout copying, validate the
+complete archive, and support recoverable promotion before this release boundary
+can close. The known shared-Library case must not be reduced to checking one
+Stack's Compose labels. Reproduce the bounded consumer proof with
+`node tests/stack-backup-consumer-proof.mjs --run`.
+
+### Runtime-owned Pipeline preparation — October 13, preceding candidate
+
+```text
+Host CLI / Console                 Owning Runtime (native, Docker or remote)
+  authenticated catalog request ──▶ read Library + Runtime under native leases
+  ◀─────────────────────────────── coverage + exact state/profile receipt
+  each pinned Registry origin
+    → saved host login
+    → exact signed build grant
+  preparation + grants ───────────▶ recheck selection, Library and recipe
+                                    → download and verify signed missing layers
+                                    → prepare indexes → atomic activation
+```
+
+The host never opens a Docker/remote state path. Saved Registry credentials remain
+on the host, and an environment bearer is used only for its explicitly matched
+origin. Each package keeps its Registry origin; the Runtime's Stack Registry URL
+no longer redirects all Pipeline downloads. Existing catalog, grant, signed-build
+and activation services are reused, with no new database or management endpoint.
+Missing builds are distinct from invalid retained builds. Preparation conflicts
+preserve the previous activation and now retain a structured CLI error code.
+Registry layer errors discard untrusted response bodies rather than echo grants.
+
+Verified on this candidate: TypeScript/Vue checks and production build; full
+Windows suite **910 passes, zero failures, three opt-in service skips** (432.1s);
+**33 packaged Linux tests with zero failures/skips**; and a five-stage real
+Windows CLI/Console → Linux-volume Runtime proof. The latter checks corrupt/refused
+downloads, exact signed acquisition, stale preparation, retained-build reuse,
+redacted Activity, offline failure without host fallback, and restart persistence.
+It uses a synthetic signed HTTP Registry, not Laravel or a model benchmark.
+Its container/volume were removed and no existing user resource changed.
+The candidate image is
+`741707259302957afff50344f7964e8247b042dd4551d1e205616844014126ca`.
+Boundaries, dependency graph, 18 guidance scopes and 36 documentation files pass;
+Graphify records 641 nodes / 1,697 edges / 20 communities.
+The three opt-in services were then explicitly enabled: **64 service tests pass,
+zero failures/skips** (143.5s), including real Evidence worker/service and
+Meilisearch checks. All **15 archive inspections** pass, and fresh global CLI
+installs from unrelated Windows and Linux directories verify all six providers.
+The read-only Temp audit still lists the same 32 preceding entries; no cleanup
+of unrelated files was performed.
+
+Reproduce the bounded owner handoff with
+`node tests/runtime-pipeline-owner-proof.mjs --run` after rebuilding the matching
+CLI image. Editable Docker/remote DKBs with missing builds require compilation in
+their owning environment; this host path refuses to compile them or open their
+database. Offline Pipeline preparation, arbitrary Runtime rebinding, volume-aware
+backup/restore and copy-and-verify migration remain active release boundaries,
+followed by the complete Stack, real-corpus, performance and ChatGPT proofs.
+
+### Managed-index retention and reconciliation — October 13, preceding candidate
+
+Managed imports now write immutable Runtime-owned retention receipts before
+external provider side effects. Successful activation triggers reconciliation
+outside its preparation transaction: for each recorded Library, acquire native
+mutation ownership, verify applied state, and remove only absent package versions.
+Installed releases retain every recorded space, including inactive Pipelines;
+another Runtime's activation is never rewritten. Retry records survive failed
+cleanup. Invalid records, changed recipes/options and changed resolved backing
+stores grant no cleanup authority. CLI/Console distinguish maintenance warnings
+from genuinely stale Runtimes.
+
+Managed API v3 providers now supply `storageIdentity`, a credential-free digest
+of the resolved service/store and tenant/namespace. The SDK, scaffold, conformance
+suite and bundled managed provider share this contract. It is operational state,
+not retrieval compatibility. Exact-index preparation rollback also checks this
+identity. No new service or database was added; obsolete direct cleanup calls
+were removed from package lifecycle handlers.
+
+That preceding candidate verification passed: all TypeScript/Vue checks and production
+build; **898 Windows tests, zero failures or skips, in 368.3 seconds**, including
+both real Docker Evidence checks and the new disposable Meilisearch proof; 74
+packaged Linux trust/lifecycle/recovery tests plus six managed-index tests, with
+no failures or skips; and the nine-stage live Windows-to-Linux CLI/Console proof.
+The Linux lifecycle image is
+`5a1b3bcab46e9e1a18ea889d69d42fdd3dbdd5b65af0b70bac2a74cc77cbc97d`.
+All 15 archive inspections and fresh isolated global CLI installations pass on
+Windows and Linux, each verifying all six shipped providers. The image file-policy
+inspection covers 937 product files, excluding dependency trees. Package boundaries,
+the dependency graph, 18 AGENTS scopes, 36 documentation files and whitespace
+checks pass. Graphify records 638 nodes / 1,694 edges / 20 communities.
+The final read-only Temp audit retains the same 32 pre-existing DKB entries;
+it deletes nothing. This checkpoint's labeled managed-index and Library proof
+containers/volumes are absent after cleanup.
+
+The Meilisearch proof exercises two Libraries, retained spaces, cleanup isolation
+and reactivation from unchanged builds; fixture Evidence and embeddings are not
+a model-quality or performance benchmark. The live CLI/Console proof uses signed
+HTTP fixtures, not the Laravel Registry or a browser interaction. These results
+do not substitute for the remaining real-corpus, performance and full-stack gates.
+Older untracked indexes
+require provider-side inspection; DKB does not infer deletion authority from
+service inventory. At that checkpoint the broader release boundaries were
+Linux-owned missing-build acquisition, arbitrary Runtime rebinding, volume backup/restore
+and migration, followed by refreshed complete Stack and real-corpus proofs.
+
+### Library destination authority — October 13, preceding candidate
+
+Native `install`, `upgrade` and `uninstall` now use the selected Library rather
+than redirecting mutation to an explicit Runtime endpoint. Runtime URLs request
+post-commit refresh only, matching Docker and Collection behavior. The shared
+installer, removal transaction, signature checks and upgrade-generation guard
+remain authoritative; no parallel installation system was added. A failed reload
+reports a stale warning without undoing a committed Library change. Dry-run,
+failed verification and stale-plan rejection do not refresh anything.
+
+The new executable regression tests first reproduced wrong-destination success
+on the earlier CLI route. They now use actual
+signed source/Evidence/Retrieval layers, two independent Libraries and a bounded
+HTTP fixture to check the chosen destination, post-commit refresh order, exact
+rollback, generation conflict and unavailable-refresh recovery. The following
+older sections certify preceding candidates, not these changes.
+
+That preceding candidate passed: all TypeScript/Vue checks and production
+build; all 15 archive file inspections and fresh isolated global CLI installs on
+Windows/Linux; 74 packaged Linux lifecycle/trust/recovery tests with no skips;
+and the nine-stage live host-to-Linux CLI/Console proof. These use image
+`b5db5a64d9c71d4c79868df38d513f17e5202dd8243bb25a5d0897eae3234298`.
+The image file-policy check covers 938 product files, excluding dependency trees.
+The initial full Windows run had 888 passes, three localhost connection failures
+and one opt-in service skip. All 17 tests in the affected files passed in a
+separate serial recheck without changing assertions or timeout limits. The full
+rerun passes **892 tests, zero failures and zero skips in 356.0 seconds**,
+including both real Docker Evidence tests. The
+intermittent Windows connection failures are not explained by this correction.
+
+That candidate exposed the managed-index reconciliation gap addressed above.
+Its green checks did not certify managed-index reclamation. The removed
+endpoint-directed package mutation route must not be restored as a cleanup path.
+
+### Docker package upgrades — October 13, preceding candidate
+
+`outdated` and upgrade planning read the existing owner-side package listing,
+including applied version, Registry origin and generation. An explicit URL may
+override origin, but changing a Library's convenience default does not redirect
+an installed package. Dry-run and up-to-date results request no install grant or
+artifact downloads. Registry search also uses the shared Library-handle resolver.
+
+The fixed DKB install worker is now `dkb.library-install.v2`. It checks the
+expected applied generation under the existing native writer lease, retaining
+ownership through the shared signed installer. A stale plan fails before remote
+acquisition. Ordinary native upgrades without a Runtime override use the same
+generation guard. No second installer, database, upgrade transaction or arbitrary
+command endpoint was added. Matching rebuilt CLI images are required; v1 is not
+a fallback. Library listings also fence their asynchronous reads against drift.
+
+The nine-stage live proof passes on
+`sha256:9c353ce2ccfdc8fe5587219c5b4fb08d6c3e1fc0e221e93e81ec609368d6fbb7`.
+It runs the actual CLI and Console command runner against disposable signed
+HTTP fixtures and a Linux-local Library. It verifies install/retry/removal,
+grant redaction, corruption and expiry, cancellation cleanup, exact origin despite
+an offline Library default, no-download planning, Console upgrade from 1.0.0 to
+1.1.0, unchanged prior knowledge on failed download, and stale-plan rejection.
+It is not Laravel authentication, browser interaction or model-quality proof.
+
+The focused Windows run passes 65 tests; the packaged Linux run passes all 64
+Collection/trust/recovery/grant/transport tests, with no skips, in 74.3 seconds.
+TypeScript/Vue checks and production build pass. The image file-policy check
+passes for 938 product files, excluding dependency trees. Boundaries, dependency
+graph, 18 AGENTS scopes, 36 documentation files and whitespace checks pass.
+Graphify records 637 nodes / 1,692 edges. The full Windows run passes with
+**889 passed, zero failed, one opt-in model-backed service test skipped, 890
+total**, in 415.3 seconds. Real Docker fallback is enabled in that run. The
+skipped service proof passes separately in 24.4 seconds on the installed
+`841cc1755dea` model-baked image, including acknowledged cancellation and
+unavailable-control recovery. All 15 distribution archives pass file-policy
+inspection. The fresh global CLI initializes an unrelated isolated directory
+on Windows and Linux, reports 0.2.0, and verifies all six shipped provider
+dependency closures. The final Temp audit is read-only; no retained entries
+were removed. No existing Library, Registry,
+host defaults or credentials were migrated, and nothing was published.
+
+That preceding checkpoint did not certify the native explicit Runtime route.
+The destination-authority correction above removes this separate mutation path.
+
+### Docker Collection grant delegation — October 13, preceding candidate
+
+The host resolves an exact immutable Collection revision and obtains one scoped
+install-plan grant per member. A bounded private request goes to the existing
+fixed Linux CLI worker. Its transport adapter supplies plans and downloads to
+the shared Collection installer; it never commits members as separate top-level
+install operations. Reusable Registry login stays on the host, and Windows
+never opens the Linux Library database. Protocol owns the portable request
+validation; the Runtime owns installation and its outer mutation transaction.
+
+Top-level `install`, `collection install` and explicit `collection update` use
+the same route. Native and Docker installs also share post-commit Runtime refresh
+handling. The Console's existing typed install operation uses this public CLI
+path. Direct/shared-member protections, exact retry, receipt verification,
+rollback, and explicit recovery are not reimplemented in the transport.
+
+The six-part live proof passes again on the rebuilt Collection candidate, through
+public CLI and the actual Console runner/Activity store. It covers exact retry
+without artifact downloads, shared-member reuse, direct-root preservation and
+update protection, expired later-member grants, cancelled-worker/scratch cleanup,
+explicit journal recovery, and identical-release reinstall without compilation.
+Only exact-plan grants enter Linux; the proof rejects leaked host credentials
+and unexpected compilation requests. It uses synthetic signed HTTP fixtures,
+not Laravel authentication, browser interaction or model-quality evaluation.
+
+The first full Windows run exposed an eager service import: request validation
+loaded SQLite before the CLI installed its output contract. All 17 failures
+were warning/output regressions. Validation now resides in Protocol, with native
+installation loaded at operation time. The existing 62-test CLI/recovery/routing
+and Collection-grant run passes without changing warning assertions.
+
+The rebuilt candidate
+`sha256:307947db5c91c3ad81110d96e108c02c564464e3aa098d3f6e51f8f40cf58d5a`
+passes all 64 packaged Linux Collection/trust/recovery/grant/transport tests in
+38.7 seconds, with no skips. All 15 archives pass the distribution file-policy
+inspection; the global CLI initializes an unrelated isolated directory on both
+Windows and Linux and verifies all six shipped provider dependency closures.
+The image's 938 product files pass inspection, excluding dependency trees.
+The final production build and all TypeScript/Vue checks pass. The full Windows
+rerun completes in 384.0 seconds with **889 passed, zero failed, one opt-in
+model-backed service test skipped, 890 total**. The separate real Docker fallback
+test is enabled and passes in that run. The skipped model-backed service proof
+passes separately in 16.6 seconds on the installed `841cc1755dea` Evidence image,
+including warm output, acknowledged cancellation and unavailable-control recovery.
+Package boundaries, the dependency graph, 18 AGENTS
+boundaries and 36 documentation files pass. Graphify records 636 nodes / 1,686
+edges. No user Library, Registry data, host defaults or credentials were migrated.
+
+The six-pair bounded regression comparison against `46e1888` also passes the
+unchanged 10% limit: candidate/baseline medians are 822/1,108 ms compile,
+102/105 ms search, 97/101 ms fetch and 96/104 ms insufficiency. Every valid pair
+participates, and source/build identities remain identical. This is the existing
+128 KiB, eight-file, 184-record synthetic MiniSearch harness, not a large-corpus
+or TEI/FAISS performance claim. The complete release gate remains open.
+
+### Collection trust prerequisite — October 13, preceding candidate
+
+Collection installation no longer treats receipt-file presence as verification.
+Protocol owns the exact immutable revision validator and the Registry-compatible
+snapshot digest. Registry client reads/publication responses and Runtime admission
+share it. Member plans are signature-checked and bound to snapshot identity,
+version and source-tree digest before downloading any member. Unsigned release
+metadata is no longer the Collection installation authority.
+
+Retries and shared-member reuse verify source bytes, exact retained build
+artifacts, receipt chains and origin-pinned keys. A retry also verifies the
+installed Collection snapshot. Same-revision drift, editable-local replacement,
+and cross-origin/different-digest updates fail closed. Library synchronization
+preserves the origin of an unchanged release instead of replacing it with the
+Library's current default. Collections remain digest-bound Registry metadata;
+their member DKBs carry signatures. No new Collection signature format or Registry
+data rewrite is implied.
+
+The original five failing regression cases now pass, as does the subsequently
+reproduced installed-snapshot tampering case. Synthetic tests cover corrupt
+retained artifacts, Unicode digest parity with PHP, idempotent retry, origin
+preservation, and rollback after a later member fails. Collection crash-recovery
+fixtures now use real signed source/Evidence/Retrieval layers rather than dummy
+receipt files. The existing killed-update recovery and direct-member retention
+assertions remain intact.
+
+The final production build and all TypeScript/Vue checks pass. The full Windows
+suite reports **874 passed, zero failed, two opt-in Docker tests skipped, 876
+total** in 401.9 seconds. The subsequently added exact-version update test passes
+in a separate 13-test Collection/Registry-contract run; it was not included in
+that already-running full suite. Earlier intermittent loopback failures did not
+recur; this passing run does not diagnose their historical cause.
+
+The packaged Linux candidate
+`sha256:263ae9c348d79711290b7c0c18e9ced2bb7a4f24bd18aadd1127b7fda93e036b`
+passes all **40** Collection, signature, Library, owner-install, and crash-recovery
+checks in 32.9 seconds, with no skips. The first attempt lacked the development-only
+MCP client; the harness now supplies only its missing pure-JavaScript test
+dependencies read-only, without replacing image product code or production
+dependencies. This proof uses Linux-local disposable storage and synthetic signed
+fixtures, not Laravel or public host-to-Docker Collection routing. Its labelled
+containers and volumes were removed after the proof.
+
+All 15 archives pass inspection: six provider bundles through the full suite's
+independent offline-install proof, and nine other workspaces from the same build.
+The image's 935 product files pass the explicit file-policy inspection, excluding
+dependency trees. Package boundaries, dependency graph, 18 AGENTS boundaries,
+36 documentation files, and whitespace checks pass. Graphify records 635 nodes /
+1,679 edges. The final Temp audit is read-only; no retained user or proof resources
+were removed.
+
+This is a verified prerequisite repair, not completed host-to-Docker Collection
+transport. That delegation and missing-member-build acquisition remain the next
+integration boundary; upgrade, verification, backup/restore and explicit migration
+also remain release work. No user Library, host defaults or Registry data was
+changed. The prior image/results below describe the preceding candidate only.
+
+### Signed Docker Library installation — October 13, preceding candidate
+
+The public host CLI obtains a signed exact-plan download grant, then runs a fixed
+Linux CLI worker against the existing Library and disposable scratch volume.
+Reusable Registry login stays on the host. Windows never opens the Library
+database. The existing signed installer, mutation journal and Runtime refresh
+orchestration remain authoritative; no new management API or database exists.
+Registry resolution retains explicit/environment/Library/association/default
+precedence and fails closed when required owner inspection fails.
+
+The seven-part live proof passed on the preceding packaged CLI image
+`sha256:35e51e9554cd154be2ab14452386b74dfb6390258f3f117061caf68e8e4bad76`
+and host CLI/Console: signed install without a Runtime, exact retry
+without artifact downloads, corrupt/expired-grant rollback, cancellation with
+confirmed scratch removal, uninstall/reinstall, public CLI progress and host-only
+login, and real Console runner/Activity records. This is a synthetic signed HTTP
+Registry fixture, not Laravel authentication, browser UI or model-quality proof.
+This image includes the public host routing and Console credential-location
+repair. It also passes 117 packaged Linux tests and seven live Stack owner checks
+for independent Runtime bindings, configuration rollback, process death,
+cancellation and retained Library volumes. Product-file inspection passes for
+929 files, excluding dependency trees. No user resource was changed.
+
+Focused tests pass for signed-chain/expansion/download behavior (23), fixed
+worker lifecycle and ordinary offline-worker regression (24), Registry precedence
+(9), and the Console credential-file override (1). The latter was reproduced
+failing before forwarding only the configured path, never the bearer environment
+variable. The production build and all TypeScript/Vue checks pass. The full
+Windows run completes in 432.3 seconds: **859 pass, three fail, two skip, 864
+total**. Failures are loopback connections during initial Registry verification,
+the lexical compiler HTTP proof, and native Runtime removal. All three pass in
+one focused run; that does not explain or fix their intermittent full-suite
+failures. No timeout, retry, assertion or product transport was weakened.
+The two skipped opt-in Docker Evidence worker proofs pass in a separate explicit
+run, including model-baked warm output, acknowledged cancellation and recovery.
+
+All 15 distributable archives pass inspection: the six provider bundles through
+the full suite's independent offline-install proof, plus nine non-provider
+workspaces from the same completed build. Graphify now records 635 nodes / 1,679
+edges. Boundary, dependency, documentation and AGENTS checks pass. The final
+read-only Temp audit reports the same 32 retained DKB-prefixed entries; none were
+removed. Labelled install/Stack proof containers and volumes are absent after
+cleanup. The complete Windows/release gate remains red; earlier sections below
+record earlier candidates, not current certification.
+Docker Collection download, upgrade/verification, Pipeline acquisition, volume
+backup/restore and explicit stopped-writer migration are not complete.
+
+### Archive expansion prerequisite — October 13, before owner install routing
+
+The shared Library extractor now applies header-level byte/entry budgets and a
+conservative free-space admission check before file writes, while retaining
+node-tar streaming, path/link checks and caller-owned staging cleanup. It does
+not add a second decompression pass, a new archive implementation or an OS quota.
+This closes a missing disk-capacity prerequisite for authenticated Docker owner
+downloads; public transport was still disabled at this earlier checkpoint.
+
+Four regression tests first reproduced the missing limits; five new budget
+tests now cover the repaired boundary. All 20 focused archive,
+signed-grant and download tests now pass, including low-capacity alternate-build
+failure preserving source, applied state and retained builds for both Library
+and Runtime destinations. The full Windows suite completed in 413.2 seconds:
+**839 of 840 pass, one fails, zero skips**, with both real Docker Evidence-worker
+checks enabled. This run's failure is the compiler liveness test's unchanged
+one-second health request deadline. The prior recovery-refresh test passes, but
+neither intermittent failure is explained. Liveness now reuses the test-only
+transport observer to distinguish connection acceptance, HTTP handling and
+event-loop delay on a future failure; no deadline, retry, product transport or
+assertion was weakened. Both instrumented recovery/liveness cases pass in a
+focused run; that is not a repair of either intermittent full-suite failure.
+
+The current image
+`sha256:3deb899d1dc5548b8880158d113e72ae7ca74514a1292bc6102308b79338cfdb`
+passes **93 packaged Linux tests and seven live owner checks**, including the
+new archive-budget suite. Only labelled disposable proof resources were removed;
+no user resource changed. All **15 distributable archives** pass inspection:
+the six provider archives in the full suite's independent offline-install proof,
+plus a separate nine-workspace inspection of this same completed build. Workspace
+TypeScript/Vue, production build, boundary, dependency, docs and AGENTS checks
+pass. Graphify remains at 625 nodes / 1,640 edges. The final read-only Temp audit
+reports the same 32 retained DKB-prefixed entries, with none removed. The complete
+Windows/release gate remains red. Earlier sections below apply to earlier
+candidates, not this extractor change.
+
+### Library grant-install prerequisite — October 13
+
+`installDkbFromLibraryGrant` and `installDkbFromRuntimeGrant` now share one
+exact-plan acquisition path. The Library destination uses the existing signed
+materialization and mutation services without creating or activating a Runtime.
+It keeps the canonical Registry origin distinct from its transport endpoint and
+passes only a download grant to artifact requests; public-key lookup does not
+inherit the host bearer token. Invalid grant envelopes fail before initialization.
+Retained-build reuse now compares the complete requested signed chain, including
+the exact Evidence and Retrieval digests, before reporting `already_installed`.
+Regression fixtures first reproduced incorrect success against the previous
+implementation for both destinations; the existing exact-plan validator closes
+that bypass without introducing another resolver.
+
+Focused signing/transport tests pass for both destinations, including alternate
+build acquisition without redownloading source, malformed credentials/endpoints,
+tampered plans, expired grants, corrupt downloads, same-recipe/different-build
+requests and preservation of previous installed state. These are synthetic
+signed-layer/HTTP fixtures, not the Laravel
+grant-expiry/replay proof or Docker public-install integration. The offline owner
+worker has not gained network or credential access. CLI delegation, Collection
+acquisition and full lifecycle remain active work. The new candidate passes
+**85 packaged Linux tests and seven live storage-owner checks** on image
+`sha256:58f228c952ca423b37fd34db5a7e928c3a90cb10913de0b7f01fd2c68df032c9`.
+The live checks include independent Runtime bindings, configuration rollback,
+cancelled/dead owner cleanup and preserved shared Library volumes. They use
+only labelled disposable resources and change no user resource. Image inspection
+passes for 914 shipped product files, excluding dependency trees. The final
+Windows run completed in 415.9 seconds: **834 of 835 tests pass, one fails, zero
+skips**, with both Docker Evidence-worker checks enabled. The recovery-refresh
+case failed with the previously observed socket-level `ETIMEDOUT`. Its synthetic
+server was listening and accepted no connections; maximum recorded server/client
+event-loop delays were 57/621 ms. Library recovery succeeded and correctly
+reported both Runtimes as stale. A separate 100-session Node-only loopback probe
+then passed; that does not explain or repair the failure. No retry, connection
+warmup, deadline increase or assertion change was made. All **15 distributable
+archives** pass inspection on this candidate. The final read-only Temp audit
+reports the same 32 retained DKB-prefixed entries and removes nothing; no protected
+leftover was retried. The 834-test result below precedes this prerequisite. This
+candidate's complete Windows gate is not green.
+
+### Offline owner-side uninstall — October 13
+
+`uninstall`/`remove` and `collection uninstall` now share `packageRemoval.ts`.
+The host resolves a Library handle, invokes the same allowlisted Linux CLI and
+refreshes serving Runtimes after the Library commit. It never sends a Runtime
+mutation request on the Docker Library path. Explicit reload endpoints remain
+host-side and are deduplicated; unavailable Runtimes produce stale warnings with
+recovery instructions. An owner failure produces no reload or host-path fallback.
+Native HTTP removal remains outside the CLI writer lease to avoid waiting on a
+second process that needs that same lease.
+
+The real Windows-to-Linux `library-owner-cli-proof.mjs --run` passed all twelve
+checks on image
+`sha256:11a69337059984a5546fa50d11562c47b86acdf35199a87943957c29bfdf0a87`.
+Its new applied-state fixture proves Collection dependency rejection, retention
+of directly installed members, removal of unused vendor files/builds,
+preservation of editable source and one terminal event result. It grants no
+network or credential to the worker and cleans only its labelled test resources.
+This is not a signed-download, model-quality or full Console lifecycle proof.
+The complete post-change Windows suite passes **834 tests, zero failures and
+zero skips** in 359.8 seconds, including both enabled Docker Evidence-worker
+checks and the native HTTP lease regression. Graphify was refreshed to 625 nodes
+and 1,640 edges. All workspace TypeScript/Vue checks, production build, package
+boundaries, dependency graph, documentation and AGENTS checks pass. All **15
+distributable archives** pass inspection after the completed build. The final
+read-only Temp audit removes nothing and reports 32 DKB-prefixed entries; the
+cleanup release gate is still open. No protected leftover was retried. The earlier
+broad results below cover the pre-uninstall candidate.
+
+### Public Linux-volume Stack startup — October 13
+
+`stack up` now uses the owner startup coordinator, rather than preparing a
+Windows Library or Runtime directory. `ownedStorage.ts` persists an exact storage
+intent before creating labelled local volumes; `ownedManager.ts` connects real
+Compose startup, authenticated Runtime activation and host registration. The
+host receives a Docker Library handle, never a fabricated filesystem path.
+The distribution declares additional service volumes as inert metadata; CLI
+storage orchestration contains no provider-specific storage choices.
+
+```text
+Host stack-storage.json + private stack.env
+    -> fixed Linux CLI initializes Library and Runtime binding
+    -> owner prepares exact recipe/image identities
+    -> Compose mounts external Linux-local volumes
+    -> Runtime activation gate
+    -> verified owner completion -> host registration
+```
+
+The latest explicit `tests/stack-volume-startup-proof.mjs --run` run passed real
+service health, activation, volume-only mounts, Docker Library registration,
+host-path absence, stop/restart persistence and missing-volume rejection. This
+used an empty synthetic Library, not the signed package lifecycle. It removed
+only its own containers, volumes, network and temporary host catalog. Existing
+user resources and defaults were not touched. The final metadata/boundary refinements
+are included in this run. CLI image
+`sha256:cc9df256615ce4c32d74fababa1e5ed58d74dc133afb72bfb940c88a98b3b765`
+is the tested Linux management image. The missing-volume check removes only the
+proof's stopped Runtime volume and confirms startup refuses to replace it.
+
+All workspace TypeScript/Vue checks, the production build, dependency/boundary,
+documentation and AGENTS checks pass. The 67 focused topology/owner/backup checks
+and nine retained native-recovery checks pass. An initial broad run exposed a
+stale Docker test double; it now validates the exact container-label inspection
+request without weakening rollback assertions. A mistyped opt-in Evidence image
+argument was corrected from Docker inspection, and its real service cancellation
+proof passes. The final combined Windows run passes **826 tests, zero failures
+and zero skips** in 401.7 seconds, including both opt-in Evidence Docker checks.
+All **15 distributable archives** pass inspection. The same candidate passes all
+**73 packaged Linux checks and seven live owner checks** in isolation, including
+host process death, delayed dispatch rejection, cancellation cleanup and two
+independent Runtime bindings sharing one Library. An earlier overlapping run
+exceeded the unchanged suite deadline alongside Windows tests and package
+inspection; that run remains a failure, not a performance fix or extra retry
+inside the proof. The isolated result is recorded independently.
+
+Existing host-mounted Stacks require explicit migration; startup neither moves
+them nor creates replacements. A ready descriptor with a missing volume fails
+closed. `init --if-absent` preserves an existing Library's Registry configuration.
+Volume-backed backup/restore, authenticated Registry delegation, legacy recovery
+tool removal and migration remain release blockers. The earlier 821-test result
+below applies to its earlier candidate, not these new edits.
+
+### Linux-owned first Runtime binding — October 13
+
+The fixed Stack worker now admits `binding.initialize`, using Runtime's existing
+atomic initializer rather than a host write or another activation implementation.
+It validates the mounted Library and selected recipes, queues behind native
+owners, and rejects foreign Runtime identities, wrong Library mounts and pending
+configuration/activation recovery. Repeating the request preserves an existing
+binding and activation, including its current Pipeline. It never changes Library
+contents or Registry defaults. A new Runtime remains inactive until the normal
+activation gate succeeds.
+
+The nine focused tests pass, including process death immediately after binding
+promotion. The packaged Linux proof now initializes its two Runtime volumes via
+this typed operation instead of proof-only evaluated setup code. This completes
+the initialization prerequisite, not public `stack up` integration. Volume
+provisioning, actual Compose callbacks, registration, backups and authenticated
+Registry delegation remain the next connected lifecycle boundary. Graphify is
+refreshed to 602 nodes / 1,527 edges / 20 communities with no semantic-model calls.
+
+CLI image `sha256:137a34bfbc35128624874a997e2d006f64a8d03619a939bdb407a9b85f00b381`
+passes all seven Stack-owner checks, including all 73 packaged Linux tests.
+The same image passes all 11 CLI/Console delegation checks, including concurrent
+writers, cancellation and stopped-Runtime recovery. Both proofs removed their
+labelled resources and changed no user resource. All workspace TypeScript/Vue
+checks and the boundary, dependency,
+documentation and agent-guidance checks pass. The full Windows suite passes
+**821 tests, zero failures and zero skips**, with both opt-in Docker Evidence-worker
+checks enabled. Its test phase took 334.5 seconds. The earlier intermittent
+Windows transport failures did not recur, but this run is not a demonstrated fix
+for them. No retries, warmups or deadline changes were added.
+All 15 distributable archives pass inspection after the completed build. An
+earlier inspection overlapped output cleanup and failed with a missing generated
+file; that orchestration error is not counted as a packaging pass. The final
+read-only Temp audit removes nothing; older retained DKB fixtures still prevent
+a clean-Temp release claim.
+
+### Owner-side Stack configuration and startup coordination — October 13
+
+The Linux owner can now prepare and recover compiler/Runtime recipe configuration
+without writing a binding, activation, Library or service. The preparation uses
+the existing recipe/image-identity rules, checks the exact planned state, and
+journals both prior files before either changes. Rollback preserves operator edits
+and unrelated activations. A completed requested activation is retained after a
+lost host reply rather than overwritten with an old snapshot.
+
+Completion is durable before the recovery journal is removed. A bounded receipt
+contains only operation/storage identity, outcome and state digests; repeated
+settlement verifies the current state instead of guessing from a missing journal.
+Real process-death tests cover both configuration promotions, receipt promotion
+and the interval after journal deletion. These are not power-loss durability tests.
+
+Cancellation before owner dispatch is also explicit: Linux verifies the original
+observation before acknowledging that nothing changed, and rejects delayed
+preparation with that cancelled operation ID. Missing journals alone still do not
+mean success.
+
+The host coordinator in `apps/cli/src/stack/ownerStartup.ts` persists the operation,
+owner descriptor, before/after topology and Compose digest before dispatch. It
+retains recovery through partial registration or failed service restoration, never
+repeats activation on recovery, and refuses to overwrite changed operator state.
+Its 26 focused Windows tests include seven real process terminations and four
+redirected-folder cases. Fresh ancestor/storage checks reject Windows junctions
+and Linux symlinks before dispatch and recovery, after service startup, and before
+final journal removal. The checks reuse the Library storage validator without
+opening a Library database. Actual
+Compose callbacks and volume-backed public Stack startup are not connected yet.
+
+Planning now returns only distribution-allowlisted public service settings, so
+the host can configure the selected model/revision without receiving arbitrary
+plugin options. Both ends reject secret fields, unselected services and Compose
+interpolation. Preparation also binds the exact resolved recipe configuration and
+service definitions; changes to defaults or dimensions fail even when target,
+service and model labels remain unchanged. This planning digest does not replace
+provider integrity, health, signatures or build compatibility verification.
+
+CLI image
+`sha256:f98493122ed16249f540aea8dc12cb00c7327396cd3f5361af4f72c8105a5700`
+passes all **seven Stack-owner checks**, including **58 packaged Linux tests**
+and recovery after killing the actual Windows coordinator following Linux
+preparation. Synthetic Compose callbacks do not claim a service-backed Stack
+lifecycle. The preceding image
+`sha256:033f48ace4c1eee2f8018c84e0b6bd1b3b829dd8bc1f6227c0bbd911c93a33e8`
+passes all **11 CLI/Console owner-delegation checks** and all 15 package archive
+inspections. All workspace TypeScript/Vue checks passed before the routing change
+below; the changed CLI also passes its type check. Graphify was refreshed to
+598 nodes / 1,514 edges / 17 communities.
+
+The aggregate Linux test-container run exceeded its 45-second harness deadline
+while cases were still passing. Its cleanup initially hid that timeout behind an
+in-use-volume error. The harness now retains named test containers for confirmed
+cleanup and bounded diagnostics, and executes each independent test file under
+the same 45-second bound. No production timeout or performance limit was changed.
+An incorrect per-file count in the first split run was corrected against the
+actual suites (10 + 22 + 26); it was a harness assertion, not a provider failure.
+
+A later run left a never-started Docker worker behind when creation was not
+acknowledged. The transport now reports uncertain cleanup rather than treating
+an empty listing as proof that delayed creation cannot finish. Tests cover lost
+and malformed acknowledgements and an unconfirmed dispatch; no worker is started
+without acknowledgement. Cleanup of the observed orphan checked its exact image,
+label, stopped state and proof-volume mounts. The subsequent seven-part proof
+above passes, but this guard is not an automatic orphan-recovery implementation.
+
+The following host-routing fix closes another ownership gap: query, read,
+read-targets and Pipeline inspection previously treated any saved Runtime path as
+native access, even for Docker/remote records. Only a native process Runtime may
+now open host state. Docker/remote commands use the authenticated Runtime endpoint
+without falling back to host files; local Pipeline preparation rejects non-native
+state before compilation. All **six regression tests** pass after reproducing the
+old behavior. These tests substitute HTTP responses to isolate CLI routing, not
+certify real network transport. Inventory and user state are unchanged.
+
+The first routing implementation imported service code before the CLI installed
+its warning/output policy. Its full run failed 11 of 812 tests, including unwanted
+SQLite warnings in CLI output; the independent loopback failure below also
+recurred. The routing rule now lives in the pure
+`apps/cli/src/host/runtimeLocation.ts` module, with a type-only inventory import.
+No new warning suppression was added. All **55 focused CLI, credential, routing
+and real CLI/HTTP/MCP audit tests** pass, including an explicit clean-output
+regression assertion. The corrected image is
+`sha256:1de902acb7efb6fc13bd6960bce714a63bf2fe72a6908943021c262a4ad36b10`;
+it passes all **11 packaged CLI/Console owner checks**, including cancellation,
+stopped-Runtime recovery and two independent CLI writers, and all **seven
+Stack-owner checks**, now including **64 packaged Linux tests** with the routing
+regressions. All 15 distributable archives pass inspection. All workspace
+TypeScript/Vue checks pass on this corrected source, as do package-boundary,
+dependency-graph, documentation-link and AGENTS-guidance checks.
+
+The corrected full Windows suite finishes **811/812 passed, no skips**. All CLI
+output and routing checks pass. The remaining failure is the first FastEmbed
+batch-order test's `fetch failed` after 29.7 seconds; this run did not retain its
+nested socket cause, so it is not yet proven to be the same loopback problem.
+That fixture now retains the cause category, accepted-connection and received-batch
+counts on failure, and awaits server teardown. It changes no request, retry or
+deadline. Its focused eight-test provider suite passes; this does not replace
+the failed full run or claim a provider/network fix. Twenty-four independent
+cold-process batching samples at concurrency four also pass without retries or
+warmup; they did not reproduce the failure. Both packaged owner proofs removed
+their labelled containers and volumes. The read-only Temp audit still lists
+older DKB leftovers; it removed nothing and is not a clean-Temp release pass.
+
+The preceding pre-routing Windows run passed **806 tests with no skips**, including
+both opt-in Docker Evidence-worker checks and independent offline provider
+installation. The preceding post-path-guard run finished with **802 passes, one
+failure and no skips**; the intermittent recovery-refresh connection failure
+recurred then and in the first routing run. It passed in the corrected run but
+remains unexplained.
+The Library itself recovers correctly
+and reports stale Runtimes. Its listening synthetic HTTP server accepted no
+connection; both client attempts failed with socket-level `ETIMEDOUT` before HTTP.
+The latest captured server event-loop delay was at most 39 ms, so server event-loop
+starvation was not demonstrated. No retry, connection warmup, deadline increase
+or weakened assertion was added. The passing earlier full run is not a fix for
+the later recurrence.
+
+The cause of the intermittent Windows connection failure is not established. An upstream
+[Windows TCP constant correction](https://github.com/libuv/libuv/pull/5179)
+is a diagnostic lead, not a demonstrated DKB fix. Available Node 24 comparison
+runs also pass but do not establish that upgrading solves this failure; its
+inspected bundled TCP source still contains the same constant assignment. The
+release gate remains red; historical or isolated passes do not certify it.
+
+The next product boundary connects the tested coordinator to volume provisioning,
+actual Compose services, Runtime activation and idempotent host registration.
+Volume-aware backup/restore and authenticated Registry delegation also still need
+integration and end-to-end proof. No existing user resource was migrated, no
+repository was published, and the goal remains incomplete.
+
+### Owner-side Stack observation — earlier October 13 checkpoint
+
+Stack recipe selection now has one implementation in
+`apps/cli/src/stack/recipes.ts`, shared by existing preparation and the new private
+Linux owner inspector. It observes separate Library, Runtime and compiler-context
+volumes; Windows receives bounded validated identities, digests and required
+service IDs, never database handles or raw operator configuration.
+
+The inspector uses Runtime's native read lease and Library read fences. It rejects
+pending Runtime selection recovery and a mounted Library that disagrees with the
+binding, preserves broken higher-priority configuration, and distinguishes an
+inactive binding from a current or stale Library generation. Inspection never
+activates, compiles, repairs a journal, or asserts provider health. The existing
+Stack startup selection checks also use this non-repairing Runtime observation.
+
+The same-candidate Windows suite passes **752 tests, no failures, cancellations
+or skips**, including both opt-in Docker Evidence-worker checks. All workspace
+TypeScript/Vue checks, all 15 package archive inspections, dependency boundaries,
+documentation and scoped guidance checks pass. The CLI Graphify navigation was
+refreshed to 553 nodes / 1,298 edges / 20 communities; this is not proof of
+Runtime behavior or performance.
+
+The rebuilt CLI image
+`sha256:bc10b3f8b11c295dd22c6ea8b613e1e4f4afb69b566ea4fbcfed4d5e170c3b21`
+passes the four-part owner observation proof on four new Linux-local volumes:
+shared-Library/separate-Runtime observation, all eight packaged tests, redacted
+broken-config rejection, and paused-writer/cancellation/process-death behavior.
+The eight tests include an actual activated synthetic package becoming stale
+after removal and strict response validation. CI now runs the isolated Stack
+proof alongside Library-owner delegation. The same image also passes all eleven
+public CLI/Console owner-delegation checks, including Registry-default updates,
+concurrent offline writes, cancellation, recovery and missing-volume rejection.
+Both proofs removed only their own labelled resources. This is not a complete
+Stack lifecycle or release-readiness claim.
+
+The previously intermittent Windows loopback recovery-refresh case passed in this
+full run. Its earlier failure remains unexplained: no retry, deadline increase,
+connection warmup or weakened assertion was added, and this pass is not a fix.
+
+The next boundary is owner-side configuration staging/rollback and Stack wiring,
+followed by volume-aware backup/restore and authenticated Registry delegation.
+Automatic legacy Registry-volume copying and Library rebinding were removed from
+startup. No existing user data or host defaults were migrated. The final read-only
+Temp audit found no leftovers from these owner or package checks; a matching
+provider-install directory dates to September 3 and was left untouched, along
+with all other pre-existing Temp entries. No Docker or Temp sweep was performed.
+
+### Library recovery and storage ownership — October 13
+
+[ADR 0012](../decisions/0012-crash-safe-library-mutations.md) owns the durable
+Library mutation journal, exact-path recovery, and fresh read fences.
+[ADR 0013](../decisions/0013-library-storage-ownership.md) supersedes only its
+mixed-Windows/Linux guard. The user approved one OS/storage environment per
+live Library database; this is no longer an open architectural choice.
+
+```text
+Windows CLI / Console
+  → typed owner-side CLI (offline public commands connected; network lifecycle pending)
+    → Linux-local Library volume
+      ← Runtime A / Pipeline A
+      ← Runtime B / Pipeline B
+
+Native Windows CLI / Runtimes
+  → separate local NTFS Library
+```
+
+The journal preserves one complete prior or next applied state after process
+death. Read phases check pending recovery and the real mutation fence on entry
+and exit. Runtimes keep independent activations; source and immutable builds
+are not copied for each Runtime.
+
+The current uncommitted foundation replaces cross-OS hardlink guards with
+native SQLite writer leases and short native read transactions. OS locks
+release on process death; lease-file existence, PID, and age do not prove
+ownership. A single fresh inspection checks paths, sidecars, actual storage
+and prior guards before database opening. Reads still check the durable pending
+marker and take a new phase-end transaction. Shared/network/unknown mounts are
+rejected. Earlier guards remain intact for matching-version recovery.
+
+Current evidence, not a complete release gate:
+
+- All workspace TypeScript and Console Vue checks pass.
+- Native Windows focused runs pass storage/ownership/recovery and Runtime
+  HTTP/MCP checks, including rejection of read-to-write authority upgrades.
+- A frozen built-module Linux-volume run passes all 72 storage, ownership,
+  authority, mutation-recovery, and read-snapshot tests, with no skips.
+- Two independent containers serialize 20 real Library mutations with no lost
+  update. A killed writer leaves reads closed until exact rollback; repeated
+  recovery is unchanged. The proof rejects the real Windows bind mount before
+  database access and removes its own labeled containers, volume, and snapshot.
+- Console retention passes 18 focused tests: bounded in-memory operations and
+  replay, full-queue rejection before dispatch, oversized events, expired
+  results, and slow stream clients. Activity remains separate redacted storage.
+- Registry verification passes 308 Pest tests / 23,570 assertions. The adjusted
+  cross-language fixtures pass 48 focused tests / 22,175 assertions; frontend,
+  type, lint, formatting, and PHPStan checks pass. CI now uses PHP 8.5 and
+  locked dependency installation, but remote CI has not run this candidate.
+- Pinned, local-only Gitleaks scans find no DKB matches across 73 reachable
+  commits and the scanned current candidate. Registry history/current scans
+  each flag two duplicated documentation examples requiring triage. Changed
+  files require a final rescan. This is not a completed privacy/license audit.
+
+The October 9 rebuilt Node suite passed **664 tests, no failures or skips**, including
+the opt-in real Docker worker/service checks, after correcting three catalog
+fixtures that referenced nonexistent Library directories. The 43 focused
+Library/Runtime checks pass, including the new no-source-rediscovery warm-query
+test, manifest-drift rejection, bounded journal reads and real CLI/HTTP/MCP audit.
+The October 13 Linux CLI image and internal owner transport pass three consecutive
+six-part Docker proofs: product-file allowlist inspection; initialization and
+inspection without a Runtime; concurrent Collection mutations; cancellation
+cleanup; killed-writer rejection and exact recovery; and missing-volume rejection
+without implicit creation. This file inspection is not an image vulnerability
+scan or complete secret-content audit. The host and image
+validate typed requests, pin the CLI image, reject remote Docker contexts and
+non-local/custom volume drivers, and invoke the existing CLI without a shell.
+The October 9 interrupted synthetic volume was also recovered after restart;
+only that proof's labelled container and volume were then removed.
+
+A repeated owner proof exposed premature read-side preflight on competing CLI
+writes. Offline Library and Collection mutations now wait for the existing
+writer lease before inspecting state; a displaced manifest is only a location
+hint until ownership and validation succeed. Ten focused CLI tests pass,
+including queued writes with present/displaced manifests, fail-closed reads,
+abandoned-journal rejection, exact recovery, output contracts and Runtime refresh.
+The corrected image retains both concurrent Collections in every proof repeat.
+
+Host-inventory handles and offline public command routing are now connected.
+A Docker Library is recorded as a context/volume/immutable-image descriptor,
+never a host path. Context precedence is unchanged; filesystem-only consumers
+reject volume handles explicitly. Public registration verifies owner-side state;
+unchecked lists retain `known` entries without launching containers, while
+`--check` performs one-shot owner probes. Status, list, storage, inert package
+inspection, recovery and offline Library/Collection changes use the existing CLI
+inside the owner. Mutations refresh associated local Runtimes by Library name.
+
+The expanded ten-part Docker proof passes public registration, selection,
+checked listing, reads/writes, one-result event output, concurrent owner writes,
+cooperative cancellation, killed-writer rejection, name-based recovery and
+missing-volume rejection. It also exercises the real Console command runner:
+checked volume listing, package listing, Collection inspection, explicit rejection
+of unsupported verification, and matching Activity records without a Windows
+Library database. This is backend integration proof, not browser visual QA or a
+complete network lifecycle. Recovery errors give the registered Library name,
+not the container-only `/library` path. Remote Windows named-pipe endpoints are
+rejected along with remote TCP/SSH Docker contexts.
+
+The earlier focused inventory, event, transport contract,
+Console retention/cancellation and recovery run passed 59 tests. Console uses
+private Node IPC for cancellation so Windows can await owner cleanup; browser
+requests still cannot supply commands. Broader results below are historical
+until repeated on the new candidate.
+
+An earlier expanded rebuilt suite reached **694 tests: 693 passed and one failed**.
+The failure was the recovery fixture's first Runtime refresh: neither local HTTP
+request reached its listening fixture, and both reported `fetch failed`. Fifteen
+fresh-process focused repeats passed, but concurrent runs reproduced Windows
+`connect ETIMEDOUT`. An independent 100-session loopback probe with Node 22.15.0
+and no DKB imports reproduced four failures. This demonstrates a host/Node
+transport issue independently of Library recovery, not its exact underlying
+cause. Do not compensate with automatic management retries. Runtime errors preserve
+bounded, known nested failure categories without arbitrary exception text,
+credentials, or implicit retries. All 17 focused Runtime credential/recovery
+tests pass after that change. It is not evidence that the intermittent host
+connection failure is repaired.
+
+A subsequent full run exposed a separate Console port-allocation race: checking
+and releasing a free port before binding allowed concurrent starts to collide.
+The Console now binds its actual server directly, falls back to an OS-assigned
+port only when the default is occupied, and derives Host/Origin security from
+the bound address. Explicit port conflicts remain errors and startup failures
+close their resources without removing the running Console's process state.
+HTTP fixtures use port zero. The 28 focused Console/retention/historical-Evidence
+tests pass, including collision, resolved-origin, bootstrap and cleanup cases.
+
+The candidate before Registry-default transaction changes passed **700 Node tests, no failures or skips**
+on Windows Node 22.15.0, including both opt-in real Docker worker checks. All
+workspace TypeScript and Console Vue checks pass. The shutdown regressions
+demonstrated that Docker may stop a worker even when the client loses the
+acknowledgement. Cleanup now freshly verifies the same owned container before
+escalating, and verifies termination again after a failed kill acknowledgement.
+Replacement containers and unresolved termination still fail closed. All 23
+focused compiler-authentication/cancellation tests pass, including the real
+Docker cancellation test. The passing full run does not establish the cause or
+repair of the independent intermittent Windows loopback failures above.
+
+Registry-default configuration is now part of the recoverable Library journal.
+The CLI changes `.dkb/config.json` and `dkb.json` under the same ownership lease
+and commit decision. A dedicated exact-file API permits configuration writes;
+generic control-state replacement remains forbidden. Readers reject pending
+recovery, and repeating an identical URL leaves both files and the mutation
+fence unchanged. Nine new tests cover rollback, process death at four promotion
+phases, fresh-process recovery, queued writers, no-op updates and forged-journal
+rejection on native Windows and the pinned Linux CLI image. The Linux run uses
+isolated native temporary storage, no network, and read-only test input; it does
+not mount or modify a host Library. The 25 existing mutation-recovery tests also pass.
+
+Public `registry use --root <library>` delegates Docker Libraries to the same
+CLI operation. Endpoint verification stays on the host; the offline owner
+receives only a validated URL. Host association follows the Library commit,
+and online Runtime refreshes retain their warning/recovery output. The rebuilt
+Linux management image passes the expanded **11-part Docker proof**, including
+real Console-runner Registry changes, idempotence and matching Activity records.
+The verified image is
+`sha256:11804e073610dadb45fa2db4345e26dd5f2ef9a74f2dfaa56e1ef891e1ecc830`.
+Only the proof's labelled containers, volume and isolated host catalog were
+removed. Existing Libraries, Stacks, credentials and host defaults are unchanged.
+All 15 candidate package archives pass file inspection; all workspace TypeScript
+and Console Vue checks and the production build pass. The CLI navigation graph
+is refreshed. These checks do not replace the remaining complete lifecycle,
+privacy, licensing, distribution and service-image gates.
+
+The revision-46 same-candidate full run passed **709 Node tests, no failures or skips**,
+including both opt-in real Docker worker checks. An earlier run passed 707/709:
+the verified-init and Runtime-import CLI assertions failed. Both then passed
+individually, all 42 CLI tests passed together, and the full rerun passed without
+product changes. Their initial cause is unconfirmed; this is not a claimed repair
+of intermittent host transport or a replacement for release-stability testing.
+The final boundary, workspace graph, documentation and scoped guidance checks
+pass. A read-only Temp audit finds no current owner/Registry-recovery proof
+directories; older unrelated or unverified DKB entries were not removed.
+
+### Runtime native ownership — October 13
+
+Stack owner integration exposed a prerequisite: the earlier Runtime guard used
+PID/hostname/age to authorize takeover, and queries were protected only inside
+one process. A regression test first demonstrated that an aged foreign-container
+guard was incorrectly removed. Runtime ownership now reuses the native Library
+lease primitive: shared query leases, exclusive mutation leases, callback-bound
+authority, and process-local FIFO writer priority. Readers cannot upgrade their
+authority; unrelated Runtime roots remain independent. Earlier guards are
+preserved for matching-version recovery, not guessed away.
+
+The 26-test ownership/authority run and 67-test activation, Pipeline-switch,
+recovery, audit and Stack-startup run pass on native Windows. All eight new
+Runtime ownership cases pass in the packaged Linux CLI. The additional six-part
+Docker proof pauses live reader/writer containers, verifies exclusion and
+independent Runtime roots, kills confirmed owners, and reacquires without deleting
+a guard. Two real Runtime activations share one synthetic lexical Library and
+return identical Evidence IDs. Deactivation makes both stale; refreshing one does
+not refresh the other, and neither serves removed knowledge. This is a storage
+and activation proof, not a TEI/FastEmbed quality comparison.
+A Windows bind-mounted Runtime is rejected before creating state or
+opening a database. Candidate image:
+`sha256:c4338d7631b950cbbe4e9bbebd64217ce93175b9fc5920f07e119647d463b9ec`.
+Only labelled proof containers/volumes and isolated temporary files were removed;
+no existing Runtime was migrated. Reproduce with
+`node tests/runtime-native-ownership-proof.mjs --run` after building the CLI image.
+The existing eleven-part CLI/Console owner proof also passes on this image,
+including product-file allowlisting and stopped-Runtime recovery.
+
+The dense MiniSearch comparison now uses six paired runs with balanced execution
+order, unchanged inputs and an unchanged 10% regression threshold. Against
+committed Library/Runtime code at `46e1888`, candidate/baseline medians are
+1378/1456 ms compilation, 127/142 ms search, 124/135 ms fetch and 120/134 ms
+insufficiency; all gates pass with identical workload identities. Earlier
+three-pair runs failed different metrics amid substantial host timing variation.
+The balanced result does not establish a speedup or certify TEI/FAISS performance.
+Per-stage timings remain visible for future diagnosis.
+
+All workspace TypeScript/Vue checks and the clean production build pass. The
+full suite rerun passes **717 tests with no failures or skips**, including both
+opt-in real Docker Evidence-worker checks. The first run passed 716/717: a
+synthetic Runtime refresh received a loopback connection timeout instead of its
+expected HTTP 503. Recovery still completed and marked that Runtime stale.
+Two focused reruns and the unchanged full rerun passed. The timeout cause is
+unconfirmed; this is not a transport fix or permission to retry mutations
+silently. Dependency boundaries, workspace graph, documentation links and
+scoped guidance checks pass, and the CLI Graphify index was refreshed.
+All 15 current npm package archives pass file inspection. The proof resources
+were cleaned up; a read-only Temp audit retained older DKB entries rather than
+deleting directories whose ownership was not established in this run. No
+Registry files, host defaults, existing Libraries or running Stacks were changed
+for this Runtime checkpoint.
+
+### Compiler native ownership — October 13
+
+Compiler ownership now shares the verified native lease primitive. The previous
+ten-minute directory-lock takeover is removed. Old guards remain intact;
+queued cancellation cannot enter or strand the queue, and active compilation
+retains ownership through provider cleanup. Secondary lease-cleanup errors do
+not replace worker-stop uncertainty used by the staging/recovery boundary.
+Public local compiler options now expose their existing cooperative abort signal.
+
+Six new native Windows tests pass. The four-part packaged Docker proof passes
+all six on Linux-local storage, pauses a real selected Evidence provider,
+excludes competing compilers, cancels a waiter, and proves acquisition after
+confirmed owner death without touching the original source. Another package
+root remains independent. The actual Windows-shared source mount fails before
+compiler state creation. The six-part Runtime ownership proof also passes on
+this candidate, including two independent activations sharing one Library.
+Image: `sha256:ac474d34295cbea098b8358bc35ee3ce6193adce309448e3ebd62edca32480d1`.
+Both proofs removed only their labelled resources; no user Library or Stack was
+migrated. That checkpoint's clean production build and full suite pass **723 tests,
+no failures or skips**, including both opt-in real Docker Evidence-worker checks.
+All workspace TypeScript/Vue checks, package boundaries, dependency graph,
+documentation links and scoped guidance checks pass. Graphify was refreshed.
+All 15 npm archives pass inspection. The eleven-part CLI/Console owner proof
+also passes on this same image, including cooperative cancellation, killed-writer
+recovery and Registry-default journaling. The performance comparison includes
+the committed compiler ownership module alongside Library/Runtime code so the
+new compiler lease is not present on both sides of its baseline.
+
+### Compiler admission cost and job-scoped hosts — October 13
+
+Extending the baseline to include the committed compiler lock exposed a real
+regression: the first six-pair run had 40.7% higher compilation time. A read-only
+Windows volume probe reduced cold admission overhead while retaining positive
+fixed/ready/NTFS verification, .NET fallback when unavailable, and fail-closed
+rejection. It was insufficient alone: the next run still regressed compilation
+33.6% and warm search 12.9%. Neither run passed or was waived.
+
+Diagnostic-only phase timings and source inspection identified duplicate provider
+host construction: the compiler resolved a recipe in one host, disposed it, then
+created a second host to execute that recipe. `compilationHost.ts` now owns one
+job-scoped host across recipe resolution, cache lookup and execution, including
+retrieval-only compilation. Code/configuration drift is checked before promotion
+and cache reuse. Cleanup runs on every exit without replacing the primary error.
+Four focused tests prove single setup/disposal, cache reuse, retrieval-only reuse,
+failure cleanup, and configuration/code drift preserving the previous build.
+Three Windows probe tests cover strict metadata, unavailable scripting, positive
+.NET fallback and rejection of unsupported or unverifiable storage.
+
+The uninstrumented six-pair, balanced-order comparison against the complete
+committed Library, Runtime and Compiler at `46e1888` passes the unchanged 10%
+limit. Candidate/baseline medians: compilation **942/1178 ms**, audited search
+**95/107 ms**, fetch **96/104 ms**, insufficiency **95/103 ms**. All runs retain
+the same workload identity
+`sha256:2b1d15397696d69dd5af1d627d874dc5c28ec3661ede5303c0417eb9c645fe66`.
+Scope remains 128 KiB, eight substantive synthetic prose/table/code files and
+184 MiniSearch Evidence records. This is not large-corpus, TEI/FAISS, or Registry
+lifecycle certification; earlier failed measurements remain part of the record.
+The diagnostic mode is explicitly non-acceptance and never reports a passing gate.
+
+The clean build succeeds; the first full suite finishes **729/730 passed, no
+skips or cancellations**. The failure is the previously intermittent Windows
+loopback refresh test: both requests timed out without reaching the disposable
+server. Library recovery completed and both Runtimes were correctly reported
+stale. The unchanged focused test passed afterward; a separate eight-fresh-process
+check completed all 16 requests. Neither result explains or fixes the full-suite
+failure. Test-only diagnostics now record accepted connection count, listening
+state and server event-loop delay on failure, without warming connections,
+retrying, extending deadlines or recording credentials. The instrumented focused
+test passes. The subsequent full rerun passes **730/730, no failures, skips or
+cancellations**, including both opt-in real Docker Evidence-worker checks.
+That rerun does not establish the timeout's cause or justify automatic retries.
+
+All workspace TypeScript/Vue checks, dependency boundaries, workspace graph,
+documentation and scoped guidance checks pass. The CLI Graphify index is refreshed.
+Rebuilt image
+`sha256:dec05556de5ceb562b5300a2c74fdb214b226d1ae204b2b8e72ee39b697e069b`
+passes the four-part compiler proof (including ten Linux lifecycle/ownership/drift
+tests), six-part Runtime proof, and eleven-part public CLI/Console owner proof.
+Only their labelled temporary containers and volumes were removed. Existing
+Libraries, credentials, Stacks, defaults and Registry data were not migrated.
+All 15 package archives pass inspection on this candidate, including the shipped
+Windows probe and compiler host module. A read-only DKB Temp audit retained
+older entries; no existing knowledge or unrelated resources were removed.
+
+The two initial new-test failures were fixture issues (a SQLite property absent
+in Node 22.15 and cleanup-hook ordering); corrected tests pass in the full run
+and packaged Linux suite. The failed hook left one synthetic 8 KiB lease at
+`%TEMP%/dkb-compiler-ownership-root-ZU0PBS`; guarded removal was policy-blocked
+and was not retried through another mechanism. Older Temp entries were retained.
+
+### Host Stack coordination prerequisite — October 13
+
+Host topology operations now reuse the native ownership primitive through
+`apps/cli/src/stack/control.ts`. Its lease lives under the host Stack inventory
+root's `.control/<name>` directory, outside replaceable Stack data. Preparing,
+starting, stopping, backing up, restoring, and upgrading a Stack share that
+owner. It neither creates Runtime state nor holds a Runtime lease across a
+Compose wait. Runtime activation and Library mutation retain their own gates.
+Earlier `startup.lock` files are preserved; PID/age-based reclamation is removed.
+
+Host-directory backups reject critical state outside the archive root, directory
+links, missing Library/Runtime roots, and explicit volume-backed state. Failed
+Docker status calls reject backup instead of silently reporting no writers.
+Stopped topology checks work without resolving a broken active Pipeline.
+The old implicit Library move and Runtime-state deletion during Stack preparation
+are removed. Existing user state has not been migrated.
+
+The focused 48-test Windows run passes, including actual owner-process death,
+independent Stacks, retained old guards, admission cancellation, control-command
+contention, incomplete-backup rejection, eight activation/recovery scenarios,
+and stopped host-directory archive/restore. Two additional linked-entry cases
+initially exposed thrown archive callbacks escaping the Promise as uncaught
+exceptions. Backup and restore now record callback rejection and fail through
+their normal cleanup path; no partial archive is promoted and the restore
+destination stays untouched.
+
+The rebuilt packaged Linux CLI at
+`sha256:da21261d5253e3ba9d8e89c652646caad080a0c689c05dd5546c0449e8008a08`
+passes all eleven Stack control/backup tests, a paused separate-container
+contention and confirmed-death recovery proof, and rejection of the actual
+Windows-shared mount before control state is created. The proof removes only
+its labelled container, volume and temporary input directory. This is a
+prerequisite, not completed Linux-volume backup or Stack startup.
+That candidate passes the full **741-test Windows suite**, with no failures,
+skips or cancellations, both opt-in Docker Evidence-worker checks enabled, and
+the eleven-part public CLI/Console owner proof. All 15 package archives pass
+inspection, as do workspace types, dependency boundaries and documentation.
+
+Following that run, the same callback issue was reproduced in knowledge archive
+extraction and npm release-archive inspection. Three separate-process regression
+cases initially failed with uncaught exceptions; all three now pass after
+returning callback errors through the awaited operation. Callers can finish
+discarding their staging directories, progress errors retain their identity,
+and outside source bytes stay untouched. Validation remains strict; this does
+not turn extraction into a live-state promotion operation.
+
+The preceding archive-cleanup candidate passed **743/744 tests**, with no skips or
+cancellations. Its sole failure was the intermittent recovery-refresh transport
+case: the online request times out before reaching the listening fixture; its
+offline companion reaches the same server and returns the intended 503. New
+diagnostics record one accepted connection and a 43 ms maximum server event-loop
+delay. Library recovery succeeds and the unavailable Runtime is reported stale.
+The unchanged case passes alone on Windows and inside the Linux CLI image.
+A separate 100-session diagnostic, with no DKB imports and two requests per
+fresh client process, passes 100 fetch and 100 Node HTTP requests. These results
+do not identify or repair the intermittent cause; that candidate's full-suite gate was red.
+No retry, connection warmup, increased timeout or weakened assertion was added.
+
+That candidate's image
+`sha256:e6da88d043874358d2b086026e1866c2b7d57210d1ea576aa5f4961ebb76d11e`
+passes all fourteen Linux Stack/archive tests and the complete three-part Stack,
+four-part compiler, six-part Runtime, and eleven-part CLI/Console owner proofs.
+All workspace TypeScript/Vue checks and all 15 package archive inspections pass
+on the final source. Existing Libraries, Stacks, credentials, defaults and
+Registry data remain unchanged. No commit, publication or visibility change was
+made from this failing full-suite candidate.
+
+Volume-aware Runtime/Stack binding and backups, authenticated Registry operations,
+signature-verification access, compilation and explicit offline copy/verify
+migration remain incomplete.
+Delegated compilation remains unavailable: native ownership closes its locking
+prerequisite, not the complete compiler service/mount and credential wiring.
+Stack planning, activation verification,
+and backups must operate on actual Linux-owned state, not a host-path
+substitute. Merely changing Compose mount syntax does not complete this gate.
+Current host-bind Stack configuration is not compatible with the new guard.
+No existing Library, credential, registered Stack, or user CLI was migrated.
+
+All 15 npm package inspections passed on the October 9 candidate. On October 13
+the dependency audit found seven vulnerable packages (five production and two
+development), including Fastify and the MCP client. Targeted updates within
+existing major versions now produce zero reported npm audit vulnerabilities.
+All workspace type checks, the Linux image build, three owner proof repeats,
+all 15 package archive inspections, dependency boundaries and documentation
+checks pass on the newer dependency graph. That earlier rebuilt Node run passed
+**681 tests, no failures or skips**, including both opt-in Docker worker checks.
+The same 15 tarballs also pass isolated global CLI installation, unrelated-folder
+initialization, version/help output and all six provider-integrity checks on
+Windows and Linux. The user's installed CLI is not replaced. No public release
+is approved by these distribution checks alone.
+
+The expanded offline-command candidate also passes the same 15-tarball global
+installation proof on Windows (Node 26.11.1) and Linux (Node 22), with all six
+installed provider receipts verified. This run preceded the final Runtime
+transport-message and Console-startup changes; it is not a new Node 22.15.0
+Windows tarball certification.
+
+One earlier full-suite run failed the warm Evidence-service fixture after about
+20 seconds; its cause was not established. Twenty fresh-process repeats, a
+subsequent 669-test run and the final 681-test run pass. Safe transport failure
+categories now survive acknowledged cleanup without exposing response bodies,
+source text or worker credentials; reset-connection and invalid-response tests
+cover this diagnostic behavior. This improves diagnosis, not a claim that the
+original intermittent cause was identified or repaired.
+
+The former shared-mount approach failed its stress/performance gates. Initial
+native-storage runs also missed the query budget. Profiling exposed redundant
+source-folder discovery during Library identity checks. Warm reads now use the
+existing manifest-only reader plus applied state; exact active inputs and fresh
+recovery fences remain validated. A new uninstrumented three-round Windows
+comparison against `46e1888` used the existing real MiniSearch harness: eight
+dense synthetic prose/table/code files (128 KiB), producing 184 Evidence records.
+Its identical host, corpus, workload, provider and profile identities matched.
+Compilation measured 1,043 ms candidate versus 1,269 ms baseline; audited warm
+search measured 88.2 versus 107.4 ms, fetch 90.5 versus 106.4 ms, and insufficient
+search 90.4 versus 101.5 ms. An independent three-round repeat after the full
+suite also passes: compilation 1,085 versus 1,155 ms; search 91.9 versus 106.5 ms;
+fetch 98.9 versus 111.2 ms; insufficient search 91.5 versus 110.9 ms. All four
+median measurements in both runs pass the 10% regression budget. Individual
+runs vary with host load; these are bounded lexical comparisons, not TEI/FAISS
+or real-user-corpus certification. The one-record search check separately
+passes at 31.5 versus 40.6 ms with byte-identical responses and retained source,
+configuration, build and logical-lock bytes. No performance gate was waived.
+
+The October 13 three-round comparison on the updated dependency graph also
+passes with identical workload/recipe identities: compile 1,235 versus 1,412 ms;
+audited search 115.5 versus 130.0 ms; fetch 114.1 versus 127.7 ms; insufficient
+search 109.9 versus 130.1 ms (candidate versus committed baseline). All medians
+remain within the 10% budget. This uses the same bounded 184-record MiniSearch
+corpus; it does not certify embedding or large-corpus performance.
+
+Partial recursive-deletion recovery remains intentionally fail-closed when
+remaining bytes no longer match the original receipt. Full lifecycle,
+multi-recipe/two-Runtime proof, signed Collection/key-history review, signed
+knowledge installation, publication audit, and the DKB-only Temp audit remain release
+gates. Policy-blocked older scratch paths are preserved rather than removed
+through a workaround. Nothing has been published, made public, or merged.
 
 ### Safety hardening continuation
 
@@ -1001,7 +2296,8 @@ removed. Package-boundary checks reject their reintroduction.
     ├── runtime-activation.lock.json  active Pipeline and exact build graph
     ├── runtime-selection.transaction.json
     │                                  crash-recovery journal, present only during promotion
-    ├── locks/runtime-mutation.lock   cross-process mutation ownership
+    ├── locks/runtime-mutation.lease.sqlite  native cross-process mutation ownership
+    ├── managed-index-retention/      backing-store-bound import and cleanup receipts
     ├── query-audit.sqlite            query and evidence audit chain
     ├── trace.sqlite                  ordered retrieval diagnostics
     └── cache/                         disposable Runtime cache root
@@ -1099,10 +2395,11 @@ removed. Remote discovery records endpoints and attestations; actual queries
 go directly to the destination Runtime's normal activation and audit gate.
 Public package-boundary checks prevent alternate raw query entry points.
 
-### Latest verification snapshot
+### Prior verification snapshot (HTTP-security checkpoint)
 
-This table replaces older running totals. It distinguishes local regression
-coverage from complete service proof.
+This historical table distinguishes local regression coverage from complete
+service proof. The dated checkpoint sections at the top supersede its running
+totals; these results do not certify later Library recovery edits.
 
 | Gate | Latest result |
 | --- | --- |
@@ -1182,7 +2479,7 @@ newly demonstrated bypass.
 | Runtime audit | Focused proofs cover rejected-before-admission records with honest nullable fields, one terminal outcome, mandatory successful persistence, and cross-process IDs. The final validated snapshot and persisted response form the response boundary; observers run afterward and cannot rewrite it. Later drift fails the next request |
 | Console completeness | Typed source publication, Registry Pipeline selector, exact historical build/Evidence drill-through, and per-build signature checks pass focused tests; inspect real rendered desktop/mobile flows |
 | Pipeline catalog | Resolved-origin requirements, trust-aware coverage, strict versioned client transport, full integrity receipts, and boot-bound compiler identity pass focused tests. Alias resolution must keep exact digest checks and immutable signed labels |
-| Registry job cancellation | Laravel authorization, states, and publication guards pass. A bundled-worker gap remains: the Evidence provider does not forward the abort signal; timeout closes only the Node request, then cleanup can race still-running Python writes. Worker termination must be acknowledged before scratch removal or `cancelled`; lost acknowledgment/restart must preserve unresolved state. Current cooperative-provider tests do not prove this |
+| Registry job cancellation | Superseded by the committed worker-confirmed checkpoint above: the Evidence service acknowledges exact-job termination before cleanup; lost acknowledgment and restart retain unresolved execution state. Real rich-parser cancellation and PID-1 restart proofs pass. This does not certify the separate full signed multi-recipe lifecycle |
 | Evidence identity scope | Corrected and tested: Evidence digests are scoped beneath PackageVersion, so identical empty IR can coexist without changing canonical bytes or signed artifacts. Index-only migration preserves rows/files; live deployment proof remains |
 | Runnable alternate example | The checked MiniSearch example uses explicit parser/chunker provenance and no embedding provider. Public conformance, nonempty retrieval, two Runtimes, scope, corruption rollback, stale-state rejection, removal and retained-build reuse pass through real CLI configuration. It is not a Registry or performance parity proof |
 | SDK conformance parity | Corrected and carried through the full Node rerun: complete compatibility/count/readiness checks, overlapping out-of-scope retrieval fixtures, host-owned health identity and strict booleans, and cleanup of only validated newly created managed test indexes after failure |
@@ -1199,8 +2496,8 @@ newly demonstrated bypass.
    remaining owned Temp cleanup. Candidate delivery still uses the same verified
    archives and fails before publication when a required workspace is private;
    no publication is authorized by this milestone.
-2. Current-image HTTP authentication proof passes. Implement acknowledged
-   worker cancellation, Library crash recovery, and the signing/retention gates
+2. Current-image HTTP authentication and acknowledged worker cancellation
+   proofs pass. Complete Library crash recovery and the signing/retention gates
    listed at the top of this map. Verify exact model consumption and
    host/container profile equality before signed lifecycle proof. Local
    dependency, model, receipt, and scope repairs have passed the integrated

@@ -6,6 +6,7 @@ import { loadDkb } from '@sjshovan/dkb-protocol/manifest.js';
 import type { LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbIndexRuntime, DkbLocatedChunk, DkbParsedDocument, DkbPipelineRecord, DkbProcessor, DkbProvider, DkbProviderOptions, DkbQueryObserver } from './types.js';
 import { DkbSdkError } from './sdk.js';
+import { validateManagedStorageIdentity } from './validation.js';
 import { normalizePluginModule } from './pluginModule.js';
 import { RegistrationDisposer } from './registrationLifecycle.js';
 import { validateServiceRequirements } from './capabilities.js';
@@ -251,6 +252,12 @@ async function exerciseProvider(provider: DkbProvider, verified: DkbPluginVerifi
         }
       };
       try {
+        if (provider.mode === 'managed') {
+          const identity = validateManagedStorageIdentity(await provider.storageIdentity({ options: verified.options }));
+          if (identity !== validateManagedStorageIdentity(await provider.storageIdentity({ options: verified.options }))) {
+            throw new DkbSdkError('invalid_storage_identity', 'Managed storage identity must remain stable for the same backing store.');
+          }
+        }
         const installed = provider.mode === 'managed' ? validateIndexMutationResult(await provider.installPackage(installInput), verified.id) : undefined;
         if (installed?.created && installed.status === 'ready') createdIndexId = installed.indexId;
         if (installed && (installed.status !== 'ready' || installed.documentCount !== 1 || typeof installed.created !== 'boolean')) throw new DkbSdkError('invalid_index_install', `${verified.id} must report ready status, the exact Evidence count, and explicit index ownership.`);
@@ -432,7 +439,7 @@ function validateProviderShape(provider: DkbProvider, pluginId: string): void {
   if (provider.kind === 'index') {
     if (!['packaged', 'managed'].includes(provider.mode) || !provider.format || !provider.capabilities || !['required', 'optional', 'none'].includes(provider.capabilities.vectors)
       || typeof provider.compilePackage !== 'function' || typeof provider.validatePackage !== 'function' || typeof provider.verifyRuntime !== 'function' || typeof provider.openRuntime !== 'function'
-      || (provider.mode === 'managed' && (typeof provider.installPackage !== 'function' || typeof provider.discardPackage !== 'function' || typeof provider.uninstallPackage !== 'function'))) throw missing(pluginId, `complete ${provider.mode} index contract (including exact discardPackage rollback)`);
+      || (provider.mode === 'managed' && (typeof provider.storageIdentity !== 'function' || typeof provider.installPackage !== 'function' || typeof provider.discardPackage !== 'function' || typeof provider.uninstallPackage !== 'function'))) throw missing(pluginId, `complete ${provider.mode} index contract (including storageIdentity and exact discardPackage rollback)`);
   }
   if (provider.kind === 'retrieval' && (!provider.protocol || !provider.capabilities || !['required', 'optional', 'none'].includes(provider.capabilities.vectors) || typeof provider.openRuntime !== 'function')) throw missing(pluginId, 'retrieval protocol, capabilities, and openRuntime()');
 }

@@ -1,6 +1,7 @@
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import path from 'node:path';
 import { captureFileSnapshot, assertFileSnapshotCurrent } from '@sjshovan/dkb-protocol/fileSnapshot.js';
+import { assertLibraryReadFence, captureLibraryReadFence, withLibraryReadSnapshot } from '@sjshovan/dkb-library/mutation.js';
 import type { DkbJsonValue, DkbQueryObserverResult } from '@sjshovan/dkb-pipeline/types.js';
 import { assertQueryContextCurrent, type QueryContext } from '../indexes/queryContext.js';
 import type { DkbRuntimeContext } from './context.js';
@@ -69,6 +70,7 @@ export async function runAuditedRuntimeOperation<T>(options: {
     let instance: DkbRuntimeInstance | undefined;
     let context: QueryContext | undefined;
     let selectionInputs: Awaited<ReturnType<typeof captureFileSnapshot>> | undefined;
+    let libraryFence: Awaited<ReturnType<typeof captureLibraryReadFence>> | undefined;
     let result: DkbAuditedOperationResult<T> | undefined;
     let candidates: DkbQueryAuditCandidate[] = [];
     let citations: DkbQueryAuditCitation[] = [];
@@ -79,15 +81,23 @@ export async function runAuditedRuntimeOperation<T>(options: {
         paths.bindingPath, paths.activationPath, path.join(paths.stateRoot, DKB_RUNTIME_SELECTION_TRANSACTION),
       ]);
       runtimeId = (await maybeReadRuntimeBinding(paths.bindingPath))?.runtimeId ?? null;
-      instance = await readRuntimeState(paths.stateRoot);
-      if (!instance.activation) {
-        throw new DkbError(`Runtime ${instance.runtimeId} has no validated activation. Run dkb runtime refresh ${instance.runtimeId}.`, 'runtime_activation_required');
-      }
-      await assertFileSnapshotCurrent(selectionInputs);
-      context = await getOrOpenRuntimeQueryContext(instance, instance.activation.library.id, options.runtime);
-      if (!context) {
-        throw new DkbError(`Runtime ${instance.runtimeId} cannot open its activated build graph. Run dkb runtime refresh ${instance.runtimeId}.`, 'runtime_activation_required');
-      }
+      const inputs = selectionInputs;
+      const admitted = await withLibraryReadSnapshot(async () => {
+        const instance = await readRuntimeState(paths.stateRoot);
+        if (!instance.activation) {
+          throw new DkbError(`Runtime ${instance.runtimeId} has no validated activation. Run dkb runtime refresh ${instance.runtimeId}.`, 'runtime_activation_required');
+        }
+        await assertFileSnapshotCurrent(inputs);
+        const libraryFence = await captureLibraryReadFence(instance.libraryRoot);
+        const context = await getOrOpenRuntimeQueryContext(instance, instance.activation.library.id, options.runtime);
+        if (!context) {
+          throw new DkbError(`Runtime ${instance.runtimeId} cannot open its activated build graph. Run dkb runtime refresh ${instance.runtimeId}.`, 'runtime_activation_required');
+        }
+        return { instance, context, libraryFence };
+      });
+      // Admission is complete only after the scope's fresh Library barrier.
+      // Provider work must not inherit its immutable read snapshot.
+      ({ instance, context, libraryFence } = admitted);
       result = detachedResult(await options.operation({ instance, context }));
       candidates = bindCandidates(instance, context, result.candidates ?? []);
       citations = bindCitations(instance, context, result.citations ?? []);
@@ -97,13 +107,23 @@ export async function runAuditedRuntimeOperation<T>(options: {
     }
 
     const event = await finalizeQueryAudit(paths.stateRoot, async (): Promise<QueryAuditWriteOptions> => {
-      if (!failed && instance && context && selectionInputs) {
+      if (!failed && instance && context && selectionInputs && libraryFence !== undefined) {
         try {
-          await Promise.all([
-            assertFileSnapshotCurrent(selectionInputs),
-            assertRuntimeLibraryCurrent(instance),
-            assertQueryContextCurrent(context),
-          ]);
+          const inputs = { instance, context, selectionInputs, libraryFence };
+          await withLibraryReadSnapshot(async () => {
+            const validations = await Promise.allSettled([
+              assertFileSnapshotCurrent(inputs.selectionInputs),
+              assertRuntimeLibraryCurrent(inputs.instance),
+              assertQueryContextCurrent(inputs.context),
+              assertLibraryReadFence(inputs.instance.libraryRoot, inputs.libraryFence),
+            ]);
+            // A failed sibling must not leave Library guard/SQLite work running
+            // after the request releases its Runtime query boundary.
+            const rejected = validations.find((validation) => validation.status === 'rejected');
+            if (rejected?.status === 'rejected') throw rejected.reason;
+          });
+          // This independent scope's fresh barrier completes before the audit
+          // options can describe success and the mandatory sink can commit.
         } catch (error) { failure = error; failed = true; }
       }
       return {
@@ -127,8 +147,9 @@ export async function runAuditedRuntimeOperation<T>(options: {
       };
     });
 
-    // This successful commit is the point-in-time response boundary. Later telemetry
-    // cannot revise it; subsequent requests independently reject any later drift.
+    // The final verified snapshot is the point-in-time Library boundary, not the
+    // later audit commit. The audit must succeed before a response is released;
+    // telemetry cannot revise it, and subsequent requests verify fresh state.
     if (context) {
       try { await notifyObservers(paths.stateRoot, context, event); }
       catch (error) { console.error(JSON.stringify({ event: 'dkb.query_observer.failed', auditEventId: event.eventId, message: error instanceof Error ? error.message : String(error) })); }

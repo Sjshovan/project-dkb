@@ -2,6 +2,7 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRetrieveKnowledgeRequest } from '../read/runtime.js';
 import type { DkbReadRequest } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbInstallPlan } from '@sjshovan/dkb-protocol/builds.js';
+import type { DkbRuntimePipelinePreparation } from './pipelinePreparation.js';
 
 export interface DkbRuntimeClientOptions {
   baseUrl?: string;
@@ -67,7 +68,8 @@ export class DkbRuntimeClient {
   switchPipeline(input: {
     target: string;
     registryUrl?: string;
-    grants?: Record<string, { plan: DkbInstallPlan; installGrant: string }>;
+    grants?: Record<string, { plan: DkbInstallPlan; installGrant: string; registryTransportUrl?: string }>;
+    expected?: DkbRuntimePipelinePreparation;
   }) {
     return this.post('/api/runtime/pipeline', input, true);
   }
@@ -120,9 +122,7 @@ export class DkbRuntimeClient {
         redirect: 'error',
       });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-
-      throw new DkbError(`Unable to reach DKB Runtime ${this.baseUrl}: ${detail}`);
+      throw new DkbError(`Unable to reach DKB Runtime ${this.baseUrl}: ${safeTransportFailure(error)}. Check the Runtime endpoint and service status.`, 'runtime_transport_failed');
     }
     const text = await response.text();
     const parsed = parseJson(text);
@@ -131,10 +131,13 @@ export class DkbRuntimeClient {
       const message = parsed && typeof parsed === 'object' && 'message' in parsed
         ? String((parsed as { message: unknown }).message)
         : `${method} ${path} failed with HTTP ${response.status}`;
+      const code = parsed && typeof parsed === 'object' && 'error' in parsed ? (parsed as { error: unknown }).error : undefined;
+      const recoverable = typeof code === 'string' && ['runtime_pipeline_conflict', 'runtime_pipeline_preparation_invalid',
+        'runtime_refresh_required', 'runtime_busy', 'library_busy', 'library_recovery_required'].includes(code) ? code : 'DKB_ERROR';
 
       throw new DkbError(response.status === 401 || response.status === 403
         ? 'Runtime authentication is required. Use the credential for this endpoint through DKB_RUNTIME_READ_TOKEN (knowledge) or DKB_RUNTIME_ADMIN_TOKEN (management).'
-        : redactCredentials(message, [this.adminToken, this.readToken]), response.status === 401 || response.status === 403 ? 'runtime_unauthorized' : 'DKB_ERROR');
+        : redactCredentials(message, [this.adminToken, this.readToken]), response.status === 401 || response.status === 403 ? 'runtime_unauthorized' : recoverable);
     }
 
     if (text && parsed === null) {
@@ -143,6 +146,36 @@ export class DkbRuntimeClient {
 
     return parsed;
   }
+}
+
+// Fetch wraps socket failures in a generic TypeError. Keep known cause classes,
+// not arbitrary messages which may contain request data or credentials.
+function safeTransportFailure(error: unknown): string {
+  const seen = new Set<object>();
+  const pending: unknown[] = [error];
+  const details = new Set<string>();
+  for (let index = 0; index < pending.length && index < 16; index += 1) {
+    const value = pending[index];
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    const failure = value as { name?: unknown; code?: unknown; cause?: unknown; errors?: unknown };
+    const detail = failure.name === 'TimeoutError' ? 'request timed out'
+      : failure.name === 'AbortError' ? 'request cancelled'
+        : typeof failure.code === 'string' ? ({
+          ECONNREFUSED: 'connection refused', ECONNRESET: 'connection reset',
+          ETIMEDOUT: 'connection timed out', ENOTFOUND: 'host not found',
+          EAI_AGAIN: 'host lookup temporarily unavailable', EACCES: 'connection denied',
+          EADDRNOTAVAIL: 'local connection address unavailable', ENETUNREACH: 'network unreachable',
+          EHOSTUNREACH: 'host unreachable', UND_ERR_SOCKET: 'connection closed',
+          UND_ERR_CONNECT_TIMEOUT: 'connection timed out', UND_ERR_HEADERS_TIMEOUT: 'response timed out',
+          CERT_HAS_EXPIRED: 'TLS certificate expired', DEPTH_ZERO_SELF_SIGNED_CERT: 'TLS certificate untrusted',
+          UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS certificate untrusted', ERR_TLS_CERT_ALTNAME_INVALID: 'TLS hostname mismatch',
+        } as Record<string, string>)[failure.code] : undefined;
+    if (typeof detail === 'string' && detail) details.add(detail);
+    if (failure.cause) pending.push(failure.cause);
+    if (Array.isArray(failure.errors)) pending.push(...failure.errors.slice(0, 8));
+  }
+  return details.size ? [...details].join('; ') : 'connection or protocol failure';
 }
 
 function normalizeBaseUrl(value: string): string {

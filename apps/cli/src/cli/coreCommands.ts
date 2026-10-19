@@ -23,10 +23,12 @@ export function registerCoreCommands(program: Command, context: CoreCommandConte
     .option('--registry-url <url>', 'Upstream Registry URL for this Library')
     .option('--no-verify', 'Save the registry URL without validating it first')
     .option('--yes', 'Use defaults without prompting when possible')
+    .option('--if-absent', 'Initialize only a missing Library; preserve all existing configuration')
     .option('--owner <id>', 'Owner id to write into dkb.json')
     .option('--email <email>', 'Owner email to write into dkb.json')
-    .action(async (identity: string | undefined, options: { dir?: string; displayName?: string; registryUrl?: string; verify?: boolean; yes?: boolean; owner?: string; email?: string }) => {
+    .action(async (identity: string | undefined, options: { dir?: string; displayName?: string; registryUrl?: string; verify?: boolean; yes?: boolean; ifAbsent?: boolean; owner?: string; email?: string }) => {
       const initializeLibrary = !identity?.trim();
+      if (options.ifAbsent && !initializeLibrary) throw new DkbError('--if-absent applies only to Library initialization.');
 
       if (initializeLibrary) {
         const { nearestLibraryRoot, libraryManifestForFolder, resolveRegistryInitializationConfiguration } = await import('./serve.js');
@@ -38,6 +40,11 @@ export function registerCoreCommands(program: Command, context: CoreCommandConte
 
         if (manifestPresent && !alreadyInitialized) {
           throw new DkbError(`Cannot initialize a Library because ${manifestPath} already belongs to another entry or is invalid.`);
+        }
+
+        if (alreadyInitialized && options.ifAbsent) {
+          presenter().print({ status: 'already initialized', type: 'library', root, manifest: manifestPath }, summarizeInitResult);
+          return;
         }
 
         const selectedRegistry = await resolveRegistryInitializationConfiguration({

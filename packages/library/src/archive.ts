@@ -11,6 +11,9 @@ import {
 } from '@sjshovan/dkb-protocol/progress.js';
 import { validateCompiledPackage, type ValidatePackageBuildResult } from './builds.js';
 import { isExcludedPortableName } from './packageTree.js';
+import { archiveBudget, validateArchiveLimits, type DkbArchiveLimits } from './archiveBudget.js';
+
+export type { DkbArchiveLimits } from './archiveBudget.js';
 
 export const DKB_PACKAGE_EXTENSION = '.dkbpkg';
 export const DKB_PACKAGE_MEDIA_TYPE = 'application/vnd.dkb.package+gzip';
@@ -77,30 +80,49 @@ export async function packCompiledPackage(root: string, archivePath: string): Pr
 export async function extractDkbPackageArchive(
   archivePath: string,
   targetRoot: string,
-  options: { progress?: DkbProgressReporter } = {},
+  options: { progress?: DkbProgressReporter; limits?: DkbArchiveLimits } = {},
 ): Promise<void> {
+  const limits = validateArchiveLimits(options.limits);
   const target = path.resolve(targetRoot);
   let extracted = 0;
+  let rejection: { error: unknown } | undefined;
 
   options.progress?.(progressStart({ phase: 'extract', label: 'Extract package', total: 0, unit: 'files' }));
   await fs.mkdir(target, { recursive: true });
+  const admit = await archiveBudget(target, limits);
   await tar.x({
     cwd: target,
     file: path.resolve(archivePath),
     preserveOwner: false,
     unlink: true,
-    filter: (entryPath, entry) => isSafeTarEntry(entryPath, entry as unknown),
+    filter: (entryPath, entry) => {
+      if (rejection) return false;
+      try {
+        isSafeTarEntry(entryPath, entry as unknown);
+        admit(entryPath, entry.size);
+        return true;
+      } catch (error) {
+        rejection = { error };
+        return false;
+      }
+    },
     onentry: () => {
+      if (rejection) return;
       extracted += 1;
-      options.progress?.(progressUpdate({
-        phase: 'extract',
-        label: 'Extract package',
-        value: extracted,
-        total: 0,
-        unit: 'files',
-      }));
+      try {
+        options.progress?.(progressUpdate({
+          phase: 'extract',
+          label: 'Extract package',
+          value: extracted,
+          total: 0,
+          unit: 'files',
+        }));
+      } catch (error) { rejection = { error }; }
     },
   });
+  // tar callbacks are not Promise executors. Drain/close the archive before
+  // rejecting so the caller can safely clean its staging directory.
+  if (rejection) throw rejection.error;
   options.progress?.(progressFinish({ phase: 'extract', label: 'Extract package', total: extracted, unit: 'files' }));
 }
 

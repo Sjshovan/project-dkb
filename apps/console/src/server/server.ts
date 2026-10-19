@@ -1,12 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { CONSOLE_ACTIVITY_DEFAULT_PAGE_SIZE, CONSOLE_ACTIVITY_MAX_PAGE_SIZE, ConsoleActivityStore } from './activity.js';
-import { ConsoleCommandRunner, type ConsoleOperation } from './commandRunner.js';
+import { CONSOLE_OPERATION_RETENTION, CONSOLE_RESULT_EXPIRED, ConsoleCommandRunner, ConsoleRunnerBusyError, type ConsoleOperation } from './commandRunner.js';
 import { ConsoleInputError, consoleCommand, parseConsoleCommandInput } from './commandCatalog.js';
 import { consoleStateRoot, removeConsoleProcessState, writeConsoleProcessState } from './processState.js';
 import { ConsoleSecurity, ConsoleSecurityError } from './security.js';
@@ -23,17 +22,19 @@ export interface DkbConsoleServerOptions {
 
 export async function startDkbConsoleServer(options: DkbConsoleServerOptions): Promise<{ app: FastifyInstance; url: string; close(): Promise<void> }> {
   const host = options.host ?? '127.0.0.1';
-  const port = options.port ?? await availableLoopbackPort(7338);
+  let port = options.port ?? 7338;
   const app = Fastify({ logger: false, bodyLimit: 64 * 1024, requestTimeout: 30_000, forceCloseConnections: true });
   await app.register(cookie);
   const webRoot = options.webRoot ?? fileURLToPath(new URL('../web', import.meta.url));
-  const url = `http://${host}:${port}`;
+  let url = `http://${host}:${port}`;
   const controlToken = options.controlToken ?? randomBytes(32).toString('base64url');
-  const security = new ConsoleSecurity({ bootstrapSecret: options.bootstrapSecret, port });
+  let security = new ConsoleSecurity({ bootstrapSecret: options.bootstrapSecret, port });
+  let ready = false;
   const activity = new ConsoleActivityStore(path.join(consoleStateRoot(), 'activity.sqlite'));
   const runner = new ConsoleCommandRunner({ cliEntrypoint: path.resolve(options.cliEntrypoint), cwd: path.resolve(options.cwd ?? process.cwd()), activity });
 
   app.addHook('onRequest', async (request, reply) => {
+    if (!ready) throw new ConsoleSecurityError(503, 'Console is starting. Retry shortly.');
     security.assertRequestBoundary(request);
     reply.headers({
       'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
@@ -240,7 +241,7 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
   app.get<{ Params: { id: string } }>('/api/v1/operations/:id', async (request, reply) => {
     security.session(request);
     const operation = runner.get(request.params.id);
-    if (!operation) return reply.code(404).send({ error: 'Operation not found.' });
+    if (!operation) return reply.code(404).send({ error: CONSOLE_RESULT_EXPIRED });
     return operation;
   });
   app.post<{ Params: { id: string } }>('/api/v1/operations/:id/cancel', async (request, reply) => {
@@ -251,7 +252,7 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
   app.get<{ Params: { id: string } }>('/api/v1/operations/:id/events', async (request, reply) => {
     security.session(request);
     const operation = runner.get(request.params.id);
-    if (!operation) return reply.code(404).send({ error: 'Operation not found.' });
+    if (!operation) return reply.code(404).send({ error: CONSOLE_RESULT_EXPIRED });
     reply.hijack();
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -259,15 +260,32 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
     });
-    const send = (event: unknown) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    let unsubscribe = () => undefined as void;
+    let keepAlive: NodeJS.Timeout | undefined;
+    const cleanup = () => { unsubscribe(); clearInterval(keepAlive); };
+    reply.raw.once('close', cleanup);
+    reply.raw.once('error', cleanup);
+    reply.raw.setTimeout(30_000, () => reply.raw.destroy());
+    const write = (data: string) => {
+      if (reply.raw.destroyed || reply.raw.writableEnded) return;
+      // A slow reader must not create an unbounded Node socket write queue.
+      // Disconnecting this subscription never cancels or retries the command.
+      if (reply.raw.writableLength + Buffer.byteLength(data) > CONSOLE_OPERATION_RETENTION.replayBytes) {
+        cleanup();
+        reply.raw.destroy();
+        return;
+      }
+      reply.raw.write(data);
+    };
+    const send = (event: unknown) => write(`data: ${JSON.stringify(event)}\n\n`);
     for (const event of operation.events) send(event);
+    if (reply.raw.destroyed) return;
     if (['succeeded', 'failed', 'cancelled'].includes(operation.status)) return reply.raw.end();
-    const unsubscribe = runner.subscribe(operation.id, (event) => {
+    unsubscribe = runner.subscribe(operation.id, (event) => {
       send(event);
-      if (event.event === 'completion') { unsubscribe(); clearInterval(keepAlive); reply.raw.end(); }
+      if (event.event === 'completion') { cleanup(); reply.raw.end(); }
     });
-    const keepAlive = setInterval(() => reply.raw.write(': keepalive\n\n'), 15_000);
-    request.raw.once('close', () => { unsubscribe(); clearInterval(keepAlive); });
+    keepAlive = setInterval(() => write(': keepalive\n\n'), 15_000);
   });
 
   app.setNotFoundHandler(async (request, reply) => {
@@ -277,7 +295,9 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
   app.setErrorHandler(async (error, _request, reply) => {
     const statusCode = error instanceof ConsoleSecurityError
       ? error.statusCode
-      : error instanceof ConsoleInputError
+      : error instanceof ConsoleRunnerBusyError
+        ? 503
+        : error instanceof ConsoleInputError
         ? 400
         : error instanceof ConsoleCommandError
           ? 422
@@ -294,8 +314,27 @@ export async function startDkbConsoleServer(options: DkbConsoleServerOptions): P
     await removeConsoleProcessState(process.pid);
     await app.close();
   };
-  await app.listen({ host, port });
-  await writeConsoleProcessState({ format: 'dkb.console-process.v1', pid: process.pid, port, url, controlToken, startedAt: new Date().toISOString() });
+  try {
+    // Bind the real server: probing and releasing a port permits another Console
+    // to claim it before startup. Explicit port requests never silently change.
+    try { await app.listen({ host, port }); }
+    catch (error) {
+      if (options.port !== undefined || !error || typeof error !== 'object' || !('code' in error) || error.code !== 'EADDRINUSE') throw error;
+      await app.listen({ host, port: 0 });
+    }
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Console did not bind a loopback TCP address.');
+    port = address.port;
+    url = `http://${host}:${port}`;
+    security = new ConsoleSecurity({ bootstrapSecret: options.bootstrapSecret, port });
+    await writeConsoleProcessState({ format: 'dkb.console-process.v1', pid: process.pid, port, url, controlToken, startedAt: new Date().toISOString() });
+    ready = true;
+  } catch (error) {
+    await runner.close();
+    activity.close();
+    await app.close();
+    throw error;
+  }
   return { app, url, close };
 }
 
@@ -364,20 +403,4 @@ function records(value: unknown, key: string): Record<string, unknown>[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
   const list = (value as Record<string, unknown>)[key];
   return Array.isArray(list) ? list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
-}
-
-async function availableLoopbackPort(preferred: number): Promise<number> {
-  for (const candidate of [preferred, 0]) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const server = net.createServer();
-      server.once('error', reject);
-      server.listen(candidate, '127.0.0.1', () => {
-        const address = server.address();
-        const resolved = address && typeof address !== 'string' ? address.port : 0;
-        server.close((error) => error ? reject(error) : resolve(resolved));
-      });
-    }).catch(() => 0);
-    if (port > 0) return port;
-  }
-  throw new Error('No loopback port is available for DKB Console.');
 }

@@ -26,8 +26,8 @@ x-registry-environment: &registry-environment
   DKB_REGISTRY_BOOTSTRAP_TOKEN: ${DKB_REGISTRY_BOOTSTRAP_TOKEN:?Run dkb stack up to generate stack secrets}
 
 x-registry-volumes: &registry-volumes
-  - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/registry/data:/data
-  - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/registry/storage:/var/www/html/storage/app/registry
+  - dkb-registry-data:/data
+  - dkb-registry-artifacts:/var/www/html/storage/app/registry
 
 services:
   registry-migrate:
@@ -103,7 +103,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
     volumes:
-      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-context:/context
+      - dkb-compiler-context:/context
       - dkb-compiler-jobs:/jobs
     depends_on:
       dkb-compiler-worker:
@@ -163,10 +163,10 @@ services:
       DKB_FAISS_ALLOWED_ROOTS: /context,/jobs,/state,/library
       DKB_FAISS_MAX_SESSIONS: "64"
     volumes:
-      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/compiler-context:/context
+      - dkb-compiler-context:/context
       - dkb-compiler-jobs:/jobs
-      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
-      - ${DKB_LIBRARY_HOST_PATH:?Run dkb stack up to select a Library}:/library
+      - dkb-runtime-state:/state
+      - dkb-library:/library
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,json; assert json.load(urllib.request.urlopen('http://127.0.0.1:8092/health'))['ok']"]
       interval: 5s
@@ -226,8 +226,8 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${DKB_MEILI_MASTER_KEY}
     volumes:
-      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/runtime:/state
-      - ${DKB_LIBRARY_HOST_PATH:?Run dkb stack up to select a Library}:/library
+      - dkb-runtime-state:/state
+      - dkb-library:/library
     ports:
       - "127.0.0.1:${DKB_RUNTIME_PORT:-7331}:7331"
     depends_on:
@@ -260,7 +260,7 @@ services:
     ports:
       - "${DKB_MEILI_PORT:-7700}:7700"
     volumes:
-      - ${DKB_STACK_STATE:?DKB_STACK_STATE is required}/meilisearch:/meili_data
+      - dkb-meilisearch:/meili_data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7700/health"]
       interval: 5s
@@ -268,6 +268,30 @@ services:
       retries: 24
 
 volumes:
+  dkb-library:
+    external: true
+    name: ${DKB_LIBRARY_VOLUME:?Run dkb stack up to provision Linux-owned storage}
+  dkb-runtime-state:
+    external: true
+    name: ${DKB_RUNTIME_VOLUME:?Run dkb stack up to provision Linux-owned storage}
+  dkb-compiler-context:
+    external: true
+    name: ${DKB_COMPILER_CONTEXT_VOLUME:?Run dkb stack up to provision Linux-owned storage}
+  dkb-registry-data:
+    external: true
+    name: ${DKB_REGISTRY_DATA_VOLUME:?Run dkb stack up to provision Linux-owned storage}
+  dkb-registry-artifacts:
+    external: true
+    name: ${DKB_REGISTRY_ARTIFACTS_VOLUME:?Run dkb stack up to provision Linux-owned storage}
   dkb-compiler-jobs:
+    external: true
+    name: ${DKB_COMPILER_JOBS_VOLUME:?Run dkb stack up to provision Linux-owned storage}
+  dkb-meilisearch:
+    external: true
+    name: ${DKB_MEILISEARCH_VOLUME:?Run dkb stack up to provision Linux-owned storage}
   dkb-fastembed-cache:
+    external: true
+    name: ${DKB_FASTEMBED_CACHE_VOLUME:?Run dkb stack up to provision Linux-owned storage}
   dkb-tei-cache:
+    external: true
+    name: ${DKB_TEI_CACHE_VOLUME:?Run dkb stack up to provision Linux-owned storage}

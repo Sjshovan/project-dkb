@@ -1,17 +1,16 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { libraryStateIdentity, type DkbLibraryStateIdentity } from '@sjshovan/dkb-library/state.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { canonicalJson } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import { validateRuntimeActivation, validateRuntimeBinding } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import { withRuntimeMutation } from '@sjshovan/dkb-runtime/runtime/mutation.js';
-import { maybeReadRuntimeBindingFromStateRoot, maybeReadRuntimeActivation, runtimePaths } from '@sjshovan/dkb-runtime/runtime/state.js';
+import { inspectRuntimeSelection } from '@sjshovan/dkb-runtime/runtime/state.js';
 import type { DkbDistribution } from '@sjshovan/dkb-pipeline/host.js';
 import { readDkbStack, readDkbStackControl, stackName, stackStateRoot, writeAtomic } from './context.js';
 import { composeContainerIds, runCompose, runComposeControl } from './docker.js';
 import type { DkbStackContext } from './types.js';
+import { withStackControl } from './control.js';
 
 const FILES = ['stack.env', 'compiler-context/.dkb/config.json', 'runtime/.dkb/config.json'] as const;
 const JOURNAL = 'startup-recovery.json';
@@ -38,7 +37,7 @@ export interface StackStartup {
 export async function withStackStartup<T>(distribution: DkbDistribution, name: string, operation: (startup: StackStartup) => Promise<T>): Promise<T> {
   const root = path.join(stackStateRoot(), stackName(name));
   const runtimeRoot = path.join(root, 'runtime');
-  return withStartupLock(root, async () => {
+  return withStackControl(name, async () => {
     const recoveryPath = path.join(root, JOURNAL);
     const pending = await readOptional(recoveryPath);
     if (pending !== null) {
@@ -140,8 +139,7 @@ async function assertUnchangedSelection(root: string, previous: Selection): Prom
 
 const sameSelection = (left: Selection, right: Selection) => left.binding === right.binding && left.activation === right.activation;
 async function readSelection(root: string): Promise<Selection> {
-  const binding = await maybeReadRuntimeBindingFromStateRoot(root);
-  const activation = await maybeReadRuntimeActivation(runtimePaths(root).activationPath);
+  const { binding, activation } = await inspectRuntimeSelection(root);
   return { binding: binding === null ? null : canonicalJson(binding), activation: activation === null ? null : canonicalJson(activation) };
 }
 async function readFiles(root: string): Promise<Files> {
@@ -177,40 +175,3 @@ function parseRecovery(source: string): Recovery {
   return value;
 }
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-
-async function withStartupLock<T>(root: string, action: () => Promise<T>): Promise<T> {
-  await fs.mkdir(root, { recursive: true });
-  const lock = path.join(root, 'startup.lock');
-  const token = randomUUID();
-  const runtimeRoot = path.join(root, 'runtime');
-  // Reclamation and acquisition use the same cross-process Runtime gate. Two
-  // contenders must not both remove an abandoned lease after one has replaced it.
-  const handle = await withRuntimeMutation(runtimeRoot, async () => {
-    let opened: Awaited<ReturnType<typeof fs.open>>;
-    try { opened = await fs.open(lock, 'wx', 0o600); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const owner = await readOptional(lock).then((source) => { try { return JSON.parse(source ?? '') as { pid?: number; host?: string }; } catch { return null; } });
-      if (!owner || owner.host !== os.hostname() || !Number.isInteger(owner.pid) || Number(owner.pid) < 1) throw new DkbError(`Stack startup lock ${lock} has an unknown owner; inspect it before retrying.`, 'stack_busy');
-      let abandoned = false;
-      try { process.kill(owner.pid!, 0); } catch (probeError) { abandoned = (probeError as NodeJS.ErrnoException).code === 'ESRCH'; }
-      if (!abandoned) throw new DkbError('Another process is starting this Stack. Wait for it to finish and retry.', 'stack_busy');
-      await fs.rm(lock);
-      opened = await fs.open(lock, 'wx', 0o600);
-    }
-    try { await opened.writeFile(JSON.stringify({ token, pid: process.pid, host: os.hostname() })); } catch (error) {
-      await opened.close();
-      await fs.rm(lock);
-      throw error;
-    }
-    return opened;
-  });
-  try {
-    return await action();
-  } finally {
-    await handle.close();
-    await withRuntimeMutation(runtimeRoot, async () => {
-      const owner = await readOptional(lock).then((source) => { try { return JSON.parse(source ?? '') as { token?: string }; } catch { return null; } });
-      if (owner?.token === token) await fs.rm(lock);
-    });
-  }
-}

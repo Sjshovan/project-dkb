@@ -4,7 +4,7 @@ import { validateCompiledPackage, type ValidatePackageBuildResult } from '@sjsho
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import { applyLibraryLock, maybeReadLibraryLock, readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { syncLibrary } from '@sjshovan/dkb-library/resolver.js';
-import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import { assertLibraryMutation, promoteLibraryPath, removeLibraryPath, withLibraryMutation, writeLibraryMutationFile } from '@sjshovan/dkb-library/mutation.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
 import { parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
@@ -12,7 +12,8 @@ import { loadDkbPackage } from '@sjshovan/dkb-protocol/manifest.js';
 import { progressFinish, progressStart, progressUpdate, type DkbProgressReporter } from '@sjshovan/dkb-protocol/progress.js';
 import type { DkbPackageReceipt, LoadedDkb } from '@sjshovan/dkb-protocol/types.js';
 import type { DkbIndexMutationResult } from '@sjshovan/dkb-pipeline/types.js';
-import { cleanupRuntimeIndexPackage, verifyRuntimeIndex } from '../providers/runtimeIndex.js';
+import { verifyRuntimeIndex } from '../providers/runtimeIndex.js';
+import type { ManagedIndexCleanup } from '../providers/managedIndexRetention.js';
 import type { DkbRuntimeContext } from './context.js';
 import { refreshRuntimeCatalogFromInstalledArtifacts } from './catalog.js';
 import { ensureRuntimeState, type DkbRuntimeInstance } from './activation.js';
@@ -24,7 +25,6 @@ import {
   maybeReadJsonObject,
   pathExists as exists,
   safeRuntimeId as safeId,
-  writeJsonAtomic,
 } from './paths.js';
 import { installedDkbs, runtimeLibraryId } from './libraryState.js';
 
@@ -57,7 +57,8 @@ export interface ImportCompiledDkbArtifactResult {
   packagePath: string;
   validation: ValidatePackageBuildResult;
   catalog: Awaited<ReturnType<typeof refreshRuntimeCatalogFromInstalledArtifacts>>;
-  search: { upsert: DkbIndexMutationResult; removedPrevious?: DkbIndexMutationResult };
+  search: { upsert: DkbIndexMutationResult };
+  indexCleanup?: ManagedIndexCleanup;
   warning?: string;
 }
 
@@ -72,25 +73,11 @@ export async function importCompiledDkbArtifactIntoRuntime(
   let activation: Awaited<ReturnType<typeof refreshRuntimeActivation>> | null = null;
   try {
     activation = await refreshRuntimeActivation({ runtime: options.runtime, stateRoot: runtime.stateRoot });
+    warning = activation.warning;
   } catch (error) {
     warning = `Library installation succeeded, but Runtime ${runtime.runtimeId} is stale: ${error instanceof Error ? error.message : String(error)}. Run dkb runtime refresh ${runtime.runtimeId}.`;
   }
 
-  let removedPrevious: DkbIndexMutationResult | undefined;
-  if (installed.replaced) {
-    removedPrevious = (await cleanupRuntimeIndexPackage({
-      runtime: options.runtime,
-      runtimeStateRoot: runtime.stateRoot,
-      libraryRoot: runtime.libraryRoot,
-      libraryId: await runtimeLibraryId(runtime),
-      packageId: installed.replaced.id,
-      packageVersion: installed.replaced.version,
-      target: runtime.target,
-    }).catch((error) => {
-      warning ??= `Knowledge was installed, but managed-index cleanup needs attention: ${error instanceof Error ? error.message : String(error)}`;
-      return undefined;
-    })) ?? undefined;
-  }
   invalidateRuntimeQuerySnapshot(runtime.stateRoot);
   const refreshed = await ensureRuntimeState(runtime.stateRoot);
   const catalog = refreshed.activation
@@ -110,9 +97,9 @@ export async function importCompiledDkbArtifactIntoRuntime(
         status: 'ready',
         ...(warning ? { warning } : {}),
       },
-      ...(removedPrevious ? { removedPrevious } : {}),
     },
-    ...(warning || removedPrevious?.warning ? { warning: warning ?? removedPrevious?.warning } : {}),
+    ...(activation?.indexCleanup ? { indexCleanup: activation.indexCleanup } : {}),
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -121,21 +108,19 @@ export async function importCompiledDkbArtifactIntoLibrary(
   libraryRoot: string,
 ): Promise<ImportCompiledDkbArtifactIntoLibraryResult> {
   const resolvedLibraryRoot = path.resolve(libraryRoot);
-  return withDkbFileLock(resolvedLibraryRoot, 'library-mutation', () => importCompiledDkbArtifactIntoLibraryUnlocked(options, resolvedLibraryRoot));
+  return withLibraryMutation(resolvedLibraryRoot, () => importCompiledDkbArtifactIntoLibraryUnlocked(options, resolvedLibraryRoot));
 }
 
 /**
- * Imports a package while the caller owns the Library mutation lock.
- *
- * This is intentionally separate from the normal lock-owning entrypoint so
- * multi-package transactions can remain atomic without attempting to acquire
- * the same cross-process lock recursively.
+ * Imports a package as part of the caller's durable Library transaction.
  */
 export async function importCompiledDkbArtifactIntoLibraryWithinMutation(
   options: ImportCompiledDkbArtifactIntoLibraryOptions,
   libraryRoot: string,
 ): Promise<ImportCompiledDkbArtifactIntoLibraryResult> {
-  return importCompiledDkbArtifactIntoLibraryUnlocked(options, path.resolve(libraryRoot));
+  const root = path.resolve(libraryRoot);
+  await assertLibraryMutation(root);
+  return importCompiledDkbArtifactIntoLibraryUnlocked(options, root);
 }
 
 async function importCompiledDkbArtifactIntoLibraryUnlocked(
@@ -182,9 +167,6 @@ async function importCompiledDkbArtifactIntoLibraryUnlocked(
     : localEntryPath(libraryRoot, id);
   const existing = await maybeInstalledPackage(packagePath, id);
   const tempPath = await copyCompiledArtifactToInstallTemp(sourceRoot, libraryRoot, id);
-  const libraryManifestPath = path.join(libraryRoot, 'dkb.json');
-  const previousManifest = await fs.readFile(libraryManifestPath, 'utf8');
-  const previousLock = await maybeReadLibraryLock(libraryRoot);
 
   try {
     const stagedValidation = await validateCompiledPackage(tempPath);
@@ -202,7 +184,7 @@ async function importCompiledDkbArtifactIntoLibraryUnlocked(
 
     let finalValidation!: ValidatePackageBuildResult;
     options.progress?.(progressStart({ phase: 'activate', label: 'Install package in Library', total: 2, unit: 'steps' }));
-    await promotePackagePath(tempPath, packagePath, options.force, async () => {
+    await promotePackagePath(libraryRoot, tempPath, packagePath, options.force, async () => {
       finalValidation = await validateCompiledPackage(packagePath);
       if (!finalValidation.ok) throw new DkbError(`Installed compiled artifact validation failed at ${packagePath}`);
       options.progress?.(progressUpdate({ phase: 'activate', label: 'Install package in Library', value: 1, total: 2, unit: 'steps' }));
@@ -233,8 +215,6 @@ async function importCompiledDkbArtifactIntoLibraryUnlocked(
     };
   } catch (error) {
     await fs.rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
-    await fs.writeFile(libraryManifestPath, previousManifest, 'utf8').catch(() => undefined);
-    await restoreLibraryLock(libraryRoot, previousLock).catch(() => undefined);
     throw error;
   }
 }
@@ -246,27 +226,16 @@ export async function removeDkbFromRuntime(
 ) {
   const runtime = await ensureRuntimeState(stateRoot);
   await closeRuntimeQuerySnapshot(runtime.stateRoot);
-  const removed = await removeDkbFromLibrary(id, runtime.libraryRoot, { progress: options.progress });
+  await removeDkbFromLibrary(id, runtime.libraryRoot, { progress: options.progress });
 
   let warning: string | undefined;
   let refreshed = null as Awaited<ReturnType<typeof refreshRuntimeActivation>> | null;
   try {
     refreshed = await refreshRuntimeActivation({ runtime: options.runtime, stateRoot: runtime.stateRoot });
+    warning = refreshed.warning;
   } catch (error) {
     warning = `Library removal succeeded, but Runtime ${runtime.runtimeId} is stale: ${error instanceof Error ? error.message : String(error)}. Run dkb runtime refresh ${runtime.runtimeId}.`;
   }
-  const removedIndex = await cleanupRuntimeIndexPackage({
-    runtime: options.runtime,
-    runtimeStateRoot: runtime.stateRoot,
-    libraryRoot: runtime.libraryRoot,
-    libraryId: await runtimeLibraryId(runtime),
-    packageId: removed.id,
-    packageVersion: removed.version,
-    target: runtime.target,
-  }).catch((error) => {
-    warning ??= `Knowledge was removed, but managed-index cleanup needs attention: ${error instanceof Error ? error.message : String(error)}`;
-    return null;
-  });
   invalidateRuntimeQuerySnapshot(runtime.stateRoot);
 
   let remaining: DkbIndexMutationResult | null = null;
@@ -285,8 +254,9 @@ export async function removeDkbFromRuntime(
     status: 'removed',
     id,
     libraryPath: runtime.libraryRoot,
-    search: { removed: removedIndex ? [removedIndex] : [], remaining },
-    ...(warning || removedIndex?.warning ? { warning: warning ?? removedIndex?.warning } : {}),
+    search: { remaining },
+    ...(refreshed?.indexCleanup ? { indexCleanup: refreshed.indexCleanup } : {}),
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -296,7 +266,7 @@ export async function removeDkbFromLibrary(
   options: { progress?: DkbProgressReporter } = {},
 ): Promise<{ status: 'removed'; id: string; version: string; libraryPath: string }> {
   const resolvedLibraryRoot = path.resolve(libraryRoot);
-  return withDkbFileLock(resolvedLibraryRoot, 'library-mutation', async () => {
+  return withLibraryMutation(resolvedLibraryRoot, async () => {
     const identity = parseDkbIdentity(id, 'DKB identity').identity;
     const state = await readLibraryState(resolvedLibraryRoot);
     const stateEntry = state.entries[identity];
@@ -305,26 +275,13 @@ export async function removeDkbFromLibrary(
     if (blockers.length > 0) throw new DkbError(`Cannot uninstall ${identity}; it is required by ${blockers.join(', ')}`);
     const packageRoot = path.resolve(resolvedLibraryRoot, stateEntry.path);
     const installed = await loadDkbPackage(packageRoot, identity);
-    const uninstallRoot = path.join(resolvedLibraryRoot, '.dkb', 'tmp', `uninstall-${safeId(identity)}-${process.pid}-${Date.now().toString(36)}`);
-    const stagedPath = stateEntry.source === 'registry' ? path.join(uninstallRoot, path.basename(packageRoot)) : null;
-    let mutation: { rollback: () => Promise<void> } | null = null;
     options.progress?.(progressStart({ phase: 'uninstall', label: 'Remove package from Library', total: 2, unit: 'steps' }));
-    try {
-      if (stagedPath) {
-        await fs.mkdir(uninstallRoot, { recursive: true });
-        await fs.rename(packageRoot, stagedPath);
-      }
-      mutation = await removeLibraryDependencyEntry(resolvedLibraryRoot, identity);
-      options.progress?.(progressUpdate({ phase: 'uninstall', label: 'Remove package from Library', value: 1, total: 2, unit: 'steps' }));
-      await fs.rm(uninstallRoot, { recursive: true, force: true });
-      options.progress?.(progressUpdate({ phase: 'uninstall', label: 'Remove package from Library', value: 2, total: 2, unit: 'steps' }));
-      options.progress?.(progressFinish({ phase: 'uninstall', label: 'Remove package from Library', total: 2, unit: 'steps' }));
-      return { status: 'removed', id: identity, version: installed.manifest.version, libraryPath: resolvedLibraryRoot };
-    } catch (error) {
-      if (stagedPath && await exists(stagedPath)) await fs.rename(stagedPath, packageRoot).catch(() => undefined);
-      await mutation?.rollback().catch(() => undefined);
-      throw error;
-    }
+    if (stateEntry.source === 'registry') await removeLibraryPath(resolvedLibraryRoot, packageRoot);
+    await removeLibraryDependencyEntry(resolvedLibraryRoot, identity);
+    options.progress?.(progressUpdate({ phase: 'uninstall', label: 'Remove package from Library', value: 1, total: 2, unit: 'steps' }));
+    options.progress?.(progressUpdate({ phase: 'uninstall', label: 'Remove package from Library', value: 2, total: 2, unit: 'steps' }));
+    options.progress?.(progressFinish({ phase: 'uninstall', label: 'Remove package from Library', total: 2, unit: 'steps' }));
+    return { status: 'removed', id: identity, version: installed.manifest.version, libraryPath: resolvedLibraryRoot };
   });
 }
 
@@ -345,7 +302,7 @@ async function activateLocalImports(libraryRoot: string, identities: string[]): 
   for (const identity of identities) {
     roots[identity] = { path: path.relative(libraryRoot, localEntryPath(libraryRoot, identity)).replace(/\\/g, '/') };
   }
-  await writeJsonAtomic(manifestPath, { ...manifest, roots });
+  await writeLibraryMutationFile(libraryRoot, manifestPath, `${JSON.stringify({ ...manifest, roots }, null, 2)}\n`);
   await syncLibrary(libraryRoot);
 }
 
@@ -360,30 +317,18 @@ async function maybeInstalledPackage(packagePath: string, id: string): Promise<{
 
 async function copyCompiledArtifactToInstallTemp(sourceRoot: string, libraryRoot: string, id: string): Promise<string> {
   const tempRoot = path.join(libraryRoot, '.dkb', 'tmp');
-  const tempPath = path.join(tempRoot, `install-${safeId(id)}-${process.pid}-${Date.now().toString(36)}`);
   await fs.mkdir(tempRoot, { recursive: true });
-  await fs.rm(tempPath, { recursive: true, force: true });
+  const tempPath = await fs.mkdtemp(path.join(tempRoot, `install-${safeId(id)}-`));
   await fs.cp(sourceRoot, tempPath, { recursive: true, filter: (source) => !isEphemeralDkbStatePath(sourceRoot, source) });
   return tempPath;
 }
 
-async function promotePackagePath<T>(tempPath: string, packagePath: string, force: boolean | undefined, operation: () => Promise<T>): Promise<T> {
-  const backupPath = `${packagePath}.replace-${process.pid}-${Date.now().toString(36)}`;
-  await fs.mkdir(path.dirname(packagePath), { recursive: true });
+async function promotePackagePath<T>(libraryRoot: string, tempPath: string, packagePath: string, force: boolean | undefined, operation: () => Promise<T>): Promise<T> {
   if (await exists(packagePath)) {
     if (!force) throw new DkbError(`Runtime DKB already exists: ${path.basename(packagePath)}. Use force to replace it.`);
-    await fs.rename(packagePath, backupPath);
   }
-  try {
-    await fs.rename(tempPath, packagePath);
-    const result = await operation();
-    await fs.rm(backupPath, { recursive: true, force: true });
-    return result;
-  } catch (error) {
-    await fs.rm(packagePath, { recursive: true, force: true });
-    if (await exists(backupPath)) await fs.rename(backupPath, packagePath);
-    throw error;
-  }
+  await promoteLibraryPath(libraryRoot, tempPath, packagePath);
+  return operation();
 }
 
 async function activateRegistryImport(
@@ -400,10 +345,10 @@ async function activateRegistryImport(
   if (!receipt.payload.lock.packages[identity]) throw new DkbError(`Package receipt does not contain package lock entry: ${identity}`);
   const previous = await maybeReadLibraryLock(root);
   const now = new Date().toISOString();
-  await writeJsonAtomic(manifestPath, {
+  await writeLibraryMutationFile(root, manifestPath, `${JSON.stringify({
     ...manifest,
     roots: { ...(isRecord(manifest.roots) ? manifest.roots : {}), [identity]: { version: receipt.package.version } },
-  });
+  }, null, 2)}\n`);
   await applyLibraryLock(root, {
     library: { name: String(manifest.name) },
     generation: (previous?.generation ?? 0) + 1,
@@ -431,43 +376,17 @@ function requiredRegistryUrl(value: string | undefined): string {
   return normalized;
 }
 
-async function removeLibraryDependencyEntry(root: string, id: string): Promise<{ rollback: () => Promise<void> }> {
+async function removeLibraryDependencyEntry(root: string, id: string): Promise<void> {
   const manifestPath = path.join(root, 'dkb.json');
   const manifest = await maybeReadJsonObject(manifestPath);
   const previousLock = await maybeReadLibraryLock(root);
   if (!manifest || manifest.type !== 'library' || !isRecord(manifest.roots) || !previousLock?.entries[id]) {
     throw new DkbError(`Runtime DKB is not installed: ${id}`);
   }
-  const previousManifest = await fs.readFile(manifestPath, 'utf8');
   const roots = { ...manifest.roots };
   delete roots[id];
   const entries = { ...previousLock.entries };
   delete entries[id];
-  const rollback = async () => {
-    await fs.writeFile(manifestPath, previousManifest, 'utf8');
-    await applyLibraryLock(root, previousLock);
-  };
-  try {
-    await writeJsonAtomic(manifestPath, { ...manifest, roots });
-    await applyLibraryLock(root, { ...previousLock, generation: previousLock.generation + 1, entries, resolvedAt: new Date().toISOString() });
-  } catch (error) {
-    await rollback().catch(() => undefined);
-    throw error;
-  }
-  return { rollback };
-}
-
-async function restoreLibraryLock(root: string, lock: Awaited<ReturnType<typeof maybeReadLibraryLock>>): Promise<void> {
-  if (lock) {
-    await applyLibraryLock(root, lock);
-    return;
-  }
-  const manifest = await maybeReadJsonObject(path.join(root, 'dkb.json'));
-  await applyLibraryLock(root, {
-    library: { name: String(manifest?.name ?? 'DKB Library') },
-    generation: 0,
-    entries: {},
-    resolvedAt: new Date().toISOString(),
-  });
-  await fs.rm(path.join(root, 'dkb-lock.json'), { force: true });
+  await writeLibraryMutationFile(root, manifestPath, `${JSON.stringify({ ...manifest, roots }, null, 2)}\n`);
+  await applyLibraryLock(root, { ...previousLock, generation: previousLock.generation + 1, entries, resolvedAt: new Date().toISOString() });
 }

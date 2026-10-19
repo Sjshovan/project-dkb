@@ -24,6 +24,7 @@ import {
 } from '@sjshovan/dkb-library/signing.js';
 import {
   attachSignedBuildChain,
+  installDkbFromLibraryGrant,
   installDkbFromRuntimeGrant,
   materializeDkbInstallPlan,
   parseRegistryTrustedKeys,
@@ -355,7 +356,12 @@ test('an alternate Evidence Profile attaches only through its exact signed insta
   assert.equal((await fs.readdir(path.dirname(installPlanReceiptPath(packageRoot, stableHash(plan))))).length, 2);
 });
 
-test('Runtime uses its Registry transport URL without replacing the installed public origin', async (t) => {
+for (const destination of ['Runtime', 'Library']) {
+  test(`${destination} grant installation preserves the signed public origin and reuses source for another build`,
+    t => proveGrantedDestination(t, destination));
+}
+
+async function proveGrantedDestination(t, destination) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dkb-registry-transport-origin-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const sourceRoot = path.join(root, 'source');
@@ -491,6 +497,7 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
     [plan.artifacts[2].url, { path: retrievalArchive, artifact: plan.artifacts[2] }],
   ]);
   const requests = [];
+  let downloadFailure;
   const server = http.createServer(async (request, response) => {
     requests.push({ url: request.url, authorization: request.headers.authorization });
     if (request.url === '/.well-known/dkb-registry-keys.json') {
@@ -500,8 +507,11 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
     }
     const layer = layerFiles.get(request.url);
     if (layer) {
+      if (downloadFailure === 'expired') { response.writeHead(403).end('grant expired'); return; }
       response.setHeader('content-type', layer.artifact.mediaType);
-      response.end(await fs.readFile(layer.path));
+      const bytes = await fs.readFile(layer.path);
+      if (downloadFailure === 'corrupt') bytes[0] ^= 1;
+      response.end(bytes);
       return;
     }
     response.statusCode = 404;
@@ -516,20 +526,35 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
   assert.equal(typeof address, 'object');
   const transportUrl = `http://127.0.0.1:${address.port}`;
   const publicOrigin = 'https://registry.example.test';
-  await ensureRuntimeState(runtimeRoot, {
-    libraryRoot,
-    runtimeId: 'transport-origin-runtime',
-    target: 'transport-proof',
+  if (destination === 'Runtime') {
+    await ensureRuntimeState(runtimeRoot, {
+      libraryRoot,
+      runtimeId: 'transport-origin-runtime',
+      target: 'transport-proof',
+    });
+  }
+  const installGranted = (input) => destination === 'Runtime'
+    ? installDkbFromRuntimeGrant({ runtime: DEFAULT_DKB_RUNTIME_CONTEXT, runtimeRoot, ...input })
+    : installDkbFromLibraryGrant({ libraryRoot, ...input });
+  const request = { registryUrl: publicOrigin, registryTransportUrl: transportUrl, installGrant: `dkb_grant_${'g'.repeat(64)}`, plan };
+  const previousToken = process.env.DKB_REGISTRY_TOKEN;
+  process.env.DKB_REGISTRY_TOKEN = 'host-bearer-must-not-be-used';
+  t.after(() => {
+    if (previousToken === undefined) delete process.env.DKB_REGISTRY_TOKEN;
+    else process.env.DKB_REGISTRY_TOKEN = previousToken;
   });
+  for (const invalid of [{ installGrant: '' }, { installGrant: 'secret\r\nheader' }, { installGrant: 's'.repeat(4097) },
+    { registryUrl: 'https://secret-user:secret-password@registry.example.test' },
+    { registryTransportUrl: `${transportUrl}?secret=must-not-leak` }]) {
+    await assert.rejects(installGranted({ ...request, ...invalid }), error => {
+      assert.equal(error.code, 'invalid_install_grant');
+      assert.doesNotMatch(error.message, /secret-user|secret-password|must-not-leak|secret\r/u);
+      return true;
+    });
+  }
+  assert.equal(requests.length, 0, 'Invalid grant envelopes never contact a service');
 
-  const installed = await installDkbFromRuntimeGrant({
-    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-    runtimeRoot,
-    registryUrl: publicOrigin,
-    registryTransportUrl: transportUrl,
-    installGrant: `dkb_grant_${'g'.repeat(64)}`,
-    plan,
-  });
+  const installed = await installGranted(request);
 
   assert.equal(installed.status, 'installed');
   assert.equal((await readLibraryState(libraryRoot)).entries[packageIdentity.id].registryUrl, publicOrigin);
@@ -537,20 +562,25 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
   process.env.DKB_REGISTRY_URL = 'http://registry-web:8000';
   let runtimeServer;
   try {
-    runtimeServer = await serveDkbRuntime({
-      adminToken: 'signed-discovery-admin',
-      readAccess: 'public-read',
-      runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-      stateRoot: runtimeRoot,
-      host: '127.0.0.1',
-      port: 0,
-    });
-    const runtimeAddress = runtimeServer.address();
-    assert.equal(typeof runtimeAddress, 'object');
-    const discovery = await fetch(`http://127.0.0.1:${runtimeAddress.port}/.well-known/dkb.json`).then((response) => response.json());
-    const advertised = discovery.packages.find((item) => item.id === packageIdentity.id);
-    assert.equal(advertised.install.registryUrl, publicOrigin);
-    assert.equal(JSON.stringify(discovery).includes('registry-web:8000'), false);
+    if (destination === 'Runtime') {
+      runtimeServer = await serveDkbRuntime({
+        adminToken: 'signed-discovery-admin',
+        readAccess: 'public-read',
+        runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
+        stateRoot: runtimeRoot,
+        host: '127.0.0.1',
+        port: 0,
+      });
+      const runtimeAddress = runtimeServer.address();
+      assert.equal(typeof runtimeAddress, 'object');
+      const discovery = await fetch(`http://127.0.0.1:${runtimeAddress.port}/.well-known/dkb.json`).then((response) => response.json());
+      const advertised = discovery.packages.find((item) => item.id === packageIdentity.id);
+      assert.equal(advertised.install.registryUrl, publicOrigin);
+      assert.equal(JSON.stringify(discovery).includes('registry-web:8000'), false);
+    } else {
+      await assert.rejects(fs.access(runtimeRoot), { code: 'ENOENT' });
+      await assert.rejects(fs.access(path.join(libraryRoot, '.dkb/runtime.lock.json')), { code: 'ENOENT' });
+    }
   } finally {
     if (runtimeServer) {
       await new Promise((resolve, reject) => runtimeServer.close((error) => error ? reject(error) : resolve()));
@@ -564,7 +594,53 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
     '/api/layers/evidence',
     '/api/layers/retrieval',
   ]);
+  assert.equal(requests[0].authorization, undefined, 'Public key lookup does not inherit host credentials');
   assert.equal(requests.slice(1).every((request) => request.authorization === `DKB-Install-Grant dkb_grant_${'g'.repeat(64)}`), true);
+
+  const replayBegin = requests.length;
+  assert.equal((await installGranted(request)).status, 'already_installed');
+  assert.deepEqual(requests.slice(replayBegin).map(item => item.url), ['/.well-known/dkb-registry-keys.json']);
+
+  const installedState = await readLibraryState(libraryRoot);
+  for (const field of ['evidenceDigest', 'retrievalBuildDigest']) {
+    const replacementDigest = stableHash({ requested: field, replacement: true });
+    const replacementEvidencePayload = {
+      ...evidencePayload,
+      ...(field === 'evidenceDigest' ? { evidenceDigest: replacementDigest } : {}),
+    };
+    const replacementEvidenceReceipt = layerReceipt('dkb.evidence.receipt', replacementEvidencePayload, sourceReceiptHash, sourceDigest);
+    const replacementEvidenceReceiptHash = stableHash(replacementEvidenceReceipt);
+    const replacementRetrievalPayload = {
+      ...retrievalPayload,
+      evidenceReceiptHash: replacementEvidenceReceiptHash,
+      [field]: replacementDigest,
+    };
+    const replacementRetrievalReceipt = layerReceipt('dkb.retrieval.receipt', replacementRetrievalPayload, replacementEvidenceReceiptHash, sourceDigest);
+    const replacementPayload = {
+      ...payload,
+      [field]: replacementDigest,
+      artifacts: [
+        payload.artifacts[0],
+        { ...payload.artifacts[1], receiptHash: replacementEvidenceReceiptHash, receipt: replacementEvidenceReceipt },
+        { ...payload.artifacts[2], receiptHash: stableHash(replacementRetrievalReceipt), receipt: replacementRetrievalReceipt },
+      ],
+    };
+    const replacementPlan = validateInstallPlan({
+      ...replacementPayload,
+      receipt: layerReceipt('dkb.install-plan.receipt', replacementPayload, undefined, sourceDigest),
+    });
+    // A different signed child identity is not satisfied by the retained recipe.
+    // An unavailable download must fail, rather than report the old build as installed.
+    downloadFailure = 'expired';
+    const begin = requests.length;
+    await assert.rejects(installGranted({ ...request, plan: replacementPlan }), /403|expired/u);
+    assert.deepEqual(requests.slice(begin).map(item => item.url), [
+      '/.well-known/dkb-registry-keys.json', '/api/layers/evidence',
+    ]);
+    assert.deepEqual(await readLibraryState(libraryRoot), installedState);
+    assert.equal((await listPackageBuilds(installed.packagePath)).retrieval.length, 1);
+  }
+  downloadFailure = undefined;
 
   const alternate = await writeFixtureBuild(
     buildRoot,
@@ -635,21 +711,56 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
   layerFiles.set(alternatePlan.artifacts[1].url, { path: alternateEvidenceArchive, artifact: alternatePlan.artifacts[1] });
   layerFiles.set(alternatePlan.artifacts[2].url, { path: alternateRetrievalArchive, artifact: alternatePlan.artifacts[2] });
 
-  const retainedSource = await installDkbFromRuntimeGrant({
-    runtime: DEFAULT_DKB_RUNTIME_CONTEXT,
-    runtimeRoot,
+  const stateBeforeFailure = await readLibraryState(libraryRoot);
+  const sourceBeforeFailure = await hashPortablePackageTree(installed.packagePath);
+  for (const failure of ['tampered-plan', 'expired', 'corrupt']) {
+    const damagedPlan = structuredClone(alternatePlan);
+    if (failure === 'tampered-plan') damagedPlan.receipt.payloadHash = `sha256:${'0'.repeat(64)}`;
+    downloadFailure = failure;
+    const begin = requests.length;
+    await assert.rejects(installGranted({ ...request, plan: damagedPlan }), /receipt chain|expired|403|hash mismatch/u);
+    assert.deepEqual(await readLibraryState(libraryRoot), stateBeforeFailure);
+    assert.deepEqual(await hashPortablePackageTree(installed.packagePath), sourceBeforeFailure);
+    assert.equal((await listPackageBuilds(installed.packagePath)).retrieval.length, 1);
+    if (failure === 'tampered-plan') assert.deepEqual(requests.slice(begin).map(item => item.url), ['/.well-known/dkb-registry-keys.json']);
+  }
+  downloadFailure = undefined;
+  const originalStatfs = fs.statfs;
+  for (const stage of ['download', 'archive']) {
+    let checked = false;
+    const lowCapacity = t.mock.method(fs, 'statfs', async (...args) => {
+      const capacity = await originalStatfs(...args);
+      // Preserve a distinct expansion test: allow signed layer downloads, then
+      // deny capacity at the build candidate before any archive payload is written.
+      if (stage === 'archive' && !String(args[0]).includes('.dkb-build-chain-candidate-')) return capacity;
+      checked = true;
+      return { ...capacity, bavail: args[1]?.bigint ? 0n : 0 };
+    });
+    const begin = requests.length;
+    try {
+      await assert.rejects(installGranted({ ...request, plan: alternatePlan }), { code: `${stage}_capacity_exceeded` });
+      assert.equal(checked, true);
+      if (stage === 'download') assert.deepEqual(requests.slice(begin).map(item => item.url), ['/.well-known/dkb-registry-keys.json']);
+    } finally { lowCapacity.mock.restore(); }
+    assert.deepEqual(await readLibraryState(libraryRoot), stateBeforeFailure);
+    assert.deepEqual(await hashPortablePackageTree(installed.packagePath), sourceBeforeFailure);
+    assert.equal((await listPackageBuilds(installed.packagePath)).retrieval.length, 1);
+  }
+  const alternateBegin = requests.length;
+  const retainedSource = await installGranted({
     registryUrl: publicOrigin,
     registryTransportUrl: transportUrl,
     installGrant: `dkb_grant_${'h'.repeat(64)}`,
     plan: alternatePlan,
   });
   assert.equal(retainedSource.status, 'already_installed');
-  assert.deepEqual(requests.slice(4).map((request) => request.url), [
+  assert.deepEqual(requests.slice(alternateBegin).map((request) => request.url), [
     '/.well-known/dkb-registry-keys.json',
     '/api/layers/evidence-alternate',
     '/api/layers/retrieval-alternate',
   ]);
-  assert.equal(requests.slice(5).every((request) => request.authorization === `DKB-Install-Grant dkb_grant_${'h'.repeat(64)}`), true);
+  assert.equal(requests.slice(alternateBegin + 1).every((request) => request.authorization === `DKB-Install-Grant dkb_grant_${'h'.repeat(64)}`), true);
+  assert.equal(requests.some(item => String(item.authorization).includes('host-bearer')), false);
   assert.deepEqual(
     { evidence: (await listPackageBuilds(retainedSource.packagePath)).evidence.length, retrieval: (await listPackageBuilds(retainedSource.packagePath)).retrieval.length },
     { evidence: 2, retrieval: 2 },
@@ -658,7 +769,7 @@ test('Runtime uses its Registry transport URL without replacing the installed pu
     JSON.parse(await fs.readFile(installPlanReceiptPath(retainedSource.packagePath, stableHash(alternatePlan)), 'utf8')),
     alternatePlan,
   );
-});
+}
 
 function layer(kind, receiptHash, receipt) {
   return {

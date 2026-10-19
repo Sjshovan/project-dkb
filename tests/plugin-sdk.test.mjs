@@ -401,6 +401,7 @@ test('conformance executes the complete managed index lifecycle', async () => {
       context.registerProvider({
         kind: 'index',
         mode: 'managed',
+        storageIdentity() { return `sha256:${'a'.repeat(64)}`; },
         format: 'test.managed.v1',
         capabilities: { vectors: 'optional' },
         async compilePackage({ artifactsRoot, compiled, signal }) {

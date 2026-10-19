@@ -20,7 +20,8 @@ import {
   validateStoredPackageBuild,
   validateCompiledPackage,
 } from '@sjshovan/dkb-library/builds.js';
-import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import { assertDkbFileLock, withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import { assertLibraryMutation, captureLibraryReadFence } from '@sjshovan/dkb-library/mutation.js';
 import { hashPortablePackageTree } from '@sjshovan/dkb-library/packageTree.js';
 import {
   DKB_INSTALL_PLAN_RECEIPT_PATH,
@@ -90,7 +91,12 @@ export async function installDkbFromRegistry(options: {
   libraryRoot: string;
   force?: boolean;
   progress?: DkbProgressReporter;
+  expectedLibraryGeneration?: number;
 }): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
+  return withExpectedLibraryGeneration(options.libraryRoot, options.expectedLibraryGeneration, () => installDkbFromRegistryInternal(options));
+}
+
+async function installDkbFromRegistryInternal(options: Parameters<typeof installDkbFromRegistry>[0]): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
   const libraryRoot = path.resolve(options.libraryRoot);
   await loadLibrary(libraryRoot);
   const client = new DkbRegistryClient({ baseUrl: options.registryUrl, token: options.registryToken });
@@ -171,20 +177,80 @@ export async function installDkbFromRegistry(options: {
   }
 }
 
-export async function installDkbFromRuntimeGrant(options: {
-  runtime: DkbRuntimeContext;
+interface DkbGrantedInstallOptions {
   registryUrl: string;
   registryTransportUrl?: string;
   installGrant: string;
   plan: DkbInstallPlan;
-  runtimeRoot?: string;
   force?: boolean;
   progress?: DkbProgressReporter;
+}
+
+/** Install verified layers without creating, starting, or activating a Runtime. */
+export async function installDkbFromLibraryGrant(options: DkbGrantedInstallOptions & {
+  libraryRoot: string;
+  expectedLibraryGeneration?: number;
 }): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
-  const plan = validateInstallPlan(options.plan, 'Runtime Registry install plan');
+  const request = validateGrantedInstallOptions(options);
+  const libraryRoot = path.resolve(options.libraryRoot);
+  return withExpectedLibraryGeneration(libraryRoot, options.expectedLibraryGeneration, async () => {
+    await loadLibrary(libraryRoot);
+    return installDkbFromGrant(request, libraryRoot, os.tmpdir(), (plan, layerRoot, trustedKeys, registryUrl) =>
+      installDkbPlanIntoLibrary({ libraryRoot, plan, layerRoot, trustedKeys, registryUrl,
+        force: options.force, progress: options.progress }));
+  });
+}
+
+/** Upgrade planning cannot authorize replacement after another Library writer commits. */
+async function withExpectedLibraryGeneration<T>(root: string, expected: number | undefined, install: () => Promise<T>): Promise<T> {
+  if (expected === undefined) return install();
+  if (!Number.isSafeInteger(expected) || expected < 0) throw new DkbError('Invalid expected Library generation.', 'invalid_library_generation');
+  return withDkbFileLock(path.resolve(root), 'library-mutation', async () => {
+    if ((await readLibraryState(root)).generation !== expected) {
+      throw new DkbError('Library changed while preparing the upgrade. No package was replaced. Run dkb outdated and retry the upgrade.', 'library_upgrade_conflict');
+    }
+    return install();
+  });
+}
+
+export async function installDkbFromRuntimeGrant(options: DkbGrantedInstallOptions & {
+  runtime: DkbRuntimeContext;
+  runtimeRoot?: string;
+}): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
+  const request = validateGrantedInstallOptions(options);
   const runtime = await ensureRuntimeState(options.runtimeRoot);
+  return installDkbFromGrant(request, runtime.libraryRoot, runtime.stateDir, (plan, layerRoot, trustedKeys, registryUrl) =>
+    installDkbPlanIntoRuntime({ runtime: options.runtime, runtimeRoot: runtime.stateRoot, plan, layerRoot, trustedKeys, registryUrl,
+      force: options.force, progress: options.progress }));
+}
+
+export function validateGrantedInstallOptions(options: DkbGrantedInstallOptions): DkbGrantedInstallOptions {
+  if (typeof options.installGrant !== 'string' || !/^[\x21-\x7e]{1,4096}$/u.test(options.installGrant)) {
+    throw new DkbError('A nonempty, bounded Registry install grant is required. Request a fresh grant and retry.', 'invalid_install_grant');
+  }
+  const endpoint = (value: string): string => {
+    let parsed: URL;
+    try { parsed = new URL(value); } catch { throw new DkbError('Registry grant endpoint must be an absolute HTTP(S) URL.', 'invalid_install_grant'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new DkbError('Registry grant endpoint must not contain credentials, query parameters, or a fragment.', 'invalid_install_grant');
+    }
+    return normalizeRegistryUrl(parsed.toString());
+  };
+  return { ...options, plan: validateInstallPlan(options.plan, 'Registry install plan'),
+    registryUrl: endpoint(options.registryUrl),
+    ...(options.registryTransportUrl !== undefined ? { registryTransportUrl: endpoint(options.registryTransportUrl) } : {}) };
+}
+
+/** Both destinations use one grant-only acquisition and signed-chain validation path. */
+async function installDkbFromGrant(
+  options: DkbGrantedInstallOptions,
+  libraryRoot: string,
+  stagingParent: string,
+  install: (plan: DkbInstallPlan, layerRoot: string, keys: DkbSigningKeyRecord[], origin: string) => Promise<DkbRegistryInstallResult>,
+): Promise<DkbRegistryInstallResult | DkbAlreadyInstalledResult> {
+  const { plan, registryUrl } = options;
   const client = new DkbRegistryClient({
-    baseUrl: options.registryTransportUrl ?? options.registryUrl,
+    baseUrl: options.registryTransportUrl ?? registryUrl,
     installGrant: options.installGrant,
     token: '',
   });
@@ -192,8 +258,8 @@ export async function installDkbFromRuntimeGrant(options: {
   const verified = await verifySignedInstallPlan(plan, trustedKeys);
   const packageTreeHash = requiredSignedPackageTreeHash(verified);
   const existing = await preflightDkbInstall({
-    libraryRoot: runtime.libraryRoot,
-    registryUrl: options.registryUrl,
+    libraryRoot,
+    registryUrl,
     candidate: {
       packageId: plan.package.id,
       version: plan.package.version,
@@ -207,29 +273,20 @@ export async function installDkbFromRuntimeGrant(options: {
       client,
       plan,
       trustedKeys,
-      libraryRoot: runtime.libraryRoot,
-      registryUrl: options.registryUrl,
+      libraryRoot,
+      registryUrl,
       packageRoot: existing.packagePath,
       progress: options.progress,
     });
     return existing;
   }
-  const downloadRoot = await fs.mkdtemp(path.join(runtime.stateDir, 'tmp-registry-grant-download-'));
+  const downloadRoot = await fs.mkdtemp(path.join(stagingParent, 'dkb-registry-grant-download-'));
   try {
     for (const artifact of plan.artifacts) {
       const extension = artifact.kind === 'source' ? '.dkbpkg' : artifact.kind === 'evidence' ? '.dkbevidence' : '.dkbbuild';
       await client.writeInstallLayer(artifact, path.join(downloadRoot, `${artifact.kind}${extension}`), { progress: options.progress });
     }
-    return await installDkbPlanIntoRuntime({
-      runtime: options.runtime,
-      plan,
-      layerRoot: downloadRoot,
-      trustedKeys,
-      runtimeRoot: runtime.stateRoot,
-      registryUrl: normalizeRegistryUrl(options.registryUrl),
-      force: options.force,
-      progress: options.progress,
-    });
+    return await install(plan, downloadRoot, trustedKeys, registryUrl);
   } finally {
     await fs.rm(downloadRoot, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -245,19 +302,7 @@ async function ensureExistingSignedBuildChain(options: {
   progress?: DkbProgressReporter;
 }): Promise<void> {
   try {
-    const graph = await selectStoredPackageBuild({
-      root: options.packageRoot,
-      target: options.plan.target,
-      evidenceProfileDigest: options.plan.evidenceProfileDigest,
-      retrievalProfileDigest: options.plan.retrievalProfileDigest,
-      compatibilityDigest: options.plan.compatibilityDigest,
-    });
-    await verifyStoredSignedBuildChain({
-      packageRoot: options.packageRoot,
-      graph,
-      target: options.plan.target,
-      trustedKeys: options.trustedKeys,
-    });
+    await verifyInstalledSignedBuildForPlan(options);
     await pinRegistryTrustedKeys({ libraryRoot: options.libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys });
     return;
   } catch {
@@ -353,6 +398,7 @@ export async function installDkbPlanIntoLibrary(options: {
 
 /** Install one signed layer chain inside an existing Library mutation transaction. */
 export async function installDkbPlanIntoLibraryWithinMutation(options: Parameters<typeof installDkbPlanIntoLibrary>[0]): Promise<DkbRegistryInstallResult> {
+  await assertLibraryMutation(path.resolve(options.libraryRoot));
   return installDkbPlanIntoLibraryInternal(options, true);
 }
 
@@ -489,14 +535,12 @@ interface AttachSignedBuildChainWithinMutationOptions {
   layerRoot: string;
   packageRoot: string;
   trustedKeys: DkbSigningKeyRecord[];
-  libraryRoot?: string;
+  libraryRoot: string;
   registryUrl?: string;
   progress?: DkbProgressReporter;
 }
 
-export async function attachSignedBuildChain(options: AttachSignedBuildChainWithinMutationOptions & {
-  libraryRoot: string;
-}): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+export async function attachSignedBuildChain(options: AttachSignedBuildChainWithinMutationOptions): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
   const libraryRoot = path.resolve(options.libraryRoot);
   const packageRoot = path.resolve(options.packageRoot);
   assertPackageWithinLibrary(libraryRoot, packageRoot);
@@ -510,13 +554,16 @@ export async function attachSignedBuildChain(options: AttachSignedBuildChainWith
 export async function attachSignedBuildChainWithinMutation(
   options: AttachSignedBuildChainWithinMutationOptions,
 ): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+  const libraryRoot = path.resolve(options.libraryRoot);
+  await assertDkbFileLock(libraryRoot, 'library-mutation');
+  await captureLibraryReadFence(libraryRoot);
+  assertPackageWithinLibrary(libraryRoot, path.resolve(options.packageRoot));
   const verified = await verifySignedInstallPlan(options.plan, options.trustedKeys);
   const plan = verified.plan;
   const packageRoot = path.resolve(options.packageRoot);
   await verifyInstalledSourceForPlan(packageRoot, verified, options.trustedKeys);
   if (options.registryUrl) {
-    if (!options.libraryRoot) throw new DkbError('Pinning Registry build trust requires its owning Library root');
-    await pinRegistryTrustedKeys({ libraryRoot: options.libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys, mutationLockHeld: true });
+    await pinRegistryTrustedKeys({ libraryRoot, registryUrl: options.registryUrl, keys: options.trustedKeys, mutationLockHeld: true });
   }
 
   const evidenceArchive = path.join(options.layerRoot, 'evidence.dkbevidence');
@@ -682,12 +729,26 @@ export async function verifySignedInstallPlanForInstalledSource(options: {
   return verified.plan;
 }
 
-interface VerifiedInstallPlan {
+/** Reuse only the exact requested, authenticated source and immutable build graph. */
+export async function verifyInstalledSignedBuildForPlan(options: {
+  plan: DkbInstallPlan;
+  packageRoot: string;
+  trustedKeys: DkbSigningKeyRecord[];
+}): Promise<Awaited<ReturnType<typeof selectStoredPackageBuild>>> {
+  await verifySignedInstallPlanForInstalledSource(options);
+  const graph = await selectStoredPackageBuild({ root: options.packageRoot, target: options.plan.target,
+    evidenceProfileDigest: options.plan.evidenceProfileDigest, retrievalProfileDigest: options.plan.retrievalProfileDigest,
+    compatibilityDigest: options.plan.compatibilityDigest });
+  assertBuildGraphMatchesPlan(graph, options.plan);
+  return verifyStoredSignedBuildChain({ ...options, graph, target: options.plan.target });
+}
+
+export interface VerifiedInstallPlan {
   plan: DkbInstallPlan;
   sourceReceipt: DkbPackageReceipt;
 }
 
-async function verifySignedInstallPlan(
+export async function verifySignedInstallPlan(
   input: DkbInstallPlan,
   trustedKeys: DkbSigningKeyRecord[],
 ): Promise<VerifiedInstallPlan> {

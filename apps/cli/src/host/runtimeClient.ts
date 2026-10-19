@@ -3,6 +3,7 @@ import { DkbRuntimeClient } from '@sjshovan/dkb-runtime/runtime/client.js';
 import { runtimeTokensForUrl } from '../stack/context.js';
 import { readHostInventory } from './inventory.js';
 import { loadRuntimeHttpCredentials } from './runtimeCredentials.js';
+import { nativeRuntimeStateRoot } from './runtimeLocation.js';
 
 /** Resolve credentials for exactly one selected endpoint; inventory never carries secrets. */
 export async function runtimeClientForUrl(baseUrl: string, timeoutMs?: number): Promise<DkbRuntimeClient> {
@@ -12,9 +13,10 @@ export async function runtimeClientForUrl(baseUrl: string, timeoutMs?: number): 
   if (['127.0.0.1', 'localhost', '::1', ...localAddresses].includes(url.hostname.replace(/^\[|\]$/gu, ''))) {
     const inventory = await readHostInventory();
     const known = Object.values(inventory.runtimes).find((entry) =>
-      entry.kind === 'process' && entry.stateRoot && endpointIdentity(entry.url) === endpointIdentity(baseUrl));
-    if (known?.stateRoot) {
-      const saved = await loadRuntimeHttpCredentials(known.stateRoot);
+      nativeRuntimeStateRoot(entry) && endpointIdentity(entry.url) === endpointIdentity(baseUrl));
+    const root = known && nativeRuntimeStateRoot(known);
+    if (root) {
+      const saved = await loadRuntimeHttpCredentials(root);
       adminToken ??= saved?.adminToken;
       readToken ??= saved?.readToken;
     }

@@ -41,6 +41,16 @@ session, validates Host and Origin, and requires CSRF on mutations. It stores
 only redacted activity metadata in its local SQLite database. Authoritative
 state remains in each owning DKB subsystem.
 
+Operation memory is bounded independently of the redacted Activity database:
+at most 32 running/queued operations, 100 completed results, a 30-minute
+completed-result lifetime, and a 32 MiB completed-result budget. Each operation
+retains at most 256 replay events / 8 MiB while preserving its final result or
+failure. A replay gap is reported explicitly; it is not a new execution.
+An oversized CLI event fails the operation. Slow stream clients disconnect
+without retrying or cancelling the command. A full queue returns a retryable
+503 before starting work. After an expired result, inspect Activity and current
+resource state before retrying any mutation.
+
 Browser sessions last twelve hours and are intentionally invalidated whenever
 the local Console process restarts. An expired tab shows a dedicated recovery
 screen; reopen **DKB Console** from the applications menu or run `dkb console`

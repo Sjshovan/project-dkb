@@ -12,6 +12,7 @@ import { serveDkbRegistryCompiler } from '@sjshovan/dkb-compiler/server.js';
 import { compileRegistryPackage } from '../services/compiler/dist/registryCompilation.js';
 import { readCompilerBuildIdentity } from '../services/compiler/dist/compilerCapabilities.js';
 import { materializeBundledProviderFixtures } from './bundled-provider-fixture.mjs';
+import { observeLoopbackTransport } from './fixtures/loopback-transport-diagnostics.mjs';
 
 const optionsSchema = { '~standard': { version: 1, vendor: 'test', validate(value) { return { value: value ?? {} }; } } };
 
@@ -394,16 +395,27 @@ test('Registry compiler liveness does not wait for provider capability probes', 
   const address = server.address();
   assert.equal(typeof address, 'object');
 
-  const response = await fetch(`http://127.0.0.1:${address.port}/health`, {
-    signal: AbortSignal.timeout(1_000),
+  const transport = observeLoopbackTransport(address.port);
+  let acceptedConnections = 0, requests = 0, responses = 0;
+  server.on('connection', () => { acceptedConnections++; });
+  server.on('request', (_request, response) => {
+    requests++;
+    response.once('finish', () => { responses++; });
   });
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    ok: true,
-    service: 'dkb.registry.compiler',
-    version: '0.2.0',
-  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/health`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      service: 'dkb.registry.compiler',
+      version: '0.2.0',
+    });
+  } catch (error) {
+    assert.fail(JSON.stringify({ error: { name: error.name, code: error.code, message: error.message },
+      listening: server.listening, acceptedConnections, requests, responses, transport: transport.snapshot() }));
+  } finally { transport.dispose(); }
 });
 
 function setEnvironment(name, value) {

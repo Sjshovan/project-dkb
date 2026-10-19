@@ -10,6 +10,65 @@ The ordinary package lifecycle from that decision is implemented; remaining
 release gates concern distribution, cross-platform proof, and operational
 hardening rather than missing public command names.
 
+## Docker-owned Library commands
+
+A Docker-owned Library is an explicit context/volume/immutable-image handle,
+not a Windows path. Registration checks the existing Library with the matching
+CLI image; it does not create, move or copy Library data:
+
+```text
+dkb library register --name team --docker-context desktop-linux --docker-volume team-library --owner-image sha256:<installed-image-id>
+dkb library use team
+dkb library list --check
+dkb list --library team
+dkb library recover --library team
+dkb registry use https://registry.example --root team
+```
+
+Unchecked Docker entries show `known`; one-shot checks show actual availability.
+Tables show Kind and Location without inventing a local path. Offline Library
+and Collection changes run the same CLI inside the owner and refresh serving
+local Runtimes afterward. JSON/event/human output retains one final result.
+`dkb uninstall` and `dkb collection uninstall` use this offline owner path too.
+Collection dependency guards and source-preserving local deactivation are
+unchanged. A failed post-commit Runtime refresh reports a stale warning and
+recovery command, while a failed owner mutation reports failure without refresh.
+Registry-default changes use the same owner-side transaction for configuration
+and manifest. An identical setting reports `unchanged`, with `registry.changed`
+false, and does not refresh Runtimes. Verification happens on the host; an
+unreachable Registry produces a warning without preventing an explicit saved
+default. The default does not rewrite any installed package's signed origin.
+`dkb install` also supports a Docker Library for DKBs and Collections. Host login
+mints a signed-plan download grant; the fixed Linux CLI worker verifies and
+installs the source/Evidence/Retrieval chain. It uses the Library's Registry
+default unless explicitly overridden and never opens Linux database files on
+Windows. Progress and final output use the same presenter as native installs.
+The Console invokes this same path. A Collection request carries the exact
+revision and one grant per member; one owner-side transaction verifies and
+installs the complete bundle. `dkb collection install` and explicit
+`dkb collection update` share this path. A failed update preserves prior members
+and direct/shared ownership. Cancellation names the Library's recovery command.
+`outdated` and `upgrade --dry-run` also read the installed ledger in Linux. An
+upgrade uses the package's recorded Registry origin unless `--url` is explicit;
+changing the Library default does not redirect it. The v2 install worker checks
+the planned Library generation under the existing writer lease before any
+download, and holds that lease through installation. Concurrent state changes
+return `library_upgrade_conflict`; rerun `outdated --library <name>` and the
+upgrade. A matching rebuilt CLI image is required, not an older v1 worker.
+Network verification and other unsupported build/deployment operations fail explicitly, without
+falling back to Windows database access. This remains a partial deployment
+boundary; see [ADR 0013](decisions/0013-library-storage-ownership.md).
+
+## Package destination and Runtime refresh
+
+Top-level package installation, upgrade and removal always use the resolved
+Library, whether native or Docker-owned. `install` / `upgrade --runtime-url`
+and `uninstall --url` request an additional post-commit Runtime refresh only;
+they never redirect the package operation to that endpoint's Library. Registered
+local serving Runtimes are refreshed automatically. A failed refresh keeps the
+successful Library result and reports a stale warning with a recovery command.
+Native upgrades enforce the same generation guard even with an explicit Runtime.
+
 ## Output modes
 
 | Invocation | Result output | Progress | Errors |
@@ -64,7 +123,8 @@ the Library lock before downloading the package archive.
 - Reuse of a published version with a different digest is rejected as an
   immutable-release violation.
 - A package directory without matching Library applied-state metadata is
-  reported as an incomplete installation; `--force` repairs it.
+  reported as an incomplete installation; `--force` repairs it only when no
+  unfinished Library transaction requires explicit recovery first.
 - New and forced installs stream the archive directly to disk, verify its
   Registry digest, extract it once, verify package contents and signatures,
   validate the retrieval build, and atomically install it. Installation reports
@@ -74,6 +134,20 @@ the Library lock before downloading the package archive.
 
 The Library transaction performs a second installed-path check immediately
 before promotion to cover concurrent installs.
+
+`dkb library recover --library <name-or-path>` recovers an interrupted Library
+transaction without parsing, compiling, or contacting a Registry. It reports
+`rolled_back`, `committed`, or `unchanged` in JSON and a clear human summary.
+It accepts an explicit root even when its manifest is temporarily missing or
+invalid. Successful recovery refreshes affected local Runtimes using the same
+refresh flow as installation; unchanged recovery does not contact them.
+Normal reads never repair state or discard a journal. Errors include the exact
+recovery command, and unexpected operator edits remain preserved for repair.
+
+Offline `library sync/add/remove` and `collection create/add/remove` commands
+wait for another live writer before inspecting mutable state. Their operation
+starts visibly while queued. A read command still rejects unfinished state;
+waiting for ownership never repairs an abandoned transaction automatically.
 
 `dkb list --library <path>` shows installed DKBs and Collections in a compact
 table, including compiled record counts for DKBs. `dkb library status` also

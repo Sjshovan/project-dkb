@@ -4,6 +4,30 @@ import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 
 export const DEFAULT_REGISTRY_URL = 'http://127.0.0.1:8000';
 
+/** Transport-only mapping; immutable Registry origin never changes. */
+export function dockerRegistryTransportUrl(value: string): string {
+  const url = new URL(strictRegistryEndpoint(value));
+  if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) url.hostname = 'host.docker.internal';
+  return normalizeRegistryUrl(url.toString());
+}
+
+export function validateRegistryTransportUrl(origin: string, transport: string): string {
+  const normalized = strictRegistryEndpoint(transport);
+  if (normalized !== strictRegistryEndpoint(origin) && normalized !== dockerRegistryTransportUrl(origin)) {
+    throw new DkbError('Registry transport must preserve its pinned origin or translate only loopback for Docker.', 'registry_transport_invalid');
+  }
+  return normalized;
+}
+
+function strictRegistryEndpoint(value: string): string {
+  try {
+    if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f]/u.test(value)) throw new Error();
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+    return normalizeRegistryUrl(url.toString());
+  } catch { throw new DkbError('Invalid Registry transport endpoint.', 'registry_transport_invalid'); }
+}
+
 export interface RegistryVerificationCheck {
   name: string;
   ok: boolean;

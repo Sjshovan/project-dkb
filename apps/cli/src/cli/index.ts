@@ -23,6 +23,7 @@ import { registerRegistryCommands } from './registryCommands.js';
 import { registerRuntimeCommands } from './runtimeCommands.js';
 import { registerConsoleCommands } from './consoleCommands.js';
 import { createCliEventWriter } from './eventStream.js';
+import { cancelLibraryOwnerOperations } from '../host/libraryOwnerCancellation.js';
 
 installWarningFilter();
 
@@ -37,12 +38,22 @@ if (jsonDocumentRequested && jsonStreamRequested) {
   process.exit(2);
 }
 
-if (eventWriter) {
-  process.once('SIGINT', () => {
-    eventWriter.cancel('Interrupted by operator.');
-    eventWriter.complete('cancelled');
-    process.exit(130);
+const interrupt = () => {
+  if (cancelLibraryOwnerOperations()) return; // Cleanup settles before terminal output.
+  eventWriter?.cancel('Interrupted by operator.');
+  eventWriter?.complete('cancelled');
+  process.exit(130);
+};
+process.on('SIGINT', interrupt);
+process.on('SIGTERM', interrupt);
+if (process.send) {
+  // Node IPC avoids Windows ChildProcess.kill(), which force-terminates the host.
+  process.on('message', value => {
+    if (value && typeof value === 'object' && 'format' in value && value.format === 'dkb.cli-control.v1'
+      && 'event' in value && value.event === 'cancel') interrupt();
   });
+  process.send({ format: 'dkb.cli-control.v1', event: 'ready' });
+  process.channel?.unref();
 }
 
 program
@@ -135,6 +146,7 @@ const runtime = registerRuntimeCommands(program, {
 registerRegistryCommands(program, {
   presenter,
   currentLibraryRoot,
+  currentRuntimeAdminClient,
   parsePositiveInteger,
 });
 registerKnowledgeCommands(program, runtime, {
@@ -193,16 +205,19 @@ try {
     process.exitCode = error.exitCode || 1;
   } else {
     const message = error instanceof DkbError || error instanceof Error ? error.message : String(error);
+    const cancelled = error instanceof DkbError && error.code === 'library_owner_cancelled'
+      || error instanceof Error && error.name === 'AbortError';
 
     if (jsonStreamRequested) {
-      eventWriter?.failure(error instanceof DkbError ? error.code : 'DKB_ERROR', message);
-      eventWriter?.complete('failed');
+      if (cancelled) eventWriter?.cancel(message);
+      else eventWriter?.failure(error instanceof DkbError ? error.code : 'DKB_ERROR', message);
+      eventWriter?.complete(cancelled ? 'cancelled' : 'failed');
     } else if (jsonDocumentRequested) {
       printJsonValue({ ok: false, error: { code: error instanceof DkbError ? error.code : 'DKB_ERROR', message } });
     } else {
       console.error(`${failureLine('Error:')} ${message}`);
     }
-    process.exitCode = 1;
+    process.exitCode = cancelled ? 130 : 1;
   }
 }
 

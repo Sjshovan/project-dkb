@@ -45,7 +45,7 @@
     "datatables.net-dt": "^3.0.3",
     "datatables.net-responsive-dt": "^4.0.2",
     "datatables.net-vue3": "^3.0.8",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "reka-ui": "^2.10.4",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.3",

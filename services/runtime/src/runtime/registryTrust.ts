@@ -5,7 +5,7 @@ import { createPublicKey } from 'node:crypto';
 import { stableHash } from '@sjshovan/dkb-protocol/contracts/hash.js';
 import type { DkbSigningKeyRecord } from '@sjshovan/dkb-protocol/types.js';
 import { fingerprintPublicKey } from '@sjshovan/dkb-library/signing.js';
-import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
+import { assertDkbFileLock, withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
 import { normalizeRegistryUrl } from '@sjshovan/dkb-registry-client/config.js';
 import { writeJsonAtomic } from './paths.js';
 
@@ -74,7 +74,10 @@ export async function pinRegistryTrustedKeys(input: {
     if (stableHash(previous) === stableHash(sorted)) return;
     await writeJsonAtomic(source, { format: TRUST_FORMAT, registryUrl, updatedAt: new Date().toISOString(), keys: sorted });
   };
-  if (input.mutationLockHeld) await update();
+  if (input.mutationLockHeld) {
+    await assertDkbFileLock(input.libraryRoot, 'library-mutation');
+    await update();
+  }
   else await withDkbFileLock(input.libraryRoot, 'library-mutation', update);
 }
 

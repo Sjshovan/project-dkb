@@ -84,7 +84,8 @@ a failed audit event for the same request and withholds the result.
 <runtime-state>/.dkb/runtime-binding.json
 <runtime-state>/.dkb/runtime-activation.lock.json
 <runtime-state>/.dkb/runtime-selection.transaction.json
-<runtime-state>/.dkb/locks/runtime-mutation.lock
+<runtime-state>/.dkb/locks/runtime-mutation.lease.sqlite
+<runtime-state>/.dkb/managed-index-retention/<receipt-digest>.json
 <runtime-state>/.dkb/cache/runtime/<snapshot-digest>/
 ```
 
@@ -92,8 +93,14 @@ There is no durable active `.dkb/artifacts` mirror. Libraries contain immutable
 builds but no active Pipeline. Each Runtime owns its binding, activation, and
 disposable cache, so multiple Runtimes may reuse one Library without copying it.
 Binding and activation promotion is journaled and protected by an in-process
-reader/writer gate plus a cross-process mutation lock. Startup recovers an
+reader/writer gate plus a cross-process native mutation lease. Startup recovers an
 interrupted promotion to one consistent previous or promoted pair.
+
+Managed-index retention receipts record import scope and resolved backing-store
+identity before external side effects. Post-activation reconciliation removes
+only versions absent from authoritative Library state while holding that
+Library's writer lease. Cleanup failures retain retry authority and report a
+maintenance warning; they do not undo activation or change another Runtime.
 
 ## Composition roots
 

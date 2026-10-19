@@ -2,12 +2,23 @@ import { formatBytes, humanSummary } from '../presentation.js';
 import { humanStatus } from './utils.js';
 
 export function summarizeLibrarySync(value: unknown): string[] {
-  const result = value as { status?: unknown; lock?: { generation?: unknown; entries?: Record<string, unknown> } };
+  const result = value as { status?: unknown; warning?: string; lock?: { generation?: unknown; entries?: Record<string, unknown> } };
   const count = Object.keys(result.lock?.entries ?? {}).length;
   return [
     `status: ${String(result.status ?? 'synchronized')}`,
     `generation: ${String(result.lock?.generation ?? '-')}`,
     `active entries: ${count}`,
+    ...(result.warning ? [`warning: ${result.warning}`] : []),
+  ];
+}
+
+export function summarizeLibraryRecovery(value: unknown): string[] {
+  const result = value as { status: string; libraryPath: string; transactionId?: string; warning?: string };
+  return [
+    `status: ${humanStatus(result.status)}`,
+    `path: ${result.libraryPath}`,
+    ...(result.transactionId ? [`transaction: ${result.transactionId}`] : []),
+    ...(result.warning ? [`warning: ${result.warning}`] : []),
   ];
 }
 
@@ -19,6 +30,7 @@ export function summarizeCollectionMutation(value: unknown): string[] {
     selector?: unknown;
     status?: unknown;
     root?: unknown;
+    warning?: string;
   };
   return [
     `status: ${String(result.status ?? 'updated')}`,
@@ -26,6 +38,7 @@ export function summarizeCollectionMutation(value: unknown): string[] {
     result.collectionIdentity ? `collection: ${String(result.collectionIdentity)}` : '',
     result.dkbIdentity ? `DKB: ${String(result.dkbIdentity)}${result.selector ? `@${String(result.selector)}` : ''}` : '',
     result.root ? `path: ${String(result.root)}` : '',
+    ...(result.warning ? [`warning: ${result.warning}`] : []),
   ];
 }
 

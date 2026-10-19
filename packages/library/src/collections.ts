@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { identityDisplayName, parseDkbIdentity, registryPackagePath } from '@sjshovan/dkb-protocol/identity.js';
@@ -6,6 +7,8 @@ import { discoverLibraryEntries, loadManifest } from '@sjshovan/dkb-protocol/man
 import { validateDkbManifest } from '@sjshovan/dkb-protocol/validation.js';
 import type { DkbSourceManifest, DkbVersionSelector } from '@sjshovan/dkb-protocol/types.js';
 import { addLibraryRoot, syncLibrary, type SyncLibraryResult } from './resolver.js';
+import { assertLibraryReadFence, captureLibraryReadFence, promoteLibraryPath, withLibraryMutation, writeLibraryMutationFile } from './mutation.js';
+import { assertSafePath } from './mutationPaths.js';
 
 export interface CreateCollectionResult extends SyncLibraryResult {
   identity: string;
@@ -13,7 +16,7 @@ export interface CreateCollectionResult extends SyncLibraryResult {
   manifestPath: string;
 }
 
-export async function createLocalCollection(options: {
+async function createLocalCollectionOwned(options: {
   libraryRoot: string;
   identity: string;
   displayName?: string;
@@ -40,18 +43,17 @@ export async function createLocalCollection(options: {
     members: {},
   } satisfies DkbSourceManifest;
 
-  await fs.mkdir(root, { recursive: false });
-  try {
-    await fs.writeFile(target, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    const synced = await addLibraryRoot(libraryRoot, identity.identity);
-    return { ...synced, identity: identity.identity, root, manifestPath: target };
-  } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
-  }
+  const staged = path.join(libraryRoot, '.dkb', 'tmp', `collection-${randomUUID()}`);
+  await assertSafePath(libraryRoot, staged);
+  await fs.mkdir(staged, { recursive: true });
+  await assertSafePath(libraryRoot, staged);
+  await fs.writeFile(path.join(staged, 'dkb.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await promoteLibraryPath(libraryRoot, staged, root);
+  const synced = await addLibraryRoot(libraryRoot, identity.identity);
+  return { ...synced, identity: identity.identity, root, manifestPath: target };
 }
 
-export async function setCollectionMember(options: {
+async function setCollectionMemberOwned(options: {
   libraryRoot: string;
   collectionIdentity: string;
   dkbIdentity: string;
@@ -78,7 +80,7 @@ export async function setCollectionMember(options: {
   return { ...synced, collectionIdentity, dkbIdentity, selector: options.selector };
 }
 
-export async function removeCollectionMember(options: {
+async function removeCollectionMemberOwned(options: {
   libraryRoot: string;
   collectionIdentity: string;
   dkbIdentity: string;
@@ -106,12 +108,14 @@ export async function collectionOverview(libraryRoot: string, identity: string):
   active: boolean;
   members: Array<{ identity: string; selector: string }>;
 }> {
+  const fence = await captureLibraryReadFence(libraryRoot);
   const parsed = parseDkbIdentity(identity, 'Collection identity').identity;
   const manifest = (await discoverLibraryEntries(libraryRoot)).find((entry) => entry.manifest.name === parsed)?.manifest
     ?? await loadManifest(registryPackagePath(libraryRoot, parsed));
   if (manifest.type !== 'collection') throw new DkbError(`${parsed} is not a Collection`);
   const library = await loadManifest(libraryRoot);
 
+  await assertLibraryReadFence(libraryRoot, fence);
   return {
     identity: parsed,
     displayName: manifest.displayName ?? identityDisplayName(parsed),
@@ -148,15 +152,8 @@ async function replaceCollectionManifest(
   candidate: DkbSourceManifest,
 ): Promise<SyncLibraryResult> {
   validateDkbManifest(candidate, `${source}#candidate`);
-  const previous = await fs.readFile(source, 'utf8');
-
-  try {
-    await writeJsonAtomic(source, candidate);
-    return await syncLibrary(libraryRoot);
-  } catch (error) {
-    await fs.writeFile(source, previous, 'utf8');
-    throw error;
-  }
+  await writeLibraryMutationFile(libraryRoot, source, `${JSON.stringify(candidate, null, 2)}\n`);
+  return syncLibrary(libraryRoot);
 }
 
 function validateSelector(selector: string): void {
@@ -168,21 +165,6 @@ function validateSelector(selector: string): void {
   validateDkbManifest(probe, 'Collection member selector');
 }
 
-async function writeJsonAtomic(target: string, value: unknown): Promise<void> {
-  const temp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  const backup = `${target}.replace-${process.pid}-${Date.now().toString(36)}`;
-  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await fs.rename(target, backup);
-  try {
-    await fs.rename(temp, target);
-    await fs.rm(backup, { force: true });
-  } catch (error) {
-    await fs.rm(target, { force: true });
-    await fs.rename(backup, target);
-    throw error;
-  }
-}
-
 async function exists(target: string): Promise<boolean> {
   try {
     await fs.access(target);
@@ -190,4 +172,16 @@ async function exists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function createLocalCollection(options: Parameters<typeof createLocalCollectionOwned>[0]): ReturnType<typeof createLocalCollectionOwned> {
+  return withLibraryMutation(options.libraryRoot, () => createLocalCollectionOwned(options));
+}
+
+export async function setCollectionMember(options: Parameters<typeof setCollectionMemberOwned>[0]): ReturnType<typeof setCollectionMemberOwned> {
+  return withLibraryMutation(options.libraryRoot, () => setCollectionMemberOwned(options));
+}
+
+export async function removeCollectionMember(options: Parameters<typeof removeCollectionMemberOwned>[0]): ReturnType<typeof removeCollectionMemberOwned> {
+  return withLibraryMutation(options.libraryRoot, () => removeCollectionMemberOwned(options));
 }

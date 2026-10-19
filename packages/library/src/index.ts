@@ -5,6 +5,7 @@ export * from './adapters/compose.js';
 export * from './adapters/index.js';
 export * from './archive.js';
 export * from './collections.js';
+export * from './mutation.js';
 export * from './overview.js';
 export * from './resolver.js';
 export * from './root.js';

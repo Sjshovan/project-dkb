@@ -45,6 +45,11 @@ export const DEFAULT_DKB_DISTRIBUTION: DkbDistribution = {
     { id: '@dkb/index-meilisearch', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-index-meilisearch/plugin.js'), exportName: 'MEILISEARCH_PLUGIN' },
     { id: '@dkb/retrieval-hybrid', version: '0.1.0', sourceUrl: import.meta.resolve('@sjshovan/dkb-retrieval-hybrid/plugin.js'), exportName: 'HYBRID_RETRIEVAL_PLUGIN' },
   ],
+  stackVolumes: {
+    registryData: 'DKB_REGISTRY_DATA_VOLUME', registryArtifacts: 'DKB_REGISTRY_ARTIFACTS_VOLUME',
+    jobs: 'DKB_COMPILER_JOBS_VOLUME', meilisearch: 'DKB_MEILISEARCH_VOLUME',
+    fastembedCache: 'DKB_FASTEMBED_CACHE_VOLUME', teiCache: 'DKB_TEI_CACHE_VOLUME',
+  },
   services: [
     {
       id: 'registry',

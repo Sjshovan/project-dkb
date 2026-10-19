@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { allLibraryReads, withLibraryReadFence } from './readFence.js';
 import path from 'node:path';
 import { resolveContainedPath } from '@sjshovan/dkb-protocol/paths.js';
 import { readLibraryState } from './state.js';
@@ -21,15 +22,15 @@ export interface DkbLibraryStorageReport {
 }
 
 /** Measures only authoritative Library entries and Library-owned state. */
-export async function inspectLibraryStorage(libraryRoot: string): Promise<DkbLibraryStorageReport> {
+async function inspectLibraryStorageSnapshot(libraryRoot: string): Promise<DkbLibraryStorageReport> {
   const root = path.resolve(libraryRoot);
   const state = await readLibraryState(root);
-  const packages = await Promise.all(Object.values(state.entries)
+  const packages = await allLibraryReads(Object.values(state.entries)
     .sort((left, right) => left.identity.localeCompare(right.identity))
     .map(async (entry) => {
       const packageRoot = resolveContainedPath(root, entry.path, `Installed entry ${entry.identity} path`);
       const generatedRoot = path.join(packageRoot, '.dkb');
-      const [sourceBytes, buildBytes, generatedBytes] = await Promise.all([
+      const [sourceBytes, buildBytes, generatedBytes] = await allLibraryReads([
         directoryBytes(packageRoot, (relative) => relative !== '.dkb' && !relative.startsWith('.dkb/')),
         directoryBytes(path.join(generatedRoot, 'builds')),
         directoryBytes(generatedRoot),
@@ -47,7 +48,7 @@ export async function inspectLibraryStorage(libraryRoot: string): Promise<DkbLib
         totalBytes: sourceBytes + generatedBytes,
       };
     }));
-  const [libraryStateBytes, rootFileBytes] = await Promise.all([
+  const [libraryStateBytes, rootFileBytes] = await allLibraryReads([
     directoryBytes(path.join(root, '.dkb')),
     directFileBytes(root),
   ]);
@@ -90,5 +91,9 @@ async function directoryBytes(
 async function directFileBytes(root: string): Promise<number> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   const files = entries.filter((entry) => entry.isFile());
-  return (await Promise.all(files.map((entry) => fs.stat(path.join(root, entry.name))))).reduce((total, stat) => total + stat.size, 0);
+  return (await allLibraryReads(files.map((entry) => fs.stat(path.join(root, entry.name))))).reduce((total, stat) => total + stat.size, 0);
+}
+
+export async function inspectLibraryStorage(...args: Parameters<typeof inspectLibraryStorageSnapshot>): ReturnType<typeof inspectLibraryStorageSnapshot> {
+  return withLibraryReadFence(args[0], () => inspectLibraryStorageSnapshot(...args));
 }
