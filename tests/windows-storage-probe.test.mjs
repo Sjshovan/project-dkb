@@ -60,7 +60,11 @@ test('Windows probe failure requires positive .NET verification; a negative OS a
           if(script && mode==='malformed') return callback(null,'not a volume result','');
           if(script || mode==='both-unavailable') return callback(new Error('unavailable'));
           const started=Date.now();
-          return original(file,args,options,(error,stdout,stderr)=>{
+          const diagnosticArgs=[...args], commandIndex=diagnosticArgs.indexOf('-Command')+1;
+          assert.ok(commandIndex>0);
+          diagnosticArgs[commandIndex]='[Console]::Error.WriteLine("dkb.storage.probe.entered"); '
+            +diagnosticArgs[commandIndex]+'; [Console]::Error.WriteLine("dkb.storage.probe.completed");';
+          return original(file,diagnosticArgs,options,(error,stdout,stderr)=>{
             if(error) console.error(JSON.stringify({
               event:'windows_storage_powershell_failed', mode, elapsedMs:Date.now()-started,
               code:error.code??null, signal:error.signal??null, killed:error.killed??null,

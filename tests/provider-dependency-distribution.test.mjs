@@ -118,7 +118,7 @@ async function proveIndependentProviderInstallation(root, signal) {
     assert.ok(report.paths.includes('node_modules/@sjshovan/dkb-protocol/package.json'));
   }
 
-  const conflictingArchives = [];
+  const conflictingPackages = [];
   for (const [name, version] of [['zod', '4.99.0'], ['fast-uri', '3.99.0']]) {
     signal.throwIfAborted();
     const fixture = path.join(root, 'conflicts', name);
@@ -128,7 +128,7 @@ async function proveIndependentProviderInstallation(root, signal) {
     const { stdout } = await execute(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--json', '--pack-destination', output], {
       cwd: fixture, windowsHide: true, timeout: 30_000, signal,
     });
-    conflictingArchives.push(path.join(output, JSON.parse(stdout)[0].filename));
+    conflictingPackages.push({ name, archive: path.join(output, JSON.parse(stdout)[0].filename) });
   }
   const prefix = path.join(root, 'prefix');
   const unrelated = path.join(root, 'unrelated');
@@ -141,7 +141,9 @@ async function proveIndependentProviderInstallation(root, signal) {
   };
   await execute(process.execPath, [npmCli, 'install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts',
     '--cache', path.join(root, 'empty-cache'), '--registry', 'http://127.0.0.1:1', '--no-audit', '--no-fund',
-    ...packages.map(report => report.archive), ...conflictingArchives], {
+    // Bare archive arguments make npm extract each bundle just to discover its
+    // name. These names are already known; retain the same exact file inputs.
+    ...[...packages, ...conflictingPackages].map(report => `${report.name}@file:${report.archive}`)], {
     cwd: unrelated, env: environment, windowsHide: true, timeout: 120_000, maxBuffer: 4 * 1024 * 1024, signal,
   });
   const modules = path.join(prefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules');

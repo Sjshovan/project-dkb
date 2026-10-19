@@ -763,6 +763,7 @@ test('stopped stack backup and restore preserve state with a verified sidecar', 
       && (result.error || result.status !== 0)) {
       t.diagnostic(JSON.stringify({ probe: 'docker compose version', elapsedMs: performance.now() - started,
         errorCode: result.error?.code ?? null, status: result.status, signal: result.signal,
+        stdout: String(result.stdout ?? '').slice(-2048),
         stderr: String(result.stderr ?? '').slice(-2048) }));
     }
     return result;

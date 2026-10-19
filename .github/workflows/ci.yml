@@ -49,9 +49,15 @@ jobs:
           if (($testFiles | Where-Object { $_ -eq $packaging }).Count -ne 1) { throw 'Provider packaging test must be included exactly once.' }
           $parallelFiles = @($testFiles | Where-Object { $_ -ne $packaging })
           if ($parallelFiles.Count -eq 0) { throw 'No parallel behavior tests were found.' }
-          node --import ./tests/test-environment.mjs --test --test-concurrency=4 @parallelFiles
+          # Each test file may launch more processes. Match workers to this
+          # runner's CPU allocation while keeping all files and deadlines.
+          $testCpuCount = & node -p 'require("node:os").availableParallelism()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testConcurrency = [Math]::Max(1, [Math]::Min(4, [int]$testCpuCount))
+          Write-Output "Running $($testFiles.Count) test files with at most $testConcurrency workers."
+          node --import ./tests/test-environment.mjs --test --test-concurrency=$testConcurrency @parallelFiles
           $parallelExit = $LASTEXITCODE
-          node --import ./tests/test-environment.mjs --test --test-concurrency=4 $packaging
+          node --import ./tests/test-environment.mjs --test --test-concurrency=$testConcurrency $packaging
           $packagingExit = $LASTEXITCODE
           if ($parallelExit -ne 0) { exit $parallelExit }
           exit $packagingExit
