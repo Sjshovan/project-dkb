@@ -1,8 +1,11 @@
-import { appendLocalDkb, type DkbAppendRequest, type PrepareDkbAppend } from '@sjshovan/dkb-library/append.js';
+import { appendLocalDkb, listLocalDkbWriteTargets, type DkbAppendRequest, type PrepareDkbAppend } from '@sjshovan/dkb-library/append.js';
 import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import { readRuntimeState } from './activation.js';
 import type { DkbRuntimeContext } from './context.js';
+import { withLibraryReadSnapshot } from '@sjshovan/dkb-library/mutation.js';
+import { assertRuntimeLibraryCurrent } from './querySnapshot.js';
+import { withRuntimeQuery } from './mutation.js';
 import { withRuntimeMutation } from './mutation.js';
 import { refreshRuntimeActivation } from './pipelineSwitch.js';
 import { readRuntime } from './queryAccess.js';
@@ -51,4 +54,25 @@ export async function appendRuntime(options: {
       }
     });
   });
+}
+
+
+export async function runtimeWriteTargets(options: { stateRoot: string; dkbId?: string; after?: string }) {
+  return withRuntimeQuery(options.stateRoot, () => withLibraryReadSnapshot(async () => {
+    const instance = await readRuntimeState(options.stateRoot);
+    if (instance.binding.library.kind !== 'local') throw new DkbError('Write discovery requires a local Library.', 'append_target_unavailable');
+    await assertRuntimeLibraryCurrent(instance);
+    const ids = options.dkbId ? [options.dkbId] : Object.keys(instance.activation!.packages);
+    const packages = [];
+    for (const id of ids) {
+      if (!instance.activation!.packages[id]) throw new DkbError('DKB is outside this Runtime activation.', 'append_target_unavailable');
+      try { packages.push(await listLocalDkbWriteTargets(instance.libraryRoot, id, options.after)); }
+      catch (error) {
+        if (options.dkbId || !(error instanceof DkbError)) throw error;
+        packages.push({ dkbId: id, blocked: error.code, message: error.message });
+      }
+    }
+    await assertRuntimeLibraryCurrent(instance);
+    return { packages };
+  }));
 }

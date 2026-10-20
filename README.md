@@ -104,8 +104,9 @@ The Runtime exposes MCP retrieval tools:
 - `search` finds relevant evidence.
 - `fetch` returns selected evidence with source and citation metadata.
 
-Local `dkb mcp serve` also exposes an append-only tool for explicitly writable
-editable packages. It preserves fact text and package version, and returns fetched
+Local `dkb mcp serve` also exposes `write_targets`, `create` and `append` for
+explicitly writable editable packages. Path rules govern destinations; existing-file
+append preserves byte prefixes and retains old citations. It returns fetched
 evidence after a successful refresh. Use `dkb mcp serve-http` for authenticated,
 read-only HTTP. Remote clients require an appropriately secured HTTPS endpoint.
 See [MCP integration](docs/chatgpt-mcp.md) for authentication and citation settings.

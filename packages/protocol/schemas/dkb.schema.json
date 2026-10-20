@@ -198,7 +198,7 @@
         "operations": {
           "type": "array",
           "minItems": 1,
-          "items": { "enum": ["write", "append", "delete", "update", "supersede"] },
+          "items": { "enum": ["write", "append", "create", "delete", "update", "supersede"] },
           "uniqueItems": true
         },
         "accepts": {
@@ -209,6 +209,14 @@
             "subjects": { "$ref": "#/$defs/stringList" },
             "intents": { "$ref": "#/$defs/stringList" },
             "recordTypes": { "$ref": "#/$defs/stringList" }
+          }
+        },
+        "paths": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "append": { "$ref": "#/$defs/stringList" },
+            "create": { "$ref": "#/$defs/stringList" },
+            "exclude": { "$ref": "#/$defs/stringList" }
           }
         },
         "dedupe": { "enum": ["required", "optional", "none"] },

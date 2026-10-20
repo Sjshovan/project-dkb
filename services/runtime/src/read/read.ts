@@ -60,7 +60,7 @@ export async function readDkb(root: string, request: DkbReadRequest, queryContex
       target: query.target,
       status: 'complete' as const,
       reason: null,
-      message: 'Compiled source chunk read directly from the active runtime catalog.',
+      message: chunk.reference.revision ? 'Historical compiled source revision fetched by exact evidence ID.' : 'Compiled source chunk read directly from the active runtime catalog.',
         evidence: [{
         type: 'text' as const,
         label: `[${chunk.reference.dkbId}] ${chunk.reference.title}`,
@@ -92,6 +92,7 @@ export async function readDkb(root: string, request: DkbReadRequest, queryContex
         chunkOrdinal: chunk.reference.chunkOrdinal,
         chunkStart: chunk.reference.chunkStart,
         chunkEnd: chunk.reference.chunkEnd,
+        ...(chunk.reference.revision ? { sourceRevision: chunk.reference.revision } : {}),
       },
     };
   });

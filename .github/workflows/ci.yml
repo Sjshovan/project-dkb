@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [development]
+    branches: [main, development]
 
 permissions:
   contents: read
@@ -66,11 +66,12 @@ jobs:
         run: |
           npm.cmd run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Real Docker probes and packaging need their own process budget;
+          # Real Docker, OS storage probes and packaging need their own process budget;
           # preserve deadlines without competing with parallel behavior tests.
           $stack = 'tests/stack.test.mjs'
           $packaging = 'tests/provider-dependency-distribution.test.mjs'
-          $isolatedFiles = @($stack, $packaging)
+          $storage = 'tests/windows-storage-probe.test.mjs'
+          $isolatedFiles = @($stack, $storage, $packaging)
           $testFiles = @(Get-ChildItem -LiteralPath tests -Filter '*.test.mjs' -File | Sort-Object Name | ForEach-Object { "tests/$($_.Name)" })
           foreach ($isolated in $isolatedFiles) {
             if (($testFiles | Where-Object { $_ -eq $isolated }).Count -ne 1) { throw "$isolated must be included exactly once." }
@@ -85,11 +86,14 @@ jobs:
           Write-Output "Running $($testFiles.Count) test files with at most $testConcurrency workers."
           node --import ./tests/test-environment.mjs --test --test-concurrency=1 $stack
           $stackExit = $LASTEXITCODE
+          node --import ./tests/test-environment.mjs --test --test-concurrency=1 $storage
+          $storageExit = $LASTEXITCODE
           node --import ./tests/test-environment.mjs --test --test-concurrency=$testConcurrency @parallelFiles
           $parallelExit = $LASTEXITCODE
           node --import ./tests/test-environment.mjs --test --test-concurrency=$testConcurrency $packaging
           $packagingExit = $LASTEXITCODE
           if ($stackExit -ne 0) { exit $stackExit }
+          if ($storageExit -ne 0) { exit $storageExit }
           if ($parallelExit -ne 0) { exit $parallelExit }
           exit $packagingExit
       - name: Verify Linux volume ownership preservation

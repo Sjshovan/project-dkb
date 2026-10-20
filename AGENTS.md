@@ -70,7 +70,8 @@ py -m graphify update apps/cli/src
 - Retrieval remains chunk-first and provenance-preserving. Stable evidence IDs
   and source locators must survive internal retrieval changes.
 - Remote HTTP MCP is read-only. Local stdio append follows ADR 0014: explicit
-  package permission, confirmed append-only transactions, clean source text and
+  package permission, confirmed append-only transactions (explicit paths and retained
+  revisions extend this in ADR 0015), clean source text and
   structured pipeline provenance. Other package lifecycle remains operator-controlled.
 - The Laravel registry is the user/team/package control plane. It does not own
   compiler or query-serving internals.

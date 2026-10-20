@@ -5,6 +5,7 @@
   "type": "module",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./sourceRevisions.js": { "types": "./dist/sourceRevisions.d.ts", "import": "./dist/sourceRevisions.js" },
     "./append.js": { "types": "./dist/append.d.ts", "import": "./dist/append.js" },
     ".": {
       "types": "./dist/index.d.ts",

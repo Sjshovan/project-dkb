@@ -24,9 +24,9 @@ are authoritative.
   partial match, and never mix compatibility spaces in one snapshot.
 - Preserve stable evidence identities, bounded untrusted-source output,
   provenance, citations, and trace metadata.
-- HTTP MCP exposes read-only `search`/`fetch`. Local stdio `append` follows ADR 0014:
-  Library transactions, compiler injection at CLI composition, clean text and
-  native provenance. Runtime never imports compiler internals.
+- HTTP MCP stays read-only. Local discovery/create/append follow
+  [ADR 0015](../../docs/decisions/0015-targeted-source-writes.md): Library transactions,
+  CLI compiler injection, clean text and revision-aware provenance.
 - Never expose install, uninstall, compilation, plugin, or write-queue controls
   over remote MCP.
 - Keep credentials out of Runtime state, discovery documents, traces, and

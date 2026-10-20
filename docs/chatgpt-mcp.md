@@ -1,53 +1,141 @@
 # ChatGPT MCP Boundary
 
-DKB uses Runtime-owned MCP tools. Local stdio additionally supports permission-gated source append; HTTP remains read-only.
+DKB uses Runtime-owned MCP tools. Local stdio supports policy-controlled text
+creation and append; HTTP remains read-only.
 
 ## Local MCP
 
-`dkb mcp serve` uses stdio and exposes `search`, `fetch`, and `append`.
-Bind it to an existing initialized local Runtime with `DKB_RUNTIME_STATE_ROOT`.
-The tool is listed even when a package disallows writes, so callers receive a
-structured permission error rather than treating a missing tool as a denial.
+`dkb mcp serve` exposes `search`, `fetch`, `write_targets`, `create` and `append`.
+Bind it to an initialized local Runtime with `DKB_RUNTIME_STATE_ROOT`.
+Client tool allowlists must expose the new tools before agents can use them.
+Tools remain discoverable when writes are disabled; execution returns a structured
+permission error. MCP cannot edit permissions, install packages or select providers.
 
-`append` accepts:
+### Destination policy
+
+The operator configures each editable installed package's `dkb.json`:
+
+```json
+{
+  "permissions": { "read": true, "write": true },
+  "write": {
+    "mode": "direct",
+    "operations": ["append", "create"],
+    "confirmationRequired": true,
+    "paths": {
+      "append": ["/facts/", "/*.md"],
+      "create": ["/facts/"],
+      "exclude": ["/facts/private/", "secret.md"]
+    }
+  }
+}
+```
+
+Missing operation allowlists deny that operation. Exclusions always win. Read
+permission, Registry inclusion rules and `localSources.excludes` do not grant write
+access. The server enforces these rules again at execution; agent selection is
+advisory. Registry packages and indirect/outside-Library paths are not writable.
+
+Patterns use the bounded `dkb-write-glob-v1` subset, not all of Git's ignore syntax:
+
+| Pattern | Meaning |
+| --- | --- |
+| `*.md` or `*` | Matching basename at any depth |
+| `/*.md` or `/*` | Matching root-level entry only |
+| `/folder/` | Every descendant of that root folder |
+| `/folder` | Exact path only; does not imply descendants |
+| `folder/*.md` | Root-relative folder, one file segment |
+| `**/*.txt` | Text files at any depth, including root |
+| `/notes/**/fact?.md` | Zero or more directories; one character after fact |
+
+Matching is case-insensitive, with forward slashes and package-relative paths.
+Single `*` and `?` do not cross slashes; `**` must occupy a whole segment.
+Negation, escapes/backslashes, comments, character classes, braces, empty/dot
+segments and ambiguous patterns are rejected. Lists allow at most 100 patterns,
+each at most 512 characters. Exclusions cannot be negated or overridden.
+
+Even broad allowlists cannot write dot paths, control manifests, `AGENTS.md`,
+`SKILL.md`, vendor/dependency/build/archive directories, nonportable paths or
+symlinked paths. Existing append targets must be regular files without hardlinks.
+Only UTF-8 `.md` and `.txt` are supported; existing invalid UTF-8/NUL sources are
+rejected. Native writes fail closed for `write.schema`, required semantic dedupe
+or nonempty `write.accepts`, because those constraints are not implemented.
+
+### Agent list/select/write flow
+
+1. Call `write_targets` with optional `dkbId`. It returns each editable package's
+   existing append targets, source hashes, formats and confirmation policy. Its
+   `creation` object returns allow/exclude patterns even when the package is empty.
+   No source contents are returned. Existing targets are paginated at 100; pass
+   `nextCursor` as `after` with that package ID. A scan is bounded to 10,000 entries.
+2. Select a semantically suitable existing file, or a new path permitted by the
+   creation policy. Discovery does not promise that the selected Pipeline ingests
+   a format; compilation verifies actual ingestion before any source commit.
+3. Obtain confirmation when required, then call the selected tool. Confirmation
+   is a caller assertion, not independent authentication of a human action.
+
+Example `append` input (replace the hash with the discovery result):
 
 ```json
 {
   "dkbId": "@team/memory",
   "requestId": "fact-001",
-  "text": "The support desk opens at 09:00.",
+  "path": "facts/support.md",
+  "expectedSourceHash": "sha256:<64 lowercase hex digits from discovery>",
+  "text": "\nThe support desk opens at 09:00.\n",
   "evidenceRefs": ["caller-known-source-reference"],
   "confirmed": true
 }
 ```
 
-The installed local package must explicitly declare `permissions.write: true`
-and `write: { "mode": "direct", "operations": ["append"],
-"confirmationRequired": true }` when per-write confirmation is required.
-Ask the user before asserting `confirmed: true`. MCP cannot change permissions.
-Registry packages, paths, update/delete operations and arbitrary files are not
-accepted.
+`append` requires an existing file and matching `expectedSourceHash`. It preserves
+all old bytes as an exact prefix, including BOM and line endings. It does not add
+separators: include desired newlines in `text`. `create` uses the same input except
+`expectedSourceHash` is omitted; the path must be absent and is never overwritten.
+Text is limited to 64 KiB per request and the resulting file to 16 MiB. Request IDs
+accept 1-80 letters, digits, underscores or hyphens.
 
-Text is stored exactly in a new `append-<requestId>.md` asset. Request IDs accept
-1–80 letters, digits, underscores or hyphens; text is limited to 64 KiB.
-The existing trusted Pipeline compiles the target package synchronously, and
-the tool commits source/builds transactionally, refreshes the exact activation
-and returns native fetched evidence. Existing source records and package version
-are preserved. `search` and `fetch` can immediately retrieve a successful append.
+For compatibility, a manifest without `write.paths` can still use pathless `append`
+to insert a new `append-<requestId>.md` asset under the original policy. It cannot
+select an existing file. Adding `write.paths` opts into explicit destinations and
+disables that legacy form. No automatic manifest or live-permission migration occurs.
 
-Reuse the identical request ID, text and references after an uncertain response.
-Different input under the same ID returns `append_request_conflict`.
+### Revisions, retries and recovery
+
+Trusted compilation prepares immutable Evidence/Retrieval Builds for the whole
+target package before commit. The Library transaction owns the source, retained
+revision, immutable builds, receipt and generation. The Runtime activates the
+exact result and fetches it before returning `appended` (also the success status
+for `create`; `receipt.operation` identifies the requested action).
+
+An existing-file append changes its source hash and therefore its evidence IDs.
+Search uses only the current revision. Previously issued IDs remain exact-fetchable
+from validated retained builds, with historical revision metadata and the original
+source hash/build digests in citations and audit candidates. They are not injected
+into current search rankings. Unrelated source identities remain unchanged.
+
+Retained source bytes live at `.dkb/source-revisions/<hash>.txt` and exact old build
+selections at `.dkb/source-history.json`. They are required local state: corruption
+fails closed, and there is no automatic garbage collection. History is scoped to
+the installed package version and is not part of portable Registry source exports.
+Uninstall prevents serving the package; reinstallation of the same retained local
+package/version can restore fetches. Preserve this state with local backups.
+
+Reuse the identical request ID, operation, path, hash, text and references after an
+uncertain response. A changed request under the same ID conflicts. Identical retry
+after later source appends uses retained revisions and never adds duplicate bytes.
+External edits without matching history require operator reconciliation.
+
 `committed_refresh_required` means source was saved but retrieval needs recovery;
-restore the Pipeline service and retry that same request. `recovery_required`
-with `committed: null` requires Library recovery before another write. Never
-retry under a new ID to conceal an unresolved outcome.
+restore the Pipeline and retry the same request. `recovery_required` with
+`committed: null` requires Library recovery before another write. Never use a new
+ID to conceal an unresolved outcome. Other Runtimes fail closed until refreshed.
 
-Source/chunk/build provenance remains structured pipeline metadata. No automatic
-provenance paragraph, date, heading or conversation message ID is added to text.
-The caller's `evidenceRefs` satisfy the existing write-intent contract and request
-identity; they do not authenticate conversation attribution or become Evidence IR
-metadata. A conversation-attribution schema is outside this change.
-See [the append decision](decisions/0014-local-mcp-append.md).
+Source/chunk/build provenance stays structured. No provenance paragraph, date,
+heading or message ID is added. `evidenceRefs` are caller-known references used in
+request identity; they are not authenticated conversation attribution or inserted
+into Evidence IR. See [ADR 0014](decisions/0014-local-mcp-append.md) and
+[ADR 0015](decisions/0015-targeted-source-writes.md).
 
 ## Remote MCP
 

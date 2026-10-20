@@ -11,7 +11,7 @@ export function resolveDkbCapabilities(manifest: DkbManifest): DkbCapabilities {
   const writeAllowed = manifest.permissions?.write ?? operations.length > 0;
   const access: DkbAccess = {
     read: manifest.permissions?.read ?? true,
-    write: writeAllowed && operations.some((operation) => operation === 'write' || operation === 'update' || operation === 'supersede'),
+    write: writeAllowed && operations.some((operation) => operation === 'create' || operation === 'write' || operation === 'update' || operation === 'supersede'),
     append: writeAllowed && operations.includes('append'),
     delete: writeAllowed && operations.includes('delete'),
   };

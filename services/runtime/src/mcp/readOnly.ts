@@ -127,6 +127,7 @@ export async function fetchRemoteEvidence(
           packageVersion: evidence.source.packageVersion,
           sourceHash: evidence.source.hash,
           locator: evidence.source.locator,
+          ...(result.queries[0]?.trace?.sourceRevision ? { revision: result.queries[0].trace.sourceRevision } : {}),
         } : null,
       };
       const packageId = evidence?.source.dkbId;
