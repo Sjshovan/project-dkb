@@ -24,3 +24,4 @@ Deployment limits belong in [supported configurations](../developer-preview.md).
 - [0011 — Worker-confirmed compilation cancellation](0011-worker-confirmed-compilation-cancellation.md)
 - [0012 — Crash-safe Library mutations](0012-crash-safe-library-mutations.md) — Cross-OS ownership superseded by 0013.
 - [0013 — One storage environment per Library](0013-library-storage-ownership.md)
+- [0014 - Permission-gated local MCP append](0014-local-mcp-append.md)

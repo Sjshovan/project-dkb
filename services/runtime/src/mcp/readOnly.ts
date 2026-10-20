@@ -11,9 +11,10 @@ export function createDkbReadOnlyMcpServer(options: {
   runtime: DkbRuntimeContext;
   stateRoot: string;
   publicBaseUrl?: string;
+  serverName?: string;
 }): McpServer {
   const server = new McpServer(
-    { name: 'dkb-runtime-read-only', version: DKB_PROTOCOL_VERSION },
+    { name: options.serverName ?? 'dkb-runtime-read-only', version: DKB_PROTOCOL_VERSION },
     { capabilities: { tools: {} } },
   );
 

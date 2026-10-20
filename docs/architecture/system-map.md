@@ -120,8 +120,11 @@ Request
   → response
 ```
 
-CLI, HTTP and MCP enter the Runtime's validated retrieval boundary. MCP exposes
-only `search` and `fetch`. Query observers receive finalized, redacted events;
+CLI, HTTP and MCP reads enter the Runtime's validated retrieval boundary. HTTP
+MCP exposes only `search` and `fetch`. Local stdio additionally exposes the
+permission-gated `append` operation described in [ADR 0014](../decisions/0014-local-mcp-append.md).
+The Library owns its source/build transaction; CLI composition supplies trusted
+compilation; Runtime owns exact activation and immediate evidence readback. Query observers receive finalized, redacted events;
 they cannot rewrite evidence or citations. Source instructions remain untrusted.
 
 An empty search is not permission to fabricate an answer. Consumers must assess

@@ -99,13 +99,15 @@ and [operations](docs/operations.md) before choosing a deployment.
 
 ## Connect an agent
 
-The Runtime exposes read-only MCP tools:
+The Runtime exposes MCP retrieval tools:
 
 - `search` finds relevant evidence.
 - `fetch` returns selected evidence with source and citation metadata.
 
-Use `dkb mcp serve` for local stdio or `dkb mcp serve-http` for authenticated
-HTTP. Remote clients require an appropriately secured HTTPS endpoint.
+Local `dkb mcp serve` also exposes an append-only tool for explicitly writable
+editable packages. It preserves fact text and package version, and returns fetched
+evidence after a successful refresh. Use `dkb mcp serve-http` for authenticated,
+read-only HTTP. Remote clients require an appropriately secured HTTPS endpoint.
 See [MCP integration](docs/chatgpt-mcp.md) for authentication and citation settings.
 
 Installation, publication, compilation, and removal remain operator-controlled.

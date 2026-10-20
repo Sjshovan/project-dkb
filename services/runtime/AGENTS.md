@@ -1,7 +1,6 @@
 # Runtime Guidance
 
-This directory owns installed-state activation, retrieval, evidence resolution,
-tracing, Runtime HTTP, and MCP. The canonical
+Own activation, retrieval, evidence, Runtime HTTP and MCP. The canonical
 [provider architecture](../../docs/architecture/final-provider-architecture.md)
 and [ADR 0008](../../docs/decisions/0008-runtime-bound-pipelines-and-shared-libraries.md)
 are authoritative.
@@ -25,7 +24,9 @@ are authoritative.
   partial match, and never mix compatibility spaces in one snapshot.
 - Preserve stable evidence identities, bounded untrusted-source output,
   provenance, citations, and trace metadata.
-- Every MCP transport exposes exactly `search` and `fetch`; both are read-only.
+- HTTP MCP exposes read-only `search`/`fetch`. Local stdio `append` follows ADR 0014:
+  Library transactions, compiler injection at CLI composition, clean text and
+  native provenance. Runtime never imports compiler internals.
 - Never expose install, uninstall, compilation, plugin, or write-queue controls
   over remote MCP.
 - Keep credentials out of Runtime state, discovery documents, traces, and

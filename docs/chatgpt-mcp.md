@@ -1,11 +1,53 @@
 # ChatGPT MCP Boundary
 
-DKB has one Runtime-owned MCP tool surface over two transports.
+DKB uses Runtime-owned MCP tools. Local stdio additionally supports permission-gated source append; HTTP remains read-only.
 
 ## Local MCP
 
-`dkb mcp serve` uses stdio and exposes only the Runtime's read-only `search`
-and `fetch` tools. Package lifecycle remains under explicit CLI control.
+`dkb mcp serve` uses stdio and exposes `search`, `fetch`, and `append`.
+Bind it to an existing initialized local Runtime with `DKB_RUNTIME_STATE_ROOT`.
+The tool is listed even when a package disallows writes, so callers receive a
+structured permission error rather than treating a missing tool as a denial.
+
+`append` accepts:
+
+```json
+{
+  "dkbId": "@team/memory",
+  "requestId": "fact-001",
+  "text": "The support desk opens at 09:00.",
+  "evidenceRefs": ["caller-known-source-reference"],
+  "confirmed": true
+}
+```
+
+The installed local package must explicitly declare `permissions.write: true`
+and `write: { "mode": "direct", "operations": ["append"],
+"confirmationRequired": true }` when per-write confirmation is required.
+Ask the user before asserting `confirmed: true`. MCP cannot change permissions.
+Registry packages, paths, update/delete operations and arbitrary files are not
+accepted.
+
+Text is stored exactly in a new `append-<requestId>.md` asset. Request IDs accept
+1–80 letters, digits, underscores or hyphens; text is limited to 64 KiB.
+The existing trusted Pipeline compiles the target package synchronously, and
+the tool commits source/builds transactionally, refreshes the exact activation
+and returns native fetched evidence. Existing source records and package version
+are preserved. `search` and `fetch` can immediately retrieve a successful append.
+
+Reuse the identical request ID, text and references after an uncertain response.
+Different input under the same ID returns `append_request_conflict`.
+`committed_refresh_required` means source was saved but retrieval needs recovery;
+restore the Pipeline service and retry that same request. `recovery_required`
+with `committed: null` requires Library recovery before another write. Never
+retry under a new ID to conceal an unresolved outcome.
+
+Source/chunk/build provenance remains structured pipeline metadata. No automatic
+provenance paragraph, date, heading or conversation message ID is added to text.
+The caller's `evidenceRefs` satisfy the existing write-intent contract and request
+identity; they do not authenticate conversation attribution or become Evidence IR
+metadata. A conversation-attribution schema is outside this change.
+See [the append decision](decisions/0014-local-mcp-append.md).
 
 ## Remote MCP
 

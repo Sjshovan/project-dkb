@@ -12,7 +12,7 @@ export async function searchRuntime(options: {
   query: string;
   limit?: number;
   scope?: DkbRetrievalScope;
-  channel?: 'cli' | 'runtime-http';
+  channel?: 'cli' | 'runtime-http' | 'mcp';
 }): Promise<DkbSemanticSearchResponse> {
   return runAuditedRuntimeOperation({
     stateRoot: options.stateRoot,
@@ -52,7 +52,7 @@ export async function describeRuntimeTargets(options: {
   runtime: DkbRuntimeContext;
   query: string;
   limit?: number;
-  channel?: 'cli' | 'runtime-http';
+  channel?: 'cli' | 'runtime-http' | 'mcp';
 }): Promise<DkbQueryTargetResponse> {
   return runAuditedRuntimeOperation({
     stateRoot: options.stateRoot,
@@ -90,7 +90,7 @@ export async function readRuntime(options: {
   stateRoot?: string;
   runtime: DkbRuntimeContext;
   request: DkbReadRequest;
-  channel?: 'cli' | 'runtime-http';
+  channel?: 'cli' | 'runtime-http' | 'mcp';
 }): Promise<DkbReadResult> {
   const targets = options.request.queries.map((query) => query.target);
   const query = targets.join(' ').trim() || 'read';
