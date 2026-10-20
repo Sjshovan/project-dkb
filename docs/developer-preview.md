@@ -49,7 +49,9 @@ private service networking and an operator-managed backup policy. The Registry's
 development HTTP server is not a production serving layer.
 
 Public citation routes expose source evidence when explicitly enabled. Enable
-them only for content intended to be public. MCP remains read-only.
+them only for content intended to be public. HTTP MCP remains read-only. Local
+stdio supports [permission-gated append](chatgpt-mcp.md#local-mcp) using the trusted
+configured compiler. This compiles the target package; it is not incremental indexing.
 
 ## Capacity and recovery
 

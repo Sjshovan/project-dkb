@@ -196,10 +196,10 @@ export async function promoteLibraryPath(root: string, stagedAbsolutePath: strin
 export async function removeLibraryPath(root: string, targetAbsolutePath: string): Promise<void> {
   return enqueue(root, async (current) => changePath(current, null, targetAbsolutePath));
 }
-export async function writeLibraryMutationFile(root: string, targetAbsolutePath: string, bytes: string | Uint8Array): Promise<void> {
+export async function writeLibraryMutationFile(root: string, targetAbsolutePath: string, bytes: string | Uint8Array, expectedReceipt?: string | null): Promise<void> {
   return enqueue(root, async (current) => {
     if (Buffer.byteLength(bytes) > 16 * 1024 * 1024) throw new DkbError('Library metadata writes are limited to 16 MiB.');
-    await changePath(current, null, targetAbsolutePath, bytes);
+    await changePath(current, null, targetAbsolutePath, bytes, false, expectedReceipt);
   });
 }
 /** The sole control-file exception: callers validate configuration before joining the transaction. */
@@ -209,7 +209,7 @@ export async function writeLibraryConfigurationFile(root: string, bytes: string 
     await changePath(current, null, path.join(current.root, '.dkb', 'config.json'), bytes, true);
   });
 }
-async function changePath(current: Mutation, source: string | null, target: string, bytes?: string | Uint8Array, configuration = false): Promise<void> {
+async function changePath(current: Mutation, source: string | null, target: string, bytes?: string | Uint8Array, configuration = false, expectedReceipt?: string | null): Promise<void> {
   const relative = targetPath(current.root, target, configuration);
   for (const previous of current.journal.changes) {
     const left = targetKey(previous.target), right = targetKey(relative);
@@ -230,6 +230,7 @@ async function changePath(current: Mutation, source: string | null, target: stri
     index: current.journal.changes.length,
     ...(configuration ? { configuration: true as const } : {}),
     ...(bytes !== undefined ? { metadata: { bytes: Buffer.from(bytes).toString('base64'), ready: false } } : {}) };
+  if (expectedReceipt !== undefined && change.before !== expectedReceipt) throw new DkbError('Source changed before its journal transaction.', 'append_source_stale');
   if (source && change.after === null) throw new DkbError('Library staging path is missing.');
   current.journal.changes.push(change);
   save(current); // Durable intent precedes every live rename.

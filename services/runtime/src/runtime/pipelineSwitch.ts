@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
+import { currentLocalAppendSelection } from '@sjshovan/dkb-library/append.js';
 import path from 'node:path';
-import { resolveLibraryActivationBuilds, selectStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
+import { resolveLibraryActivationBuilds, selectStoredPackageBuild, validateStoredPackageBuild } from '@sjshovan/dkb-library/builds.js';
 import { withDkbFileLock } from '@sjshovan/dkb-library/locks.js';
 import { assertLibraryReadFence, captureLibraryReadFence } from '@sjshovan/dkb-library/mutation.js';
 import { libraryStateIdentity, readLibraryState } from '@sjshovan/dkb-library/state.js';
@@ -92,6 +93,7 @@ export async function switchRuntimePipelineFromRegistry(options: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  localBuildSelections?: Record<string, DkbRuntimeActivationEntry>;
   expected?: DkbRuntimePipelinePreparation;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const stateRoot = path.resolve(options.stateRoot ?? defaultRuntimeStateRoot());
@@ -118,6 +120,7 @@ async function switchRuntimePipelineUnlocked(options: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  localBuildSelections?: Record<string, DkbRuntimeActivationEntry>;
   expected?: DkbRuntimePipelinePreparation;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const instance = await ensureRuntimeState(options.stateRoot);
@@ -141,6 +144,7 @@ async function switchRuntimePipelineWithinLibraryMutation(options: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  localBuildSelections?: Record<string, DkbRuntimeActivationEntry>;
   expected?: DkbRuntimePipelinePreparation;
 }, instance: Awaited<ReturnType<typeof ensureRuntimeState>>): Promise<DkbRuntimePipelineSwitchResult> {
   const libraryRoot = options.libraryRoot;
@@ -203,6 +207,7 @@ async function switchRuntimePipelineWithinLibraryMutation(options: {
         timeoutMs: options.timeoutMs,
         progress: options.progress,
         grant: options.grants?.[entry.identity],
+        localSelection: entry.source === 'local' ? options.localBuildSelections?.[entry.identity] : undefined,
       });
       const dkb = await loadDkbPackage(packageRoot, entry.identity);
       const inputs = await captureFileSnapshot([
@@ -313,6 +318,7 @@ export async function refreshRuntimeActivation(options: {
   stateRoot?: string;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  localBuildSelections?: Record<string, DkbRuntimeActivationEntry>;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const instance = await ensureRuntimeState(options.stateRoot);
   return switchRuntimePipelineFromRegistry({
@@ -321,6 +327,7 @@ export async function refreshRuntimeActivation(options: {
     target: instance.binding.target,
     ...(options.progress ? { progress: options.progress } : {}),
     ...(options.libraryBinding ? { libraryBinding: options.libraryBinding } : {}),
+    ...(options.localBuildSelections ? { localBuildSelections: options.localBuildSelections } : {}),
   });
 }
 
@@ -333,6 +340,7 @@ export async function switchRuntimeLibrary(options: {
   grants?: Record<string, DkbRuntimePipelineBuildGrant>;
   progress?: DkbProgressReporter;
   libraryBinding?: DkbRuntimeLibraryBinding;
+  localBuildSelections?: Record<string, DkbRuntimeActivationEntry>;
 }): Promise<DkbRuntimePipelineSwitchResult> {
   const instance = await ensureRuntimeState(options.stateRoot);
   return switchRuntimePipelineFromRegistry({
@@ -344,6 +352,7 @@ export async function switchRuntimeLibrary(options: {
     ...(options.grants ? { grants: options.grants } : {}),
     ...(options.progress ? { progress: options.progress } : {}),
     ...(options.libraryBinding ? { libraryBinding: options.libraryBinding } : {}),
+    ...(options.localBuildSelections ? { localBuildSelections: options.localBuildSelections } : {}),
   });
 }
 
@@ -364,10 +373,20 @@ async function preparePackageBuild(input: {
   timeoutMs?: number;
   progress?: DkbProgressReporter;
   grant?: DkbRuntimePipelineBuildGrant;
+  localSelection?: DkbRuntimeActivationEntry;
 }): Promise<{ preparation: 'retained' | 'downloaded'; selection: DkbRuntimeActivationEntry }> {
   let retained: Awaited<ReturnType<typeof selectStoredPackageBuild>> | null = null;
   try {
-    retained = await selectStoredPackageBuild({ root: input.packageRoot, ...profileSelection(input) });
+    const localSelection = input.localSelection ?? (input.source === 'local' ? await currentLocalAppendSelection(input.packageRoot) : null);
+    retained = localSelection
+      ? await validateStoredPackageBuild(input.packageRoot, localSelection)
+      : await selectStoredPackageBuild({ root: input.packageRoot, ...profileSelection(input) });
+    if (retained.selection.version !== input.version
+      || retained.evidence.evidenceProfileDigest !== input.evidenceProfileDigest
+      || retained.retrieval.retrievalProfileDigest !== input.retrievalProfileDigest
+      || retained.retrieval.compatibilityDigest !== input.compatibilityDigest) {
+      throw new DkbError('The explicit local build does not match the installed package and Runtime Pipeline.');
+    }
   } catch (error) {
     if (!(error instanceof DkbError) || error.code !== 'retrieval_build_missing') throw error;
   }

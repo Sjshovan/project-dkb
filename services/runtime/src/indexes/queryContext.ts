@@ -7,6 +7,8 @@ import type { DkbEmbeddingProvider, DkbIndexProvider, DkbIndexRuntime, DkbJsonVa
 import { evidenceIdsForRetrievalScope, validateIndexRuntime, validateRetrievalHits, validateRetrievalRuntime, validateVector } from '@sjshovan/dkb-pipeline/validation.js';
 import { resolveProviderRetrievalProfile } from '@sjshovan/dkb-pipeline/profile.js';
 import { resolveLibraryActivationBuilds } from '@sjshovan/dkb-library/builds.js';
+import { readSourceRevisions, type HistoricalEvidence } from '@sjshovan/dkb-library/sourceRevisions.js';
+import { readLibraryState } from '@sjshovan/dkb-library/state.js';
 import { readEvidenceCatalog } from '@sjshovan/dkb-library/evidenceCatalog.js';
 import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
 import type { DkbRuntimeContext } from '../runtime/context.js';
@@ -23,6 +25,7 @@ export interface QueryContext {
   evidenceAssets: DkbEvidenceCatalogAsset[];
   evidenceRecords: DkbEvidenceCatalogRecord[];
   evidenceById: Map<string, DkbEvidenceCatalogRecord>;
+  historicalEvidenceById?: Map<string, HistoricalEvidence>;
   evidenceAssetsByKey: Map<string, DkbEvidenceCatalogAsset>;
   evidenceByIdentifier: Map<string, DkbEvidenceCatalogRecord[]>;
   index?: DkbIndexRuntime;
@@ -81,6 +84,15 @@ export async function createQueryContext(
     const validatedInputs = await captureQueryInputs(resolvedRoot, activation);
     const packages = await resolveLibraryActivationBuilds(resolvedRoot, activation);
     await verifyRuntimeRegistryBuilds(resolvedRoot, activation);
+    const state = await readLibraryState(resolvedRoot);
+    const historicalEvidenceById = new Map<string, HistoricalEvidence>();
+    for (const item of packages) {
+      const entry = state.entries[item.dkb.manifest.id];
+      if (entry?.source !== 'local') continue;
+      for (const historical of await readSourceRevisions(item.dkb.root, item.dkb.manifest.id, item.dkb.manifest.version)) {
+        historicalEvidenceById.set(historical.record.evidenceId, historical);
+      }
+    }
     const catalogs = packages.map((item) => readEvidenceCatalog(item.evidenceRoot));
     const evidenceAssets = catalogs.flatMap((catalog) => catalog.assets)
       .sort((left, right) => `${left.packageId}/${left.id}`.localeCompare(`${right.packageId}/${right.id}`));
@@ -145,6 +157,7 @@ export async function createQueryContext(
       evidenceAssets,
       evidenceRecords,
       evidenceById: new Map(evidenceRecords.map((record) => [record.evidenceId, record])),
+      historicalEvidenceById,
       evidenceAssetsByKey: new Map(evidenceAssets.map((asset) => [`${asset.packageId}/${asset.id}`, asset])),
       evidenceByIdentifier: evidenceIdentifierIndex(evidenceRecords),
       providerHost,

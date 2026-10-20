@@ -200,11 +200,12 @@ export function registerDiagnosticCommands(program: Command, context: Diagnostic
 
   mcp
     .command('serve')
-    .description('Start the read-only DKB Runtime MCP server over stdio')
+    .description('Start local DKB MCP search, fetch and permission-gated append over stdio')
     .action(async () => {
       const { serveDkbMcpStdio } = await import('@sjshovan/dkb-runtime/mcp/stdio.js');
 
-      serveDkbMcpStdio();
+      const { prepareLocalAppend } = await import('../providers/localAppend.js');
+      serveDkbMcpStdio({ prepareAppend: prepareLocalAppend });
     });
 
   mcp

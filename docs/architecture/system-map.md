@@ -120,9 +120,19 @@ Request
   → response
 ```
 
-CLI, HTTP and MCP enter the Runtime's validated retrieval boundary. MCP exposes
-only `search` and `fetch`. Query observers receive finalized, redacted events;
+CLI, HTTP and MCP reads enter the Runtime's validated retrieval boundary. HTTP
+MCP exposes only `search` and `fetch`. Local stdio additionally exposes the
+permission-gated `write_targets`, `create` and `append` operations described in
+[ADR 0015](../decisions/0015-targeted-source-writes.md).
+The Library owns its source/build transaction; CLI composition supplies trusted
+compilation; Runtime owns exact activation and immediate evidence readback. Query observers receive finalized, redacted events;
 they cannot rewrite evidence or citations. Source instructions remain untrusted.
+
+For explicit existing-source appends, the Library retains prior source bytes and
+exact immutable build selections transactionally. Runtime search sees only current
+evidence; exact historical fetch validates retained source/build identity under the
+installed local package version and audits the original build digests. History is
+part of the query snapshot and is invalidated by removal or corruption.
 
 An empty search is not permission to fabricate an answer. Consumers must assess
 the fetched evidence before making claims.

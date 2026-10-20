@@ -28,6 +28,7 @@ export interface DkbNavigationReference {
   chunkOrdinal: number;
   chunkStart: number;
   chunkEnd: number;
+  revision?: { historical: true; sourceHash: string; evidenceDigest: string; retrievalBuildDigest: string };
 }
 
 export interface DkbSemanticSearchResponse {
@@ -126,6 +127,12 @@ export async function readNavigationChunks(
     byTarget.set(`${record.packageId}/${record.evidenceId}`, record);
   }
 
+  for (const { record } of context.historicalEvidenceById?.values() ?? []) {
+    if (!byTarget.has(record.evidenceId)) {
+      byTarget.set(record.evidenceId, record);
+      byTarget.set(record.packageId + '/' + record.evidenceId, record);
+    }
+  }
   const chunks: DkbReadNavigationChunk[] = [];
   const missing: string[] = [];
   for (const target of [...new Set(targets)]) {
@@ -134,8 +141,12 @@ export async function readNavigationChunks(
       missing.push(target);
       continue;
     }
+    const historical = !context.evidenceById.has(record.evidenceId) ? context.historicalEvidenceById?.get(record.evidenceId) : undefined;
     chunks.push({
-      reference: navigationReference(record, 1, []),
+      reference: { ...navigationReference(record, 1, []), ...(historical ? { revision: {
+        historical: true as const, sourceHash: record.sourceHash,
+        evidenceDigest: historical.selection.evidenceDigest, retrievalBuildDigest: historical.selection.retrievalBuildDigest,
+      } } : {}) },
       text: renderUntrustedSourceBlock(record.text),
       sourcePolicy: SOURCE_DATA_POLICY_LINE,
     });
