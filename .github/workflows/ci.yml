@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Prepare Changesets comparison branch
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         run: git branch development origin/development
       - uses: actions/setup-node@v4
         with:
