@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codename-dkb.local/schemas/dkb-lock.schema.json",
+  "title": "DKB Compile Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "registry", "packages", "builds"],
+  "properties": {
+    "format": { "const": "dkb.compile-receipt.v2" },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "packages": { "type": "object", "additionalProperties": true },
+    "builds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "retrieval"],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/build" },
+        "retrieval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "target", "profileDigest", "digest", "compatibilityDigest", "status"],
+          "properties": {
+            "path": { "type": "string" },
+            "target": { "type": "string" },
+            "profileDigest": { "type": ["string", "null"] },
+            "digest": { "type": ["string", "null"] },
+            "compatibilityDigest": { "type": ["string", "null"] },
+            "status": { "enum": ["built", "not_built", "missing"] }
+          }
+        }
+      }
+    },
+    "compiled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordCount", "compiledAt"],
+      "properties": {
+        "recordCount": { "type": "integer", "minimum": 0 },
+        "compiledAt": { "type": "string" },
+        "providerDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["packageId", "kind", "providerId", "providerIntegrityDigest", "diagnostics"],
+            "properties": {
+              "packageId": { "type": "string" },
+              "kind": { "type": "string" },
+              "providerId": { "type": "string" },
+              "providerIntegrityDigest": { "type": "string" },
+              "diagnostics": { "type": "object" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "profileDigest", "digest", "status"],
+      "properties": {
+        "path": { "type": "string" },
+        "profileDigest": { "type": ["string", "null"] },
+        "digest": { "type": ["string", "null"] },
+        "status": { "enum": ["built", "not_built", "missing"] }
+      }
+    }
+  }
+}

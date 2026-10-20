@@ -1,0 +1,61 @@
+{
+  "name": "@sjshovan/dkb-cli",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "dkb": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist/version.*",
+    "dist/cli/",
+    "dist/host/",
+    "dist/inspect/",
+    "dist/knowledge/",
+    "dist/lifecycle/",
+    "dist/providers/",
+    "dist/remote/",
+    "dist/runtime/",
+    "dist/stack/",
+    "dist/watch/",
+    "dist/writes/"
+  ],
+  "scripts": {
+    "build": "tsc -b && node ../../scripts/copy-cli-assets.mjs && node ../../scripts/generate-provider-integrity.mjs",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@sjshovan/dkb-compiler": "0.2.0",
+    "@sjshovan/dkb-console": "0.1.0",
+    "@sjshovan/dkb-distribution-default": "0.2.0",
+    "@sjshovan/dkb-library": "0.2.0",
+    "@sjshovan/dkb-pipeline": "0.2.0",
+    "@sjshovan/dkb-protocol": "2.0.0",
+    "@sjshovan/dkb-registry-client": "0.2.0",
+    "@sjshovan/dkb-runtime": "0.2.0",
+    "chokidar": "^5.0.0",
+    "cli-progress": "^3.12.0",
+    "commander": "^12.1.0",
+    "ora": "^9.4.1",
+    "tar": "^7.5.22"
+  },
+  "devDependencies": {
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sjshovan/project-dkb.git"
+  },
+  "homepage": "https://github.com/Sjshovan/project-dkb",
+  "bugs": {
+    "url": "https://github.com/Sjshovan/project-dkb/issues"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "format": "dkb.config.v2",
+  "targets": {
+    "minisearch-lexical": {
+      "parser": "@example/minisearch-lexical",
+      "chunker": "@example/minisearch-lexical",
+      "embedding": null,
+      "index": "@example/minisearch-lexical",
+      "retrieval": "@example/minisearch-lexical"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@sjshovan/dkb-distribution-default",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@sjshovan/dkb-embedding-fastembed": "0.1.0",
+    "@sjshovan/dkb-embedding-tei": "0.1.0",
+    "@sjshovan/dkb-evidence-docling-llamaindex": "0.1.0",
+    "@sjshovan/dkb-index-faiss": "0.1.0",
+    "@sjshovan/dkb-index-meilisearch": "0.1.0",
+    "@sjshovan/dkb-pipeline": "0.2.0",
+    "@sjshovan/dkb-retrieval-hybrid": "0.1.0"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "private": true
+}

@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../pipeline" },
+    { "path": "../../providers/evidence-docling-llamaindex" },
+    { "path": "../../providers/embedding-fastembed" },
+    { "path": "../../providers/embedding-tei" },
+    { "path": "../../providers/index-faiss" },
+    { "path": "../../providers/index-meilisearch" },
+    { "path": "../../providers/retrieval-hybrid" }
+  ]
+}

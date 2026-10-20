@@ -1,18 +1,19 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "outDir": "dist",
-    "rootDir": ".",
-    "declaration": true,
-    "sourceMap": true
-  },
-  "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules"]
+  "files": [],
+  "references": [
+    { "path": "apps/cli" },
+    { "path": "services/compiler" },
+    { "path": "services/runtime" },
+    { "path": "packages/protocol" },
+    { "path": "packages/library" },
+    { "path": "packages/pipeline" },
+    { "path": "packages/registry-client" },
+    { "path": "packages/distribution-default" },
+    { "path": "providers/evidence-docling-llamaindex" },
+    { "path": "providers/embedding-fastembed" },
+    { "path": "providers/embedding-tei" },
+    { "path": "providers/index-faiss" },
+    { "path": "providers/index-meilisearch" },
+    { "path": "providers/retrieval-hybrid" }
+  ]
 }

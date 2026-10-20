@@ -1,0 +1,12 @@
+{
+  "name": "@example/minisearch-lexical",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": ["plugin.mjs", "options.mjs", "source.mjs", "index.mjs", "retrieval.mjs", "pipeline.json", "README.md"],
+  "scripts": { "check": "tsc -p tsconfig.json", "test": "npm run check && node --test plugin.test.mjs" },
+  "dependencies": { "@sjshovan/dkb-pipeline": "0.2.0", "minisearch": "7.2.0" },
+  "devDependencies": { "typescript": "^5.9.2", "@types/node": "^22.15.0" },
+  "engines": { "node": ">=22.15.0" }
+}

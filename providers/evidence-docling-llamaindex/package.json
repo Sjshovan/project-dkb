@@ -1,0 +1,18 @@
+{
+  "name": "@sjshovan/dkb-evidence-docling-llamaindex",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./plugin.js": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" },
+    "./compiler.js": { "types": "./dist/compiler.d.ts", "import": "./dist/compiler.js" }
+  },
+  "files": ["dist/", "!dist/.tsbuildinfo", "python/compile.py", "python/service.py", "python/worker.py", "python/worker_control.py", "python/model-pins.json", "python/assets.json", "python/model_assets.py", "python/requirements.txt", "python/Dockerfile", "python/Dockerfile.gpu"],
+  "scripts": { "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs .", "check": "tsc -b --pretty false", "prepack": "node ../../scripts/generate-provider-integrity.mjs --verify --quiet ." },
+  "bundleDependencies": ["@sjshovan/dkb-pipeline", "@sjshovan/dkb-protocol"],
+  "dependencies": { "@sjshovan/dkb-pipeline": "0.2.0", "@sjshovan/dkb-protocol": "2.0.0" },
+  "engines": { "node": ">=22.15.0" },
+  "private": true
+}

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "allowImportingTsExtensions": false,
+    "noEmit": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src/web/**/*.ts", "src/web/**/*.vue"]
+}

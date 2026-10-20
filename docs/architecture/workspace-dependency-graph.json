@@ -1,0 +1,152 @@
+{
+  "format": "dkb.workspace-graph.v1",
+  "packages": [
+    {
+      "name": "@sjshovan/dkb-cli",
+      "version": "0.2.0",
+      "root": "apps/cli"
+    },
+    {
+      "name": "@sjshovan/dkb-compiler",
+      "version": "0.2.0",
+      "root": "services/compiler"
+    },
+    {
+      "name": "@sjshovan/dkb-console",
+      "version": "0.1.0",
+      "root": "apps/console"
+    },
+    {
+      "name": "@sjshovan/dkb-distribution-default",
+      "version": "0.2.0",
+      "root": "packages/distribution-default"
+    },
+    {
+      "name": "@sjshovan/dkb-embedding-fastembed",
+      "version": "0.1.0",
+      "root": "providers/embedding-fastembed"
+    },
+    {
+      "name": "@sjshovan/dkb-embedding-tei",
+      "version": "0.1.0",
+      "root": "providers/embedding-tei"
+    },
+    {
+      "name": "@sjshovan/dkb-evidence-docling-llamaindex",
+      "version": "0.1.0",
+      "root": "providers/evidence-docling-llamaindex"
+    },
+    {
+      "name": "@sjshovan/dkb-index-faiss",
+      "version": "0.1.0",
+      "root": "providers/index-faiss"
+    },
+    {
+      "name": "@sjshovan/dkb-index-meilisearch",
+      "version": "0.1.0",
+      "root": "providers/index-meilisearch"
+    },
+    {
+      "name": "@sjshovan/dkb-library",
+      "version": "0.2.0",
+      "root": "packages/library"
+    },
+    {
+      "name": "@sjshovan/dkb-pipeline",
+      "version": "0.2.0",
+      "root": "packages/pipeline"
+    },
+    {
+      "name": "@sjshovan/dkb-protocol",
+      "version": "2.0.0",
+      "root": "packages/protocol"
+    },
+    {
+      "name": "@sjshovan/dkb-registry-client",
+      "version": "0.2.0",
+      "root": "packages/registry-client"
+    },
+    {
+      "name": "@sjshovan/dkb-retrieval-hybrid",
+      "version": "0.1.0",
+      "root": "providers/retrieval-hybrid"
+    },
+    {
+      "name": "@sjshovan/dkb-runtime",
+      "version": "0.2.0",
+      "root": "services/runtime"
+    }
+  ],
+  "dependencies": {
+    "@sjshovan/dkb-cli": [
+      "@sjshovan/dkb-compiler",
+      "@sjshovan/dkb-console",
+      "@sjshovan/dkb-distribution-default",
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-registry-client",
+      "@sjshovan/dkb-runtime"
+    ],
+    "@sjshovan/dkb-compiler": [
+      "@sjshovan/dkb-distribution-default",
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-registry-client"
+    ],
+    "@sjshovan/dkb-console": [
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-distribution-default": [
+      "@sjshovan/dkb-embedding-fastembed",
+      "@sjshovan/dkb-embedding-tei",
+      "@sjshovan/dkb-evidence-docling-llamaindex",
+      "@sjshovan/dkb-index-faiss",
+      "@sjshovan/dkb-index-meilisearch",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-retrieval-hybrid"
+    ],
+    "@sjshovan/dkb-embedding-fastembed": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-embedding-tei": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-evidence-docling-llamaindex": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-index-faiss": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-index-meilisearch": [
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-library": [
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-pipeline": [
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-protocol": [],
+    "@sjshovan/dkb-registry-client": [
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-protocol"
+    ],
+    "@sjshovan/dkb-retrieval-hybrid": [
+      "@sjshovan/dkb-pipeline"
+    ],
+    "@sjshovan/dkb-runtime": [
+      "@sjshovan/dkb-distribution-default",
+      "@sjshovan/dkb-library",
+      "@sjshovan/dkb-pipeline",
+      "@sjshovan/dkb-protocol",
+      "@sjshovan/dkb-registry-client"
+    ]
+  }
+}

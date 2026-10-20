@@ -1,0 +1,161 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
+import { hostHeaderValidation, NodeStreamableHTTPServerTransport, originValidation } from '@modelcontextprotocol/node';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { defaultRuntimeStateRoot } from '../runtime/state.js';
+import { createDkbReadOnlyMcpServer, fetchRemoteEvidence } from './readOnly.js';
+import { DEFAULT_DKB_RUNTIME_CONTEXT } from '../defaultComposition.js';
+import type { DkbRuntimeContext } from '../runtime/context.js';
+import { runtimeClientForRequest, withRuntimeClient } from '../runtime/clientContext.js';
+
+export interface ServeDkbMcpHttpOptions {
+  runtime?: DkbRuntimeContext;
+  host?: string;
+  port?: number;
+  path?: string;
+  stateRoot?: string;
+  bearerToken?: string;
+  allowedHosts?: string[];
+  allowedOrigins?: string[];
+  publicBaseUrl?: string;
+  publicDocuments?: boolean;
+  allowInsecureNoAuth?: boolean;
+}
+
+export interface DkbMcpHttpHandler {
+  endpointPath: string;
+  handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
+  close(): Promise<void>;
+}
+
+export async function createDkbMcpHttpHandler(options: ServeDkbMcpHttpOptions = {}): Promise<DkbMcpHttpHandler> {
+  const host = options.host ?? process.env.DKB_MCP_HTTP_HOST ?? process.env.DKB_RUNTIME_HOST ?? '127.0.0.1';
+  const endpointPath = normalizePath(options.path ?? process.env.DKB_MCP_HTTP_PATH ?? '/mcp');
+  const stateRoot = options.stateRoot ?? process.env.DKB_RUNTIME_STATE_ROOT ?? defaultRuntimeStateRoot();
+  const bearerToken = options.bearerToken ?? process.env.DKB_MCP_BEARER_TOKEN;
+  const publicBaseUrl = options.publicBaseUrl ?? process.env.DKB_MCP_PUBLIC_BASE_URL;
+  const publicDocuments = options.publicDocuments ?? process.env.DKB_MCP_PUBLIC_DOCUMENTS === 'true';
+  const allowInsecureNoAuth = options.allowInsecureNoAuth ?? process.env.DKB_MCP_ALLOW_INSECURE_NO_AUTH === 'true';
+  const runtime = options.runtime ?? DEFAULT_DKB_RUNTIME_CONTEXT;
+
+  if (!bearerToken && !allowInsecureNoAuth) {
+    throw new DkbError('Authenticated HTTP MCP requires DKB_MCP_BEARER_TOKEN. Set DKB_MCP_ALLOW_INSECURE_NO_AUTH=true only for a disposable synthetic-data proof.');
+  }
+
+  const validateHost = hostHeaderValidation(uniqueHostnames([
+    ...(options.allowedHosts ?? csv(process.env.DKB_MCP_ALLOWED_HOSTS)),
+    host, publicBaseUrl ?? '', 'localhost', '127.0.0.1', '[::1]',
+  ]));
+  const validateOrigin = originValidation(uniqueHostnames([
+    ...(options.allowedOrigins ?? csv(process.env.DKB_MCP_ALLOWED_ORIGINS)),
+    'localhost', '127.0.0.1', '[::1]',
+  ]));
+  const mcp = createDkbReadOnlyMcpServer({ runtime, stateRoot, publicBaseUrl });
+  const transport = new NodeStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+
+  await mcp.connect(transport);
+
+  return {
+    endpointPath,
+    async handle(request, response) {
+      const requestUrl = new URL(request.url ?? '/', 'http://dkb.local');
+      const documentId = requestUrl.pathname.match(/^\/documents\/([^/]+)$/)?.[1];
+
+      if (documentId && request.method === 'GET' && publicDocuments) {
+        sendJson(response, 200, await fetchRemoteEvidence(stateRoot, decodeURIComponent(documentId), publicBaseUrl, runtime));
+        return true;
+      }
+      if (requestUrl.pathname !== endpointPath) return false;
+      if (!validateHost(request, response) || !validateOrigin(request, response)) return true;
+      if (!allowInsecureNoAuth && !validBearer(request, bearerToken!)) {
+        response.setHeader('www-authenticate', 'Bearer realm="DKB MCP"');
+        sendJson(response, 401, { error: 'unauthorized' });
+        return true;
+      }
+      await withRuntimeClient(runtimeClientForRequest(request), () => transport.handleRequest(request, response));
+      return true;
+    },
+    async close() {
+      await transport.close();
+      await mcp.close();
+    },
+  };
+}
+
+export async function serveDkbMcpHttp(options: ServeDkbMcpHttpOptions = {}) {
+  const host = options.host ?? process.env.DKB_MCP_HTTP_HOST ?? '127.0.0.1';
+  const port = options.port ?? parsePort(process.env.DKB_MCP_HTTP_PORT, 7332);
+  const handler = await createDkbMcpHttpHandler({ ...options, host });
+  const httpServer = createServer(async (request, response) => {
+    try {
+      const requestUrl = new URL(request.url ?? '/', 'http://dkb.local');
+
+      if (requestUrl.pathname === '/health' && request.method === 'GET') {
+        return sendJson(response, 200, { ok: true, mode: 'read-only', endpoint: handler.endpointPath });
+      }
+      if (await handler.handle(request, response)) return;
+      return sendJson(response, 404, { error: 'not_found' });
+    } catch (error) {
+      sendJson(response, 500, {
+        error: 'mcp_http_error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  httpServer.on('close', () => void handler.close());
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, host, () => {
+      httpServer.off('error', reject);
+      resolve();
+    });
+  });
+
+  return httpServer;
+}
+
+function validBearer(request: IncomingMessage, expected: string): boolean {
+  const supplied = (request.headers.authorization ?? '').replace(/^Bearer /, '');
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
+  return suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
+}
+
+function uniqueHostnames(values: string[]): string[] {
+  return [...new Set(values.flatMap((value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      return [new URL(trimmed.includes('://') ? trimmed : `http://${trimmed}`).hostname];
+    } catch {
+      return [];
+    }
+  }))];
+}
+
+function csv(value: string | undefined): string[] {
+  return value?.split(',').map((item) => item.trim()).filter(Boolean) ?? [];
+}
+
+function normalizePath(value: string): string {
+  const normalized = `/${value}`.replace(/\/+/g, '/');
+  return normalized.length > 1 ? normalized.replace(/\/$/, '') : normalized;
+}
+
+function parsePort(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65_535 ? parsed : fallback;
+}
+
+function sendJson(response: ServerResponse, status: number, body: unknown): void {
+  if (response.headersSent) {
+    response.end();
+    return;
+  }
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(body, null, 2));
+}

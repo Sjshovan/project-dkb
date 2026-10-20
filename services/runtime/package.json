@@ -1,0 +1,74 @@
+{
+  "name": "@sjshovan/dkb-runtime",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./defaultComposition.js": { "types": "./dist/defaultComposition.d.ts", "import": "./dist/defaultComposition.js" },
+    "./mcp/http.js": { "types": "./dist/mcp/http.d.ts", "import": "./dist/mcp/http.js" },
+    "./mcp/readOnly.js": { "types": "./dist/mcp/readOnly.d.ts", "import": "./dist/mcp/readOnly.js" },
+    "./mcp/stdio.js": { "types": "./dist/mcp/stdio.d.ts", "import": "./dist/mcp/stdio.js" },
+    "./providers/runtimeIndex.js": { "types": "./dist/providers/runtimeIndex.d.ts", "import": "./dist/providers/runtimeIndex.js" },
+    "./remote/discovery.js": { "types": "./dist/remote/discovery.d.ts", "import": "./dist/remote/discovery.js" },
+    "./remote/types.js": { "types": "./dist/remote/types.d.ts", "import": "./dist/remote/types.js" },
+    "./remote/verification.js": { "types": "./dist/remote/verification.d.ts", "import": "./dist/remote/verification.js" },
+    "./runtime/catalog.js": { "types": "./dist/runtime/catalog.d.ts", "import": "./dist/runtime/catalog.js" },
+    "./runtime/buildTrust.js": { "types": "./dist/runtime/buildTrust.d.ts", "import": "./dist/runtime/buildTrust.js" },
+    "./runtime/client.js": { "types": "./dist/runtime/client.d.ts", "import": "./dist/runtime/client.js" },
+    "./runtime/collections.js": { "types": "./dist/runtime/collections.d.ts", "import": "./dist/runtime/collections.js" },
+    "./runtime/collectionGrant.js": { "types": "./dist/runtime/collectionGrant.d.ts", "import": "./dist/runtime/collectionGrant.js" },
+    "./runtime/context.js": { "types": "./dist/runtime/context.d.ts", "import": "./dist/runtime/context.js" },
+    "./runtime/mutation.js": { "types": "./dist/runtime/mutation.d.ts", "import": "./dist/runtime/mutation.js" },
+    "./runtime/pipelineSwitch.js": { "types": "./dist/runtime/pipelineSwitch.d.ts", "import": "./dist/runtime/pipelineSwitch.js" },
+    "./runtime/pipelineCatalog.js": { "types": "./dist/runtime/pipelineCatalog.d.ts", "import": "./dist/runtime/pipelineCatalog.js" },
+    "./runtime/pipelinePreparation.js": { "types": "./dist/runtime/pipelinePreparation.d.ts", "import": "./dist/runtime/pipelinePreparation.js" },
+    "./runtime/queryCache.js": { "types": "./dist/runtime/queryCache.d.ts", "import": "./dist/runtime/queryCache.js" },
+    "./runtime/queryAccess.js": { "types": "./dist/runtime/queryAccess.d.ts", "import": "./dist/runtime/queryAccess.js" },
+    "./runtime/queryAudit.js": { "types": "./dist/runtime/queryAudit.d.ts", "import": "./dist/runtime/queryAudit.js" },
+    "./runtime/registryInstall.js": { "types": "./dist/runtime/registryInstall.d.ts", "import": "./dist/runtime/registryInstall.js" },
+    "./runtime/server.js": { "types": "./dist/runtime/server.d.ts", "import": "./dist/runtime/server.js" },
+    "./runtime/state.js": { "types": "./dist/runtime/state.d.ts", "import": "./dist/runtime/state.js" },
+    "./runtime/trace.js": { "types": "./dist/runtime/trace.d.ts", "import": "./dist/runtime/trace.js" },
+    "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" }
+  },
+  "bin": {
+    "dkb-runtime": "./dist/bin.js"
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@sjshovan/dkb-distribution-default": "0.2.0",
+    "@sjshovan/dkb-library": "0.2.0",
+    "@sjshovan/dkb-pipeline": "0.2.0",
+    "@sjshovan/dkb-protocol": "2.0.0",
+    "@sjshovan/dkb-registry-client": "0.2.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sjshovan/project-dkb.git"
+  },
+  "homepage": "https://github.com/Sjshovan/project-dkb",
+  "bugs": {
+    "url": "https://github.com/Sjshovan/project-dkb/issues"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@sjshovan/dkb-embedding-tei",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./plugin.js": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" },
+    "./tei.js": { "types": "./dist/tei.d.ts", "import": "./dist/tei.js" }
+  },
+  "files": ["dist/", "!dist/.tsbuildinfo"],
+  "scripts": { "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs .", "check": "tsc -b --pretty false", "prepack": "node ../../scripts/generate-provider-integrity.mjs --verify --quiet ." },
+  "bundleDependencies": ["@sjshovan/dkb-pipeline", "@sjshovan/dkb-protocol"],
+  "dependencies": { "@sjshovan/dkb-pipeline": "0.2.0", "@sjshovan/dkb-protocol": "2.0.0" },
+  "engines": { "node": ">=22.15.0" },
+  "private": true
+}

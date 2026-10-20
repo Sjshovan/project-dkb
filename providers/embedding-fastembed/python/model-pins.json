@@ -1,0 +1,10 @@
+{
+  "BAAI/bge-small-en-v1.5": {
+    "repository": "Qdrant/bge-small-en-v1.5-onnx-Q",
+    "revision": "52398278842ec682c6f32300af41344b1c0b0bb2"
+  },
+  "BAAI/bge-base-en-v1.5": {
+    "repository": "Qdrant/bge-base-en-v1.5-onnx-Q",
+    "revision": "738cad1c108e2f23649db9e44b2eab988626493b"
+  }
+}

@@ -1,0 +1,328 @@
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import net from 'node:net';
+import path from 'node:path';
+import { DkbError } from '@sjshovan/dkb-protocol/errors.js';
+import { isSha256Digest } from '@sjshovan/dkb-pipeline/validation.js';
+import { readEnvironmentFileSync } from './context.js';
+import type { DkbStackServiceContext, DkbStackControlContext, DkbStackStatus } from './types.js';
+
+export function assertDockerAvailable(): void {
+  const engine = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (engine.error || engine.status !== 0 || !String(engine.stdout ?? '').trim()) {
+    const reason = engine.error?.message.includes('ETIMEDOUT')
+      ? 'Docker did not respond within 5 seconds.'
+      : 'The Docker engine is not available.';
+    throw new DkbError(`${reason} Start or restart Docker Desktop, then retry: dkb stack up`);
+  }
+
+  const compose = spawnSync('docker', ['compose', 'version'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (compose.error || compose.status !== 0) {
+    throw new DkbError('Docker Compose is unavailable. Install or enable Docker Compose, then retry: dkb stack up');
+  }
+}
+
+export async function assertPortAvailable(port: number, label: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', () => reject(new DkbError(`${label} port ${port} is already in use. Stop the conflicting service or choose another stack port in stack.env.`)));
+    server.listen(port, '127.0.0.1', () => server.close(() => resolve()));
+  });
+}
+
+export function assertRequiredImages(context: DkbStackServiceContext, values = readEnvironmentFileSync(context.envFile)): Record<string, string> {
+  const digests: Record<string, string> = {};
+  for (const service of context.requiredServices) {
+    if (!service.stack) continue;
+    const image = values[service.stack.imageEnvironment] ?? service.image;
+    if (!image) throw new DkbError(`Stack service ${service.id} does not declare an image.`);
+    let result = inspectImage(image, context.dockerContext);
+    if (result.status !== 0 && !service.stack.build && !service.stack.recovery) {
+      result = spawnSync('docker', [...dockerContextArguments(context.dockerContext), 'pull', image], { encoding: 'utf8' });
+      if (result.status === 0) result = inspectImage(image, context.dockerContext);
+    }
+    if (result.status !== 0) {
+      const recovery = imageRecovery(service, image, values.DKB_BUILD_COMMIT);
+      throw new DkbError(
+        `Required stack image ${image} for ${service.id} is unavailable. ${recovery} Then retry: dkb stack up ${context.name}`,
+      );
+    }
+
+    if (service.stack.build) {
+      const labels = parseImageLabels(String(result.stdout ?? ''));
+      const issue = localImageMetadataIssue(labels, service.version, values.DKB_BUILD_COMMIT);
+      if (issue) {
+        throw new DkbError(
+          `Required stack image ${image} for ${service.id} is stale: ${issue}. `
+          + `${imageRecovery(service, image, values.DKB_BUILD_COMMIT)} Then retry: dkb stack up ${context.name}`,
+        );
+      }
+    }
+    if (service.providerExternalIdentities?.some((identity) => identity.kind === 'image')) {
+      const digest = resolveImmutableImageDigest(image, context.dockerContext);
+      if (!digest) {
+        throw new DkbError(
+          `Required stack image ${image} for ${service.id} is present but its immutable OCI digest could not be resolved. `
+          + `Pin the image as ${image.split('@')[0]}@sha256:<digest> or rebuild it, then retry: dkb stack up ${context.name}`,
+        );
+      }
+      digests[service.id] = digest;
+    }
+  }
+  return digests;
+}
+
+export function immutableDigestFromImageReference(image: string): string | null {
+  const separator = image.lastIndexOf('@');
+  if (separator < 0) return null;
+  const digest = image.slice(separator + 1);
+  return isSha256Digest(digest) ? digest : null;
+}
+
+export function resolveImmutableImageDigest(image: string, dockerContext?: string): string | null {
+  return immutableDigestFromImageReference(image) ?? inspectedImageId(image, dockerContext);
+}
+
+export function localImageMetadataIssue(
+  labels: Record<string, string>,
+  expectedVersion?: string,
+  expectedRevision?: string,
+): string | null {
+  const actualVersion = labels['org.opencontainers.image.version'];
+  if (expectedVersion && actualVersion !== expectedVersion) {
+    return `OCI version is ${actualVersion ?? 'missing'}; expected ${expectedVersion}`;
+  }
+  const revision = normalizedExpectedRevision(expectedRevision);
+  if (revision && labels['org.opencontainers.image.revision'] !== revision) {
+    return `OCI revision is ${labels['org.opencontainers.image.revision'] ?? 'missing'}; expected ${revision}`;
+  }
+  return null;
+}
+
+/** Never copy a possibly live SQLite volume onto a host filesystem as part of startup. */
+export async function assertRegistryStorageUnambiguous(context: Pick<DkbStackServiceContext, 'root' | 'projectName' | 'name'>): Promise<void> {
+  if (await exists(path.join(context.root, 'registry', 'data', 'registry.sqlite'))) return;
+  const volume = `${context.projectName}_dkb-registry-data`;
+  const listed = spawnSync('docker', ['volume', 'ls', '--format', '{{.Name}}'], {
+    encoding: 'utf8', timeout: 5_000, windowsHide: true,
+  });
+  if (listed.error || listed.status !== 0) throw new DkbError('Unable to verify existing Registry storage. Check Docker and retry; no Registry data was copied or initialized.', 'stack_storage_check_failed');
+  if (String(listed.stdout ?? '').split(/\r?\n/u).map(name => name.trim()).includes(volume)) {
+    throw new DkbError(`Stack ${context.name} has existing Registry data in Docker volume ${volume}. Stop its writers and explicitly verify its storage binding before startup; DKB will not copy a live database onto host storage or silently initialize a replacement. The volume was preserved.`, 'stack_migration_required');
+  }
+}
+
+export async function probeStack(context: DkbStackServiceContext): Promise<Array<{ component: string; status: 'ok' | 'failed'; message: string }>> {
+  return Promise.all(context.requiredServices.flatMap((service) => {
+    const health = service.stack?.health;
+    const port = context.servicePorts[service.id];
+    if (!health || port === undefined) return [];
+    return [probe(health.component, `http://127.0.0.1:${port}${health.path}`, health.expectation)];
+  }));
+}
+
+export function composeServices(context: DkbStackServiceContext): DkbStackStatus['services'] {
+  const result = runCompose(context, ['ps', '--all', '--format', 'json'], false, true);
+  const text = result.stdout.trim();
+  if (!text) return [];
+  const records = parseComposeJson(text);
+  return records.map((record) => {
+    const name = stringValue(record.Service) || stringValue(record.Name) || 'unknown';
+    const state = stringValue(record.State) || stringValue(record.Status) || 'unknown';
+    const completed = state === 'exited' && Number(record.ExitCode) === 0;
+    return {
+      name,
+      status: completed ? 'completed' : state,
+      health: completed ? 'n/a' : stringValue(record.Health) || 'unknown',
+    };
+  }).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function composeContainerIds(context: DkbStackControlContext): Promise<string[]> {
+  // Container labels survive Compose format changes. Checking stopped state must
+  // not require rendering a newer Compose file against an older environment.
+  return activeContainerIds(context.dockerContext, `label=com.docker.compose.project=${context.projectName}`);
+}
+
+/** A shared volume can have consumers outside the Stack's Compose project. */
+export async function volumeContainerIds(dockerContext: string, volume: string): Promise<string[]> {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,127}$/u.test(volume)) {
+    throw new DkbError('Invalid Stack volume identity; no stopped-state assumption was made.', 'stack_storage_check_failed');
+  }
+  return activeContainerIds(dockerContext, `volume=${volume}`);
+}
+
+function activeContainerIds(dockerContext: string | undefined, filter: string): string[] {
+  const result = spawnSync('docker', [...dockerContextArguments(dockerContext), 'container', 'ls', '--all',
+    '--filter', filter, '--format', '{{json .}}'],
+  { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+  if (result.error || result.status !== 0) throw new DkbError('Unable to verify Stack containers. No stopped-state assumption was made.', 'stack_storage_check_failed');
+  try {
+    const rows = String(result.stdout ?? '').split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line));
+    if (rows.some(row => !/^[a-f0-9]{12,64}$/u.test(row.ID) || !['running', 'paused', 'restarting', 'removing', 'created', 'exited', 'dead'].includes(row.State))) throw new Error('Invalid container metadata');
+    return [...new Set(rows.filter(row => !['exited', 'dead'].includes(row.State)).map(row => String(row.ID)))];
+  } catch { throw new DkbError('Docker returned invalid Stack container metadata; no state was changed.', 'stack_storage_check_failed'); }
+}
+
+export function runCompose(
+  context: DkbStackServiceContext,
+  args: string[],
+  inherit = false,
+  allowFailure = false,
+  profileScope: 'active' | 'all' = 'active',
+): { stdout: string; stderr: string } {
+  return executeCompose(context, args, inherit, allowFailure, profileScope);
+}
+
+export function runComposeControl(context: DkbStackControlContext, args: ['down' | 'logs', ...string[]], inherit = false): { stdout: string; stderr: string } {
+  return executeCompose(context, args, inherit, false, 'all');
+}
+
+function executeCompose(
+  context: DkbStackServiceContext | DkbStackControlContext,
+  args: string[],
+  inherit: boolean,
+  allowFailure: boolean,
+  profileScope: 'active' | 'all',
+): { stdout: string; stderr: string } {
+  const result = spawnSync('docker', composeArguments(context, args, profileScope), {
+    cwd: path.dirname(context.composeFile),
+    encoding: 'utf8',
+    stdio: inherit ? 'inherit' : 'pipe',
+    // Compose normally prefers the invoking shell over --env-file. The exact
+    // committed topology must win, including explicit targets and image pins.
+    env: { ...process.env, ...readEnvironmentFileSync(context.envFile) },
+    windowsHide: true,
+  });
+  if (result.error) throw new DkbError(`Unable to run Docker Compose: ${result.error.message}`);
+  if (!allowFailure && result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || '').trim();
+    throw new DkbError(`Docker Compose failed for stack ${context.name}${detail ? `: ${detail}` : ''}. Run: dkb stack logs ${context.name}`);
+  }
+  return { stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') };
+}
+
+export function composeArguments(
+  context: DkbStackServiceContext | DkbStackControlContext,
+  args: string[],
+  profileScope: 'active' | 'all' = 'active',
+): string[] {
+  if (!('profiles' in context) && !['down', 'logs', 'ps'].includes(args[0] ?? '')) {
+    throw new DkbError('Stack control topology is only valid for stopping services, status, or reading logs; startup requires validated recipe resolution.');
+  }
+  const profiles = args.includes('down') || profileScope === 'all' || !('profiles' in context) ? context.allProfiles : context.profiles;
+  return [
+    ...dockerContextArguments(context.dockerContext),
+    'compose',
+    '--env-file', context.envFile,
+    '-p', context.projectName,
+    '-f', context.composeFile,
+    ...profiles.flatMap((profile) => ['--profile', profile]),
+    ...args,
+  ];
+}
+
+async function probe(
+  component: string,
+  url: string,
+  expectation: 'http-ok' | 'json-ok' | 'status-available',
+): Promise<{ component: string; status: 'ok' | 'failed'; message: string }> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return { component, status: 'failed', message: `HTTP ${response.status} from ${url}` };
+    if (expectation === 'http-ok') return { component, status: 'ok', message: url };
+    const text = await response.text();
+    const body = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const healthy = expectation === 'json-ok' ? body.ok === true : body.status === 'available';
+    const expected = expectation === 'json-ok' ? 'ok=true' : 'status=available';
+    return healthy
+      ? { component, status: 'ok', message: url }
+      : { component, status: 'failed', message: `Health response did not report ${expected} at ${url}` };
+  } catch (error) {
+    return { component, status: 'failed', message: `${url}: ${errorMessage(error)}` };
+  }
+}
+
+function parseComposeJson(value: string): Array<Record<string, unknown>> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isRecord) : isRecord(parsed) ? [parsed] : [];
+  } catch {
+    return value.split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+}
+
+async function exists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function inspectImage(image: string, dockerContext?: string): ReturnType<typeof spawnSync> {
+  return spawnSync('docker', [...dockerContextArguments(dockerContext), 'image', 'inspect', image, '--format', '{{json .Config.Labels}}'], { encoding: 'utf8' });
+}
+
+function inspectedImageId(image: string, dockerContext?: string): string | null {
+  const result = spawnSync('docker', [...dockerContextArguments(dockerContext), 'image', 'inspect', image, '--format', '{{.Id}}'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  const digest = String(result.stdout ?? '').trim();
+  return result.status === 0 && isSha256Digest(digest) ? digest : null;
+}
+
+function parseImageLabels(value: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value.trim()) as unknown;
+    if (!isRecord(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch {
+    return {};
+  }
+}
+
+function imageRecovery(
+  service: DkbStackServiceContext['requiredServices'][number],
+  image: string,
+  revision?: string,
+): string {
+  if (service.stack?.recovery) return service.stack.recovery;
+  if (!service.stack?.build) return `Run: docker pull ${image}.`;
+  const version = service.version ?? 'development';
+  const commit = normalizedExpectedRevision(revision) ?? 'development';
+  return `Run: docker build --build-arg DKB_VERSION=${version} --build-arg DKB_COMMIT=${commit} -f ${service.stack.build.dockerfile} -t ${image} ${service.stack.build.context}.`;
+}
+
+function normalizedExpectedRevision(value?: string): string | null {
+  const revision = value?.trim();
+  return revision && revision !== 'development' ? revision : null;
+}
+
+function dockerContextArguments(context?: string): string[] {
+  if (context !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/u.test(context)) throw new DkbError('Invalid Docker context.', 'invalid_stack_context');
+  return context ? ['--context', context] : [];
+}

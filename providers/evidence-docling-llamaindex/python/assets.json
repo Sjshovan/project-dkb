@@ -1,0 +1,23 @@
+{
+  "format": "dkb.docling-assets.v1",
+  "common": [
+    { "path": "docling-project--docling-layout-heron/config.json", "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/config.json", "bytes": 3268, "sha256": "fdea30805ce2f5666b147fca941dcdd27ad468e27d6ed21902207d3da056a97d" },
+    { "path": "docling-project--docling-layout-heron/preprocessor_config.json", "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/preprocessor_config.json", "bytes": 444, "sha256": "cd38cd59999e7a95d68e487fbe5132df3d4e5c32a0836add57e6126ba0c4eaf1" },
+    { "path": "docling-project--docling-layout-heron/model.safetensors", "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/model.safetensors", "bytes": 171658996, "sha256": "00333a43451945aaf89db8ca9c0a17e75d1537c17db60fdb91aa95f4c7929e0c" },
+    { "path": "docling-project--docling-models/model_artifacts/tableformer/accurate/tm_config.json", "url": "https://huggingface.co/docling-project/docling-models/resolve/fc0f2d45e2218ea24bce5045f58a389aed16dc23/model_artifacts/tableformer/accurate/tm_config.json", "bytes": 7060, "sha256": "984e122ceb8ccf84d84c9d2882f6f2302a44b4f1e577babd6289892c36f3cffd" },
+    { "path": "docling-project--docling-models/model_artifacts/tableformer/accurate/tableformer_accurate.safetensors", "url": "https://huggingface.co/docling-project/docling-models/resolve/fc0f2d45e2218ea24bce5045f58a389aed16dc23/model_artifacts/tableformer/accurate/tableformer_accurate.safetensors", "bytes": 212758388, "sha256": "2a7d6c924b3cd12fb99a09280ca9c33a89c5d60b93253617d2e088c1a40374d9" }
+  ],
+  "ocr": {
+    "torch": [
+      { "path": "RapidOcr/PP-OCRv6_det_small.pth", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/torch/PP-OCRv6/det/PP-OCRv6_det_small.pth", "bytes": 10248727, "sha256": "fbdc74c97ea7b770ab22cbdc1bba01a52bdf1975efcf3442057356d622b05d54" },
+      { "path": "RapidOcr/PP-OCRv6_rec_small.pth", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/torch/PP-OCRv6/rec/PP-OCRv6_rec_small.pth", "bytes": 21326017, "sha256": "0107b2ad694ccc9b1db7cf9ed3ffbc93d1795d9e08d9cf823127243a87bce516" },
+      { "path": "RapidOcr/ch_ptocr_mobile_v2.0_cls_mobile.pth", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/torch/PP-OCRv4/cls/ch_ptocr_mobile_v2.0_cls_mobile.pth", "bytes": 588638, "sha256": "bfe13860824b3365c0c7f7ccfcddc8ff11645c60051739ff18bc9913f60c98e1" },
+      { "path": "RapidOcr/ppocrv6_dict.txt", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/paddle/PP-OCRv6/rec/PP-OCRv6_rec_small/ppocrv6_dict.txt", "bytes": 74947, "sha256": "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d" }
+    ],
+    "onnxruntime": [
+      { "path": "RapidOcr/PP-OCRv6_det_small.onnx", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx", "bytes": 9929594, "sha256": "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f" },
+      { "path": "RapidOcr/PP-OCRv6_rec_small.onnx", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx", "bytes": 21234383, "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884" },
+      { "path": "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "bytes": 585532, "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c" }
+    ]
+  }
+}

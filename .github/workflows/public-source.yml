@@ -1,0 +1,39 @@
+name: Public source hygiene
+
+on:
+  pull_request:
+  push:
+    branches: [main, development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Check source file policy
+        run: |
+          node scripts/check-public-source.mjs --self-test
+          node scripts/check-public-source.mjs
+      - name: Scan the committed source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="$(mktemp -d)"
+          snapshot_dir="$(mktemp -d)"
+          curl --fail --location --retry 3 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$tool_dir/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $tool_dir/gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf "$tool_dir/gitleaks.tar.gz" -C "$tool_dir"
+          git archive HEAD | tar -xf - -C "$snapshot_dir"
+          "$tool_dir/gitleaks" dir "$snapshot_dir" --redact=100 --no-banner \
+            --ignore-gitleaks-allow --exit-code 1

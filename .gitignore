@@ -13,15 +13,23 @@ dkb-release.json
 
 # local IDE state
 .idea/
+.codex-remote-attachments/
 latest-session.jsonl
 rollout-*.jsonl
 
+# Python compiler caches
+__pycache__/
+*.py[cod]
+
 # local labs and scratch runs
 storage/
-src/testing/
+**/src/testing/
 Dockerfile
 docker-compose.yml
 .dockerignore
+!Dockerfile
+!.dockerignore
+!compiler/llamaindex/Dockerfile
 _local/
 .local/
 runs/*
@@ -29,3 +37,15 @@ runs/*
 runs-debug/
 dkbr/
 studio/
+# Private host configuration and operational output
+.env
+.env.*
+!.env.example
+!*.env.example
+.agents/
+.ai/
+.codex/
+.junie/
+auth.json
+*.dkbevidence
+*.dkbbuild

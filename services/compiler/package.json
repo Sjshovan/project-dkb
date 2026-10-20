@@ -1,0 +1,55 @@
+{
+  "name": "@sjshovan/dkb-compiler",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./buildStatistics.js": { "types": "./dist/buildStatistics.d.ts", "import": "./dist/buildStatistics.js" },
+    "./compile.js": { "types": "./dist/compile.d.ts", "import": "./dist/compile.js" },
+    "./diskCapacity.js": { "types": "./dist/diskCapacity.d.ts", "import": "./dist/diskCapacity.js" },
+    "./embeddingCache.js": { "types": "./dist/embeddingCache.d.ts", "import": "./dist/embeddingCache.js" },
+    "./pipelineRunner.js": { "types": "./dist/pipelineRunner.d.ts", "import": "./dist/pipelineRunner.js" },
+    "./records.js": { "types": "./dist/records.d.ts", "import": "./dist/records.js" },
+    "./registryTargets.js": { "types": "./dist/registryTargets.d.ts", "import": "./dist/registryTargets.js" },
+    "./server.js": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
+    "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" },
+    "./workRoot.js": { "types": "./dist/workRoot.d.ts", "import": "./dist/workRoot.js" }
+  },
+  "bin": {
+    "dkb-compiler": "./dist/bin.js"
+  },
+  "files": [
+    "dist/",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b && node ../../scripts/generate-provider-integrity.mjs",
+    "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@sjshovan/dkb-distribution-default": "0.2.0",
+    "@sjshovan/dkb-library": "0.2.0",
+    "@sjshovan/dkb-pipeline": "0.2.0",
+    "@sjshovan/dkb-protocol": "2.0.0",
+    "@sjshovan/dkb-registry-client": "0.2.0"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sjshovan/project-dkb.git"
+  },
+  "homepage": "https://github.com/Sjshovan/project-dkb",
+  "bugs": {
+    "url": "https://github.com/Sjshovan/project-dkb/issues"
+  }
+}

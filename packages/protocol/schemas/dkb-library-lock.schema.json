@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codename-dkb.local/schemas/dkb-library-lock.schema.json",
+  "title": "DKB Library Lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["library", "generation", "entries", "resolvedAt"],
+  "properties": {
+    "library": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "retrievalProfileDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "generation": { "type": "integer", "minimum": 0 },
+    "entries": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^@[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/entry" }
+    },
+    "resolvedAt": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "source", "path", "requiredBy", "installedAt"],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "pattern": "^@[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
+        },
+        "kind": { "enum": ["dkb", "collection"] },
+        "source": { "enum": ["local", "registry"] },
+        "version": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "path": { "type": "string", "minLength": 1 },
+        "registryUrl": { "type": "string", "pattern": "^https?://" },
+        "requiredBy": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "installedAt": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "dkb" } }, "required": ["kind"] },
+          "then": { "required": ["version"], "not": { "required": ["revision"] } }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "const": "collection" },
+              "source": { "const": "registry" }
+            },
+            "required": ["kind", "source"]
+          },
+          "then": { "required": ["revision"], "not": { "required": ["version"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "collection" } }, "required": ["kind"] },
+          "then": { "not": { "required": ["version"] } }
+        }
+      ]
+    }
+  }
+}

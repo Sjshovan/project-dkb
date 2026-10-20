@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dkb.dev/schemas/dkb-host.schema.json",
+  "title": "DKB host inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "defaults", "libraries", "registries", "runtimes", "stacks"],
+  "properties": {
+    "format": { "const": "dkb.host.v2" },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "library": { "$ref": "#/$defs/name" },
+        "registry": { "$ref": "#/$defs/name" },
+        "runtime": { "$ref": "#/$defs/name" },
+        "stack": { "$ref": "#/$defs/name" }
+      }
+    },
+    "libraries": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/library" }
+    },
+    "registries": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/registry" }
+    },
+    "runtimes": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/runtime" }
+    },
+    "stacks": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/stack" }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "httpUrl": {
+      "type": "string",
+      "pattern": "^https?://"
+    },
+    "library": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "displayName", "registeredAt", "updatedAt"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 },
+        "registry": { "$ref": "#/$defs/name" },
+        "registeredAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "registeredAt", "updatedAt"],
+      "properties": {
+        "url": { "$ref": "#/$defs/httpUrl" },
+        "registeredAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "registeredAt", "updatedAt"],
+      "properties": {
+        "kind": { "enum": ["process", "docker", "remote"] },
+        "url": { "$ref": "#/$defs/httpUrl" },
+        "library": { "$ref": "#/$defs/name" },
+        "stateRoot": { "type": "string", "minLength": 1 },
+        "composeFile": { "type": "string", "minLength": 1 },
+        "registeredAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stateRoot", "registeredAt", "updatedAt"],
+      "properties": {
+        "stateRoot": { "type": "string", "minLength": 1 },
+        "library": { "$ref": "#/$defs/name" },
+        "registry": { "$ref": "#/$defs/name" },
+        "runtime": { "$ref": "#/$defs/name" },
+        "registeredAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}
