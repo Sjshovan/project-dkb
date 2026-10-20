@@ -172,7 +172,11 @@ function bindCandidates(
   const activation = instance.activation!;
   return candidates.map((candidate) => {
     const installed = activation.packages[candidate.packageId];
-    const evidence = context.evidenceById.get(candidate.evidenceId);
+    // Historical evidence may be fetched exactly, never ranked as a current hit.
+    const historical = candidate.score === null && Array.isArray(candidate.channels) && candidate.channels.length === 0
+      ? context.historicalEvidenceById?.get(candidate.evidenceId) : undefined;
+    const evidence = context.evidenceById.get(candidate.evidenceId) ?? historical?.record;
+    const selection = context.evidenceById.has(candidate.evidenceId) ? installed : historical?.selection;
     if (!installed || installed.version !== candidate.packageVersion
       || !evidence || evidence.packageId !== candidate.packageId || evidence.packageVersion !== candidate.packageVersion) {
       throw new DkbError(
@@ -198,8 +202,8 @@ function bindCandidates(
     return {
       ...candidate,
       channels: [...candidate.channels],
-      evidenceDigest: installed.evidenceDigest,
-      retrievalBuildDigest: installed.retrievalBuildDigest,
+      evidenceDigest: selection!.evidenceDigest,
+      retrievalBuildDigest: selection!.retrievalBuildDigest,
     };
   });
 }
@@ -211,7 +215,7 @@ function bindCitations(
 ): DkbQueryAuditCitation[] {
   const activation = instance.activation!;
   return citations.map((citation) => {
-    const evidence = context.evidenceById.get(citation.evidenceId);
+    const evidence = context.evidenceById.get(citation.evidenceId) ?? context.historicalEvidenceById?.get(citation.evidenceId)?.record;
     if (activation.packages[citation.packageId]?.version !== citation.packageVersion
       || !evidence || evidence.packageId !== citation.packageId || evidence.packageVersion !== citation.packageVersion) {
       throw new DkbError(

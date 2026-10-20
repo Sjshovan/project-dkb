@@ -42,7 +42,7 @@ py -m graphify update apps/cli/src
 | `packages/distribution-default/` | Default target recipes, bundled plugin catalog, and stack service metadata |
 | `providers/*/` | One concrete Evidence, embedding, index, or retrieval provider per workspace |
 | `services/compiler/` | Shared compilation runner and Registry-facing compiler HTTP service |
-| `services/runtime/` | Installed state, retrieval, evidence, Runtime HTTP, tracing, and read-only remote MCP |
+| `services/runtime/` | Installed state, retrieval, evidence, Runtime HTTP, tracing, local append orchestration, and read-only remote MCP |
 | `apps/cli/` | Command registration, presentation, host inventory, context selection, and orchestration |
 | `tests/` | Cross-boundary behavior and release-regression tests |
 
@@ -69,8 +69,10 @@ py -m graphify update apps/cli/src
   install and retrieval must not parse, chunk, embed, or mutate source.
 - Retrieval remains chunk-first and provenance-preserving. Stable evidence IDs
   and source locators must survive internal retrieval changes.
-- Remote HTTP MCP is read-only. Package lifecycle and source mutation remain
-  operator-controlled unless a later accepted decision explicitly changes that.
+- Remote HTTP MCP is read-only. Local stdio append follows ADR 0014: explicit
+  package permission, confirmed append-only transactions (explicit paths and retained
+  revisions extend this in ADR 0015), clean source text and
+  structured pipeline provenance. Other package lifecycle remains operator-controlled.
 - The Laravel registry is the user/team/package control plane. It does not own
   compiler or query-serving internals.
 

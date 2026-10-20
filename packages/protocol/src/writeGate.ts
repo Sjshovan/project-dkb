@@ -92,7 +92,7 @@ export function evaluateDkbWrite(dkb: LoadedDkb, operation: DkbWriteOperation): 
     };
   }
 
-  if (operation !== 'append') {
+  if (operation !== 'append' && operation !== 'create') {
     return {
       ...base,
       status: 'blocked',
@@ -216,7 +216,7 @@ export function evaluateDkbWriteIntent(dkb: LoadedDkb, intent: DkbWriteIntent): 
     return blocked('record_type_not_accepted', 'recordType', `${intent.recordType} is not declared by accepts.recordTypes`);
   }
 
-  if ((intent.operation === 'append' || intent.operation === 'write') && (!intent.evidenceRefs || intent.evidenceRefs.length === 0)) {
+  if ((intent.operation === 'append' || intent.operation === 'create' || intent.operation === 'write') && (!intent.evidenceRefs || intent.evidenceRefs.length === 0)) {
     return blocked('missing_evidence', 'evidenceRefs', 'write intents must include at least one evidence reference');
   }
 
@@ -250,7 +250,7 @@ function accessOperationFor(operation: DkbWriteOperation): 'write' | 'append' | 
 
 function acceptedByFor(dkb: LoadedDkb): DkbWriteIntentResult['acceptedBy'] {
   return {
-    operations: (dkb.manifest.write?.operations ?? []).filter((operation) => operation === 'append'),
+    operations: (dkb.manifest.write?.operations ?? []).filter((operation) => operation === 'append' || operation === 'create'),
     lanes: dkb.manifest.write?.accepts?.lanes ?? [],
     subjects: dkb.manifest.write?.accepts?.subjects ?? [],
     intents: dkb.manifest.write?.accepts?.intents ?? [],

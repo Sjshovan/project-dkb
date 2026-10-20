@@ -38,6 +38,7 @@
     "./types.js": { "types": "./dist/types.d.ts", "import": "./dist/types.js" },
     "./validation.js": { "types": "./dist/validation.d.ts", "import": "./dist/validation.js" },
     "./version.js": { "types": "./dist/version.d.ts", "import": "./dist/version.js" },
+    "./writePaths.js": { "types": "./dist/writePaths.d.ts", "import": "./dist/writePaths.js" },
     "./writeGate.js": { "types": "./dist/writeGate.d.ts", "import": "./dist/writeGate.js" },
     "./schemas/dkb-host.schema.json": "./schemas/dkb-host.schema.json",
     "./schemas/dkb-library-lock.schema.json": "./schemas/dkb-library-lock.schema.json",

@@ -1,10 +1,11 @@
 import path from 'node:path';
-import { captureFileSnapshot, type FileSnapshot } from '@sjshovan/dkb-protocol/fileSnapshot.js';
+import { assertFileSnapshotCurrent, captureFileSnapshot, type FileSnapshot } from '@sjshovan/dkb-protocol/fileSnapshot.js';
 import { loadLibrary, uniqueLoadedDkbs } from '@sjshovan/dkb-protocol/manifest.js';
 import { evidenceBuildPath, retrievalBuildPath, retrievalBuildReceiptPath } from '@sjshovan/dkb-protocol/paths.js';
 import type { DkbRuntimeActivation } from '@sjshovan/dkb-protocol/runtimeActivation.js';
 import { DKB_INSTALL_PLAN_RECEIPT_PATH, DKB_INSTALL_PLAN_RECEIPTS_DIR, DKB_PACKAGE_RECEIPT_PATH } from '@sjshovan/dkb-library/signing.js';
 import { readLibraryState } from '@sjshovan/dkb-library/state.js';
+import { SOURCE_HISTORY, sourceHistoryInputs } from '@sjshovan/dkb-library/sourceRevisions.js';
 import { registryTrustPath } from '../runtime/registryTrust.js';
 
 /** Observe only this activation's immutable inputs, never other Runtime builds. */
@@ -12,6 +13,8 @@ export async function captureQueryInputs(root: string, activation: DkbRuntimeAct
   const library = await loadLibrary(root);
   const state = await readLibraryState(root);
   const dkbs = uniqueLoadedDkbs([...library.dkbs, ...library.collections.flatMap((collection) => collection.dkbs)]);
+  const historyFence = await captureFileSnapshot(dkbs.filter(dkb => activation.packages[dkb.manifest.id]
+    && state.entries[dkb.manifest.id]?.source === 'local').map(dkb => path.join(dkb.root, SOURCE_HISTORY)));
   const inputs = [
     path.join(root, 'dkb.json'),
     path.join(root, 'dkb-lock.json'),
@@ -21,6 +24,7 @@ export async function captureQueryInputs(root: string, activation: DkbRuntimeAct
     const selection = activation.packages[dkb.manifest.id];
     if (!selection) continue; // The full build-graph validator rejects missing selections.
     const entry = state.entries[dkb.manifest.id];
+    if (entry?.source === 'local') inputs.push(...await sourceHistoryInputs(dkb.root));
     if (entry?.source === 'registry') {
       if (entry.registryUrl) inputs.push(registryTrustPath(root, entry.registryUrl));
       inputs.push(
@@ -36,5 +40,7 @@ export async function captureQueryInputs(root: string, activation: DkbRuntimeAct
       retrievalBuildReceiptPath(dkb.root, selection.retrievalBuildDigest),
     );
   }
-  return captureFileSnapshot(inputs, { recursive: true });
+  const snapshot = await captureFileSnapshot(inputs, { recursive: true });
+  await assertFileSnapshotCurrent(historyFence);
+  return snapshot;
 }

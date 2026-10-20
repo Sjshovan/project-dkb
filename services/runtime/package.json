@@ -5,6 +5,8 @@
   "type": "module",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./mcp/local.js": { "types": "./dist/mcp/local.d.ts", "import": "./dist/mcp/local.js" },
+    "./runtime/append.js": { "types": "./dist/runtime/append.d.ts", "import": "./dist/runtime/append.js" },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

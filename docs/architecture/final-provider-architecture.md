@@ -18,7 +18,7 @@ This document is the canonical navigation map for the provider architecture.
 | `packages/distribution-default` | Default target recipes, bundled plugin catalog, service metadata |
 | `providers/*` | One concrete provider implementation per workspace |
 | `services/compiler` | Generic Evidence/Retrieval build orchestration and compiler HTTP service |
-| `services/runtime` | Build activation, search/fetch, tracing, HTTP, read-only MCP |
+| `services/runtime` | Build activation, search/fetch, local append orchestration, tracing, HTTP and MCP |
 | `apps/cli` | Bootstrap, commands, presentation, progress, host context selection |
 
 Dependencies point inward toward Protocol and Pipeline contracts. Providers do
@@ -56,7 +56,7 @@ Index providers return Evidence IDs and scores. Library resolves canonical
 text, source anchors, locators, and provenance from the Evidence catalog.
 The Runtime package does not export its raw query-context, navigation, or
 retrieval modules. Public local queries use `runtime/queryAccess`, HTTP uses the
-Runtime server, and MCP uses the read-only MCP surface; each enters the same
+Runtime server, and MCP retrieval uses the search/fetch surface; each enters the same
 activation-verifying, audit-persisting operation gate. The only separately
 exported query-context control is cache invalidation/closure for lifecycle
 orchestration, which cannot open or execute a query.
@@ -137,7 +137,7 @@ data and cannot provide plugin code or configuration.
 | Runtime activation and snapshots | `services/runtime/src/runtime` |
 | Runtime provider coordination | `services/runtime/src/providers` |
 | Search/target discovery and direct Evidence fetch | `services/runtime/src/read/retrieval.ts` and `services/runtime/src/read/read.ts` |
-| HTTP and read-only MCP | `services/runtime/src/runtime/server.ts` and `services/runtime/src/mcp` |
+| HTTP and MCP (local append: ADR 0014) | `services/runtime/src/runtime/server.ts` and `services/runtime/src/mcp` |
 | CLI command composition and family-specific summaries | `apps/cli/src/cli` and `apps/cli/src/cli/summaries` |
 | Stack orchestration | `apps/cli/src/stack/manager.ts`, with Docker, release, backup, and context ownership in adjacent focused modules |
 | Cross-package enforcement | `scripts/check-package-boundaries.mjs` and `scripts/workspace-graph.mjs` |

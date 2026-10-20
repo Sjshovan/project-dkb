@@ -7,7 +7,7 @@ export type DkbTargetOrigin = 'local' | 'remote';
 export type DkbWriteMode = 'read_only' | 'queued' | 'direct';
 export type DkbAvailability = 'ready' | 'unavailable';
 export type DkbIndexFreshness = 'fresh' | 'stale' | 'unknown';
-export type DkbWriteOperation = 'write' | 'append' | 'delete' | 'update' | 'supersede';
+export type DkbWriteOperation = 'write' | 'append' | 'create' | 'delete' | 'update' | 'supersede';
 export type DkbEntryKind = 'dkb' | 'collection';
 export type DkbEntrySource = 'local' | 'registry';
 export type DkbEntryStatus = 'installed' | 'broken';
@@ -20,7 +20,14 @@ export interface DkbAccepts {
   recordTypes?: string[];
 }
 
+export interface DkbWritePaths {
+  append?: string[];
+  create?: string[];
+  exclude?: string[];
+}
+
 export interface DkbWrite {
+  paths?: DkbWritePaths;
   mode: Exclude<DkbWriteMode, 'read_only'>;
   operations: DkbWriteOperation[];
   accepts?: DkbAccepts;
